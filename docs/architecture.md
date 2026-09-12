@@ -43,8 +43,8 @@ requested for the scaffold) maps onto it as follows:
 | `app/domain` | Pure domain types (`SensorReading`, `WeatherReading`, `GridState`, `Forecast`, `Alert`), repository Protocols (ports), H3 validation. No I/O. | `app/core` |
 | `app/models` | SQLAlchemy Core table definitions (the schema) | `app/core`, `app/domain` (only for the `AlertSeverity` column type) |
 | `app/db` | Engine/session management, and `app/db/repositories/*` — concrete SQLAlchemy implementations of the domain repository Protocols | `app/core`, `app/domain`, `app/models` |
-| `app/ingestion` | Source adapters implementing `app.domain.providers.PollutionDataProvider`: `OpenAQProvider` (implemented), Open-Meteo/fixtures (not yet) | `app/core`, `app/domain` |
-| `app/services` | Business logic: per-resource read services (`SensorService`, `GridService`, `CellService`, `AlertService`, …) plus the demo-data fallback, and `SensorIngestionService` (fetch → persist, skip duplicates) | `app/core`, `app/domain`, `app/ingestion`, `app/models`, `app/db` |
+| `app/ingestion` | Source adapters implementing `app.domain.providers.PollutionDataProvider` or `WeatherProvider`: `OpenAQProvider` and `OpenMeteoProvider` (both implemented); a shared retry policy in `http.py` | `app/core`, `app/domain` |
+| `app/services` | Business logic: per-resource read services (`SensorService`, `GridService`, `CellService`, `AlertService`, …) plus the demo-data fallback, and `SensorIngestionService` / `WeatherIngestionService` (fetch → persist, skip duplicates) | `app/core`, `app/domain`, `app/ingestion`, `app/models`, `app/db` |
 | `app/api` | FastAPI routes (thin — call a service, shape the response), Pydantic schemas, error handling, dependency wiring | `app/core`, `app/domain`, `app/db` (dependency wiring only, see `app/api/deps.py`), `app/services` |
 
 Domain code depends only on `app/core` and never on SQLAlchemy: repositories
@@ -142,56 +142,94 @@ numbers as real air-quality data.
 returns 422 for a malformed or wrong-resolution H3 cell, 404 for a
 well-formed cell with no data at all (real or demo).
 
-## Ingestion (implemented: OpenAQ, PM2.5 only)
+## Ingestion (implemented: OpenAQ for PM2.5, Open-Meteo for weather)
 
-`app.domain.providers.PollutionDataProvider` is the port:
-`async fetch_readings(bbox: BoundingBox, *, since: datetime) -> list[SensorReading]`,
-raising `ProviderError` on failure. `app.ingestion.openaq.OpenAQProvider` is
-the first (and so far only) implementation, against OpenAQ v3
-(`api.openaq.org/v3`, `X-API-Key` header). Adding CPCB, satellite data, or a
-private sensor network later means a new class implementing the same
-Protocol — nothing above it (the service, the CLI) changes.
+Two ports in `app.domain.providers`, both raising `ProviderError` on
+failure so `app.services.ingestion` handles either the same way:
 
-**Fetch flow**, chosen to avoid hardcoding OpenAQ's numeric parameter id for
-PM2.5: `GET /v3/locations?bbox=...` returns locations in the box with their
-sensors embedded (id + `parameter.name`), so which locations have a PM2.5
-sensor — and that sensor's id — is known from one call, matched by the
+- `PollutionDataProvider.fetch_readings(bbox, *, since) -> list[SensorReading]`
+  — `app.ingestion.openaq.OpenAQProvider` is the only implementation, against
+  OpenAQ v3 (`api.openaq.org/v3`, `X-API-Key` header).
+- `WeatherProvider.fetch_weather(points: list[Coordinate]) -> list[WeatherSample | None]`
+  — `app.ingestion.open_meteo.OpenMeteoProvider` is the only implementation,
+  against Open-Meteo's free forecast API (no key required). Returns exactly
+  one entry per input point, in order (`None` where unavailable) — providers
+  commonly snap a requested point to their own model grid, so a caller can't
+  reliably correlate results back to points by coordinate equality, only by
+  position.
+
+Adding CPCB, satellite pollution data, ECMWF, or a private sensor network
+later means a new class implementing the relevant Protocol — nothing above
+it (the ingestion service, the CLI) changes. Both adapters share one retry
+policy (`app.ingestion.http.get_json`): exponential backoff on timeouts,
+connection errors, and 429/5xx; never on 4xx, where retrying can't help.
+
+**OpenAQ fetch flow**, chosen to avoid hardcoding OpenAQ's numeric parameter
+id for PM2.5: `GET /v3/locations?bbox=...` returns locations in the box with
+their sensors embedded (id + `parameter.name`), so which locations have a
+PM2.5 sensor — and that sensor's id — is known from one call, matched by the
 string `"pm25"`. Then one `GET /v3/locations/{id}/latest` per matching
 location gets the actual value. A single flaky location (that call failing
 after retries, or returning malformed data) is logged and skipped, not
 fatal to the run; the initial `/locations` call failing is fatal (nothing
-to iterate without it).
+to iterate without it). A reading older than `INGEST_MAX_READING_AGE_HOURS`
+is dropped as stale.
 
-**Resilience:** each request retries up to `OPENAQ_MAX_RETRIES` times with
-exponential backoff on timeouts, connection errors, and 429/5xx — never on
-4xx (401/422/etc.), where retrying can't help. A reading older than
-`INGEST_MAX_READING_AGE_HOURS` is dropped as stale.
+**Weather sampling**, the answer to "without making an unnecessarily large
+number of API calls": weather varies far less over a city block than PM2.5
+does, so it's fetched at `WEATHER_H3_RESOLUTION` (coarser than
+`H3_RESOLUTION`, e.g. 5 vs. 8 by default — a difference of 2 levels cuts the
+point count by roughly 49x) and fanned out to every fine `H3_RESOLUTION`
+cell inside each sampled cell
+(`app.domain.h3_grid.representative_sample_points`). Every representative
+point for the whole configured bbox goes into **one** Open-Meteo request
+(it accepts comma-separated multi-location lat/lon and answers with one
+result per point, batched automatically past `OPEN_METEO_MAX_LOCATIONS_PER_REQUEST`
+if needed) — that single fetched sample is then *reused* across every fine
+`WeatherReading` row it represents, which is the caching/reuse mechanism
+here rather than a separate response cache. `WeatherReadingRepository`'s
+schema and validation are untouched by this: every stored row is still at
+`H3_RESOLUTION`, just multiple rows sharing one set of values.
+`boundary_layer_height` is only available as an hourly Open-Meteo variable,
+not a "current" one, so it's matched to the current reading's hour and left
+`None` if the model has no value for it — the "where available" case.
 
-**Duplicate prevention:** `SensorReadingRepository.add()` raises
-`DuplicateReadingError` — a domain-level exception, not
-`sqlalchemy.exc.IntegrityError` — for an exact repeat (same source,
-external_sensor_id, pollutant, measured_at), backed by the table's real
-unique constraint (`uq_sensor_reading_identity`) rather than a separate
-check-then-insert (which would race under concurrent runs).
-`SensorIngestionService.run()` catches it per-reading and keeps going,
-returning counts (`fetched`, `saved`, `skipped_duplicates`) plus `errors`
-(non-empty only if the provider fetch itself failed).
+**Duplicate prevention:** both `SensorReadingRepository.add()` and
+`WeatherReadingRepository.add()` raise `DuplicateReadingError` — a
+domain-level exception, not `sqlalchemy.exc.IntegrityError` — for an exact
+repeat (sensor: source/external_sensor_id/pollutant/measured_at; weather:
+h3_cell/measured_at), backed by each table's real unique constraint rather
+than a separate check-then-insert (which would race under concurrent runs).
+Each ingestion service catches it per-item and keeps going, returning
+counts (`fetched`, `saved`, `skipped_duplicates`) plus `errors`. Any other
+persistence failure (e.g. the database is unreachable) stops that run
+immediately rather than retrying every remaining item against a connection
+that's already failed, and becomes an `errors` entry rather than an
+uncaught exception — verified live by running `ingest-weather` against the
+real Open-Meteo API with no database reachable: it fetched real data, then
+reported the connection failure cleanly instead of crashing.
 
-**Manual trigger:** `python -m app.cli ingest` (see `backend/app/cli.py`)
-runs one pass against the bbox from `.env` and prints a summary. There is
-no scheduler yet — this is a development command, not the production path
-(that's the `worker` container in [Shape](#shape), not yet built).
+**Manual trigger:** `python -m app.cli ingest` (PM2.5) and
+`python -m app.cli ingest-weather` (weather) each run one pass against the
+bbox from `.env` and print a summary. There is no scheduler yet — these are
+development commands, not the production path (that's the `worker`
+container in [Shape](#shape), not yet built).
 
 ## Configuration
 
 - **Env vars** (`.env`): infrastructure — DB connection, ports, CORS, log
-  level, H3 resolution, and OpenAQ/ingestion settings (API key, base URL,
-  timeout/retries, the ingestion bounding box). See `.env.example`.
+  level, H3 resolution (grid and weather-sampling), and OpenAQ/Open-Meteo
+  ingestion settings (API key where needed, base URL, timeout/retries, the
+  shared ingestion bounding box). See `.env.example`. A `model_validator`
+  on `Settings` rejects `WEATHER_H3_RESOLUTION` finer than `H3_RESOLUTION`
+  at startup, rather than letting it fail confusingly inside H3 library
+  calls the first time ingestion runs.
 - **Region config** (future `config/region.yaml`): domain tuning — QC
   thresholds, model parameters, PDI weights, alert thresholds. Not yet
   added; there's no model to configure. The ingestion bounding box lives in
-  `.env` for now (`INGEST_BBOX_*`), not this future file — it's config for
-  one adapter, not the shared region concept `/meta` will eventually expose.
+  `.env` for now (`INGEST_BBOX_*`, shared by both `ingest` and
+  `ingest-weather`), not this future file — it's config for the adapters,
+  not the shared region concept `/meta` will eventually expose.
 
 ## Extension points
 
@@ -200,6 +238,7 @@ no scheduler yet — this is a development command, not the production path
 | New forecast model | New module under `app/domain`, selected by config |
 | New pollutant | New config entry + source field mapping (schema is already long-format) |
 | New pollution-data source (CPCB, satellite, private sensors) | New class implementing `PollutionDataProvider` in `app/ingestion/`; `SensorIngestionService` and the CLI are unchanged — only the wiring (which provider gets constructed) picks it |
+| New weather source (ECMWF, another provider) | New class implementing `WeatherProvider` in `app/ingestion/`; `WeatherIngestionService`, the representative-sampling logic, and the CLI are all unchanged |
 | Satellite data specifically | Also likely a new `gridded_observation`-shaped table + a fusion nowcaster, since it isn't point-station data; forecaster/PDI/alerts/API/frontend untouched |
 | New region | New config file |
 | Scheduled ingestion | A worker process calling `SensorIngestionService.run()` on a timer, replacing the manual `python -m app.cli ingest` trigger — the service itself doesn't change |

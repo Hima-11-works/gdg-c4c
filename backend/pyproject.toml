@@ -20,7 +20,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=9.1,<10.0",
-    "pytest-asyncio>=0.24,<1.0",
+    # 0.26 and earlier cap pytest<9, which downgrades pytest silently on
+    # install — 1.x is the first line compatible with pytest 9.
+    "pytest-asyncio>=1.0,<2.0",
     "ruff>=0.16,<0.17",
 ]
 

@@ -23,7 +23,6 @@ Auth: X-API-Key header (required by OpenAQ v3 on every endpoint).
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime
 
@@ -32,13 +31,11 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.domain.providers import ProviderError
 from app.domain.types import PM25, BoundingBox, SensorReading
+from app.ingestion import http
 
 logger = logging.getLogger(__name__)
 
 SOURCE = "openaq"
-
-_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
-_BACKOFF_BASE_SECONDS = 0.5
 
 
 # --- OpenAQ wire format (internal to this module; never leaks outside it) ---
@@ -129,10 +126,8 @@ class OpenAQProvider:
         self._locations_limit = locations_limit
 
     async def fetch_readings(self, bbox: BoundingBox, *, since: datetime) -> list[SensorReading]:
-        try:
-            locations = await self._fetch_locations(bbox)
-        except _OpenAQError as exc:
-            raise ProviderError(f"OpenAQ: {exc}") from exc
+        # Fatal if this fails: nothing to iterate without it.
+        locations = await self._fetch_locations(bbox)
 
         pm25_by_location: dict[int, tuple[_Location, _SensorInfo]] = {}
         for location in locations:
@@ -154,13 +149,16 @@ class OpenAQProvider:
         return readings
 
     async def _fetch_locations(self, bbox: BoundingBox) -> list[_Location]:
-        payload = await self._get_json(
-            "/locations", {"bbox": _format_bbox(bbox), "limit": self._locations_limit}
-        )
+        try:
+            payload = await self._get_json(
+                "/locations", {"bbox": _format_bbox(bbox), "limit": self._locations_limit}
+            )
+        except http.RequestFailedError as exc:
+            raise ProviderError(f"OpenAQ: {exc}") from exc
         try:
             parsed = _LocationsResponse.model_validate(payload)
         except ValidationError as exc:
-            raise _OpenAQError(f"malformed /locations response: {exc}") from exc
+            raise ProviderError(f"OpenAQ: malformed /locations response: {exc}") from exc
         return parsed.results
 
     async def _fetch_reading(
@@ -168,7 +166,7 @@ class OpenAQProvider:
     ) -> SensorReading | None:
         try:
             payload = await self._get_json(f"/locations/{location.id}/latest", {})
-        except _OpenAQError as exc:
+        except http.RequestFailedError as exc:
             # One flaky station shouldn't fail the whole ingestion run.
             logger.warning(
                 "OpenAQ: skipping location %d (%r) after /latest failed: %s",
@@ -250,56 +248,12 @@ class OpenAQProvider:
             return None
 
     async def _get_json(self, path: str, params: dict[str, object]) -> dict:
-        url = f"{self._base_url}{path}"
-        headers = {"X-API-Key": self._api_key}
-        last_error: Exception | None = None
-
-        for attempt in range(1, self._max_retries + 1):
-            try:
-                response = await self._client.get(
-                    url, params=params, headers=headers, timeout=self._timeout_seconds
-                )
-            except httpx.TimeoutException as exc:
-                last_error = exc
-                logger.warning(
-                    "OpenAQ request timed out (attempt %d/%d): %s", attempt, self._max_retries, url
-                )
-            except httpx.TransportError as exc:
-                last_error = exc
-                logger.warning(
-                    "OpenAQ request failed (attempt %d/%d): %s: %s",
-                    attempt,
-                    self._max_retries,
-                    url,
-                    exc,
-                )
-            else:
-                if response.status_code == 200:
-                    try:
-                        return response.json()
-                    except ValueError as exc:
-                        raise _OpenAQError(f"invalid JSON from {url}: {exc}") from exc
-                if response.status_code not in _RETRYABLE_STATUS_CODES:
-                    raise _OpenAQError(
-                        f"{url} returned {response.status_code}: {response.text[:200]}"
-                    )
-                last_error = _OpenAQError(f"{url} returned {response.status_code}")
-                logger.warning(
-                    "OpenAQ returned %d (attempt %d/%d): %s",
-                    response.status_code,
-                    attempt,
-                    self._max_retries,
-                    url,
-                )
-
-            if attempt < self._max_retries:
-                await asyncio.sleep(_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
-
-        raise _OpenAQError(
-            f"{url} failed after {self._max_retries} attempt(s): {last_error}"
-        ) from last_error
-
-
-class _OpenAQError(Exception):
-    """Internal to this module — always converted to ProviderError at the
-    fetch_readings boundary so callers never need to know OpenAQ exists."""
+        return await http.get_json(
+            self._client,
+            f"{self._base_url}{path}",
+            params=params,
+            headers={"X-API-Key": self._api_key},
+            timeout_seconds=self._timeout_seconds,
+            max_retries=self._max_retries,
+            log_prefix="OpenAQ",
+        )

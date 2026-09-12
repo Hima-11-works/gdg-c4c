@@ -5,12 +5,15 @@ from __future__ import annotations
 from datetime import datetime
 
 from geoalchemy2.elements import WKTElement
+from psycopg.errors import UniqueViolation
 from sqlalchemy import Insert, Select, select
 from sqlalchemy.engine import Row
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.domain.h3_grid import assert_valid_cell
+from app.domain.repositories import DuplicateReadingError
 from app.domain.types import WeatherReading
 from app.models.tables import weather_reading as weather_reading_table
 
@@ -96,8 +99,16 @@ class SqlWeatherReadingRepository:
 
     def add(self, reading: WeatherReading) -> WeatherReading:
         assert_valid_cell(reading.h3_cell, resolution=get_settings().h3_resolution)
-        row = self._session.execute(_insert_stmt(reading)).one()
-        self._session.commit()
+        try:
+            row = self._session.execute(_insert_stmt(reading)).one()
+            self._session.commit()
+        except IntegrityError as exc:
+            self._session.rollback()
+            if isinstance(exc.orig, UniqueViolation):
+                raise DuplicateReadingError(
+                    f"{reading.h3_cell}@{reading.measured_at.isoformat()}"
+                ) from exc
+            raise
         return _row_to_domain(row)
 
     def list_since(self, since: datetime) -> list[WeatherReading]:

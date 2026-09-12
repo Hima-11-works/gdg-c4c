@@ -8,10 +8,12 @@ from app.domain.types import (
     Alert,
     AlertSeverity,
     BoundingBox,
+    Coordinate,
     Forecast,
     GridState,
     SensorReading,
     WeatherReading,
+    WeatherSample,
 )
 
 UTC_NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
@@ -40,6 +42,36 @@ def test_bounding_box_rejects_out_of_range_coordinates(field: str, value: float)
     kwargs = {"min_lat": 37.6, "min_lon": -122.6, "max_lat": 37.9, "max_lon": -122.1, field: value}
     with pytest.raises(ValueError, match=field):
         BoundingBox(**kwargs)
+
+
+def test_coordinate_accepts_valid_data() -> None:
+    Coordinate(latitude=0.0, longitude=0.0)  # equator/prime meridian: not falsy-invalid
+
+
+@pytest.mark.parametrize(
+    ("field", "value"), [("latitude", 91.0), ("latitude", -91.0), ("longitude", 181.0)]
+)
+def test_coordinate_rejects_out_of_range(field: str, value: float) -> None:
+    kwargs = {"latitude": 0.0, "longitude": 0.0, field: value}
+    with pytest.raises(ValueError, match=field):
+        Coordinate(**kwargs)
+
+
+def test_weather_sample_accepts_valid_data() -> None:
+    sample = WeatherSample(
+        wind_speed=3.5, wind_direction=270.0, precipitation=0.0, measured_at=UTC_NOW
+    )
+    assert sample.boundary_layer_height is None
+
+
+def test_weather_sample_rejects_negative_wind_speed() -> None:
+    with pytest.raises(ValueError, match="wind_speed"):
+        WeatherSample(wind_speed=-1.0, wind_direction=0.0, precipitation=0.0, measured_at=UTC_NOW)
+
+
+def test_weather_sample_rejects_naive_datetime() -> None:
+    with pytest.raises(ValueError, match="UTC"):
+        WeatherSample(wind_speed=1.0, wind_direction=0.0, precipitation=0.0, measured_at=NAIVE_NOW)
 
 
 def test_sensor_reading_accepts_valid_data() -> None:

@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from app.core.config import Settings
 
 
@@ -22,3 +25,38 @@ def test_password_is_not_exposed_in_repr() -> None:
     settings = Settings(postgres_user="u", postgres_password="secret-value", postgres_db="d")
 
     assert "secret-value" not in repr(settings)
+
+
+def test_weather_resolution_coarser_than_grid_is_valid() -> None:
+    settings = Settings(
+        postgres_user="u",
+        postgres_password="p",
+        postgres_db="d",
+        h3_resolution=8,
+        weather_h3_resolution=5,
+    )
+
+    assert settings.weather_h3_resolution == 5
+
+
+def test_weather_resolution_equal_to_grid_is_valid() -> None:
+    settings = Settings(
+        postgres_user="u",
+        postgres_password="p",
+        postgres_db="d",
+        h3_resolution=6,
+        weather_h3_resolution=6,
+    )
+
+    assert settings.weather_h3_resolution == 6
+
+
+def test_weather_resolution_finer_than_grid_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="WEATHER_H3_RESOLUTION"):
+        Settings(
+            postgres_user="u",
+            postgres_password="p",
+            postgres_db="d",
+            h3_resolution=5,
+            weather_h3_resolution=8,
+        )

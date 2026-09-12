@@ -3,7 +3,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 
@@ -50,6 +50,31 @@ class Settings(BaseSettings):
     ingest_bbox_max_lon: float = -122.10
     # A reading older than this is considered stale and dropped.
     ingest_max_reading_age_hours: float = Field(default=3.0, gt=0)
+
+    # --- Open-Meteo weather ingestion (app.ingestion.open_meteo) ---
+    open_meteo_base_url: str = "https://api.open-meteo.com/v1/forecast"
+    open_meteo_timeout_seconds: float = Field(default=10.0, gt=0)
+    open_meteo_max_retries: int = Field(default=3, ge=1, le=10)
+    # Open-Meteo doesn't document a hard cap; this is a self-imposed safety
+    # limit so one run never sends an unbounded number of locations in a
+    # single request — batches beyond it are split into multiple requests.
+    open_meteo_max_locations_per_request: int = Field(default=100, ge=1, le=1000)
+
+    # Weather is sampled at this coarser resolution and fanned out to every
+    # H3_RESOLUTION cell within each sampled cell — one API call covers many
+    # fine cells, since weather varies far less over a city block than PM2.5
+    # does. Must be <= h3_resolution (checked below).
+    weather_h3_resolution: int = Field(default=5, ge=0, le=15)
+
+    @model_validator(mode="after")
+    def _check_weather_resolution_not_finer_than_grid(self) -> "Settings":
+        if self.weather_h3_resolution > self.h3_resolution:
+            raise ValueError(
+                f"WEATHER_H3_RESOLUTION ({self.weather_h3_resolution}) must be <= "
+                f"H3_RESOLUTION ({self.h3_resolution}) — weather is sampled coarser "
+                "than the grid, not finer."
+            )
+        return self
 
     @property
     def cors_origin_list(self) -> list[str]:

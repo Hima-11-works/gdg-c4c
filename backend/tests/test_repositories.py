@@ -155,6 +155,23 @@ def test_weather_reading_round_trip_and_latest_for_cell(db_session, cell: str) -
     assert repo.latest_for_cell("8828308281fffff") != saved  # different cell
 
 
+def test_weather_reading_duplicate_identity_is_rejected(db_session, cell: str) -> None:
+    repo = SqlWeatherReadingRepository(db_session)
+    reading = WeatherReading(
+        h3_cell=cell,
+        latitude=37.7749,
+        longitude=-122.4194,
+        wind_speed=3.2,
+        wind_direction=270.0,
+        precipitation=0.0,
+        measured_at=NOW,
+    )
+    repo.add(reading)
+
+    with pytest.raises(DuplicateReadingError):
+        repo.add(reading)
+
+
 def test_weather_reading_list_latest_returns_one_per_cell(db_session, cell: str) -> None:
     repo = SqlWeatherReadingRepository(db_session)
     repo.add(

@@ -179,7 +179,7 @@ async def test_fetch_readings_skips_reading_with_no_coordinates_at_all() -> None
 
 async def test_retries_on_5xx_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
     sleeps: list[float] = []
-    monkeypatch.setattr("app.ingestion.openaq.asyncio.sleep", _fake_sleep(sleeps))
+    monkeypatch.setattr("app.ingestion.http.asyncio.sleep", _fake_sleep(sleeps))
 
     attempts = {"count": 0}
 
@@ -208,7 +208,7 @@ async def test_retries_on_5xx_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> 
 async def test_raises_provider_error_after_exhausting_retries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("app.ingestion.openaq.asyncio.sleep", _fake_sleep([]))
+    monkeypatch.setattr("app.ingestion.http.asyncio.sleep", _fake_sleep([]))
 
     attempts = {"count": 0}
 
@@ -249,7 +249,7 @@ async def test_raises_provider_error_for_malformed_locations_response() -> None:
 async def test_skips_location_when_its_latest_call_fails_but_keeps_others(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("app.ingestion.openaq.asyncio.sleep", _fake_sleep([]))
+    monkeypatch.setattr("app.ingestion.http.asyncio.sleep", _fake_sleep([]))
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v3/locations":

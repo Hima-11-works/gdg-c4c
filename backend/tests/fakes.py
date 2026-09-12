@@ -12,7 +12,16 @@ from datetime import datetime
 
 from app.domain.providers import ProviderError
 from app.domain.repositories import DuplicateReadingError
-from app.domain.types import Alert, BoundingBox, Forecast, GridState, SensorReading, WeatherReading
+from app.domain.types import (
+    Alert,
+    BoundingBox,
+    Coordinate,
+    Forecast,
+    GridState,
+    SensorReading,
+    WeatherReading,
+    WeatherSample,
+)
 
 
 class FakeSensorReadingRepository:
@@ -42,8 +51,13 @@ class FakeSensorReadingRepository:
 class FakeWeatherReadingRepository:
     def __init__(self) -> None:
         self.readings: list[WeatherReading] = []
+        self._seen_keys: set[tuple[str, datetime]] = set()
 
     def add(self, reading: WeatherReading) -> WeatherReading:
+        key = (reading.h3_cell, reading.measured_at)
+        if key in self._seen_keys:
+            raise DuplicateReadingError(str(key))
+        self._seen_keys.add(key)
         self.readings.append(reading)
         return reading
 
@@ -152,3 +166,30 @@ class FakePollutionDataProvider:
         if self.error is not None:
             raise ProviderError(self.error)
         return list(self.readings)
+
+
+class FakeWeatherProvider:
+    """Implements app.domain.providers.WeatherProvider.
+
+    Returns one sample per point, keyed by exact (lat, lon) match against
+    `samples_by_point` (default: the same fixed sample for every point) —
+    or raises ProviderError if `error` is set.
+    """
+
+    def __init__(
+        self,
+        samples_by_point: dict[Coordinate, WeatherSample | None] | None = None,
+        *,
+        default_sample: WeatherSample | None = None,
+        error: str | None = None,
+    ) -> None:
+        self.samples_by_point = samples_by_point or {}
+        self.default_sample = default_sample
+        self.error = error
+        self.calls: list[list[Coordinate]] = []
+
+    async def fetch_weather(self, points: list[Coordinate]) -> list[WeatherSample | None]:
+        self.calls.append(list(points))
+        if self.error is not None:
+            raise ProviderError(self.error)
+        return [self.samples_by_point.get(p, self.default_sample) for p in points]

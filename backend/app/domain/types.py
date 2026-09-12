@@ -24,6 +24,34 @@ def _require_utc(value: datetime, field: str) -> None:
         raise ValueError(f"{field} must be a timezone-aware UTC datetime, got {value!r}")
 
 
+def _require_valid_weather_values(
+    wind_speed: float, wind_direction: float, precipitation: float
+) -> None:
+    """Shared by WeatherReading and WeatherSample — same physical quantities,
+    different field sets (one is tied to an h3_cell, the other isn't yet)."""
+    if wind_speed < 0:
+        raise ValueError(f"wind_speed must be >= 0: {wind_speed}")
+    if not 0 <= wind_direction < 360:
+        raise ValueError(f"wind_direction must be within [0, 360): {wind_direction}")
+    if precipitation < 0:
+        raise ValueError(f"precipitation must be >= 0: {precipitation}")
+
+
+@dataclass(frozen=True, slots=True)
+class Coordinate:
+    """A single point, used to ask a WeatherProvider for weather at a
+    specific location rather than a whole region."""
+
+    latitude: float
+    longitude: float
+
+    def __post_init__(self) -> None:
+        if not -90 <= self.latitude <= 90:
+            raise ValueError(f"latitude out of range: {self.latitude}")
+        if not -180 <= self.longitude <= 180:
+            raise ValueError(f"longitude out of range: {self.longitude}")
+
+
 @dataclass(frozen=True, slots=True)
 class BoundingBox:
     """A geographic bounding box, used to scope ingestion to a city/region."""
@@ -86,12 +114,27 @@ class WeatherReading:
 
     def __post_init__(self) -> None:
         _require_utc(self.measured_at, "measured_at")
-        if self.wind_speed < 0:
-            raise ValueError(f"wind_speed must be >= 0: {self.wind_speed}")
-        if not 0 <= self.wind_direction < 360:
-            raise ValueError(f"wind_direction must be within [0, 360): {self.wind_direction}")
-        if self.precipitation < 0:
-            raise ValueError(f"precipitation must be >= 0: {self.precipitation}")
+        _require_valid_weather_values(self.wind_speed, self.wind_direction, self.precipitation)
+
+
+@dataclass(frozen=True, slots=True)
+class WeatherSample:
+    """A raw weather reading at a requested point, before it's mapped to
+    any H3 cell. WeatherProvider implementations return these; the
+    ingestion service (which knows about H3) turns each one into one or
+    more WeatherReading rows — see docs/architecture.md on why weather is
+    sampled at coarser representative points and fanned out from there.
+    """
+
+    wind_speed: float
+    wind_direction: float
+    precipitation: float
+    measured_at: datetime
+    boundary_layer_height: float | None = None
+
+    def __post_init__(self) -> None:
+        _require_utc(self.measured_at, "measured_at")
+        _require_valid_weather_values(self.wind_speed, self.wind_direction, self.precipitation)
 
 
 @dataclass(frozen=True, slots=True)
