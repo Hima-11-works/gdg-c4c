@@ -1,0 +1,16 @@
+# Store and check out text files with LF on every OS, so shell scripts,
+# Dockerfiles and files bind-mounted into Linux containers work on Windows.
+* text=auto eol=lf
+
+# Windows-only scripts need CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
