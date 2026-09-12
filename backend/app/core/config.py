@@ -3,7 +3,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 
@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     environment: str = "development"
     log_level: str = "INFO"
     cors_origins: str = "http://localhost:5173"
+
+    # H3 resolution used for every h3_cell column (weather_reading, grid_state,
+    # forecast, alert). Changing it does not rewrite existing rows, so treat a
+    # change as a breaking change to stored data, not a runtime toggle.
+    h3_resolution: int = Field(default=8, ge=0, le=15)
 
     # Credentials have no defaults: they must come from the environment.
     postgres_user: str

@@ -1,0 +1,84 @@
+"""SQLAlchemy-backed implementation of app.domain.repositories.ForecastRepository."""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+from sqlalchemy import Insert, Select, func, select
+from sqlalchemy.engine import Row
+from sqlalchemy.orm import Session
+
+from app.core.config import get_settings
+from app.domain.h3_grid import assert_valid_cell
+from app.domain.types import Forecast
+from app.models.tables import forecast as forecast_table
+
+
+def _row_to_domain(row: Row) -> Forecast:
+    return Forecast(
+        id=row.id,
+        h3_cell=row.h3_cell,
+        generated_at=row.generated_at,
+        forecast_time=row.forecast_time,
+        forecast_hours=row.forecast_hours,
+        predicted_pm25=row.predicted_pm25,
+        confidence=row.confidence,
+    )
+
+
+def _insert_stmt(forecast: Forecast) -> Insert:
+    return (
+        forecast_table.insert()
+        .values(
+            h3_cell=forecast.h3_cell,
+            generated_at=forecast.generated_at,
+            forecast_time=forecast.forecast_time,
+            forecast_hours=forecast.forecast_hours,
+            predicted_pm25=forecast.predicted_pm25,
+            confidence=forecast.confidence,
+        )
+        .returning(forecast_table)
+    )
+
+
+def _list_for_cell_stmt(h3_cell: str, generated_after: datetime | None) -> Select:
+    stmt = select(forecast_table).where(forecast_table.c.h3_cell == h3_cell)
+    if generated_after is not None:
+        stmt = stmt.where(forecast_table.c.generated_at >= generated_after)
+    return stmt.order_by(forecast_table.c.forecast_time)
+
+
+def _latest_for_cell_stmt(h3_cell: str) -> Select:
+    latest_run = (
+        select(func.max(forecast_table.c.generated_at))
+        .where(forecast_table.c.h3_cell == h3_cell)
+        .scalar_subquery()
+    )
+    return (
+        select(forecast_table)
+        .where(forecast_table.c.h3_cell == h3_cell, forecast_table.c.generated_at == latest_run)
+        .order_by(forecast_table.c.forecast_hours)
+    )
+
+
+class SqlForecastRepository:
+    """Implements app.domain.repositories.ForecastRepository against PostgreSQL."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(self, forecast: Forecast) -> Forecast:
+        assert_valid_cell(forecast.h3_cell, resolution=get_settings().h3_resolution)
+        row = self._session.execute(_insert_stmt(forecast)).one()
+        self._session.commit()
+        return _row_to_domain(row)
+
+    def list_for_cell(
+        self, h3_cell: str, *, generated_after: datetime | None = None
+    ) -> list[Forecast]:
+        rows = self._session.execute(_list_for_cell_stmt(h3_cell, generated_after)).all()
+        return [_row_to_domain(row) for row in rows]
+
+    def latest_for_cell(self, h3_cell: str) -> list[Forecast]:
+        rows = self._session.execute(_latest_for_cell_stmt(h3_cell)).all()
+        return [_row_to_domain(row) for row in rows]

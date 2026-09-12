@@ -1,3 +1,5 @@
+alembic==1.20.0
+    # via pollution-backend (pyproject.toml)
 annotated-doc==0.0.5
     # via fastapi
 annotated-types==0.8.0
@@ -10,14 +12,24 @@ click==8.5.0
     # via uvicorn
 fastapi==0.141.1
     # via pollution-backend (pyproject.toml)
+geoalchemy2==0.20.0
+    # via pollution-backend (pyproject.toml)
 greenlet==3.5.5
     # via sqlalchemy
 h11==0.16.0
     # via uvicorn
+h3==4.5.0
+    # via pollution-backend (pyproject.toml)
 httptools==0.8.0
     # via uvicorn
 idna==3.19
     # via anyio
+mako==1.4.1
+    # via alembic
+markupsafe==3.0.3
+    # via mako
+packaging==26.3
+    # via geoalchemy2
 psycopg==3.3.5
     # via pollution-backend (pyproject.toml)
 psycopg-binary==3.3.5
@@ -37,11 +49,15 @@ python-dotenv==1.2.3
 pyyaml==6.0.3
     # via uvicorn
 sqlalchemy==2.0.52
-    # via pollution-backend (pyproject.toml)
+    # via
+    #   pollution-backend (pyproject.toml)
+    #   alembic
+    #   geoalchemy2
 starlette==1.6.0
     # via fastapi
 typing-extensions==4.16.0
     # via
+    #   alembic
     #   anyio
     #   fastapi
     #   psycopg

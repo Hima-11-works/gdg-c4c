@@ -1,0 +1,161 @@
+"""Pure validation tests for app.domain.types — no database involved."""
+
+from datetime import UTC, datetime
+
+import pytest
+
+from app.domain.types import (
+    Alert,
+    AlertSeverity,
+    Forecast,
+    GridState,
+    SensorReading,
+    WeatherReading,
+)
+
+UTC_NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+NAIVE_NOW = datetime(2026, 1, 1, 12, 0)
+
+
+def test_sensor_reading_accepts_valid_data() -> None:
+    reading = SensorReading(
+        source="openaq",
+        external_sensor_id="123",
+        latitude=37.7749,
+        longitude=-122.4194,
+        pollutant="pm25",
+        value=12.3,
+        unit="ug/m3",
+        measured_at=UTC_NOW,
+    )
+    assert reading.id is None
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("latitude", 91.0), ("latitude", -91.0), ("longitude", 181.0), ("longitude", -181.0)],
+)
+def test_sensor_reading_rejects_out_of_range_coordinates(field: str, value: float) -> None:
+    kwargs = {
+        "source": "openaq",
+        "external_sensor_id": "123",
+        "latitude": 0.0,
+        "longitude": 0.0,
+        "pollutant": "pm25",
+        "value": 12.3,
+        "unit": "ug/m3",
+        "measured_at": UTC_NOW,
+        field: value,
+    }
+    with pytest.raises(ValueError, match=field):
+        SensorReading(**kwargs)
+
+
+def test_sensor_reading_rejects_naive_datetime() -> None:
+    with pytest.raises(ValueError, match="UTC"):
+        SensorReading(
+            source="openaq",
+            external_sensor_id="123",
+            latitude=0.0,
+            longitude=0.0,
+            pollutant="pm25",
+            value=1.0,
+            unit="ug/m3",
+            measured_at=NAIVE_NOW,
+        )
+
+
+def test_weather_reading_rejects_negative_wind_speed() -> None:
+    with pytest.raises(ValueError, match="wind_speed"):
+        WeatherReading(
+            h3_cell="8828308281fffff",
+            latitude=0.0,
+            longitude=0.0,
+            wind_speed=-1.0,
+            wind_direction=180.0,
+            precipitation=0.0,
+            measured_at=UTC_NOW,
+        )
+
+
+def test_weather_reading_rejects_wind_direction_out_of_range() -> None:
+    with pytest.raises(ValueError, match="wind_direction"):
+        WeatherReading(
+            h3_cell="8828308281fffff",
+            latitude=0.0,
+            longitude=0.0,
+            wind_speed=1.0,
+            wind_direction=360.0,
+            precipitation=0.0,
+            measured_at=UTC_NOW,
+        )
+
+
+def test_weather_reading_boundary_layer_height_is_optional() -> None:
+    reading = WeatherReading(
+        h3_cell="8828308281fffff",
+        latitude=0.0,
+        longitude=0.0,
+        wind_speed=1.0,
+        wind_direction=180.0,
+        precipitation=0.0,
+        measured_at=UTC_NOW,
+    )
+    assert reading.boundary_layer_height is None
+
+
+def test_grid_state_rejects_confidence_out_of_range() -> None:
+    with pytest.raises(ValueError, match="confidence"):
+        GridState(
+            h3_cell="8828308281fffff",
+            timestamp=UTC_NOW,
+            pm25=10.0,
+            pdi=50.0,
+            confidence=1.5,
+            wind_speed=1.0,
+            wind_direction=180.0,
+        )
+
+
+def test_forecast_rejects_forecast_time_before_generated_at() -> None:
+    with pytest.raises(ValueError, match="forecast_time"):
+        Forecast(
+            h3_cell="8828308281fffff",
+            generated_at=UTC_NOW,
+            forecast_time=UTC_NOW,
+            forecast_hours=3,
+            predicted_pm25=10.0,
+            confidence=0.5,
+        )
+
+
+def test_forecast_rejects_non_positive_hours() -> None:
+    with pytest.raises(ValueError, match="forecast_hours"):
+        Forecast(
+            h3_cell="8828308281fffff",
+            generated_at=UTC_NOW,
+            forecast_time=datetime(2026, 1, 1, 15, tzinfo=UTC),
+            forecast_hours=0,
+            predicted_pm25=10.0,
+            confidence=0.5,
+        )
+
+
+def test_alert_rejects_empty_message() -> None:
+    with pytest.raises(ValueError, match="message"):
+        Alert(
+            h3_cell="8828308281fffff",
+            severity=AlertSeverity.WARNING,
+            message="   ",
+            created_at=UTC_NOW,
+        )
+
+
+def test_alert_forecast_time_is_optional() -> None:
+    alert = Alert(
+        h3_cell="8828308281fffff",
+        severity=AlertSeverity.CRITICAL,
+        message="PM2.5 rising fast",
+        created_at=UTC_NOW,
+    )
+    assert alert.forecast_time is None

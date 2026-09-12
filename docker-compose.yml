@@ -33,7 +33,10 @@ services:
         condition: service_healthy
     volumes:
       - ./backend/app:/app/app
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    # Overrides the Dockerfile's CMD (which omits --reload) for dev hot-reload;
+    # keep the "alembic upgrade head &&" prefix here too, or schema changes
+    # won't be applied when iterating with docker-compose.
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     healthcheck:
       test:
         - CMD

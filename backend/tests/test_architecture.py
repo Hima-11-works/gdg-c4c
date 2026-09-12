@@ -11,8 +11,10 @@ APP_DIR = Path(__file__).resolve().parents[1] / "app"
 ALLOWED_IMPORTS: dict[str, set[str]] = {
     "core": set(),
     "domain": {"core"},
-    "models": {"core"},
-    "db": {"core"},
+    # models depends on domain only for the AlertSeverity enum used as a
+    # column type (app.models.tables); it has no other domain knowledge.
+    "models": {"core", "domain"},
+    "db": {"core", "domain", "models"},
     "ingestion": {"core", "domain"},
     "services": {"core", "domain", "ingestion", "models", "db"},
     "api": {"core", "domain", "db"},

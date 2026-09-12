@@ -1,11 +1,14 @@
 # Pollution Intelligence Platform
 
 Project scaffold for a pollution intelligence MVP (PM2.5, H3 grid, weather-driven
-spread predictions). **No pollution functionality is implemented yet**. So far
-the project has:
+spread predictions). **No external API ingestion or pollution modeling is
+implemented yet** — this is the data layer it will run on top of. So far the
+project has:
 - a FastAPI backend with health and readiness endpoints
-- a React + TypeScript frontend that displays them
-- PostgreSQL/PostGIS via Docker Compose
+- a database layer: schema, migrations, and a repository per entity
+  (`SensorReading`, `WeatherReading`, `GridState`, `Forecast`, `Alert`)
+- a React + TypeScript frontend that displays backend health
+- PostgreSQL/PostGIS via Docker Compose, with Alembic migrations
 
 See `docs/architecture.md` for the full system design.
 
@@ -58,6 +61,7 @@ override it.
 | `POSTGRES_HOST`, `POSTGRES_PORT` | backend | For host-side runs (`localhost:5432`). Compose overrides them to `db:5432` for the api container |
 | `API_PORT` | Compose | Host port for the API |
 | `ENVIRONMENT`, `LOG_LEVEL`, `CORS_ORIGINS` | backend | |
+| `H3_RESOLUTION` | backend | H3 resolution (0-15, default 8) for every `h3_cell` column. Changing it on an existing database does not rewrite stored rows — treat it as a breaking change to stored data |
 | `VITE_API_BASE_URL` (in `frontend/.env`) | Vite | Where the frontend calls the backend |
 
 The backend builds the database URL from the `POSTGRES_*` parts, so credentials
@@ -70,13 +74,17 @@ are defined only once.
 ├─ docker-compose.yml       # db (PostGIS) + api
 ├─ .env.example             # copy to .env
 ├─ backend/
+│  ├─ alembic.ini
+│  ├─ alembic/
+│  │  └─ versions/          # 0001_initial_schema.py
 │  ├─ app/
 │  │  ├─ api/               # FastAPI routes + request/response schemas
 │  │  ├─ core/              # settings
 │  │  ├─ db/                # SQLAlchemy engine/session
-│  │  ├─ domain/            # (future) pure domain types + pollution model, no I/O
+│  │  │  └─ repositories/   # concrete (SQLAlchemy) repository implementations
+│  │  ├─ domain/            # pure types, repository Protocols, H3 validation — no I/O
 │  │  ├─ ingestion/         # (future) OpenAQ / Open-Meteo adapters
-│  │  ├─ models/            # (future) database table definitions
+│  │  ├─ models/            # database table definitions (the schema)
 │  │  ├─ services/          # (future) pipeline / business logic
 │  │  └─ main.py            # FastAPI app entrypoint
 │  ├─ tests/
@@ -117,6 +125,25 @@ ruff check . && ruff format --check .
 Dependencies: edit ranges in `pyproject.toml`, then run
 `./scripts/lock-backend.sh` to regenerate `requirements.lock`.
 
+## Database
+
+Docker Compose runs migrations automatically (`alembic upgrade head`) before
+starting the API. Outside Docker:
+
+```bash
+cd backend
+alembic upgrade head          # apply migrations
+alembic downgrade -1          # roll back one revision
+```
+
+The schema is defined once in `app/models/tables.py` and mirrored by hand in
+`alembic/versions/0001_initial_schema.py` — there was no live database
+available while building this to autogenerate a migration against, so the
+two are kept in sync manually (see that migration's docstring). Repositories
+in `app/db/repositories/` are the only code that builds SQL against these
+tables; everything above `app/db` depends on the `app.domain.repositories`
+Protocols instead.
+
 ## Frontend
 
 ```bash
@@ -135,5 +162,6 @@ npm run format     # prettier --write
 - The `api` container waits for the Postgres healthcheck. Its own healthcheck
   uses `/health/ready`, so `docker compose ps` shows it healthy only once
   PostGIS is reachable.
-- There are no database tables yet (`app/models` is empty), so there is nothing
-  to migrate.
+- Nothing writes to the database yet — ingestion (OpenAQ/Open-Meteo) and the
+  pollution model are not implemented. The repositories exist and are tested,
+  but only migrations create rows so far.

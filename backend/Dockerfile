@@ -13,6 +13,8 @@ COPY requirements.lock ./
 RUN pip install -r requirements.lock
 
 COPY pyproject.toml ./
+COPY alembic.ini ./
+COPY alembic ./alembic
 COPY app ./app
 RUN pip install --no-deps .
 
@@ -21,4 +23,7 @@ USER appuser
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Migrations run before every start, including under docker-compose's
+# --reload dev command: alembic upgrade is a no-op once the schema is
+# already at head, so re-running it on each restart is harmless.
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
