@@ -1,0 +1,65 @@
+annotated-doc==0.0.5
+    # via fastapi
+annotated-types==0.8.0
+    # via pydantic
+anyio==4.15.1
+    # via
+    #   starlette
+    #   watchfiles
+click==8.5.0
+    # via uvicorn
+fastapi==0.141.1
+    # via pollution-backend (pyproject.toml)
+greenlet==3.5.5
+    # via sqlalchemy
+h11==0.16.0
+    # via uvicorn
+httptools==0.8.0
+    # via uvicorn
+idna==3.19
+    # via anyio
+psycopg==3.3.5
+    # via pollution-backend (pyproject.toml)
+psycopg-binary==3.3.5
+    # via psycopg
+pydantic==2.13.5
+    # via
+    #   fastapi
+    #   pydantic-settings
+pydantic-core==2.46.5
+    # via pydantic
+pydantic-settings==2.15.0
+    # via pollution-backend (pyproject.toml)
+python-dotenv==1.2.3
+    # via
+    #   pydantic-settings
+    #   uvicorn
+pyyaml==6.0.3
+    # via uvicorn
+sqlalchemy==2.0.52
+    # via pollution-backend (pyproject.toml)
+starlette==1.6.0
+    # via fastapi
+typing-extensions==4.16.0
+    # via
+    #   anyio
+    #   fastapi
+    #   psycopg
+    #   pydantic
+    #   pydantic-core
+    #   sqlalchemy
+    #   starlette
+    #   typing-inspection
+typing-inspection==0.4.4
+    # via
+    #   fastapi
+    #   pydantic
+    #   pydantic-settings
+uvicorn==0.52.4
+    # via pollution-backend (pyproject.toml)
+uvloop==0.22.1
+    # via uvicorn
+watchfiles==1.2.0
+    # via uvicorn
+websockets==17.1
+    # via uvicorn
