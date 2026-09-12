@@ -14,8 +14,20 @@ from typing import Protocol
 from app.domain.types import Alert, Forecast, GridState, SensorReading, WeatherReading
 
 
+class DuplicateReadingError(Exception):
+    """Raised by SensorReadingRepository.add() for a reading that already
+    exists (same source, external_sensor_id, pollutant, and measured_at).
+
+    A domain-level exception rather than e.g. sqlalchemy.exc.IntegrityError
+    so callers (app.services.ingestion) can catch "this was a duplicate"
+    without knowing anything about the storage backend.
+    """
+
+
 class SensorReadingRepository(Protocol):
-    def add(self, reading: SensorReading) -> SensorReading: ...
+    def add(self, reading: SensorReading) -> SensorReading:
+        """Raises DuplicateReadingError for an exact repeat (see above)."""
+        ...
 
     def list_since(
         self, since: datetime, *, pollutant: str | None = None

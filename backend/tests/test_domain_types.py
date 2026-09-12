@@ -7,6 +7,7 @@ import pytest
 from app.domain.types import (
     Alert,
     AlertSeverity,
+    BoundingBox,
     Forecast,
     GridState,
     SensorReading,
@@ -15,6 +16,30 @@ from app.domain.types import (
 
 UTC_NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 NAIVE_NOW = datetime(2026, 1, 1, 12, 0)
+
+
+def test_bounding_box_accepts_valid_data() -> None:
+    BoundingBox(min_lat=37.6, min_lon=-122.6, max_lat=37.9, max_lon=-122.1)
+
+
+def test_bounding_box_rejects_inverted_latitude() -> None:
+    with pytest.raises(ValueError, match="min_lat"):
+        BoundingBox(min_lat=38.0, min_lon=-122.6, max_lat=37.9, max_lon=-122.1)
+
+
+def test_bounding_box_rejects_inverted_longitude() -> None:
+    with pytest.raises(ValueError, match="min_lon"):
+        BoundingBox(min_lat=37.6, min_lon=-122.0, max_lat=37.9, max_lon=-122.1)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("min_lat", 91.0), ("max_lat", -91.0), ("min_lon", 181.0), ("max_lon", -181.0)],
+)
+def test_bounding_box_rejects_out_of_range_coordinates(field: str, value: float) -> None:
+    kwargs = {"min_lat": 37.6, "min_lon": -122.6, "max_lat": 37.9, "max_lon": -122.1, field: value}
+    with pytest.raises(ValueError, match=field):
+        BoundingBox(**kwargs)
 
 
 def test_sensor_reading_accepts_valid_data() -> None:

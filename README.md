@@ -1,11 +1,14 @@
 # Pollution Intelligence Platform
 
 Project scaffold for a pollution intelligence MVP (PM2.5, H3 grid, weather-driven
-spread predictions). **External ingestion (OpenAQ/Open-Meteo) and the pollution
-model are not implemented yet** — every endpoint falls back to deterministic
-demo data until they are. So far the project has:
+spread predictions). **Weather ingestion and the pollution model are not
+implemented yet** — every endpoint falls back to deterministic demo data
+until real rows exist. So far the project has:
 - a FastAPI backend: `/api/v1` (sensors, weather, grid, cells, alerts) plus
   health/readiness, with a consistent error shape and OpenAPI docs at `/docs`
+- OpenAQ ingestion for PM2.5 (`python -m app.cli ingest`), behind a
+  `PollutionDataProvider` interface so other sources (CPCB, satellite,
+  private sensors) can be added later without touching anything downstream
 - a database layer: schema, migrations, and a repository per entity
   (`SensorReading`, `WeatherReading`, `GridState`, `Forecast`, `Alert`)
 - a React + TypeScript frontend that displays backend health
@@ -81,6 +84,10 @@ override it.
 | `API_PORT` | Compose | Host port for the API |
 | `ENVIRONMENT`, `LOG_LEVEL`, `CORS_ORIGINS` | backend | |
 | `H3_RESOLUTION` | backend | H3 resolution (0-15, default 8) for every `h3_cell` column. Changing it on an existing database does not rewrite stored rows — treat it as a breaking change to stored data |
+| `OPENAQ_API_KEY` | ingestion | Required to ingest ([get one free](https://explore.openaq.org/register)). Leave blank to run everything else without it |
+| `OPENAQ_BASE_URL`, `OPENAQ_TIMEOUT_SECONDS`, `OPENAQ_MAX_RETRIES`, `OPENAQ_LOCATIONS_LIMIT` | ingestion | OpenAQ adapter tuning — see `.env.example` |
+| `INGEST_BBOX_MIN_LAT`/`MIN_LON`/`MAX_LAT`/`MAX_LON` | ingestion | Bounding box to ingest (default: San Francisco, matching the demo data) |
+| `INGEST_MAX_READING_AGE_HOURS` | ingestion | A fetched reading older than this is dropped as stale |
 | `VITE_API_BASE_URL` (in `frontend/.env`) | Vite | Where the frontend calls the backend |
 
 The backend builds the database URL from the `POSTGRES_*` parts, so credentials
@@ -102,10 +109,11 @@ are defined only once.
 │  │  ├─ core/              # settings
 │  │  ├─ db/                # SQLAlchemy engine/session
 │  │  │  └─ repositories/   # concrete (SQLAlchemy) repository implementations
-│  │  ├─ domain/            # pure types, repository Protocols, H3 validation — no I/O
-│  │  ├─ ingestion/         # (future) OpenAQ / Open-Meteo adapters
+│  │  ├─ domain/            # pure types, repository/provider Protocols, H3 validation — no I/O
+│  │  ├─ ingestion/         # openaq.py (implemented); Open-Meteo/fixtures (future)
 │  │  ├─ models/            # database table definitions (the schema)
-│  │  ├─ services/          # business logic per resource + the demo-data fallback
+│  │  ├─ services/          # business logic per resource, demo-data fallback, ingestion orchestration
+│  │  ├─ cli.py             # dev commands — `python -m app.cli ingest`
 │  │  └─ main.py            # FastAPI app entrypoint
 │  ├─ tests/
 │  ├─ pyproject.toml        # dependency ranges
@@ -164,6 +172,27 @@ in `app/db/repositories/` are the only code that builds SQL against these
 tables; everything above `app/db` depends on the `app.domain.repositories`
 Protocols instead.
 
+## Ingestion
+
+```bash
+cd backend
+python -m app.cli ingest                                    # bbox from .env
+python -m app.cli ingest --min-lat 28.4 --min-lon 76.8 \
+                          --max-lat 28.9 --max-lon 77.4      # override for one run
+```
+
+Requires `OPENAQ_API_KEY` in `.env` and the database running. Under Docker
+Compose, run it inside the `api` container instead: `docker compose exec
+api python -m app.cli ingest`. Fetches
+recent PM2.5 readings for the configured bounding box from OpenAQ,
+normalizes them into `SensorReading`, and saves them — skipping exact
+duplicates (same source/sensor/pollutant/timestamp) and stale readings
+(older than `INGEST_MAX_READING_AGE_HOURS`). A network or API failure
+prints a message and exits 1; it never crashes with a traceback. There is
+no scheduler yet — this is a manual trigger for local development. See
+`docs/architecture.md` for the full fetch flow and how to add another
+source (CPCB, satellite, private sensors) behind the same interface.
+
 ## Frontend
 
 ```bash
@@ -182,9 +211,8 @@ npm run format     # prettier --write
 - The `api` container waits for the Postgres healthcheck. Its own healthcheck
   uses `/health/ready`, so `docker compose ps` shows it healthy only once
   PostGIS is reachable.
-- Nothing writes to the database yet — ingestion (OpenAQ/Open-Meteo) and the
-  pollution model are not implemented. The repositories exist and are tested,
-  but only migrations create rows so far. Every `/api/v1/*` endpoint falls
-  back to deterministic demo data (`app/services/demo_data.py`) when its
-  repository query is empty, which today means always — see `is_demo` in
-  every response.
+- OpenAQ ingestion writes `sensor_reading` rows when triggered manually
+  (`python -m app.cli ingest`); nothing else writes yet — weather ingestion
+  and the pollution model aren't implemented. Every `/api/v1/*` endpoint
+  falls back to deterministic demo data (`app/services/demo_data.py`) when
+  its repository query is empty — see `is_demo` in every response.

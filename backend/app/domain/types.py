@@ -25,6 +25,28 @@ def _require_utc(value: datetime, field: str) -> None:
 
 
 @dataclass(frozen=True, slots=True)
+class BoundingBox:
+    """A geographic bounding box, used to scope ingestion to a city/region."""
+
+    min_lat: float
+    min_lon: float
+    max_lat: float
+    max_lon: float
+
+    def __post_init__(self) -> None:
+        for name, lat in (("min_lat", self.min_lat), ("max_lat", self.max_lat)):
+            if not -90 <= lat <= 90:
+                raise ValueError(f"{name} out of range: {lat}")
+        for name, lon in (("min_lon", self.min_lon), ("max_lon", self.max_lon)):
+            if not -180 <= lon <= 180:
+                raise ValueError(f"{name} out of range: {lon}")
+        if self.min_lat >= self.max_lat:
+            raise ValueError(f"min_lat ({self.min_lat}) must be < max_lat ({self.max_lat})")
+        if self.min_lon >= self.max_lon:
+            raise ValueError(f"min_lon ({self.min_lon}) must be < max_lon ({self.max_lon})")
+
+
+@dataclass(frozen=True, slots=True)
 class SensorReading:
     """A single pollutant reading from a physical station."""
 

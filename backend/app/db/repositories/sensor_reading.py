@@ -10,10 +10,13 @@ from __future__ import annotations
 from datetime import datetime
 
 from geoalchemy2.elements import WKTElement
+from psycopg.errors import UniqueViolation
 from sqlalchemy import Insert, Select, select
 from sqlalchemy.engine import Row
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.domain.repositories import DuplicateReadingError
 from app.domain.types import SensorReading
 from app.models.tables import sensor_reading as sensor_reading_table
 
@@ -98,8 +101,17 @@ class SqlSensorReadingRepository:
         self._session = session
 
     def add(self, reading: SensorReading) -> SensorReading:
-        row = self._session.execute(_insert_stmt(reading)).one()
-        self._session.commit()
+        try:
+            row = self._session.execute(_insert_stmt(reading)).one()
+            self._session.commit()
+        except IntegrityError as exc:
+            self._session.rollback()
+            if isinstance(exc.orig, UniqueViolation):
+                raise DuplicateReadingError(
+                    f"{reading.source}/{reading.external_sensor_id}/{reading.pollutant}"
+                    f"@{reading.measured_at.isoformat()}"
+                ) from exc
+            raise
         return _row_to_domain(row)
 
     def list_since(self, since: datetime, *, pollutant: str | None = None) -> list[SensorReading]:

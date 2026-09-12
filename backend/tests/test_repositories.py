@@ -21,6 +21,7 @@ from app.db.repositories import (
     SqlSensorReadingRepository,
     SqlWeatherReadingRepository,
 )
+from app.domain.repositories import DuplicateReadingError
 from app.domain.types import (
     Alert,
     AlertSeverity,
@@ -78,7 +79,7 @@ def test_sensor_reading_duplicate_identity_is_rejected(db_session) -> None:
     )
     repo.add(reading)
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises(DuplicateReadingError):
         repo.add(reading)
 
 

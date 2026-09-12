@@ -6,8 +6,10 @@ from pathlib import Path
 APP_DIR = Path(__file__).resolve().parents[1] / "app"
 
 # layer -> layers it may import. The root package (app/__init__.py, for
-# __version__) is importable from anywhere; app/main.py is the composition
-# root and may import everything.
+# __version__) is importable from anywhere. app/main.py (the FastAPI app)
+# and app/cli.py (dev commands, e.g. `python -m app.cli ingest`) are
+# composition roots and may import everything — neither is checked here,
+# since only directories under app/ are (see test_every_layer_has_a_rule).
 ALLOWED_IMPORTS: dict[str, set[str]] = {
     "core": set(),
     "domain": {"core"},

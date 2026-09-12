@@ -10,14 +10,21 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from app.domain.types import Alert, Forecast, GridState, SensorReading, WeatherReading
+from app.domain.providers import ProviderError
+from app.domain.repositories import DuplicateReadingError
+from app.domain.types import Alert, BoundingBox, Forecast, GridState, SensorReading, WeatherReading
 
 
 class FakeSensorReadingRepository:
     def __init__(self) -> None:
         self.readings: list[SensorReading] = []
+        self._seen_keys: set[tuple[str, str, str, datetime]] = set()
 
     def add(self, reading: SensorReading) -> SensorReading:
+        key = (reading.source, reading.external_sensor_id, reading.pollutant, reading.measured_at)
+        if key in self._seen_keys:
+            raise DuplicateReadingError(str(key))
+        self._seen_keys.add(key)
         self.readings.append(reading)
         return reading
 
@@ -124,3 +131,24 @@ class FakeAlertRepository:
 
     def list_active(self, *, since: datetime) -> list[Alert]:
         return [a for a in self.alerts if a.created_at >= since]
+
+
+class FakePollutionDataProvider:
+    """Implements app.domain.providers.PollutionDataProvider.
+
+    Returns a fixed list of readings, or raises ProviderError if
+    `error` is set — configure whichever a test needs before calling.
+    """
+
+    def __init__(
+        self, readings: list[SensorReading] | None = None, *, error: str | None = None
+    ) -> None:
+        self.readings = list(readings or [])
+        self.error = error
+        self.calls: list[tuple[BoundingBox, datetime]] = []
+
+    async def fetch_readings(self, bbox: BoundingBox, *, since: datetime) -> list[SensorReading]:
+        self.calls.append((bbox, since))
+        if self.error is not None:
+            raise ProviderError(self.error)
+        return list(self.readings)

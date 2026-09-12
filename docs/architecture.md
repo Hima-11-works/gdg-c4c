@@ -43,8 +43,8 @@ requested for the scaffold) maps onto it as follows:
 | `app/domain` | Pure domain types (`SensorReading`, `WeatherReading`, `GridState`, `Forecast`, `Alert`), repository Protocols (ports), H3 validation. No I/O. | `app/core` |
 | `app/models` | SQLAlchemy Core table definitions (the schema) | `app/core`, `app/domain` (only for the `AlertSeverity` column type) |
 | `app/db` | Engine/session management, and `app/db/repositories/*` — concrete SQLAlchemy implementations of the domain repository Protocols | `app/core`, `app/domain`, `app/models` |
-| `app/ingestion` | Source adapters: OpenAQ, Open-Meteo, fixtures (not yet implemented) | `app/core`, `app/domain` |
-| `app/services` | Business logic: per-resource services (`SensorService`, `GridService`, `CellService`, `AlertService`, …), the demo-data fallback, and (later) the ingestion pipeline | `app/core`, `app/domain`, `app/ingestion`, `app/models`, `app/db` |
+| `app/ingestion` | Source adapters implementing `app.domain.providers.PollutionDataProvider`: `OpenAQProvider` (implemented), Open-Meteo/fixtures (not yet) | `app/core`, `app/domain` |
+| `app/services` | Business logic: per-resource read services (`SensorService`, `GridService`, `CellService`, `AlertService`, …) plus the demo-data fallback, and `SensorIngestionService` (fetch → persist, skip duplicates) | `app/core`, `app/domain`, `app/ingestion`, `app/models`, `app/db` |
 | `app/api` | FastAPI routes (thin — call a service, shape the response), Pydantic schemas, error handling, dependency wiring | `app/core`, `app/domain`, `app/db` (dependency wiring only, see `app/api/deps.py`), `app/services` |
 
 Domain code depends only on `app/core` and never on SQLAlchemy: repositories
@@ -142,13 +142,56 @@ numbers as real air-quality data.
 returns 422 for a malformed or wrong-resolution H3 cell, 404 for a
 well-formed cell with no data at all (real or demo).
 
+## Ingestion (implemented: OpenAQ, PM2.5 only)
+
+`app.domain.providers.PollutionDataProvider` is the port:
+`async fetch_readings(bbox: BoundingBox, *, since: datetime) -> list[SensorReading]`,
+raising `ProviderError` on failure. `app.ingestion.openaq.OpenAQProvider` is
+the first (and so far only) implementation, against OpenAQ v3
+(`api.openaq.org/v3`, `X-API-Key` header). Adding CPCB, satellite data, or a
+private sensor network later means a new class implementing the same
+Protocol — nothing above it (the service, the CLI) changes.
+
+**Fetch flow**, chosen to avoid hardcoding OpenAQ's numeric parameter id for
+PM2.5: `GET /v3/locations?bbox=...` returns locations in the box with their
+sensors embedded (id + `parameter.name`), so which locations have a PM2.5
+sensor — and that sensor's id — is known from one call, matched by the
+string `"pm25"`. Then one `GET /v3/locations/{id}/latest` per matching
+location gets the actual value. A single flaky location (that call failing
+after retries, or returning malformed data) is logged and skipped, not
+fatal to the run; the initial `/locations` call failing is fatal (nothing
+to iterate without it).
+
+**Resilience:** each request retries up to `OPENAQ_MAX_RETRIES` times with
+exponential backoff on timeouts, connection errors, and 429/5xx — never on
+4xx (401/422/etc.), where retrying can't help. A reading older than
+`INGEST_MAX_READING_AGE_HOURS` is dropped as stale.
+
+**Duplicate prevention:** `SensorReadingRepository.add()` raises
+`DuplicateReadingError` — a domain-level exception, not
+`sqlalchemy.exc.IntegrityError` — for an exact repeat (same source,
+external_sensor_id, pollutant, measured_at), backed by the table's real
+unique constraint (`uq_sensor_reading_identity`) rather than a separate
+check-then-insert (which would race under concurrent runs).
+`SensorIngestionService.run()` catches it per-reading and keeps going,
+returning counts (`fetched`, `saved`, `skipped_duplicates`) plus `errors`
+(non-empty only if the provider fetch itself failed).
+
+**Manual trigger:** `python -m app.cli ingest` (see `backend/app/cli.py`)
+runs one pass against the bbox from `.env` and prints a summary. There is
+no scheduler yet — this is a development command, not the production path
+(that's the `worker` container in [Shape](#shape), not yet built).
+
 ## Configuration
 
 - **Env vars** (`.env`): infrastructure — DB connection, ports, CORS, log
-  level. See `.env.example`.
-- **Region config** (future `config/region.yaml`): domain tuning — bbox, H3
-  resolution, QC thresholds, model parameters, PDI weights, alert
-  thresholds. Not yet added; there's no model to configure.
+  level, H3 resolution, and OpenAQ/ingestion settings (API key, base URL,
+  timeout/retries, the ingestion bounding box). See `.env.example`.
+- **Region config** (future `config/region.yaml`): domain tuning — QC
+  thresholds, model parameters, PDI weights, alert thresholds. Not yet
+  added; there's no model to configure. The ingestion bounding box lives in
+  `.env` for now (`INGEST_BBOX_*`), not this future file — it's config for
+  one adapter, not the shared region concept `/meta` will eventually expose.
 
 ## Extension points
 
@@ -156,5 +199,7 @@ well-formed cell with no data at all (real or demo).
 |---|---|
 | New forecast model | New module under `app/domain`, selected by config |
 | New pollutant | New config entry + source field mapping (schema is already long-format) |
-| Satellite data | New ingestion adapter producing gridded observations + a fusion nowcaster; forecaster/PDI/alerts/API/frontend untouched |
+| New pollution-data source (CPCB, satellite, private sensors) | New class implementing `PollutionDataProvider` in `app/ingestion/`; `SensorIngestionService` and the CLI are unchanged — only the wiring (which provider gets constructed) picks it |
+| Satellite data specifically | Also likely a new `gridded_observation`-shaped table + a fusion nowcaster, since it isn't point-station data; forecaster/PDI/alerts/API/frontend untouched |
 | New region | New config file |
+| Scheduled ingestion | A worker process calling `SensorIngestionService.run()` on a timer, replacing the manual `python -m app.cli ingest` trigger — the service itself doesn't change |
