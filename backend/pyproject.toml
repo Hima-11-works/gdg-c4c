@@ -43,3 +43,8 @@ select = ["E", "F", "I", "UP", "B", "TID"]
 [tool.ruff.lint.flake8-tidy-imports]
 # Absolute imports only, so tests/test_architecture.py can check layer boundaries.
 ban-relative-imports = "all"
+
+[tool.ruff.lint.flake8-bugbear]
+# B008 ("no function calls in argument defaults") otherwise flags every
+# FastAPI Depends()/Query()/Path() — that pattern is how FastAPI's DI works.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Path"]

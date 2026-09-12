@@ -61,6 +61,31 @@ def _latest_for_cell_stmt(h3_cell: str) -> Select:
     )
 
 
+def _latest_for_horizon_stmt(forecast_hours: int) -> Select:
+    # Per cell, the most recent run that produced a forecast at this
+    # horizon — cells can be on different run cadences, so this is a
+    # per-cell max, not a single global "latest run" timestamp.
+    latest_per_cell = (
+        select(
+            forecast_table.c.h3_cell,
+            func.max(forecast_table.c.generated_at).label("max_generated_at"),
+        )
+        .where(forecast_table.c.forecast_hours == forecast_hours)
+        .group_by(forecast_table.c.h3_cell)
+        .subquery()
+    )
+    return (
+        select(forecast_table)
+        .join(
+            latest_per_cell,
+            (forecast_table.c.h3_cell == latest_per_cell.c.h3_cell)
+            & (forecast_table.c.generated_at == latest_per_cell.c.max_generated_at)
+            & (forecast_table.c.forecast_hours == forecast_hours),
+        )
+        .order_by(forecast_table.c.h3_cell)
+    )
+
+
 class SqlForecastRepository:
     """Implements app.domain.repositories.ForecastRepository against PostgreSQL."""
 
@@ -81,4 +106,8 @@ class SqlForecastRepository:
 
     def latest_for_cell(self, h3_cell: str) -> list[Forecast]:
         rows = self._session.execute(_latest_for_cell_stmt(h3_cell)).all()
+        return [_row_to_domain(row) for row in rows]
+
+    def latest_for_horizon(self, hours: int) -> list[Forecast]:
+        rows = self._session.execute(_latest_for_horizon_stmt(hours)).all()
         return [_row_to_domain(row) for row in rows]

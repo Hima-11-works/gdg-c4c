@@ -61,6 +61,15 @@ def _latest_stmt() -> Select:
     )
 
 
+def _latest_for_cell_stmt(h3_cell: str) -> Select:
+    return (
+        select(grid_state_table)
+        .where(grid_state_table.c.h3_cell == h3_cell)
+        .order_by(grid_state_table.c.timestamp.desc())
+        .limit(1)
+    )
+
+
 class SqlGridStateRepository:
     """Implements app.domain.repositories.GridStateRepository against PostgreSQL."""
 
@@ -80,3 +89,7 @@ class SqlGridStateRepository:
     def latest(self) -> list[GridState]:
         rows = self._session.execute(_latest_stmt()).all()
         return [_row_to_domain(row) for row in rows]
+
+    def latest_for_cell(self, h3_cell: str) -> GridState | None:
+        row = self._session.execute(_latest_for_cell_stmt(h3_cell)).first()
+        return _row_to_domain(row) if row else None

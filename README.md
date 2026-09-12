@@ -1,10 +1,11 @@
 # Pollution Intelligence Platform
 
 Project scaffold for a pollution intelligence MVP (PM2.5, H3 grid, weather-driven
-spread predictions). **No external API ingestion or pollution modeling is
-implemented yet** — this is the data layer it will run on top of. So far the
-project has:
-- a FastAPI backend with health and readiness endpoints
+spread predictions). **External ingestion (OpenAQ/Open-Meteo) and the pollution
+model are not implemented yet** — every endpoint falls back to deterministic
+demo data until they are. So far the project has:
+- a FastAPI backend: `/api/v1` (sensors, weather, grid, cells, alerts) plus
+  health/readiness, with a consistent error shape and OpenAPI docs at `/docs`
 - a database layer: schema, migrations, and a repository per entity
   (`SensorReading`, `WeatherReading`, `GridState`, `Forecast`, `Alert`)
 - a React + TypeScript frontend that displays backend health
@@ -46,7 +47,25 @@ npm run dev
 | http://localhost:5173 | Frontend |
 | http://localhost:8000/health | Liveness: the API process is up (never touches the DB) |
 | http://localhost:8000/health/ready | Readiness: PostgreSQL reachable and PostGIS installed (200 or 503) |
-| http://localhost:8000/docs | Swagger UI |
+| http://localhost:8000/docs | Swagger UI — every `/api/v1/*` endpoint |
+| http://localhost:8000/api/v1/sensors | Try it: latest sensor readings (demo data until ingestion exists) |
+
+## API
+
+| Endpoint | Returns |
+|---|---|
+| `GET /api/v1/sensors` | Latest reading per sensor |
+| `GET /api/v1/weather` | Latest weather per H3 cell |
+| `GET /api/v1/grid/current` | Current PM2.5/PDI state per cell |
+| `GET /api/v1/grid/forecast?hours=1\|3\|6` | Forecast per cell at that horizon |
+| `GET /api/v1/cells/{h3_cell}` | Current state + forecasts + weather for one cell |
+| `GET /api/v1/alerts` | Alerts from the last 24h |
+
+Every response is `{"generated_at", "is_demo", "data"}`. Ingestion isn't
+implemented, so `is_demo` is `true` until real rows exist — the frontend
+should treat that as "illustrative, not measured" (e.g. a banner), never as
+real air-quality data. Errors are always `{"error": {"code", "message", "details"?}}`.
+See `docs/architecture.md` for the full contract and the demo-data fallback rule.
 
 ## Configuration
 
@@ -78,14 +97,15 @@ are defined only once.
 │  ├─ alembic/
 │  │  └─ versions/          # 0001_initial_schema.py
 │  ├─ app/
-│  │  ├─ api/               # FastAPI routes + request/response schemas
+│  │  ├─ api/               # routes (thin), schemas, error handling, DI wiring
+│  │  │  └─ routes/         # sensors, weather, grid, cells, alerts, health
 │  │  ├─ core/              # settings
 │  │  ├─ db/                # SQLAlchemy engine/session
 │  │  │  └─ repositories/   # concrete (SQLAlchemy) repository implementations
 │  │  ├─ domain/            # pure types, repository Protocols, H3 validation — no I/O
 │  │  ├─ ingestion/         # (future) OpenAQ / Open-Meteo adapters
 │  │  ├─ models/            # database table definitions (the schema)
-│  │  ├─ services/          # (future) pipeline / business logic
+│  │  ├─ services/          # business logic per resource + the demo-data fallback
 │  │  └─ main.py            # FastAPI app entrypoint
 │  ├─ tests/
 │  ├─ pyproject.toml        # dependency ranges
@@ -164,4 +184,7 @@ npm run format     # prettier --write
   PostGIS is reachable.
 - Nothing writes to the database yet — ingestion (OpenAQ/Open-Meteo) and the
   pollution model are not implemented. The repositories exist and are tested,
-  but only migrations create rows so far.
+  but only migrations create rows so far. Every `/api/v1/*` endpoint falls
+  back to deterministic demo data (`app/services/demo_data.py`) when its
+  repository query is empty, which today means always — see `is_demo` in
+  every response.

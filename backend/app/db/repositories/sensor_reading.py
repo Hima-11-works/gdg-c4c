@@ -76,6 +76,21 @@ def _list_since_stmt(since: datetime, pollutant: str | None) -> Select:
     return stmt.order_by(sensor_reading_table.c.measured_at)
 
 
+def _list_latest_stmt() -> Select:
+    return (
+        select(*_COLUMNS)
+        .distinct(
+            sensor_reading_table.c.source,
+            sensor_reading_table.c.external_sensor_id,
+        )
+        .order_by(
+            sensor_reading_table.c.source,
+            sensor_reading_table.c.external_sensor_id,
+            sensor_reading_table.c.measured_at.desc(),
+        )
+    )
+
+
 class SqlSensorReadingRepository:
     """Implements app.domain.repositories.SensorReadingRepository against PostgreSQL."""
 
@@ -89,4 +104,8 @@ class SqlSensorReadingRepository:
 
     def list_since(self, since: datetime, *, pollutant: str | None = None) -> list[SensorReading]:
         rows = self._session.execute(_list_since_stmt(since, pollutant)).all()
+        return [_row_to_domain(row) for row in rows]
+
+    def list_latest(self) -> list[SensorReading]:
+        rows = self._session.execute(_list_latest_stmt()).all()
         return [_row_to_domain(row) for row in rows]

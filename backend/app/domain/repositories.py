@@ -21,6 +21,10 @@ class SensorReadingRepository(Protocol):
         self, since: datetime, *, pollutant: str | None = None
     ) -> list[SensorReading]: ...
 
+    def list_latest(self) -> list[SensorReading]:
+        """The most recent reading for every (source, external_sensor_id)."""
+        ...
+
 
 class WeatherReadingRepository(Protocol):
     def add(self, reading: WeatherReading) -> WeatherReading: ...
@@ -28,6 +32,10 @@ class WeatherReadingRepository(Protocol):
     def list_since(self, since: datetime) -> list[WeatherReading]: ...
 
     def latest_for_cell(self, h3_cell: str) -> WeatherReading | None: ...
+
+    def list_latest(self) -> list[WeatherReading]:
+        """The most recent reading for every cell that has one."""
+        ...
 
 
 class GridStateRepository(Protocol):
@@ -39,6 +47,8 @@ class GridStateRepository(Protocol):
         """The most recent row for every cell that has one."""
         ...
 
+    def latest_for_cell(self, h3_cell: str) -> GridState | None: ...
+
 
 class ForecastRepository(Protocol):
     def add(self, forecast: Forecast) -> Forecast: ...
@@ -49,6 +59,10 @@ class ForecastRepository(Protocol):
 
     def latest_for_cell(self, h3_cell: str) -> list[Forecast]:
         """All horizons from the most recent pipeline run for this cell."""
+        ...
+
+    def latest_for_horizon(self, hours: int) -> list[Forecast]:
+        """The most recent forecast at this horizon, for every cell that has one."""
         ...
 
 

@@ -17,7 +17,9 @@ ALLOWED_IMPORTS: dict[str, set[str]] = {
     "db": {"core", "domain", "models"},
     "ingestion": {"core", "domain"},
     "services": {"core", "domain", "ingestion", "models", "db"},
-    "api": {"core", "domain", "db"},
+    # api may import services for business logic (routes stay thin) and db
+    # only for the dependency-injection wiring in app/api/deps.py.
+    "api": {"core", "domain", "db", "services"},
 }
 
 

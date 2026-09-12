@@ -82,6 +82,38 @@ def test_sensor_reading_duplicate_identity_is_rejected(db_session) -> None:
         repo.add(reading)
 
 
+def test_sensor_reading_list_latest_returns_one_per_sensor(db_session) -> None:
+    repo = SqlSensorReadingRepository(db_session)
+    older = SensorReading(
+        source="openaq",
+        external_sensor_id="s1",
+        latitude=0.0,
+        longitude=0.0,
+        pollutant="pm25",
+        value=10.0,
+        unit="ug/m3",
+        measured_at=NOW - timedelta(hours=1),
+    )
+    newer = SensorReading(
+        source="openaq",
+        external_sensor_id="s1",
+        latitude=0.0,
+        longitude=0.0,
+        pollutant="pm25",
+        value=20.0,
+        unit="ug/m3",
+        measured_at=NOW,
+    )
+    repo.add(older)
+    repo.add(newer)
+
+    latest = repo.list_latest()
+
+    matching = [r for r in latest if r.external_sensor_id == "s1"]
+    assert len(matching) == 1
+    assert matching[0].value == 20.0
+
+
 def test_sensor_reading_check_constraint_rejects_bad_latitude(db_session) -> None:
     # The domain dataclass already rejects this before it reaches SQL; this
     # proves the database CHECK constraint is a real backstop, not just
@@ -120,6 +152,38 @@ def test_weather_reading_round_trip_and_latest_for_cell(db_session, cell: str) -
     assert saved.id is not None
     assert repo.latest_for_cell(cell) == saved
     assert repo.latest_for_cell("8828308281fffff") != saved  # different cell
+
+
+def test_weather_reading_list_latest_returns_one_per_cell(db_session, cell: str) -> None:
+    repo = SqlWeatherReadingRepository(db_session)
+    repo.add(
+        WeatherReading(
+            h3_cell=cell,
+            latitude=37.7749,
+            longitude=-122.4194,
+            wind_speed=1.0,
+            wind_direction=0.0,
+            precipitation=0.0,
+            measured_at=NOW - timedelta(hours=1),
+        )
+    )
+    repo.add(
+        WeatherReading(
+            h3_cell=cell,
+            latitude=37.7749,
+            longitude=-122.4194,
+            wind_speed=2.0,
+            wind_direction=90.0,
+            precipitation=0.0,
+            measured_at=NOW,
+        )
+    )
+
+    latest = repo.list_latest()
+
+    matching = [r for r in latest if r.h3_cell == cell]
+    assert len(matching) == 1
+    assert matching[0].wind_speed == 2.0
 
 
 def test_weather_reading_rejects_cell_at_wrong_resolution(db_session) -> None:
@@ -201,6 +265,39 @@ def test_grid_state_latest_returns_one_row_per_cell(db_session, cell: str) -> No
     assert matching[0].timestamp == later
 
 
+def test_grid_state_latest_for_cell_returns_most_recent_row(db_session, cell: str) -> None:
+    repo = SqlGridStateRepository(db_session)
+    repo.upsert(
+        GridState(
+            h3_cell=cell,
+            timestamp=NOW,
+            pm25=10.0,
+            pdi=20.0,
+            confidence=0.5,
+            wind_speed=1.0,
+            wind_direction=180.0,
+        )
+    )
+    later = NOW + timedelta(hours=1)
+    repo.upsert(
+        GridState(
+            h3_cell=cell,
+            timestamp=later,
+            pm25=12.0,
+            pdi=25.0,
+            confidence=0.6,
+            wind_speed=1.5,
+            wind_direction=185.0,
+        )
+    )
+
+    result = repo.latest_for_cell(cell)
+
+    assert result is not None
+    assert result.timestamp == later
+    assert repo.latest_for_cell("8828308281fffff") is None
+
+
 def test_forecast_round_trip_and_latest_for_cell(db_session, cell: str) -> None:
     repo = SqlForecastRepository(db_session)
     for hours in (1, 3, 6):
@@ -235,6 +332,61 @@ def test_forecast_duplicate_run_and_horizon_is_rejected(db_session, cell: str) -
 
     with pytest.raises(IntegrityError):
         repo.add(forecast)
+
+
+def test_forecast_latest_for_horizon_returns_one_row_per_cell(db_session) -> None:
+    repo = SqlForecastRepository(db_session)
+    resolution = get_settings().h3_resolution
+    cell_a = h3.latlng_to_cell(37.7749, -122.4194, resolution)
+    cell_b = h3.latlng_to_cell(37.8044, -122.2712, resolution)
+
+    repo.add(
+        Forecast(
+            h3_cell=cell_a,
+            generated_at=NOW,
+            forecast_time=NOW + timedelta(hours=1),
+            forecast_hours=1,
+            predicted_pm25=10.0,
+            confidence=0.7,
+        )
+    )
+    repo.add(
+        Forecast(
+            h3_cell=cell_a,
+            generated_at=NOW + timedelta(minutes=30),
+            forecast_time=NOW + timedelta(hours=1, minutes=30),
+            forecast_hours=1,
+            predicted_pm25=11.0,
+            confidence=0.7,
+        )
+    )
+    repo.add(
+        Forecast(
+            h3_cell=cell_b,
+            generated_at=NOW,
+            forecast_time=NOW + timedelta(hours=1),
+            forecast_hours=1,
+            predicted_pm25=20.0,
+            confidence=0.7,
+        )
+    )
+    # A different horizon must not show up in the hours=1 result.
+    repo.add(
+        Forecast(
+            h3_cell=cell_a,
+            generated_at=NOW,
+            forecast_time=NOW + timedelta(hours=3),
+            forecast_hours=3,
+            predicted_pm25=99.0,
+            confidence=0.7,
+        )
+    )
+
+    results = {f.h3_cell: f for f in repo.latest_for_horizon(1)}
+
+    assert set(results) == {cell_a, cell_b}
+    assert results[cell_a].predicted_pm25 == 11.0  # the later run for cell_a wins
+    assert results[cell_b].predicted_pm25 == 20.0
 
 
 def test_alert_round_trip_and_list_active(db_session, cell: str) -> None:

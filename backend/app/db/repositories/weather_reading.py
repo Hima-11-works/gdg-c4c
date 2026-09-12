@@ -80,6 +80,14 @@ def _latest_for_cell_stmt(h3_cell: str) -> Select:
     )
 
 
+def _list_latest_stmt() -> Select:
+    return (
+        select(*_COLUMNS)
+        .distinct(weather_reading_table.c.h3_cell)
+        .order_by(weather_reading_table.c.h3_cell, weather_reading_table.c.measured_at.desc())
+    )
+
+
 class SqlWeatherReadingRepository:
     """Implements app.domain.repositories.WeatherReadingRepository against PostgreSQL."""
 
@@ -99,3 +107,7 @@ class SqlWeatherReadingRepository:
     def latest_for_cell(self, h3_cell: str) -> WeatherReading | None:
         row = self._session.execute(_latest_for_cell_stmt(h3_cell)).first()
         return _row_to_domain(row) if row else None
+
+    def list_latest(self) -> list[WeatherReading]:
+        rows = self._session.execute(_list_latest_stmt()).all()
+        return [_row_to_domain(row) for row in rows]

@@ -16,7 +16,7 @@ so a new pollutant is a data change, not a migration).
 ## Shape
 
 ```
-  frontend (host, Vite)  ──HTTP /api/v1 (OpenAPI, GeoJSON)──►  api container
+  frontend (host, Vite)  ──HTTP /api/v1 (OpenAPI, JSON)──►  api container
                                                                    │ read
                                                              PostgreSQL+PostGIS
                                                                    ▲ write
@@ -44,8 +44,8 @@ requested for the scaffold) maps onto it as follows:
 | `app/models` | SQLAlchemy Core table definitions (the schema) | `app/core`, `app/domain` (only for the `AlertSeverity` column type) |
 | `app/db` | Engine/session management, and `app/db/repositories/*` — concrete SQLAlchemy implementations of the domain repository Protocols | `app/core`, `app/domain`, `app/models` |
 | `app/ingestion` | Source adapters: OpenAQ, Open-Meteo, fixtures (not yet implemented) | `app/core`, `app/domain` |
-| `app/services` | Orchestration: ingestion pipeline, alert rules — the only layer allowed to import ingestion + domain + models together | all of the above |
-| `app/api` | FastAPI routes, request/response schemas, GeoJSON building | `app/core`, `app/domain`, `app/db` |
+| `app/services` | Business logic: per-resource services (`SensorService`, `GridService`, `CellService`, `AlertService`, …), the demo-data fallback, and (later) the ingestion pipeline | `app/core`, `app/domain`, `app/ingestion`, `app/models`, `app/db` |
+| `app/api` | FastAPI routes (thin — call a service, shape the response), Pydantic schemas, error handling, dependency wiring | `app/core`, `app/domain`, `app/db` (dependency wiring only, see `app/api/deps.py`), `app/services` |
 
 Domain code depends only on `app/core` and never on SQLAlchemy: repositories
 are consumed through the `app.domain.repositories` Protocols, so a service
@@ -100,18 +100,47 @@ layer (`app.domain.h3_grid.assert_valid_cell`), not in the dataclasses
 themselves — the dataclasses are pure and have no notion of configuration,
 so this check belongs at the persistence boundary.
 
-## API (target contract, not yet implemented beyond `/health`)
+## API (implemented)
+
+**Contract note:** the endpoint list below (plain JSON under `/api/v1`) is
+what was actually specified and built. It supersedes an earlier draft in
+this doc (`/meta`, GeoJSON polygons from `/grid`, `/stations`) which was
+never built. GeoJSON may still make sense once the frontend map is wired
+up — nothing here forecloses adding it as an alternative representation
+later, it's just not what exists today.
 
 | Endpoint | Returns |
 |---|---|
-| `GET /health` | API liveness (implemented) |
-| `GET /health/ready` | PostgreSQL + PostGIS readiness, 200/503 (implemented) |
-| `GET /meta` | Region info, pollutants, horizons, latest run |
-| `GET /grid?pollutant=&horizon=` | GeoJSON polygons of cell values |
-| `GET /cells/{cell_id}` | Per-cell detail + PDI breakdown |
-| `GET /weather?horizon=` | GeoJSON wind/precip points |
-| `GET /stations` | GeoJSON station points |
-| `GET /alerts` | Alerts from the latest run |
+| `GET /health` | API liveness — never touches the database |
+| `GET /health/ready` | PostgreSQL + PostGIS readiness, 200/503 |
+| `GET /api/v1/sensors` | Latest reading per sensor |
+| `GET /api/v1/weather` | Latest weather per cell |
+| `GET /api/v1/grid/current` | Current `GridState` per cell |
+| `GET /api/v1/grid/forecast?hours=1\|3\|6` | Latest `Forecast` per cell at that horizon |
+| `GET /api/v1/cells/{h3_cell}` | Current state + all forecasts + weather for one cell |
+| `GET /api/v1/alerts` | Alerts created in the last 24h (see `app/services/alerts.py`) |
+
+Every response (`/health` excepted) is wrapped the same way:
+`{"generated_at": <UTC ISO-8601>, "is_demo": bool, "data": ...}`. `data` is
+a list for collection endpoints, a single object for `/cells/{h3_cell}`.
+Internal database ids are never exposed — `h3_cell` (+ `timestamp` /
+`generated_at` where relevant) already identifies a resource, and dropping
+ids keeps the contract independent of the storage backend.
+
+**Demo-data fallback.** Ingestion doesn't exist yet, so every endpoint
+falls back to small, deterministic seed data (`app/services/demo_data.py`)
+whenever its repository query returns nothing — never unconditionally, so
+real rows take over automatically once ingestion writes them. Every such
+response sets `is_demo: true`; the frontend should treat that as "this is
+illustrative, not measured" (e.g. a banner), not silently show fabricated
+numbers as real air-quality data.
+
+**Errors** are always `{"error": {"code": "...", "message": "...", "details": [...]?}}`
+(`app/api/errors.py`), for both explicitly-raised and unhandled exceptions.
+`code` is one of `bad_request`, `not_found`, `validation_error`,
+`internal_error`, or a generic `http_error` fallback. `/cells/{h3_cell}`
+returns 422 for a malformed or wrong-resolution H3 cell, 404 for a
+well-formed cell with no data at all (real or demo).
 
 ## Configuration
 

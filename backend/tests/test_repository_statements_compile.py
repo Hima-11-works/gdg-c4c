@@ -66,6 +66,10 @@ def test_sensor_reading_statements() -> None:
     assert "FROM sensor_reading" in select_sql
     assert "sensor_reading.pollutant" in select_sql
 
+    latest_sql = _sql(sensor_reading_repo._list_latest_stmt())
+    assert "DISTINCT ON" in latest_sql
+    assert "sensor_reading.source, sensor_reading.external_sensor_id" in latest_sql
+
 
 def test_weather_reading_statements() -> None:
     reading = WeatherReading(
@@ -85,6 +89,10 @@ def test_weather_reading_statements() -> None:
     latest_sql = _sql(weather_reading_repo._latest_for_cell_stmt(CELL))
     assert "ORDER BY weather_reading.measured_at DESC" in latest_sql
     assert "LIMIT" in latest_sql
+
+    list_latest_sql = _sql(weather_reading_repo._list_latest_stmt())
+    assert "DISTINCT ON" in list_latest_sql
+    assert "weather_reading.h3_cell" in list_latest_sql
 
 
 def test_grid_state_statements() -> None:
@@ -108,6 +116,10 @@ def test_grid_state_statements() -> None:
     assert "DISTINCT ON" in _sql(grid_state_repo._latest_stmt())
     assert "FROM grid_state" in _sql(grid_state_repo._get_stmt(CELL, NOW))
 
+    latest_for_cell_sql = _sql(grid_state_repo._latest_for_cell_stmt(CELL))
+    assert "ORDER BY grid_state.timestamp DESC" in latest_for_cell_sql
+    assert "LIMIT" in latest_for_cell_sql
+
 
 def test_forecast_statements() -> None:
     forecast = Forecast(
@@ -124,6 +136,11 @@ def test_forecast_statements() -> None:
 
     latest_sql = _sql(forecast_repo._latest_for_cell_stmt(CELL)).lower()
     assert "max(forecast.generated_at)" in latest_sql
+
+    horizon_sql = _sql(forecast_repo._latest_for_horizon_stmt(3))
+    assert "JOIN" in horizon_sql
+    assert "GROUP BY forecast.h3_cell" in horizon_sql
+    assert horizon_sql.count("forecast.forecast_hours = 3") == 2  # subquery + join condition
 
 
 def test_alert_statements() -> None:

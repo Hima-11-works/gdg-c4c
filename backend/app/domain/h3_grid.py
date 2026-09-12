@@ -10,6 +10,11 @@ from __future__ import annotations
 import h3
 
 
+def cell_for(latitude: float, longitude: float, *, resolution: int) -> str:
+    """The H3 cell address containing (latitude, longitude) at `resolution`."""
+    return h3.latlng_to_cell(latitude, longitude, resolution)
+
+
 def is_valid_cell(h3_cell: str, *, resolution: int) -> bool:
     """True if h3_cell is a real H3 cell address at exactly `resolution`."""
     return h3.is_valid_cell(h3_cell) and h3.get_resolution(h3_cell) == resolution
