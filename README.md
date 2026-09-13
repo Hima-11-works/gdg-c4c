@@ -1,11 +1,14 @@
 # Pollution Intelligence Platform
 
 Project scaffold for a pollution intelligence MVP (PM2.5, H3 grid, weather-driven
-spread predictions). **The pollution/spread model is not implemented yet**
-— every endpoint falls back to deterministic demo data until real rows
-exist. So far the project has:
+spread predictions). **Estimation isn't wired into the API or a persistence
+pipeline yet** — every endpoint still falls back to deterministic demo data
+until that pipeline exists. So far the project has:
 - a FastAPI backend: `/api/v1` (sensors, weather, grid, cells, alerts) plus
   health/readiness, with a consistent error shape and OpenAPI docs at `/docs`
+- PM2.5 estimation v1 (`IDWPollutionEstimator`, inverse-distance-weighted)
+  behind a `PollutionEstimator` interface, so Kriging, satellite fusion, or
+  an ML model can replace it later without changing any caller
 - OpenAQ ingestion for PM2.5 (`python -m app.cli ingest`) and Open-Meteo
   ingestion for weather (`python -m app.cli ingest-weather`), each behind
   a provider interface (`PollutionDataProvider` / `WeatherProvider`) so
@@ -96,6 +99,8 @@ override it.
 | `WEATHER_H3_RESOLUTION` | ingestion | Coarser H3 resolution (default 5) weather is sampled at, fanned out to every `H3_RESOLUTION` cell inside each sampled cell. Must be <= `H3_RESOLUTION` |
 | `INGEST_BBOX_MIN_LAT`/`MIN_LON`/`MAX_LAT`/`MAX_LON` | ingestion | Bounding box to ingest, shared by `ingest` and `ingest-weather` (default: San Francisco, matching the demo data) |
 | `INGEST_MAX_READING_AGE_HOURS` | ingestion | A fetched PM2.5 reading older than this is dropped as stale |
+| `IDW_MAX_DISTANCE_KM` | estimation | Max distance (default 15km) from a cell center a sensor may be to count as evidence for that cell |
+| `IDW_MIN_SENSORS` | estimation | Min sensors (default 2) required within range before a cell gets an estimate at all |
 | `VITE_API_BASE_URL` (in `frontend/.env`) | Vite | Where the frontend calls the backend |
 
 The backend builds the database URL from the `POSTGRES_*` parts, so credentials
@@ -121,7 +126,7 @@ are defined only once.
 │  │  ├─ ingestion/         # openaq.py, open_meteo.py, shared retry policy in http.py
 │  │  ├─ models/            # database table definitions (the schema)
 │  │  ├─ services/          # per-resource logic, demo-data fallback, ingestion orchestration,
-│  │  │                     # geospatial.py (GeospatialService — the H3 facade)
+│  │  │                     # geospatial.py (GeospatialService), estimation.py (IDWPollutionEstimator)
 │  │  ├─ cli.py             # dev commands — `python -m app.cli ingest[-weather]|export-grid`
 │  │  └─ main.py            # FastAPI app entrypoint
 │  ├─ tests/
@@ -192,12 +197,32 @@ full method list.
 ```bash
 cd backend
 python -m app.cli export-grid                                # region from .env -> grid.geojson
-python -m app.cli export-grid --out sf.geojson     --min-lat 37.75 --min-lon -122.45 --max-lat 37.80 --max-lon -122.40
+python -m app.cli export-grid --out sf.geojson \
+    --min-lat 37.75 --min-lon -122.45 --max-lat 37.80 --max-lon -122.40
 ```
 
 Writes the configured region's H3 coverage as a GeoJSON `FeatureCollection`
 — open the file directly at [geojson.io](https://geojson.io) to inspect
 the grid visually. No API key or database needed.
+
+## PM2.5 estimation
+
+`app.services.estimation.IDWPollutionEstimator` fills in PM2.5 for grid
+cells that don't contain a sensor, via inverse-distance-weighted
+interpolation — behind `app.domain.estimation.PollutionEstimator`, so
+Kriging, satellite fusion, or an ML model can replace it later without any
+caller changing. Not wired into a pipeline or the API yet; this is the
+model layer only, exercised directly by
+`backend/tests/test_estimation.py`.
+
+- A cell with no sensor within `IDW_MAX_DISTANCE_KM`, or fewer than
+  `IDW_MIN_SENSORS` within that range, gets `pm25=None` and
+  `confidence=0.0` — never a fabricated value.
+- A sensor within 10m of a cell center is used directly rather than
+  divided by a near-zero distance.
+- `pdi`/`wind_speed`/`wind_direction` are always `None` from this
+  estimator (it only ever sees PM2.5 readings) — see
+  `docs/architecture.md` for why `GridState`'s fields are `Optional`.
 
 ## Ingestion
 

@@ -80,11 +80,11 @@ class GridStateOut(BaseModel):
 
     h3_cell: str
     timestamp: datetime
-    pm25: float
-    pdi: float
     confidence: float
-    wind_speed: float
-    wind_direction: float
+    pm25: float | None
+    pdi: float | None
+    wind_speed: float | None
+    wind_direction: float | None
 
 
 class ForecastOut(BaseModel):

@@ -50,10 +50,14 @@ def _require_valid_weather_values(
         raise ValueError(f"precipitation must be >= 0: {precipitation}")
 
 
+_EARTH_RADIUS_KM = 6371.0088  # IUGG mean radius
+
+
 @dataclass(frozen=True, slots=True)
 class Coordinate:
     """A single point, used to ask a WeatherProvider for weather at a
-    specific location rather than a whole region."""
+    specific location rather than a whole region, or (via distance_km) as
+    the basis for distance-weighted interpolation like IDW."""
 
     latitude: float
     longitude: float
@@ -63,6 +67,19 @@ class Coordinate:
             raise ValueError(f"latitude out of range: {self.latitude}")
         if not -180 <= self.longitude <= 180:
             raise ValueError(f"longitude out of range: {self.longitude}")
+
+    def distance_km(self, other: Coordinate) -> float:
+        """Great-circle distance to `other`, in kilometers (haversine).
+
+        Accurate enough for city-scale interpolation; not geodesic-precise,
+        which doesn't matter at these distances.
+        """
+        lat1, lon1 = math.radians(self.latitude), math.radians(self.longitude)
+        lat2, lon2 = math.radians(other.latitude), math.radians(other.longitude)
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+        a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+        return _EARTH_RADIUS_KM * 2 * math.asin(math.sqrt(a))
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,20 +170,41 @@ class WeatherSample:
 
 @dataclass(frozen=True, slots=True)
 class GridState:
-    """The current pollution state of one H3 cell at one point in time."""
+    """The current pollution state of one H3 cell at one point in time.
+
+    pm25/pdi/wind_speed/wind_direction are None when there isn't enough
+    evidence to produce a value — app.services.estimation never fabricates
+    a number to fill a gap. confidence is always present: 0.0 means "no
+    evidence", not "unknown", so it stays a plain required float rather
+    than Optional.
+    """
 
     h3_cell: str
     timestamp: datetime
-    pm25: float
-    pdi: float
     confidence: float
-    wind_speed: float
-    wind_direction: float
+    pm25: float | None = None
+    pdi: float | None = None
+    wind_speed: float | None = None
+    wind_direction: float | None = None
 
     def __post_init__(self) -> None:
         _require_utc(self.timestamp, "timestamp")
         if not 0 <= self.confidence <= 1:
             raise ValueError(f"confidence must be within [0, 1]: {self.confidence}")
+        if self.pm25 is not None:
+            _require_finite(self.pm25, "pm25")
+            if self.pm25 < 0:
+                raise ValueError(f"pm25 must be >= 0: {self.pm25}")
+        if self.pdi is not None:
+            _require_finite(self.pdi, "pdi")
+        if self.wind_speed is not None:
+            _require_finite(self.wind_speed, "wind_speed")
+            if self.wind_speed < 0:
+                raise ValueError(f"wind_speed must be >= 0: {self.wind_speed}")
+        if self.wind_direction is not None:
+            _require_finite(self.wind_direction, "wind_direction")
+            if not 0 <= self.wind_direction < 360:
+                raise ValueError(f"wind_direction must be within [0, 360): {self.wind_direction}")
 
 
 @dataclass(frozen=True, slots=True)

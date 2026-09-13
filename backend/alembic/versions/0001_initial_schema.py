@@ -95,12 +95,17 @@ def upgrade() -> None:
         "grid_state",
         sa.Column("h3_cell", sa.String(H3_CELL_LENGTH), primary_key=True),
         sa.Column("timestamp", sa.DateTime(timezone=True), primary_key=True),
-        sa.Column("pm25", sa.Float(), nullable=False),
-        sa.Column("pdi", sa.Float(), nullable=False),
+        sa.Column("pm25", sa.Float(), nullable=True),
+        sa.Column("pdi", sa.Float(), nullable=True),
         sa.Column("confidence", sa.Float(), nullable=False),
-        sa.Column("wind_speed", sa.Float(), nullable=False),
-        sa.Column("wind_direction", sa.Float(), nullable=False),
+        sa.Column("wind_speed", sa.Float(), nullable=True),
+        sa.Column("wind_direction", sa.Float(), nullable=True),
         sa.CheckConstraint("confidence BETWEEN 0 AND 1", name="ck_grid_state_confidence"),
+        sa.CheckConstraint("pm25 IS NULL OR pm25 >= 0", name="ck_grid_state_pm25"),
+        sa.CheckConstraint(
+            "wind_direction IS NULL OR (wind_direction >= 0 AND wind_direction < 360)",
+            name="ck_grid_state_wind_direction",
+        ),
     )
     op.create_index("ix_grid_state_timestamp", "grid_state", ["timestamp"])
 

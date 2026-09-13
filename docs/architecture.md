@@ -40,11 +40,11 @@ requested for the scaffold) maps onto it as follows:
 | Directory | Responsibility | May import |
 |---|---|---|
 | `app/core` | Settings, cross-cutting config | nothing internal |
-| `app/domain` | Pure domain types (`SensorReading`, `WeatherReading`, `GridState`, `Forecast`, `Alert`), repository Protocols (ports), H3 validation. No I/O. | `app/core` |
+| `app/domain` | Pure domain types (`SensorReading`, `WeatherReading`, `GridState`, `Forecast`, `Alert`), repository/provider/estimator Protocols (ports), H3 helpers. No I/O. | `app/core` |
 | `app/models` | SQLAlchemy Core table definitions (the schema) | `app/core`, `app/domain` (only for the `AlertSeverity` column type) |
 | `app/db` | Engine/session management, and `app/db/repositories/*` — concrete SQLAlchemy implementations of the domain repository Protocols | `app/core`, `app/domain`, `app/models` |
 | `app/ingestion` | Source adapters implementing `app.domain.providers.PollutionDataProvider` or `WeatherProvider`: `OpenAQProvider` and `OpenMeteoProvider` (both implemented); a shared retry policy in `http.py` | `app/core`, `app/domain` |
-| `app/services` | Business logic: per-resource read services (`SensorService`, `GridService`, `CellService`, `AlertService`, …) plus the demo-data fallback, `SensorIngestionService` / `WeatherIngestionService` (fetch → persist, skip duplicates), and `GeospatialService` (the H3 facade — see below) | `app/core`, `app/domain`, `app/ingestion`, `app/models`, `app/db` |
+| `app/services` | Business logic: per-resource read services (`SensorService`, `GridService`, `CellService`, `AlertService`, …) plus the demo-data fallback, `SensorIngestionService` / `WeatherIngestionService` (fetch → persist, skip duplicates), `GeospatialService` (the H3 facade), and `IDWPollutionEstimator` (see below) | `app/core`, `app/domain`, `app/ingestion`, `app/models`, `app/db` |
 | `app/api` | FastAPI routes (thin — call a service, shape the response), Pydantic schemas, error handling, dependency wiring | `app/core`, `app/domain`, `app/db` (dependency wiring only, see `app/api/deps.py`), `app/services` |
 
 Domain code depends only on `app/core` and never on SQLAlchemy: repositories
@@ -83,7 +83,7 @@ rejects naive or non-UTC datetimes before they ever reach SQL
 |---|---|---|
 | `sensor_reading` | Raw pollutant readings from stations. `pollutant` is a plain string, not an enum, so a new pollutant is a data change | PK `id`; unique (`source`, `external_sensor_id`, `pollutant`, `measured_at`); GiST index on `geom`; btree on (`pollutant`, `measured_at`) |
 | `weather_reading` | Weather sample for one H3 cell | PK `id`; unique (`h3_cell`, `measured_at`); btree on `h3_cell` |
-| `grid_state` | Current pollution state of one cell at one time (PM2.5, PDI, confidence, wind) | PK (`h3_cell`, `timestamp`); upserted, not appended |
+| `grid_state` | Current pollution state of one cell at one time (PM2.5, PDI, confidence, wind) | PK (`h3_cell`, `timestamp`); upserted, not appended; `pm25`/`pdi`/`wind_speed`/`wind_direction` are nullable — `confidence` is the only pollution-related field that's always present (0.0 means "no evidence") |
 | `forecast` | Predicted PM2.5 for one cell at a future time, tagged with the horizon and the run that produced it | PK `id`; unique (`h3_cell`, `generated_at`, `forecast_hours`) |
 | `alert` | A pollution alert for one cell | PK `id`; `severity` is a plain-string column whose CHECK constraint is generated from the `AlertSeverity` enum, not hand-duplicated |
 
@@ -272,15 +272,54 @@ bbox from `.env` and print a summary. There is no scheduler yet — these are
 development commands, not the production path (that's the `worker`
 container in [Shape](#shape), not yet built).
 
+## PM2.5 estimation (implemented: v1, IDW)
+
+`app.domain.estimation.PollutionEstimator` is the port:
+`estimate(grid: list[str], sensor_readings, *, timestamp) -> list[GridState]`,
+one result per cell in `grid`, in order. `timestamp` is supplied by the
+caller rather than read from a clock, so any implementation is a pure
+function of its inputs — the same call always produces the same result,
+which is what makes it testable without mocking time. Kriging, satellite
+fusion, or an ML model can implement this same Protocol later; nothing
+that calls a `PollutionEstimator` — an API endpoint, a future pipeline —
+needs to change to use a different one.
+
+`app.services.estimation.IDWPollutionEstimator` is the first
+implementation: classic inverse-distance-weighted interpolation. For each
+target cell, only sensor readings within `IDW_MAX_DISTANCE_KM` of the
+cell's center (via `Coordinate.distance_km`, haversine) are considered; if
+fewer than `IDW_MIN_SENSORS` qualify, the cell gets `pm25=None` and
+`confidence=0.0` — never a value extrapolated from evidence that's too
+sparse or too far away. Otherwise `pm25` is the IDW-weighted average
+(weight `1/distanceᵖ`, `power` configurable on the class, default 2), and
+`confidence` is a deterministic function of the nearest sensor's distance
+and how many sensors were used, bounded to [0, 1].
+
+**Divide-by-zero:** a sensor within 10 m of a cell center is treated as
+coincident with it — its value is used directly, which is standard IDW
+practice for an exact match, not a workaround bolted on to dodge the
+singularity.
+
+**Scope:** `pdi`, `wind_speed`, and `wind_direction` are always `None` from
+this estimator — it only ever sees PM2.5 sensor readings and has no
+forecast or weather data to derive them from. This is why `GridState`'s
+non-identity fields are all `Optional`: the type honestly reflects that a
+cell can have a pollution estimate without wind (this estimator, today) or
+wind without a pollution estimate (nothing currently produces that
+combination, but a weather-only cell in a sparse sensor network is a real
+future case), rather than forcing every producer to invent values for
+fields it has no basis for.
+
 ## Configuration
 
 - **Env vars** (`.env`): infrastructure — DB connection, ports, CORS, log
-  level, H3 resolution (grid and weather-sampling), and OpenAQ/Open-Meteo
+  level, H3 resolution (grid and weather-sampling), OpenAQ/Open-Meteo
   ingestion settings (API key where needed, base URL, timeout/retries, the
-  shared ingestion bounding box). See `.env.example`. A `model_validator`
-  on `Settings` rejects `WEATHER_H3_RESOLUTION` finer than `H3_RESOLUTION`
-  at startup, rather than letting it fail confusingly inside H3 library
-  calls the first time ingestion runs.
+  shared ingestion bounding box), and IDW estimation thresholds
+  (`IDW_MAX_DISTANCE_KM`, `IDW_MIN_SENSORS`). See `.env.example`. A
+  `model_validator` on `Settings` rejects `WEATHER_H3_RESOLUTION` finer
+  than `H3_RESOLUTION` at startup, rather than letting it fail confusingly
+  inside H3 library calls the first time ingestion runs.
 - **Region config** (future `config/region.yaml`): domain tuning — QC
   thresholds, model parameters, PDI weights, alert thresholds. Not yet
   added; there's no model to configure. The ingestion bounding box lives in
@@ -292,6 +331,7 @@ container in [Shape](#shape), not yet built).
 
 | Future change | What changes |
 |---|---|
+| New PM2.5 estimation model (Kriging, satellite fusion, ML) | New class implementing `PollutionEstimator` in `app/services/`; whatever calls `estimate()` — an API endpoint, a future pipeline — is unchanged |
 | New forecast model | New module under `app/domain`, selected by config |
 | New pollutant | New config entry + source field mapping (schema is already long-format) |
 | New pollution-data source (CPCB, satellite, private sensors) | New class implementing `PollutionDataProvider` in `app/ingestion/`; `SensorIngestionService` and the CLI are unchanged — only the wiring (which provider gets constructed) picks it |

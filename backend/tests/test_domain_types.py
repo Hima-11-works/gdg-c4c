@@ -174,6 +174,63 @@ def test_grid_state_rejects_confidence_out_of_range() -> None:
         )
 
 
+def test_grid_state_pollution_and_wind_fields_default_to_none() -> None:
+    state = GridState(h3_cell="8828308281fffff", timestamp=UTC_NOW, confidence=0.0)
+
+    assert state.pm25 is None
+    assert state.pdi is None
+    assert state.wind_speed is None
+    assert state.wind_direction is None
+
+
+def test_grid_state_rejects_negative_pm25() -> None:
+    with pytest.raises(ValueError, match="pm25"):
+        GridState(h3_cell="8828308281fffff", timestamp=UTC_NOW, confidence=0.5, pm25=-1.0)
+
+
+def test_grid_state_rejects_negative_wind_speed() -> None:
+    with pytest.raises(ValueError, match="wind_speed"):
+        GridState(h3_cell="8828308281fffff", timestamp=UTC_NOW, confidence=0.5, wind_speed=-1.0)
+
+
+def test_grid_state_rejects_wind_direction_out_of_range() -> None:
+    with pytest.raises(ValueError, match="wind_direction"):
+        GridState(
+            h3_cell="8828308281fffff", timestamp=UTC_NOW, confidence=0.5, wind_direction=360.0
+        )
+
+
+@pytest.mark.parametrize("field", ["pm25", "pdi", "wind_speed", "wind_direction"])
+def test_grid_state_rejects_non_finite_values(field: str) -> None:
+    kwargs = {
+        "h3_cell": "8828308281fffff",
+        "timestamp": UTC_NOW,
+        "confidence": 0.5,
+        field: float("nan"),
+    }
+    with pytest.raises(ValueError, match="finite"):
+        GridState(**kwargs)
+
+
+def test_coordinate_distance_km_to_self_is_zero() -> None:
+    point = Coordinate(37.7749, -122.4194)
+    assert point.distance_km(point) == 0.0
+
+
+def test_coordinate_distance_km_is_symmetric() -> None:
+    a = Coordinate(37.7749, -122.4194)
+    b = Coordinate(37.8044, -122.2712)
+    assert a.distance_km(b) == pytest.approx(b.distance_km(a))
+
+
+def test_coordinate_distance_km_matches_known_reference() -> None:
+    # One degree of latitude is ~111.19 km everywhere; longitude has no
+    # effect on this pair since they share a meridian.
+    a = Coordinate(0.0, 0.0)
+    b = Coordinate(1.0, 0.0)
+    assert a.distance_km(b) == pytest.approx(111.19, abs=0.5)
+
+
 def test_forecast_rejects_forecast_time_before_generated_at() -> None:
     with pytest.raises(ValueError, match="forecast_time"):
         Forecast(

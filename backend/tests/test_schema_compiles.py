@@ -41,6 +41,14 @@ def test_grid_state_primary_key_is_cell_and_timestamp() -> None:
     assert pk_columns == {"h3_cell", "timestamp"}
 
 
+def test_grid_state_pollution_and_wind_columns_are_nullable() -> None:
+    """A cell with insufficient evidence (see app.services.estimation)
+    stores None, not a fabricated value — these columns must accept NULL."""
+    for column_name in ("pm25", "pdi", "wind_speed", "wind_direction"):
+        assert grid_state.c[column_name].nullable is True
+    assert grid_state.c.confidence.nullable is False
+
+
 def test_forecast_unique_constraint_on_run_and_horizon() -> None:
     names = {c.name for c in forecast.constraints if hasattr(c, "name")}
     assert "uq_forecast_run_horizon" in names

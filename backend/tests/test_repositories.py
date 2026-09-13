@@ -251,6 +251,21 @@ def test_grid_state_upsert_updates_existing_row(db_session, cell: str) -> None:
     assert repo.get(cell, NOW) == result
 
 
+def test_grid_state_with_null_pollution_fields_round_trips(db_session, cell: str) -> None:
+    """A cell with insufficient evidence (see app.services.estimation) has
+    pm25/pdi/wind as None, not a fabricated value — the columns must
+    actually be nullable, not just accepted by the domain type."""
+    repo = SqlGridStateRepository(db_session)
+
+    result = repo.upsert(GridState(h3_cell=cell, timestamp=NOW, confidence=0.0))
+
+    assert result.pm25 is None
+    assert result.pdi is None
+    assert result.wind_speed is None
+    assert result.wind_direction is None
+    assert repo.get(cell, NOW) == result
+
+
 def test_grid_state_latest_returns_one_row_per_cell(db_session, cell: str) -> None:
     repo = SqlGridStateRepository(db_session)
     repo.upsert(

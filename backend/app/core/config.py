@@ -74,6 +74,15 @@ class Settings(BaseSettings):
     # one. Refuse loudly instead of appearing to hang.
     weather_max_cells: int = Field(default=50_000, ge=1)
 
+    # --- PM2.5 estimation (app.services.estimation.IDWPollutionEstimator) ---
+    # A cell with no sensor within this radius gets no estimate (pm25=None,
+    # confidence=0.0) rather than a value extrapolated from something too
+    # far away to be locally representative.
+    idw_max_distance_km: float = Field(default=15.0, gt=0)
+    # A cell backed by fewer than this many sensors within range also gets
+    # no estimate — one reading isn't corroborated evidence.
+    idw_min_sensors: int = Field(default=2, ge=1)
+
     @model_validator(mode="after")
     def _check_weather_resolution_not_finer_than_grid(self) -> "Settings":
         if self.weather_h3_resolution > self.h3_resolution:

@@ -97,12 +97,20 @@ grid_state = Table(
     metadata,
     Column("h3_cell", String(H3_CELL_LENGTH), primary_key=True),
     Column("timestamp", DateTime(timezone=True), primary_key=True),
-    Column("pm25", Float, nullable=False),
-    Column("pdi", Float, nullable=False),
+    # Nullable: a cell without enough nearby evidence gets no fabricated
+    # value (see app.services.estimation). confidence stays NOT NULL —
+    # 0.0 means "no evidence", not "unknown".
+    Column("pm25", Float, nullable=True),
+    Column("pdi", Float, nullable=True),
     Column("confidence", Float, nullable=False),
-    Column("wind_speed", Float, nullable=False),
-    Column("wind_direction", Float, nullable=False),
+    Column("wind_speed", Float, nullable=True),
+    Column("wind_direction", Float, nullable=True),
     CheckConstraint("confidence BETWEEN 0 AND 1", name="ck_grid_state_confidence"),
+    CheckConstraint("pm25 IS NULL OR pm25 >= 0", name="ck_grid_state_pm25"),
+    CheckConstraint(
+        "wind_direction IS NULL OR (wind_direction >= 0 AND wind_direction < 360)",
+        name="ck_grid_state_wind_direction",
+    ),
     Index("ix_grid_state_timestamp", "timestamp"),
 )
 
