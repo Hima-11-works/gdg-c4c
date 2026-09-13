@@ -275,6 +275,82 @@ def test_alert_forecast_time_is_optional() -> None:
     assert alert.forecast_time is None
 
 
+def test_alert_context_fields_default_to_none() -> None:
+    alert = Alert(
+        h3_cell="8828308281fffff",
+        severity=AlertSeverity.WARNING,
+        message="PM2.5 rising fast",
+        created_at=UTC_NOW,
+    )
+    assert alert.current_pm25 is None
+    assert alert.forecast_pm25 is None
+    assert alert.forecast_hours is None
+    assert alert.confidence is None
+
+
+def test_alert_accepts_all_context_fields() -> None:
+    alert = Alert(
+        h3_cell="8828308281fffff",
+        severity=AlertSeverity.WARNING,
+        message="PM2.5 rising fast",
+        created_at=UTC_NOW,
+        current_pm25=60.0,
+        forecast_pm25=90.0,
+        forecast_hours=3,
+        confidence=0.7,
+    )
+    assert alert.current_pm25 == 60.0
+    assert alert.forecast_pm25 == 90.0
+    assert alert.forecast_hours == 3
+    assert alert.confidence == 0.7
+
+
+def test_alert_rejects_negative_current_pm25() -> None:
+    with pytest.raises(ValueError, match="current_pm25"):
+        Alert(
+            h3_cell="8828308281fffff",
+            severity=AlertSeverity.WARNING,
+            message="x",
+            created_at=UTC_NOW,
+            current_pm25=-1.0,
+        )
+
+
+def test_alert_rejects_negative_forecast_pm25() -> None:
+    with pytest.raises(ValueError, match="forecast_pm25"):
+        Alert(
+            h3_cell="8828308281fffff",
+            severity=AlertSeverity.WARNING,
+            message="x",
+            created_at=UTC_NOW,
+            forecast_pm25=-1.0,
+        )
+
+
+@pytest.mark.parametrize("forecast_hours", [0, -1])
+def test_alert_rejects_non_positive_forecast_hours(forecast_hours: int) -> None:
+    with pytest.raises(ValueError, match="forecast_hours"):
+        Alert(
+            h3_cell="8828308281fffff",
+            severity=AlertSeverity.WARNING,
+            message="x",
+            created_at=UTC_NOW,
+            forecast_hours=forecast_hours,
+        )
+
+
+@pytest.mark.parametrize("confidence", [-0.1, 1.1])
+def test_alert_rejects_confidence_out_of_range(confidence: float) -> None:
+    with pytest.raises(ValueError, match="confidence"):
+        Alert(
+            h3_cell="8828308281fffff",
+            severity=AlertSeverity.WARNING,
+            message="x",
+            created_at=UTC_NOW,
+            confidence=confidence,
+        )
+
+
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
 def test_sensor_reading_rejects_non_finite_value(bad: float) -> None:
     with pytest.raises(ValueError, match="finite"):

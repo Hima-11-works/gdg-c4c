@@ -62,6 +62,14 @@ def test_alert_severity_column_matches_domain_enum() -> None:
     assert set(alert.c.severity.type.enums) == {member.value for member in AlertSeverity}
 
 
+def test_alert_context_columns_are_nullable() -> None:
+    """Alert context (current_pm25/forecast_pm25/forecast_hours/confidence)
+    is never fabricated (see app.services.alert_generation) — these
+    columns must accept NULL."""
+    for column_name in ("current_pm25", "forecast_pm25", "forecast_hours", "confidence"):
+        assert alert.c[column_name].nullable is True
+
+
 def test_metadata_creates_tables_in_dependency_order_without_error() -> None:
     # sorted_tables raises CircularDependencyError if foreign keys formed a
     # cycle; none are expected here, but this guards against a future one.

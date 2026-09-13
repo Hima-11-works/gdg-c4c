@@ -113,7 +113,29 @@ class AlertOut(BaseModel):
     severity: AlertSeverity
     message: str
     created_at: datetime
-    forecast_time: datetime | None
+    current_pm25: float | None = Field(
+        description=(
+            "The cell's current PM2.5 estimate when this alert was raised, or null if none existed."
+        )
+    )
+    forecast_pm25: float | None = Field(
+        description=(
+            "Forecast PM2.5 attached to this alert (null only if the cell had no forecast at "
+            "all) — the horizon that triggered the alert, or the nearest available horizon for "
+            "an alert triggered by current conditions."
+        )
+    )
+    forecast_hours: int | None = Field(description="Horizon (hours) forecast_pm25 refers to.")
+    confidence: float | None = Field(
+        description=(
+            "Confidence in the value that triggered this alert — the current estimate's "
+            "confidence for a now-condition alert, or that forecast horizon's confidence "
+            "otherwise."
+        )
+    )
+    forecast_time: datetime | None = Field(
+        description="When the alerted condition itself occurs; null if it's already true now."
+    )
 
 
 class CellDetailOut(BaseModel):

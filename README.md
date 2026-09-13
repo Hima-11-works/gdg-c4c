@@ -17,9 +17,10 @@ falls back to deterministic demo data (`is_demo: true`). So far the project has:
   (`DeterministicH3DispersionModel`): wind-driven advection, limited
   neighbor diffusion, decay/precipitation removal, mass-conserving by
   construction, behind a `PollutionForecastModel` interface
-- simple, configurable PM2.5-threshold alert generation
-  (`AlertGenerationService`) — WARNING/CRITICAL for a threshold already
-  exceeded, WATCH for one only a forecast horizon reaches
+- a very small rule-based alert engine (`AlertGenerationService`, **no
+  machine learning**) — threshold crossing (now or forecast), sharp
+  current-to-forecast increase, and high PDI + worsening forecast; see
+  "Alerts" below
 - OpenAQ ingestion for PM2.5 and Open-Meteo ingestion for weather, each
   behind a provider interface (`PollutionDataProvider` / `WeatherProvider`)
   so other sources (CPCB, satellite, ECMWF, private sensors) can be added
@@ -124,6 +125,8 @@ override it.
 | `DISPERSION_WIND_CONE_HALF_ANGLE_DEG` | dispersion | Half-angle (default 50°) of the downwind neighbor-selection cone |
 | `DISPERSION_CONFIDENCE_DECAY_PER_HOUR`, `DISPERSION_MISSING_WEATHER_CONFIDENCE_PENALTY` | dispersion | Per-hour forecast confidence discount, and an extra one for a cell with no weather reading (defaults 0.9, 0.5) |
 | `ALERT_WARNING_THRESHOLD_UGM3`, `ALERT_CRITICAL_THRESHOLD_UGM3` | alerts | PM2.5 (µg/m3) at/above which a cell gets a WARNING/CRITICAL alert if happening now, or WATCH if only a forecast horizon reaches it (defaults 55, 150 — the AQI "Unhealthy" range) |
+| `ALERT_SHARP_INCREASE_THRESHOLD_UGM3` | alerts | Current-to-forecast PM2.5 jump (µg/m3) that counts as a "sharp increase" alert on its own (default 25) |
+| `ALERT_PDI_HIGH_THRESHOLD`, `ALERT_PDI_WORSENING_MIN_INCREASE_UGM3` | alerts | PDI considered "high pressure", and the (smaller) PM2.5 increase that counts as "worsening" when combined with it (defaults 60, 5) |
 | `ALERT_ACTIVE_LOOKBACK_HOURS` | alerts | A cell with an alert created within this many hours is skipped on the next pipeline run, and is what `/api/v1/alerts` considers "active" (default 24) |
 | `VITE_API_BASE_URL` (in `frontend/.env`) | Vite | Where the frontend calls the backend |
 
@@ -398,21 +401,61 @@ land on the *same* `GridState` row, so it estimates, folds in a PDI
 score per cell, and persists once — see
 `backend/tests/test_grid_computation_service.py`.
 
-`AlertGenerationService` is new too: simple, configurable PM2.5-threshold
-rules (`ALERT_WARNING_THRESHOLD_UGM3` / `ALERT_CRITICAL_THRESHOLD_UGM3`),
-not a model. Severity encodes *when* a threshold is crossed, not just how
-high the value is — WARNING/CRITICAL for a threshold already exceeded
-right now, WATCH for one only a forecast horizon reaches (advance
-warning, not an active condition; a current condition always wins over a
-forecast one). A cell with an alert already created within
-`ALERT_ACTIVE_LOOKBACK_HOURS` is skipped, so a persistent condition
-doesn't spawn a new alert every run. See
-`backend/tests/test_alert_generation_service.py`.
+See "Alerts" below for `AlertGenerationService`'s rules in detail.
 
 There is no scheduler yet — this is a manual trigger, same as every
 other `app.cli`/`app.pipeline` command; a cron job or worker calling it
 periodically is the natural next step and wouldn't need any code here to
 change.
+
+## Alerts
+
+`app.services.alert_generation.AlertGenerationService` is a very small
+rule-based alert engine — **no machine learning**, every rule is a plain,
+configurable comparison. Rules run in priority order per cell; the first
+one that matches wins, so a cell gets at most one alert per pipeline run:
+
+1. **Threshold crossed now** — current PM2.5 at/above
+   `ALERT_WARNING_THRESHOLD_UGM3` / `ALERT_CRITICAL_THRESHOLD_UGM3` →
+   `WARNING` / `CRITICAL`.
+2. **Threshold crossed in the forecast** — no current exceedance, but
+   some forecast horizon reaches a threshold → `WATCH` (advance warning,
+   not an active condition — see below).
+3. **Sharp increase** — current-to-forecast PM2.5 jump of at least
+   `ALERT_SHARP_INCREASE_THRESHOLD_UGM3` at some horizon, independent of
+   whether either value alone crosses a threshold → `WATCH`.
+4. **High PDI + worsening forecast** — current PDI at/above
+   `ALERT_PDI_HIGH_THRESHOLD` *and* a forecast horizon at least
+   `ALERT_PDI_WORSENING_MIN_INCREASE_UGM3` above current PM2.5 (a milder
+   bar than rule 3, since already-high pressure makes even a modest
+   uptick worth flagging) → `WATCH`.
+
+Severity encodes **when** a condition is or will be true, not just how
+severe it is: only rule 1 can produce `WARNING`/`CRITICAL`; every other
+rule is `WATCH`, regardless of which threshold a forecast value happens
+to cross. A cell already exceeding a threshold *now* always takes
+priority over anything a forecast says about it. A cell with an alert
+already created within `ALERT_ACTIVE_LOOKBACK_HOURS` is skipped
+entirely, so a persistent condition doesn't spawn a new alert every run.
+
+Every `Alert` carries the context it was raised with — never fabricated,
+so any of these can be null:
+
+| Field | Meaning |
+|---|---|
+| `current_pm25` | The cell's current estimate, or null if it had none |
+| `forecast_pm25` / `forecast_hours` | The forecast attached to this alert — the horizon that triggered it (rules 2-4), or the nearest available horizon as trend context (rule 1); null only if the cell had no forecast at all |
+| `confidence` | Confidence in whichever value triggered the alert — the current estimate's confidence for rule 1, that forecast horizon's confidence otherwise |
+| `forecast_time` | When the alerted condition itself occurs; null if it's already true now (rule 1) |
+
+Rules are configurable (`ALERT_*` env vars, see Configuration above) and
+isolated behind `AlertGenerationService` — nothing else in the codebase
+knows how a threshold is evaluated. `app.services.alerts.AlertService`
+(the `/alerts` read path) is a separate, unrelated class: it only reads
+whatever `Alert` rows exist, from this engine or anywhere else, and is
+exposed at `GET /api/v1/alerts` (see "API" above) and displayed in the
+frontend's alerts panel (see "Frontend" below). See
+`backend/tests/test_alert_generation_service.py` for every rule's tests.
 
 ## Frontend
 

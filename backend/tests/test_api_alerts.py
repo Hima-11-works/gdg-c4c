@@ -15,7 +15,17 @@ def test_list_alerts_falls_back_to_demo_data_when_empty(api_client: TestClient) 
     assert len(body["data"]) == 1
     alert = body["data"][0]
     assert alert["severity"] == "warning"
-    assert set(alert.keys()) == {"h3_cell", "severity", "message", "created_at", "forecast_time"}
+    assert set(alert.keys()) == {
+        "h3_cell",
+        "severity",
+        "message",
+        "created_at",
+        "current_pm25",
+        "forecast_pm25",
+        "forecast_hours",
+        "confidence",
+        "forecast_time",
+    }
 
 
 def test_list_alerts_returns_real_data_when_present(

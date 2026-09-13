@@ -51,6 +51,12 @@ export interface AlertOut {
   severity: AlertSeverity
   message: string
   created_at: string
+  // Context the alert was raised with — never fabricated, so any of
+  // these can be null (see backend/app/domain/types.py's Alert docstring).
+  current_pm25: number | null
+  forecast_pm25: number | null
+  forecast_hours: number | null
+  confidence: number | null
   forecast_time: string | null
 }
 

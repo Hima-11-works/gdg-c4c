@@ -21,6 +21,10 @@ def _row_to_domain(row: Row) -> Alert:
         severity=AlertSeverity(row.severity),
         message=row.message,
         created_at=row.created_at,
+        current_pm25=row.current_pm25,
+        forecast_pm25=row.forecast_pm25,
+        forecast_hours=row.forecast_hours,
+        confidence=row.confidence,
         forecast_time=row.forecast_time,
     )
 
@@ -33,6 +37,10 @@ def _insert_stmt(alert: Alert) -> Insert:
             severity=alert.severity.value,
             message=alert.message,
             created_at=alert.created_at,
+            current_pm25=alert.current_pm25,
+            forecast_pm25=alert.forecast_pm25,
+            forecast_hours=alert.forecast_hours,
+            confidence=alert.confidence,
             forecast_time=alert.forecast_time,
         )
         .returning(alert_table)

@@ -156,7 +156,21 @@ alert = Table(
     ),
     Column("message", String(500), nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
+    # Context the alert was raised with (see app.domain.types.Alert) —
+    # nullable because it's never fabricated: current_pm25 is null if the
+    # cell had no current estimate, the forecast_* fields are null only
+    # if the cell had no forecast at all.
+    Column("current_pm25", Float, nullable=True),
+    Column("forecast_pm25", Float, nullable=True),
+    Column("forecast_hours", SmallInteger, nullable=True),
+    Column("confidence", Float, nullable=True),
     Column("forecast_time", DateTime(timezone=True), nullable=True),
+    CheckConstraint("current_pm25 IS NULL OR current_pm25 >= 0", name="ck_alert_current_pm25"),
+    CheckConstraint("forecast_pm25 IS NULL OR forecast_pm25 >= 0", name="ck_alert_forecast_pm25"),
+    CheckConstraint(
+        "forecast_hours IS NULL OR forecast_hours > 0", name="ck_alert_forecast_hours_positive"
+    ),
+    CheckConstraint("confidence IS NULL OR confidence BETWEEN 0 AND 1", name="ck_alert_confidence"),
     Index("ix_alert_h3_cell_created_at", "h3_cell", "created_at"),
     Index("ix_alert_severity_created_at", "severity", "created_at"),
 )

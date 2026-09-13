@@ -258,12 +258,31 @@ class AlertSeverity(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Alert:
-    """A pollution alert for one H3 cell."""
+    """A pollution alert for one H3 cell, raised by a rule in
+    app.services.alert_generation.AlertGenerationService.
+
+    current_pm25/forecast_pm25/forecast_hours/confidence are context the
+    alert was raised with — never fabricated, so any of them can be None:
+    current_pm25 is None when the cell had no current estimate;
+    forecast_pm25/forecast_hours/confidence are None only if no forecast
+    existed for the cell at all.
+
+    `forecast_time` is deliberately a separate concept from
+    forecast_pm25/forecast_hours: it means "when the alerted condition
+    itself occurs" (None for a condition already true right now, even
+    though such an alert may still carry forecast_pm25/forecast_hours as
+    informational trend context — the nearest available horizon, not
+    necessarily the one that triggered the alert).
+    """
 
     h3_cell: str
     severity: AlertSeverity
     message: str
     created_at: datetime
+    current_pm25: float | None = None
+    forecast_pm25: float | None = None
+    forecast_hours: int | None = None
+    confidence: float | None = None
     forecast_time: datetime | None = None
     id: int | None = None
 
@@ -273,3 +292,17 @@ class Alert:
             _require_utc(self.forecast_time, "forecast_time")
         if not self.message.strip():
             raise ValueError("message must not be empty")
+        if self.current_pm25 is not None:
+            _require_finite(self.current_pm25, "current_pm25")
+            if self.current_pm25 < 0:
+                raise ValueError(f"current_pm25 must be >= 0: {self.current_pm25}")
+        if self.forecast_pm25 is not None:
+            _require_finite(self.forecast_pm25, "forecast_pm25")
+            if self.forecast_pm25 < 0:
+                raise ValueError(f"forecast_pm25 must be >= 0: {self.forecast_pm25}")
+        if self.forecast_hours is not None and self.forecast_hours <= 0:
+            raise ValueError(f"forecast_hours must be positive: {self.forecast_hours}")
+        if self.confidence is not None:
+            _require_finite(self.confidence, "confidence")
+            if not 0 <= self.confidence <= 1:
+                raise ValueError(f"confidence must be within [0, 1]: {self.confidence}")

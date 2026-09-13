@@ -167,6 +167,20 @@ class Settings(BaseSettings):
     # .alerts.AlertService's "active" window) so both agree on what
     # "still active" means.
     alert_active_lookback_hours: float = Field(default=24.0, gt=0)
+    # A PM2.5 jump of at least this much (µg/m3) between current and any
+    # forecast horizon is a "sharp increase" WATCH alert, independent of
+    # whether either value crosses WARNING/CRITICAL on its own.
+    alert_sharp_increase_threshold_ugm3: float = Field(default=25.0, gt=0)
+    # PDI (heuristic, see HeuristicPDIModel) at or above which a cell
+    # counts as "high pressure" for the combined PDI+worsening-forecast
+    # rule. Not a scientific threshold — a triage choice, like every
+    # other PDI-related constant.
+    alert_pdi_high_threshold: float = Field(default=60.0, gt=0)
+    # The minimum PM2.5 increase (µg/m3) from current to a forecast
+    # horizon that counts as "worsening" for that same combined rule —
+    # deliberately smaller than alert_sharp_increase_threshold_ugm3: paired
+    # with already-high PDI, even a modest uptick is worth flagging.
+    alert_pdi_worsening_min_increase_ugm3: float = Field(default=5.0, ge=0)
 
     @model_validator(mode="after")
     def _check_weather_resolution_not_finer_than_grid(self) -> "Settings":

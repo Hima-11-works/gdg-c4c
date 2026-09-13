@@ -106,7 +106,7 @@ rejects naive or non-UTC datetimes before they ever reach SQL
 | `weather_reading` | Weather sample for one H3 cell | PK `id`; unique (`h3_cell`, `measured_at`); btree on `h3_cell` |
 | `grid_state` | Current pollution state of one cell at one time (PM2.5, PDI, confidence, wind) | PK (`h3_cell`, `timestamp`); upserted, not appended; `pm25`/`pdi`/`wind_speed`/`wind_direction` are nullable — `confidence` is the only pollution-related field that's always present (0.0 means "no evidence") |
 | `forecast` | Predicted PM2.5 for one cell at a future time, tagged with the horizon and the run that produced it | PK `id`; unique (`h3_cell`, `generated_at`, `forecast_hours`) |
-| `alert` | A pollution alert for one cell | PK `id`; `severity` is a plain-string column whose CHECK constraint is generated from the `AlertSeverity` enum, not hand-duplicated |
+| `alert` | A pollution alert for one cell, plus the current_pm25/forecast_pm25/forecast_hours/confidence context it was raised with (all nullable — never fabricated) | PK `id`; `severity` is a plain-string column whose CHECK constraint is generated from the `AlertSeverity` enum, not hand-duplicated |
 
 `sensor_reading` and `weather_reading` also store a derived `geom
 geography(Point,4326)` column with a GiST index, for future spatial queries
@@ -139,7 +139,7 @@ later, it's just not what exists today.
 | `GET /api/v1/grid/current` | Current `GridState` per cell |
 | `GET /api/v1/grid/forecast?hours=1\|3\|6` | Latest `Forecast` per cell at that horizon |
 | `GET /api/v1/cells/{h3_cell}` | Current state + all forecasts + weather for one cell |
-| `GET /api/v1/alerts` | Alerts created in the last 24h (see `app/services/alerts.py`) |
+| `GET /api/v1/alerts` | Alerts created within `ALERT_ACTIVE_LOOKBACK_HOURS` (default 24h; see `app/services/alerts.py`) |
 
 Every response (`/health` excepted) is wrapped the same way:
 `{"generated_at": <UTC ISO-8601>, "is_demo": bool, "data": ...}`. `data` is
@@ -498,22 +498,53 @@ once per resulting cell with `CellContext(h3_cell, pm25=state.pm25)`,
 and upserts the combined result once per cell — not two separate
 round trips to the same row.
 
-**`AlertGenerationService`** is new logic, not a Protocol/interface like
-the estimator/PDI/forecast models — it's two threshold comparisons, not
-a model, so there's no separate swappable abstraction for it (yet; if
-that changes, it would move to `app/domain/`). It walks (current state,
-then each forecast horizon in ascending order) for every cell and raises
-the *first* threshold it crosses:
-- Already exceeded **now** → `WARNING` (`ALERT_WARNING_THRESHOLD_UGM3`)
-  or `CRITICAL` (`ALERT_CRITICAL_THRESHOLD_UGM3`).
-- Only reached at a **future** forecast horizon → always `WATCH`,
-  regardless of which threshold — severity encodes "happening now" vs
-  "advance warning", not just magnitude, and a current condition always
-  takes priority over what a forecast says about the same cell.
-- A cell with an alert already created within `ALERT_ACTIVE_LOOKBACK_HOURS`
-  is skipped, so a persistent condition doesn't spawn a new `Alert` row
-  every pipeline run — the same window `app.services.alerts.AlertService`
-  (the `/alerts` read path) uses to decide what counts as "active".
+**`AlertGenerationService`** is a very small rule-based alert engine —
+**no machine learning**. It's not a Protocol/interface like the
+estimator/PDI/forecast models — every rule is a plain, configurable
+comparison, not a model, so there's no separate swappable abstraction
+for it (yet; if that changes, it would move to `app/domain/`). For each
+cell it walks four rules in priority order and raises the *first* one
+that matches — a cell gets at most one alert per run:
+
+1. **Threshold crossed now**: current PM2.5 ≥ `ALERT_WARNING_THRESHOLD_UGM3`
+   / `ALERT_CRITICAL_THRESHOLD_UGM3` → `WARNING` / `CRITICAL`.
+2. **Threshold crossed in the forecast**: no current exceedance, but some
+   forecast horizon (earliest first) reaches a threshold → `WATCH`.
+3. **Sharp increase**: current-to-forecast PM2.5 jump ≥
+   `ALERT_SHARP_INCREASE_THRESHOLD_UGM3` at some horizon, independent of
+   whether either value alone crosses a threshold → `WATCH`.
+4. **High PDI + worsening forecast**: current PDI ≥
+   `ALERT_PDI_HIGH_THRESHOLD` *and* a forecast horizon at least
+   `ALERT_PDI_WORSENING_MIN_INCREASE_UGM3` above current PM2.5 → `WATCH`.
+   A deliberately smaller bar than rule 3: paired with already-high
+   pressure, even a modest uptick is worth flagging.
+
+Severity encodes *when* a condition is or will be true, not just how
+severe it is: only rule 1 produces `WARNING`/`CRITICAL`; every other rule
+is `WATCH` regardless of which threshold a forecast value crosses, and a
+current condition (rule 1) always takes priority over what a forecast
+says about the same cell (rules 2-4 are only reached if rule 1 doesn't
+match). A cell with an alert already created within
+`ALERT_ACTIVE_LOOKBACK_HOURS` is skipped, so a persistent condition
+doesn't spawn a new `Alert` row every pipeline run — the same window
+`app.services.alerts.AlertService` (the `/alerts` read path) uses to
+decide what counts as "active".
+
+Every `Alert` carries the context it was raised with —
+`current_pm25`/`forecast_pm25`/`forecast_hours`/`confidence`, alongside
+the pre-existing `h3_cell`/`severity`/`message`/`created_at`/
+`forecast_time` — never fabricated, so any of them can be `None`:
+`current_pm25` is `None` only if the cell had no current estimate;
+`forecast_pm25`/`forecast_hours` are `None` only if the cell had no
+forecast at all (a rule-1 alert still attaches the *nearest* available
+forecast horizon as informational trend context even though it isn't
+what triggered the alert). `confidence` is the current estimate's own
+confidence for a rule-1 alert, or the triggering forecast horizon's
+confidence for rules 2-4 — whichever value the alert is actually about.
+`forecast_time` stays a separate concept from `forecast_pm25`/
+`forecast_hours`: it means "when the alerted condition itself occurs"
+(`None` for a condition already true now), not "which forecast is
+attached".
 
 **Failure handling** (the explicit requirement behind this design): a
 failed external data source is a clear, reported per-stage failure, not
@@ -551,9 +582,11 @@ the way ingestion/forecasting do).
   `DISPERSION_WIND_TRANSPORT_REFERENCE_MS`,
   `DISPERSION_CALM_WIND_THRESHOLD_MS`, `DISPERSION_WIND_CONE_HALF_ANGLE_DEG`,
   `DISPERSION_CONFIDENCE_DECAY_PER_HOUR`,
-  `DISPERSION_MISSING_WEATHER_CONFIDENCE_PENALTY`), and alert thresholds
-  (`ALERT_WARNING_THRESHOLD_UGM3`, `ALERT_CRITICAL_THRESHOLD_UGM3`,
-  `ALERT_ACTIVE_LOOKBACK_HOURS`). See `.env.example`. A `model_validator`
+  `DISPERSION_MISSING_WEATHER_CONFIDENCE_PENALTY`), and alert-rule
+  thresholds (`ALERT_WARNING_THRESHOLD_UGM3`, `ALERT_CRITICAL_THRESHOLD_UGM3`,
+  `ALERT_SHARP_INCREASE_THRESHOLD_UGM3`, `ALERT_PDI_HIGH_THRESHOLD`,
+  `ALERT_PDI_WORSENING_MIN_INCREASE_UGM3`, `ALERT_ACTIVE_LOOKBACK_HOURS`).
+  See `.env.example`. A `model_validator`
   on `Settings` rejects `WEATHER_H3_RESOLUTION` finer than `H3_RESOLUTION`
   at startup (and another rejects `ALERT_CRITICAL_THRESHOLD_UGM3` at or
   below `ALERT_WARNING_THRESHOLD_UGM3`), rather than letting either fail

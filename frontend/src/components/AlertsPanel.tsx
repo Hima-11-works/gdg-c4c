@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { fetchAlerts } from '../lib/api'
+import { formatNumber } from '../lib/format'
 import { useApiResource } from '../hooks/useApiResource'
 import { useMapUi } from '../state/MapUiContext'
-import type { AlertSeverity } from '../lib/types'
+import type { AlertOut, AlertSeverity } from '../lib/types'
 
 const POLL_INTERVAL_MS = 60_000
 
@@ -10,6 +11,25 @@ const SEVERITY_LABEL: Record<AlertSeverity, string> = {
   watch: 'Watch',
   warning: 'Warning',
   critical: 'Critical',
+}
+
+function AlertItem({ alert, onSelect }: { alert: AlertOut; onSelect: () => void }) {
+  return (
+    <button type="button" className={`alert-item severity-${alert.severity}`} onClick={onSelect}>
+      <strong>{SEVERITY_LABEL[alert.severity]}</strong>
+      <span>{alert.message}</span>
+      <span className="muted">
+        Now: {formatNumber(alert.current_pm25)} µg/m³
+        {alert.forecast_pm25 !== null && (
+          <>
+            {' '}
+            · +{alert.forecast_hours}h: {formatNumber(alert.forecast_pm25)} µg/m³
+          </>
+        )}
+        {alert.confidence !== null && <> · {Math.round(alert.confidence * 100)}% confidence</>}
+      </span>
+    </button>
+  )
 }
 
 export function AlertsPanel() {
@@ -44,15 +64,11 @@ export function AlertsPanel() {
 
           {resource.status === 'success' &&
             resource.data.map((alert) => (
-              <button
-                type="button"
+              <AlertItem
                 key={`${alert.h3_cell}-${alert.created_at}`}
-                className={`alert-item severity-${alert.severity}`}
-                onClick={() => dispatch({ type: 'SELECT_CELL', cell: alert.h3_cell })}
-              >
-                <strong>{SEVERITY_LABEL[alert.severity]}</strong>
-                <span>{alert.message}</span>
-              </button>
+                alert={alert}
+                onSelect={() => dispatch({ type: 'SELECT_CELL', cell: alert.h3_cell })}
+              />
             ))}
         </div>
       )}

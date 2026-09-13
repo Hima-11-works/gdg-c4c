@@ -436,3 +436,40 @@ def test_alert_round_trip_and_list_active(db_session, cell: str) -> None:
     assert saved.id is not None
     assert saved in repo.list_active(since=NOW - timedelta(hours=1))
     assert repo.list_active(since=NOW + timedelta(hours=1)) == []
+
+
+def test_alert_context_fields_round_trip(db_session, cell: str) -> None:
+    """current_pm25/forecast_pm25/forecast_hours/confidence — added for
+    the rule-based alert engine (app.services.alert_generation) — must
+    round-trip, and must accept null when an alert has no forecast."""
+    repo = SqlAlertRepository(db_session)
+
+    with_context = repo.add(
+        Alert(
+            h3_cell=cell,
+            severity=AlertSeverity.CRITICAL,
+            message="PM2.5 is 200 now",
+            created_at=NOW,
+            current_pm25=200.0,
+            forecast_pm25=210.0,
+            forecast_hours=3,
+            confidence=0.8,
+        )
+    )
+    assert with_context.current_pm25 == 200.0
+    assert with_context.forecast_pm25 == 210.0
+    assert with_context.forecast_hours == 3
+    assert with_context.confidence == 0.8
+
+    without_context = repo.add(
+        Alert(
+            h3_cell=cell,
+            severity=AlertSeverity.WARNING,
+            message="PM2.5 is 60 now, no forecast available",
+            created_at=NOW,
+            current_pm25=60.0,
+        )
+    )
+    assert without_context.forecast_pm25 is None
+    assert without_context.forecast_hours is None
+    assert without_context.confidence is None

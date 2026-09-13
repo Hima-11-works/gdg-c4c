@@ -136,9 +136,25 @@ def upgrade() -> None:
         sa.Column("severity", sa.String(20), nullable=False),
         sa.Column("message", sa.String(500), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("current_pm25", sa.Float(), nullable=True),
+        sa.Column("forecast_pm25", sa.Float(), nullable=True),
+        sa.Column("forecast_hours", sa.SmallInteger(), nullable=True),
+        sa.Column("confidence", sa.Float(), nullable=True),
         sa.Column("forecast_time", sa.DateTime(timezone=True), nullable=True),
         sa.CheckConstraint(
             "severity IN ('watch', 'warning', 'critical')", name="ck_alert_severity"
+        ),
+        sa.CheckConstraint(
+            "current_pm25 IS NULL OR current_pm25 >= 0", name="ck_alert_current_pm25"
+        ),
+        sa.CheckConstraint(
+            "forecast_pm25 IS NULL OR forecast_pm25 >= 0", name="ck_alert_forecast_pm25"
+        ),
+        sa.CheckConstraint(
+            "forecast_hours IS NULL OR forecast_hours > 0", name="ck_alert_forecast_hours_positive"
+        ),
+        sa.CheckConstraint(
+            "confidence IS NULL OR confidence BETWEEN 0 AND 1", name="ck_alert_confidence"
         ),
     )
     op.create_index("ix_alert_h3_cell_created_at", "alert", ["h3_cell", "created_at"])

@@ -125,12 +125,17 @@ def demo_alerts(resolution: int) -> list[Alert]:
     now = _now()
     # The cell at index 3 is the 63.0 ug/m3 ("unhealthy") demo point.
     alert_cell = demo_cells(resolution)[3]
+    current_pm25 = _PM25_VALUES[3]
     return [
         Alert(
             h3_cell=alert_cell,
             severity=AlertSeverity.WARNING,
-            message="Demo alert: PM2.5 approaching unhealthy levels",
+            message=f"Demo alert: PM2.5 is {current_pm25:.0f} µg/m³ now — warning level.",
             created_at=now,
+            current_pm25=current_pm25,
+            forecast_pm25=round(current_pm25 * 1.1, 1),
+            forecast_hours=3,
+            confidence=0.3,  # deliberately low: signals "placeholder", not measured
             forecast_time=now + timedelta(hours=3),
         )
     ]

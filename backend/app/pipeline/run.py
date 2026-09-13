@@ -228,6 +228,9 @@ def _generate_alerts(
         SqlAlertRepository(session),
         warning_threshold_ugm3=settings.alert_warning_threshold_ugm3,
         critical_threshold_ugm3=settings.alert_critical_threshold_ugm3,
+        sharp_increase_threshold_ugm3=settings.alert_sharp_increase_threshold_ugm3,
+        pdi_high_threshold=settings.alert_pdi_high_threshold,
+        pdi_worsening_min_increase_ugm3=settings.alert_pdi_worsening_min_increase_ugm3,
         active_lookback=timedelta(hours=settings.alert_active_lookback_hours),
     )
     result = service.run(current_state, forecasts, generated_at=timestamp)
