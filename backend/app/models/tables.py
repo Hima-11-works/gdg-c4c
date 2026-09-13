@@ -146,7 +146,13 @@ alert = Table(
         "severity",
         SAEnum(
             AlertSeverity,
-            name="alert_severity",
+            # Matches the ck_<table>_<column> convention every other CHECK
+            # constraint in this schema uses (and the migration's own
+            # name for this one) — previously "alert_severity", which
+            # would have confused a future `alembic revision
+            # --autogenerate` into thinking this constraint needed to be
+            # dropped and recreated under the "correct" name.
+            name="ck_alert_severity",
             native_enum=False,
             create_constraint=True,  # SQLAlchemy 2.0 defaults this to False
             length=20,

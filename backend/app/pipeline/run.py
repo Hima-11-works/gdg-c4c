@@ -288,7 +288,17 @@ async def _main_async(args: argparse.Namespace) -> int:
     timestamp = datetime.now(UTC)
     print(f"Running full pipeline for {bbox} at {timestamp.isoformat()}...")
 
-    report = await run_pipeline(bbox, timestamp=timestamp)
+    try:
+        report = await run_pipeline(bbox, timestamp=timestamp)
+    except Exception as exc:
+        # Unlike a per-stage failure (reported below and otherwise
+        # non-fatal), this is the database itself being unreachable or
+        # some other failure no stage can work around (see module
+        # docstring) — print one clear line instead of a raw traceback.
+        logger.exception("Pipeline run aborted by an unexpected error")
+        print(f"Fatal: pipeline aborted: {exc!r}", file=sys.stderr)
+        return 1
+
     _print_report(report)
 
     if not report.succeeded:

@@ -15,18 +15,27 @@ so a new pollutant is a data change, not a migration).
 
 ## Shape
 
+**Contract note:** the original plan below was a `worker` *container*
+running the pipeline continuously/on a schedule inside Docker, alongside
+`db` and `api`. What's actually built is `python -m app.pipeline.run` —
+a manually-triggered batch script sharing the `api` image, not a
+standing container of its own (see "Pipeline (implemented)" further
+down). The data flow it runs is otherwise as originally shaped:
+
 ```
   frontend (host, Vite)  ──HTTP /api/v1 (OpenAPI, JSON)──►  api container
                                                                    │ read
                                                              PostgreSQL+PostGIS
                                                                    ▲ write
-  worker container ─ pipeline:                                     │
+  python -m app.pipeline.run ─ pipeline:                            │
      sources ──► store(raw) ──► build inputs(QC) ──► Nowcaster ──► Forecaster
                                                        ──► PDI ──► alerts ──► store(run)
 ```
 
-- Three containers eventually: `db`, `api`, `worker` (api and worker share one
-  image). Only `db` and `api` exist so far — there is no pipeline to run yet.
+- Two containers (`db`, `api`) plus a manually-run pipeline script sharing
+  the `api` image — not the originally-planned third `worker` container.
+  Turning it into one (a long-running process on a timer, replacing the
+  manual trigger) is a listed extension point, not a structural change.
 - Replaceable interfaces: pollution source, weather source, nowcaster,
   forecaster. Implementations are selected by name in config.
 - Fixed choices, not abstracted: PostgreSQL/PostGIS, H3, FastAPI.

@@ -228,7 +228,15 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     logging.basicConfig(level=get_settings().log_level)
-    return asyncio.run(args.func(args))
+    try:
+        return asyncio.run(args.func(args))
+    except Exception as exc:  # deliberately broad: the last line of defense so an
+        # unreachable database (or any other failure no command's own error
+        # handling already covers, e.g. a repository read outside a service's
+        # try/except) prints one clear line instead of a raw traceback.
+        logger.exception("Command failed with an unexpected error")
+        print(f"Fatal: {exc!r}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

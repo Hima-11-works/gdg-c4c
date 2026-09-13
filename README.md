@@ -492,8 +492,8 @@ data-fetching library). PDI's contributing-factor breakdown isn't in the API yet
 - The `api` container waits for the Postgres healthcheck. Its own healthcheck
   uses `/health/ready`, so `docker compose ps` shows it healthy only once
   PostGIS is reachable.
-- `ingest` and `ingest-weather` write `sensor_reading` / `weather_reading`
-  rows when triggered manually; nothing else writes yet — the pollution
-  model isn't implemented. Every `/api/v1/*` endpoint falls back to
+- Nothing writes automatically — `ingest`, `ingest-weather`, `forecast`,
+  and the full `python -m app.pipeline.run` are all manually triggered
+  (see "Full pipeline" above). Every `/api/v1/*` endpoint falls back to
   deterministic demo data (`app/services/demo_data.py`) when its
   repository query is empty — see `is_demo` in every response.
