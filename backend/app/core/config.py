@@ -20,6 +20,18 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     cors_origins: str = "http://localhost:5173"
 
+    # When true, app.ingestion.factory substitutes a fixed, deterministic
+    # sensor/weather dataset (app.ingestion.demo) for OpenAQ/Open-Meteo —
+    # the ONLY thing demo mode changes. Everything downstream (H3 grid,
+    # IDW interpolation, PDI, dispersion/forecasting, alerts, persistence,
+    # the API) runs exactly as it does in live mode, on real (if
+    # synthetic) inputs — this is not the same thing as `is_demo` in API
+    # responses, which flags the separate, unrelated illustrative
+    # fallback in app.services.demo_data used when a repository query
+    # returns nothing at all. A demo-mode pipeline run produces real,
+    # persisted rows, so `is_demo` stays false for them.
+    demo_mode: bool = False
+
     # H3 resolution used for every h3_cell column (weather_reading, grid_state,
     # forecast, alert). Changing it does not rewrite existing rows, so treat a
     # change as a breaking change to stored data, not a runtime toggle.

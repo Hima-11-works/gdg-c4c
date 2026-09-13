@@ -108,6 +108,7 @@ override it.
 | `POSTGRES_HOST`, `POSTGRES_PORT` | backend | For host-side runs (`localhost:5432`). Compose overrides them to `db:5432` for the api container |
 | `API_PORT` | Compose | Host port for the API |
 | `ENVIRONMENT`, `LOG_LEVEL`, `CORS_ORIGINS` | backend | |
+| `DEMO_MODE` | ingestion | Default `false`. When `true`, substitutes a fixed, deterministic sensor/weather dataset for OpenAQ/Open-Meteo — no API key needed. See "Demo Mode" below |
 | `H3_RESOLUTION` | backend | H3 resolution (0-15, default 8) for every `h3_cell` column. Changing it on an existing database does not rewrite stored rows — treat it as a breaking change to stored data |
 | `OPENAQ_API_KEY` | ingestion | Required to ingest PM2.5 ([get one free](https://explore.openaq.org/register)). Leave blank to run everything else without it |
 | `OPENAQ_BASE_URL`, `OPENAQ_TIMEOUT_SECONDS`, `OPENAQ_MAX_RETRIES`, `OPENAQ_LOCATIONS_LIMIT` | ingestion | OpenAQ adapter tuning — see `.env.example` |
@@ -407,6 +408,51 @@ There is no scheduler yet — this is a manual trigger, same as every
 other `app.cli`/`app.pipeline` command; a cron job or worker calling it
 periodically is the natural next step and wouldn't need any code here to
 change.
+
+## Demo Mode
+
+```bash
+# .env
+DEMO_MODE=true
+```
+
+```bash
+cd backend
+python -m app.cli ingest              # uses the demo dataset, no OPENAQ_API_KEY needed
+python -m app.cli ingest-weather      # uses the demo dataset, no API key needed either
+python -m app.cli forecast
+# or, in one shot:
+python -m app.pipeline.run
+```
+
+For running the whole thing without a live network connection or working
+API keys (hackathon judging, offline demos, CI). `DEMO_MODE=true`
+substitutes a fixed, deterministic PM2.5/wind dataset
+(`app.ingestion.demo`) for OpenAQ/Open-Meteo — **that is the only thing
+it changes**. Every stage after ingestion (H3 grid coverage, IDW
+interpolation, PDI, `DeterministicH3DispersionModel`,
+`AlertGenerationService`, persistence, the API) is the exact same code
+path as live mode, running for real against this synthetic input; there
+is no separate demo API response shape and no `if demo_mode` branch
+anywhere outside `app.ingestion.factory` (the single place that decides
+which provider to build — see its docstring).
+
+The scenario is a wildfire-smoke-scale PM2.5 hotspot (280 µg/m³,
+downtown San Francisco) with four lower background readings around it
+and a steady 6 m/s westerly wind, chosen so a pipeline run against it is
+guaranteed — with no non-default configuration required — to produce:
+a clearly visible hotspot, forecast values that visibly carry it
+downwind (east) with a consistent directional signature at +1h/+3h/+6h,
+and at least one CRITICAL alert (280 µg/m³ is comfortably past the
+default `ALERT_CRITICAL_THRESHOLD_UGM3=150.0`). See
+`backend/tests/test_demo_mode.py` for an end-to-end assertion of exactly
+this, run through the real services.
+
+`DEMO_MODE` is unrelated to a response's `is_demo` flag (see
+"Configuration" above): `is_demo` means "the repository had nothing at
+all, so `app.services.demo_data`'s static illustrative fallback is being
+shown instead" — a Demo Mode pipeline run persists real, computed rows,
+so `is_demo` stays `false` for them, same as live mode.
 
 ## Alerts
 

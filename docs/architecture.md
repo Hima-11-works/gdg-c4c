@@ -303,6 +303,43 @@ bbox from `.env` and print a summary. There is no scheduler yet — these are
 development commands, not the production path (that's the `worker`
 container in [Shape](#shape), not yet built).
 
+**Demo Mode (implemented):** `DEMO_MODE=true` swaps which providers get
+built, nothing else. `app.ingestion.factory.build_pollution_provider`/
+`build_weather_provider` are the single decision point — every caller
+(`app.cli`, `app.pipeline.run`) asks the factory instead of importing
+`OpenAQProvider`/`OpenMeteoProvider` directly or branching on the flag
+itself, which is what keeps `if settings.demo_mode` out of every layer
+above ingestion. In demo mode the factory returns
+`app.ingestion.demo.DemoPollutionDataProvider`/`DemoWeatherProvider`
+instead: a fixed hotspot-plus-background PM2.5 dataset (San Francisco,
+matching `app.services.demo_data`'s layout for visual consistency, though
+the two modules don't depend on each other) and a steady westerly wind,
+both ignoring `bbox`/`since` — Demo Mode always shows the same scenario
+regardless of the configured region. `measured_at` is still stamped with
+the real current time on every call, not a fixed timestamp, so the data
+never ages out of the freshness window `GridComputationService` already
+enforces; "deterministic" here means deterministic in content (same
+coordinates/values every call), not in timestamp.
+
+Everything from `GridComputationService` onward is completely unaware
+this happened: it estimates, interpolates, disperses, and alerts on
+whatever ended up persisted, exactly as it would for a real OpenAQ/
+Open-Meteo fetch. The scenario's hotspot (280 µg/m³) and wind (6 m/s) are
+chosen so a real pipeline run against it reliably produces a visible
+hotspot, forecasts that visibly carry it downwind over +1h/+3h/+6h, and
+at least one CRITICAL alert — via the real, unmodified rule-1 alert
+threshold, not a special case. `backend/tests/test_demo_mode.py` runs the
+real `GridComputationService`/`DeterministicH3DispersionModel`/
+`AlertGenerationService` against this dataset end to end and asserts all
+three.
+
+Not the same concept as a response's `is_demo` field (see
+[Configuration](#configuration) and [API](#api-implemented)): that flags
+`app.services.demo_data`'s static illustrative fallback, shown only when
+a repository query finds nothing at all. A Demo Mode pipeline run
+produces real, computed, persisted rows through the real pipeline, so
+`is_demo` stays `false` for them — identical to live mode.
+
 ## PM2.5 estimation (implemented: v1, IDW)
 
 `app.domain.estimation.PollutionEstimator` is the port:
@@ -578,7 +615,8 @@ the way ingestion/forecasting do).
 ## Configuration
 
 - **Env vars** (`.env`): infrastructure — DB connection, ports, CORS, log
-  level, H3 resolution (grid and weather-sampling), OpenAQ/Open-Meteo
+  level, H3 resolution (grid and weather-sampling), `DEMO_MODE` (see
+  "Demo Mode" under Ingestion above), OpenAQ/Open-Meteo
   ingestion settings (API key where needed, base URL, timeout/retries, the
   shared ingestion bounding box), IDW estimation thresholds
   (`IDW_MAX_DISTANCE_KM`, `IDW_MIN_SENSORS`), PDI weights

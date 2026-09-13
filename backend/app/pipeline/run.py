@@ -16,6 +16,12 @@ this module only wires them together in order, against one shared
 session/timestamp/bounding box, and prints a clear per-stage pass/fail
 summary. It is not itself where any pollution/forecast/PDI logic lives.
 
+Demo Mode (DEMO_MODE=true): the two ingestion stages substitute a fixed,
+deterministic dataset (app.ingestion.demo) for OpenAQ/Open-Meteo — see
+app.ingestion.factory, the single place that decision is made. Every
+stage after ingestion is completely unaware of it and runs identically
+either way, on whatever ended up persisted.
+
 Failure handling: a failed EXTERNAL data source (OpenAQ or Open-Meteo) is
 reported as a clear per-stage failure but does NOT abort the run. Every
 downstream stage already has a well-defined, tested behavior for
@@ -53,8 +59,7 @@ from app.db.repositories import (
 )
 from app.db.session import get_session_factory
 from app.domain.types import BoundingBox, Forecast
-from app.ingestion.open_meteo import OpenMeteoProvider
-from app.ingestion.openaq import OpenAQProvider
+from app.ingestion.factory import build_pollution_provider, build_weather_provider
 from app.services.alert_generation import AlertGenerationService
 from app.services.dispersion import DeterministicH3DispersionModel
 from app.services.estimation import IDWPollutionEstimator
@@ -86,21 +91,13 @@ class PipelineReport:
 async def _ingest_sensors(
     session: Session, settings: Settings, bbox: BoundingBox, since: datetime
 ) -> StageOutcome:
-    api_key = settings.openaq_api_key.get_secret_value() if settings.openaq_api_key else ""
-    if not api_key:
-        message = "OPENAQ_API_KEY is not set — skipping sensor ingestion for this run"
-        logger.warning(message)
-        return StageOutcome("sensor_ingestion", False, message)
-
     async with httpx.AsyncClient(timeout=settings.openaq_timeout_seconds) as client:
-        provider = OpenAQProvider(
-            api_key=api_key,
-            client=client,
-            base_url=settings.openaq_base_url,
-            timeout_seconds=settings.openaq_timeout_seconds,
-            max_retries=settings.openaq_max_retries,
-            locations_limit=settings.openaq_locations_limit,
-        )
+        provider = build_pollution_provider(settings, client)
+        if provider is None:
+            message = "OPENAQ_API_KEY is not set — skipping sensor ingestion for this run"
+            logger.warning(message)
+            return StageOutcome("sensor_ingestion", False, message)
+
         result = await SensorIngestionService(provider, SqlSensorReadingRepository(session)).run(
             bbox, since=since
         )
@@ -119,13 +116,7 @@ async def _ingest_sensors(
 
 async def _ingest_weather(session: Session, settings: Settings, bbox: BoundingBox) -> StageOutcome:
     async with httpx.AsyncClient(timeout=settings.open_meteo_timeout_seconds) as client:
-        provider = OpenMeteoProvider(
-            client=client,
-            base_url=settings.open_meteo_base_url,
-            timeout_seconds=settings.open_meteo_timeout_seconds,
-            max_retries=settings.open_meteo_max_retries,
-            max_locations_per_request=settings.open_meteo_max_locations_per_request,
-        )
+        provider = build_weather_provider(settings, client)
         result = await WeatherIngestionService(provider, SqlWeatherReadingRepository(session)).run(
             bbox
         )
@@ -287,6 +278,8 @@ async def _main_async(args: argparse.Namespace) -> int:
     )
     timestamp = datetime.now(UTC)
     print(f"Running full pipeline for {bbox} at {timestamp.isoformat()}...")
+    if settings.demo_mode:
+        print("DEMO_MODE=true — ingestion stages use the fixed demo dataset (app.ingestion.demo).")
 
     try:
         report = await run_pipeline(bbox, timestamp=timestamp)

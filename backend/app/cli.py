@@ -41,8 +41,7 @@ from app.db.repositories import (
 )
 from app.db.session import get_session_factory
 from app.domain.types import BoundingBox
-from app.ingestion.open_meteo import OpenMeteoProvider
-from app.ingestion.openaq import OpenAQProvider
+from app.ingestion.factory import build_pollution_provider, build_weather_provider
 from app.services.dispersion import DeterministicH3DispersionModel
 from app.services.forecasting import ForecastingResult, ForecastingService
 from app.services.geospatial import GeospatialService
@@ -74,29 +73,22 @@ def _report(result: IngestionResult) -> int:
 
 async def _run_ingest(args: argparse.Namespace) -> int:
     settings = get_settings()
-    api_key = settings.openaq_api_key.get_secret_value() if settings.openaq_api_key else ""
-    if not api_key:
-        print(
-            "OPENAQ_API_KEY is not set in .env - see .env.example.",
-            file=sys.stderr,
-        )
-        return 1
-
     bbox = _bbox_from_args(args)
     since = datetime.now(UTC) - timedelta(hours=settings.ingest_max_reading_age_hours)
     print(f"Ingesting PM2.5 readings for {bbox} since {since.isoformat()}...")
+    if settings.demo_mode:
+        print("DEMO_MODE=true — using the fixed demo dataset, not OpenAQ.")
 
     session = get_session_factory()()
     try:
         async with httpx.AsyncClient(timeout=settings.openaq_timeout_seconds) as client:
-            provider = OpenAQProvider(
-                api_key=api_key,
-                client=client,
-                base_url=settings.openaq_base_url,
-                timeout_seconds=settings.openaq_timeout_seconds,
-                max_retries=settings.openaq_max_retries,
-                locations_limit=settings.openaq_locations_limit,
-            )
+            provider = build_pollution_provider(settings, client)
+            if provider is None:
+                print(
+                    "OPENAQ_API_KEY is not set in .env - see .env.example.",
+                    file=sys.stderr,
+                )
+                return 1
             service = SensorIngestionService(provider, SqlSensorReadingRepository(session))
             result = await service.run(bbox, since=since)
     finally:
@@ -112,17 +104,13 @@ async def _run_ingest_weather(args: argparse.Namespace) -> int:
         f"Ingesting weather for {bbox} at resolution {settings.weather_h3_resolution} "
         f"(fanned out to grid resolution {settings.h3_resolution})..."
     )
+    if settings.demo_mode:
+        print("DEMO_MODE=true — using the fixed demo dataset, not Open-Meteo.")
 
     session = get_session_factory()()
     try:
         async with httpx.AsyncClient(timeout=settings.open_meteo_timeout_seconds) as client:
-            provider = OpenMeteoProvider(
-                client=client,
-                base_url=settings.open_meteo_base_url,
-                timeout_seconds=settings.open_meteo_timeout_seconds,
-                max_retries=settings.open_meteo_max_retries,
-                max_locations_per_request=settings.open_meteo_max_locations_per_request,
-            )
+            provider = build_weather_provider(settings, client)
             service = WeatherIngestionService(provider, SqlWeatherReadingRepository(session))
             result = await service.run(bbox)
     finally:
