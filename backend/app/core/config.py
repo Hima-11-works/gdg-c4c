@@ -108,6 +108,46 @@ class Settings(BaseSettings):
     # CellContext.industrial_pressure); same as above.
     pdi_industrial_pressure_weight: float = Field(default=0.1)
 
+    # --- Dispersion / forecast model (app.services.dispersion.DeterministicH3DispersionModel) ---
+    # Baseline fraction of a cell's PM2.5 removed per hour regardless of
+    # weather (dry deposition + generic atmospheric loss, lumped into one
+    # heuristic rate — not species-specific physics).
+    dispersion_decay_rate_per_hour: float = Field(default=0.15, ge=0, le=1)
+    # Extra fraction removed per hour at "full" precipitation intensity
+    # (see dispersion_precipitation_reference_mm), on top of the base
+    # decay rate. Combined removal is clamped to [0, 1] regardless of
+    # how these two are configured.
+    dispersion_wet_removal_rate_per_hour: float = Field(default=0.25, ge=0, le=1)
+    # Precipitation (mm/h) treated as "maximum" wet-removal intensity when
+    # normalizing to [0, 1] — a normalization scale, not a scientific
+    # scavenging-coefficient threshold. Same idiom as PDI_PM25_REFERENCE_UGM3.
+    dispersion_precipitation_reference_mm: float = Field(default=4.0, gt=0)
+    # Hard ceiling on the fraction of a cell's (post-removal) PM2.5 that
+    # can be transported to neighbors in one hour, however strong the
+    # wind — the single biggest guard against numerical explosion, since
+    # every per-hour coefficient in the model is then bounded in [0, 1].
+    dispersion_max_transport_fraction: float = Field(default=0.6, gt=0, lt=1)
+    # Wind speed (m/s) at which the transport fraction reaches its
+    # configured max; scales linearly below that and clamps at it above.
+    dispersion_wind_transport_reference_ms: float = Field(default=8.0, gt=0)
+    # Below this wind speed (m/s), treat the cell as calm: skip
+    # directional neighbor selection entirely rather than running
+    # bearing math that has no physical meaning near zero wind.
+    dispersion_calm_wind_threshold_ms: float = Field(default=0.5, ge=0)
+    # Half-angle (degrees) of the downwind "cone" used to select which
+    # H3 neighbors receive transported mass — a cone (usually 1-2
+    # neighbors) rather than a single nearest-bearing pick, so a small
+    # change in wind direction shifts weights continuously instead of
+    # flipping 100% of transport from one hex to the next.
+    dispersion_wind_cone_half_angle_deg: float = Field(default=50.0, gt=0, le=180)
+    # Flat per-hour confidence multiplier applied regardless of input
+    # confidence, reflecting growing model uncertainty further into the
+    # future. 1.0 disables horizon-based decay entirely.
+    dispersion_confidence_decay_per_hour: float = Field(default=0.9, gt=0, le=1)
+    # Extra confidence multiplier applied for an hour where a cell had no
+    # weather reading (decay-only, degraded forecast for that cell/hour).
+    dispersion_missing_weather_confidence_penalty: float = Field(default=0.5, gt=0, le=1)
+
     @model_validator(mode="after")
     def _check_weather_resolution_not_finer_than_grid(self) -> "Settings":
         if self.weather_h3_resolution > self.h3_resolution:

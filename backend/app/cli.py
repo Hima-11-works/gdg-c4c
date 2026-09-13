@@ -3,6 +3,7 @@
     python -m app.cli ingest [--min-lat --min-lon --max-lat --max-lon]
     python -m app.cli ingest-weather [--min-lat --min-lon --max-lat --max-lon]
     python -m app.cli export-grid [--out grid.geojson] [--min-lat ...]
+    python -m app.cli forecast
 
 Runs one ingestion pass against the bounding box from .env (overridable
 per-call with the flags above) and prints a summary. This is a manual
@@ -10,6 +11,9 @@ trigger for local development — see docs/architecture.md for where a real
 scheduler/worker will eventually call the same services. `export-grid`
 writes the configured MVP region's H3 coverage as a GeoJSON
 FeatureCollection, for visual inspection (e.g. geojson.io or a GIS tool).
+`forecast` runs DeterministicH3DispersionModel against the latest
+GridState/WeatherReading rows and persists the resulting 1h/3h/6h
+Forecast rows (see app.services.forecasting.ForecastingService).
 
 Not subject to the app/* layer-import rules in tests/test_architecture.py
 (only directories under app/ are checked) — same treatment as app/main.py,
@@ -29,11 +33,18 @@ from pathlib import Path
 import httpx
 
 from app.core.config import get_settings
-from app.db.repositories import SqlSensorReadingRepository, SqlWeatherReadingRepository
+from app.db.repositories import (
+    SqlForecastRepository,
+    SqlGridStateRepository,
+    SqlSensorReadingRepository,
+    SqlWeatherReadingRepository,
+)
 from app.db.session import get_session_factory
 from app.domain.types import BoundingBox
 from app.ingestion.open_meteo import OpenMeteoProvider
 from app.ingestion.openaq import OpenAQProvider
+from app.services.dispersion import DeterministicH3DispersionModel
+from app.services.forecasting import ForecastingResult, ForecastingService
 from app.services.geospatial import GeospatialService
 from app.services.ingestion import IngestionResult, SensorIngestionService, WeatherIngestionService
 
@@ -135,6 +146,50 @@ async def _run_export_grid(args: argparse.Namespace) -> int:
     return 0
 
 
+def _report_forecast(result: ForecastingResult) -> int:
+    if not result.succeeded:
+        print(f"Forecasting failed: {'; '.join(result.errors)}", file=sys.stderr)
+        return 1
+    print(
+        f"Forecasting complete: cells={result.cells} "
+        f"generated={result.forecasts_generated} saved={result.forecasts_saved}"
+    )
+    if result.domain_outflow_by_hour:
+        outflow = ", ".join(
+            f"h{hour}={loss:.3f}" for hour, loss in sorted(result.domain_outflow_by_hour.items())
+        )
+        print(f"Domain boundary outflow (PM2.5 units left the modeled grid): {outflow}")
+    return 0
+
+
+async def _run_forecast(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    session = get_session_factory()()
+    try:
+        model = DeterministicH3DispersionModel(
+            decay_rate_per_hour=settings.dispersion_decay_rate_per_hour,
+            wet_removal_rate_per_hour=settings.dispersion_wet_removal_rate_per_hour,
+            precipitation_reference_mm=settings.dispersion_precipitation_reference_mm,
+            max_transport_fraction=settings.dispersion_max_transport_fraction,
+            wind_transport_reference_ms=settings.dispersion_wind_transport_reference_ms,
+            calm_wind_threshold_ms=settings.dispersion_calm_wind_threshold_ms,
+            wind_cone_half_angle_deg=settings.dispersion_wind_cone_half_angle_deg,
+            confidence_decay_per_hour=settings.dispersion_confidence_decay_per_hour,
+            missing_weather_confidence_penalty=settings.dispersion_missing_weather_confidence_penalty,
+        )
+        service = ForecastingService(
+            model,
+            SqlGridStateRepository(session),
+            SqlWeatherReadingRepository(session),
+            SqlForecastRepository(session),
+        )
+        result = service.run(generated_at=datetime.now(UTC))
+    finally:
+        session.close()
+
+    return _report_forecast(result)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.cli", description="Development commands.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -164,6 +219,12 @@ def main(argv: list[str] | None = None) -> int:
     grid_parser.add_argument("--max-lat", type=float, default=None)
     grid_parser.add_argument("--max-lon", type=float, default=None)
     grid_parser.set_defaults(func=_run_export_grid)
+
+    forecast_parser = subparsers.add_parser(
+        "forecast",
+        help="Run one forecast pipeline pass (DeterministicH3DispersionModel) and persist results.",
+    )
+    forecast_parser.set_defaults(func=_run_forecast)
 
     args = parser.parse_args(argv)
     logging.basicConfig(level=get_settings().log_level)

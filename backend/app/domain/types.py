@@ -56,8 +56,9 @@ _EARTH_RADIUS_KM = 6371.0088  # IUGG mean radius
 @dataclass(frozen=True, slots=True)
 class Coordinate:
     """A single point, used to ask a WeatherProvider for weather at a
-    specific location rather than a whole region, or (via distance_km) as
-    the basis for distance-weighted interpolation like IDW."""
+    specific location rather than a whole region, or (via distance_km /
+    bearing_to) as the basis for distance-weighted interpolation like IDW
+    or wind-direction-based neighbor selection like the dispersion model."""
 
     latitude: float
     longitude: float
@@ -80,6 +81,22 @@ class Coordinate:
         dlon = lon2 - lon1
         a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
         return _EARTH_RADIUS_KM * 2 * math.asin(math.sqrt(a))
+
+    def bearing_to(self, other: Coordinate) -> float:
+        """Initial compass bearing (forward azimuth) from this point to
+        `other`, in degrees [0, 360), 0 = north, 90 = east.
+
+        Used to compare an H3 neighbor's direction against a wind's
+        downwind bearing (app.services.dispersion) — accurate enough at
+        neighboring-hex distances; not geodesic-precise over long paths,
+        same caveat as distance_km.
+        """
+        lat1, lon1 = math.radians(self.latitude), math.radians(self.longitude)
+        lat2, lon2 = math.radians(other.latitude), math.radians(other.longitude)
+        dlon = lon2 - lon1
+        x = math.sin(dlon) * math.cos(lat2)
+        y = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dlon)
+        return math.degrees(math.atan2(x, y)) % 360
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,6 +245,9 @@ class Forecast:
             raise ValueError("forecast_time must be after generated_at")
         if not 0 <= self.confidence <= 1:
             raise ValueError(f"confidence must be within [0, 1]: {self.confidence}")
+        _require_finite(self.predicted_pm25, "predicted_pm25")
+        if self.predicted_pm25 < 0:
+            raise ValueError(f"predicted_pm25 must be >= 0: {self.predicted_pm25}")
 
 
 class AlertSeverity(StrEnum):

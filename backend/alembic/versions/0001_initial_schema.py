@@ -121,6 +121,7 @@ def upgrade() -> None:
         sa.CheckConstraint("forecast_hours > 0", name="ck_forecast_hours_positive"),
         sa.CheckConstraint("confidence BETWEEN 0 AND 1", name="ck_forecast_confidence"),
         sa.CheckConstraint("forecast_time > generated_at", name="ck_forecast_time_after_generated"),
+        sa.CheckConstraint("predicted_pm25 >= 0", name="ck_forecast_predicted_pm25"),
         sa.UniqueConstraint(
             "h3_cell", "generated_at", "forecast_hours", name="uq_forecast_run_horizon"
         ),

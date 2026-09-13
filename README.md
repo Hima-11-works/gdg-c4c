@@ -1,9 +1,10 @@
 # Pollution Intelligence Platform
 
 Project scaffold for a pollution intelligence MVP (PM2.5, H3 grid, weather-driven
-spread predictions). **Estimation isn't wired into the API or a persistence
-pipeline yet** — every endpoint still falls back to deterministic demo data
-until that pipeline exists. So far the project has:
+spread predictions). **PM2.5 estimation and PDI aren't wired into any pipeline
+yet** — only the dispersion/forecast model is (`python -m app.cli forecast`
+persists real `Forecast` rows). Any endpoint with nothing real behind it still
+falls back to deterministic demo data. So far the project has:
 - a FastAPI backend: `/api/v1` (sensors, weather, grid, cells, alerts) plus
   health/readiness, with a consistent error shape and OpenAPI docs at `/docs`
 - PM2.5 estimation v1 (`IDWPollutionEstimator`, inverse-distance-weighted)
@@ -11,6 +12,11 @@ until that pipeline exists. So far the project has:
   an ML model can replace it later without changing any caller
 - PDI v0 (`HeuristicPDIModel`): a heuristic "pollution pressure index",
   **not** a scientific measurement, behind a `PDIModel` interface
+- a deterministic H3 dispersion/forecast model v0
+  (`DeterministicH3DispersionModel`): wind-driven advection, limited
+  neighbor diffusion, decay/precipitation removal, mass-conserving by
+  construction, behind a `PollutionForecastModel` interface — run and
+  persisted via `python -m app.cli forecast`
 - OpenAQ ingestion for PM2.5 (`python -m app.cli ingest`) and Open-Meteo
   ingestion for weather (`python -m app.cli ingest-weather`), each behind
   a provider interface (`PollutionDataProvider` / `WeatherProvider`) so
@@ -105,6 +111,10 @@ override it.
 | `IDW_MIN_SENSORS` | estimation | Min sensors (default 2) required within range before a cell gets an estimate at all |
 | `PDI_PM25_REFERENCE_UGM3` | PDI | PM2.5 (default 250 ug/m3) treated as "maximum pressure" when normalizing to [0, 1] — a normalization scale, not a scientific threshold |
 | `PDI_PM25_WEIGHT`, `PDI_ROAD_PRESSURE_WEIGHT`, `PDI_INDUSTRIAL_PRESSURE_WEIGHT` | PDI | Relative weights (default 0.7 / 0.2 / 0.1) of each factor in the PDI blend; renormalized over whichever factors are actually present for a cell |
+| `DISPERSION_DECAY_RATE_PER_HOUR`, `DISPERSION_WET_REMOVAL_RATE_PER_HOUR`, `DISPERSION_PRECIPITATION_REFERENCE_MM` | dispersion | Baseline + precipitation-driven PM2.5 removal per hour (defaults 0.15, 0.25, 4mm) |
+| `DISPERSION_MAX_TRANSPORT_FRACTION`, `DISPERSION_WIND_TRANSPORT_REFERENCE_MS`, `DISPERSION_CALM_WIND_THRESHOLD_MS` | dispersion | How much of a cell's PM2.5 wind can move per hour, and at what speeds (defaults 0.6, 8 m/s, 0.5 m/s) |
+| `DISPERSION_WIND_CONE_HALF_ANGLE_DEG` | dispersion | Half-angle (default 50°) of the downwind neighbor-selection cone |
+| `DISPERSION_CONFIDENCE_DECAY_PER_HOUR`, `DISPERSION_MISSING_WEATHER_CONFIDENCE_PENALTY` | dispersion | Per-hour forecast confidence discount, and an extra one for a cell with no weather reading (defaults 0.9, 0.5) |
 | `VITE_API_BASE_URL` (in `frontend/.env`) | Vite | Where the frontend calls the backend |
 
 The backend builds the database URL from the `POSTGRES_*` parts, so credentials
@@ -131,8 +141,9 @@ are defined only once.
 │  │  ├─ models/            # database table definitions (the schema)
 │  │  ├─ services/          # per-resource logic, demo-data fallback, ingestion orchestration,
 │  │  │                     # geospatial.py (GeospatialService), estimation.py (IDWPollutionEstimator),
-│  │  │                     # pdi.py (HeuristicPDIModel)
-│  │  ├─ cli.py             # dev commands — `python -m app.cli ingest[-weather]|export-grid`
+│  │  │                     # pdi.py (HeuristicPDIModel), dispersion.py (DeterministicH3DispersionModel),
+│  │  │                     # forecasting.py (ForecastingService — runs+persists the dispersion model)
+│  │  ├─ cli.py             # dev commands — `python -m app.cli ingest[-weather]|export-grid|forecast`
 │  │  └─ main.py            # FastAPI app entrypoint
 │  ├─ tests/
 │  ├─ pyproject.toml        # dependency ranges
@@ -257,6 +268,53 @@ is the model layer only, exercised directly by
   precipitation washout) could push it toward `-100` without any formula
   change.
 
+## Dispersion / forecast model
+
+`app.services.dispersion.DeterministicH3DispersionModel` forecasts PM2.5
+forward hour by hour from `GridState`/`WeatherReading` data, behind
+`app.domain.dispersion.PollutionForecastModel`. **Not an atmospheric
+chemistry simulator** — a deliberately simple, explainable box model: each
+H3 cell is well-mixed; every hour its PM2.5 is reduced by a removal
+fraction (decay, boosted by precipitation) and split between what stays
+and what's transported into immediate H3 neighbors, biased toward
+whichever neighbor(s) are closest to the wind's downwind bearing. It
+redistributes/removes pollution that already exists — no emissions term.
+
+- **1h/3h/6h** are all produced from one run of the same hour-by-hour
+  loop (the 3h result is the literal state after 3 of the same steps used
+  to reach 6h) — never a shortcut, so the horizons are always mutually
+  consistent.
+- **Mass conservation:** every coefficient is clamped to `[0, 1]`, and
+  `DISPERSION_MAX_TRANSPORT_FRACTION < 1` caps transport regardless of
+  wind speed — so total mass across the modeled grid can only decrease
+  or leave through an open domain boundary, never increase, however
+  extreme the input. `predicted_pm25` is validated `>= 0` at construction
+  (`Forecast`, matching `GridState.pm25`), with a matching DB `CHECK`.
+- **Confidence** propagates through the same transport as a mass-weighted
+  average, then decays once per hour (`DISPERSION_CONFIDENCE_DECAY_PER_HOUR`)
+  and takes an extra penalty for any hour a cell had no weather reading.
+- **Known simplification:** weather is held constant across the whole
+  forecast horizon — there's no per-hour weather forecast feed yet.
+
+Unlike `IDWPollutionEstimator`/`HeuristicPDIModel`, this one **is**
+persisted: `app.services.forecasting.ForecastingService` reads the latest
+`GridState`/`WeatherReading` rows, runs the model for `hours=(1, 3, 6)`,
+and saves every resulting `Forecast`. Run it with:
+
+```bash
+cd backend
+python -m app.cli forecast
+```
+
+Requires `GridState` rows to already exist (run ingestion, or seed some
+manually — there's no PM2.5-estimation pipeline wired up yet either).
+Once it's run at least once, `/api/v1/grid/forecast` and
+`/api/v1/cells/{h3_cell}` automatically start serving the real, persisted
+forecasts instead of demo data — no API or service code changes needed,
+since they already read from `ForecastRepository`. See
+`backend/tests/test_dispersion.py` (the model) and
+`backend/tests/test_forecasting_service.py` (the pipeline).
+
 ## Ingestion
 
 ```bash
@@ -283,7 +341,7 @@ Under Docker Compose, run either inside the `api` container instead:
 
 Either command prints a message and exits 1 on a network, API, or
 database failure — never an uncaught traceback. There is no scheduler
-yet; both are manual triggers for local development. See
+yet; both (and `forecast`) are manual triggers for local development. See
 `docs/architecture.md` for the full fetch flow and how to add another
 source (CPCB, satellite, ECMWF, private sensors) behind the same
 interfaces.

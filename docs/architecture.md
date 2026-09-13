@@ -40,11 +40,11 @@ requested for the scaffold) maps onto it as follows:
 | Directory | Responsibility | May import |
 |---|---|---|
 | `app/core` | Settings, cross-cutting config | nothing internal |
-| `app/domain` | Pure domain types (`SensorReading`, `WeatherReading`, `GridState`, `Forecast`, `Alert`), repository/provider/estimator/PDI Protocols (ports), H3 helpers. No I/O. | `app/core` |
+| `app/domain` | Pure domain types (`SensorReading`, `WeatherReading`, `GridState`, `Forecast`, `Alert`), repository/provider/estimator/PDI/dispersion Protocols (ports), H3 helpers. No I/O. | `app/core` |
 | `app/models` | SQLAlchemy Core table definitions (the schema) | `app/core`, `app/domain` (only for the `AlertSeverity` column type) |
 | `app/db` | Engine/session management, and `app/db/repositories/*` — concrete SQLAlchemy implementations of the domain repository Protocols | `app/core`, `app/domain`, `app/models` |
 | `app/ingestion` | Source adapters implementing `app.domain.providers.PollutionDataProvider` or `WeatherProvider`: `OpenAQProvider` and `OpenMeteoProvider` (both implemented); a shared retry policy in `http.py` | `app/core`, `app/domain` |
-| `app/services` | Business logic: per-resource read services (`SensorService`, `GridService`, `CellService`, `AlertService`, …) plus the demo-data fallback, `SensorIngestionService` / `WeatherIngestionService` (fetch → persist, skip duplicates), `GeospatialService` (the H3 facade), `IDWPollutionEstimator`, and `HeuristicPDIModel` (see below) | `app/core`, `app/domain`, `app/ingestion`, `app/models`, `app/db` |
+| `app/services` | Business logic: per-resource read services (`SensorService`, `GridService`, `CellService`, `AlertService`, …) plus the demo-data fallback, `SensorIngestionService` / `WeatherIngestionService` (fetch → persist, skip duplicates), `GeospatialService` (the H3 facade), `IDWPollutionEstimator`, `HeuristicPDIModel`, `DeterministicH3DispersionModel`, and `ForecastingService` (runs the dispersion model, persists results — see below) | `app/core`, `app/domain`, `app/ingestion`, `app/models`, `app/db` |
 | `app/api` | FastAPI routes (thin — call a service, shape the response), Pydantic schemas, error handling, dependency wiring | `app/core`, `app/domain`, `app/db` (dependency wiring only, see `app/api/deps.py`), `app/services` |
 
 Domain code depends only on `app/core` and never on SQLAlchemy: repositories
@@ -363,24 +363,117 @@ also no real data source for `road_pressure` or `industrial_pressure` yet;
 the fields exist so a future source is a matter of populating
 `CellContext`, not changing `HeuristicPDIModel` or its caller.
 
+## Dispersion / forecast model (implemented: v0, deterministic H3 box model)
+
+**Not an atmospheric chemistry simulator.** A deliberately simple,
+explainable box model: each H3 cell is a well-mixed box; every simulated
+hour, its PM2.5 is reduced by a removal fraction (decay, boosted by
+precipitation if available), then split between what stays and what's
+transported into its immediate H3 neighbors, biased toward whichever
+neighbor(s) lie closest to the wind's downwind bearing. It redistributes
+and removes pollution that's already estimated to exist — it has no
+emissions term, so a cell sitting on a continuous real source will trend
+lower over a horizon than reality (that's closer to what PDI signals, not
+this model's job).
+
+`app.domain.dispersion.PollutionForecastModel` is the port:
+`forecast(current_state: list[GridState], weather: list[WeatherReading],
+hours: Sequence[int] = (1, 3, 6), *, generated_at) -> ForecastResult`.
+The modeled domain is exactly the cells present in `current_state` — no
+separate grid parameter, since the cells with a current estimate *are*
+the cells being forecast. `generated_at` is caller-supplied, matching
+`PollutionEstimator`/`PDIModel`'s determinism precedent. Every requested
+horizon is the literal simulated state at that many hourly steps (the
+3-hour result is 3 iterations of the same per-hour update used to reach
+6 hours) — never a closed-form shortcut — so requesting several horizons
+from one call is guaranteed internally consistent with each other.
+`ForecastResult.domain_outflow_by_hour` is a diagnostic (not a modeling
+input): the PM2.5 that left the tracked grid each hour because it was
+transported toward a neighbor cell outside `current_state` — an explicit,
+observable open-boundary loss rather than a silently-dropped number.
+
+`app.services.dispersion.DeterministicH3DispersionModel` is the first (and
+so far only) implementation:
+
+- **Removal:** `removal_fraction = clamp(DISPERSION_DECAY_RATE_PER_HOUR +
+  DISPERSION_WET_REMOVAL_RATE_PER_HOUR * clamp01(precipitation /
+  DISPERSION_PRECIPITATION_REFERENCE_MM), 0, 1)` — precipitation only
+  changes this term, never the directional transport split.
+- **Transport:** `transport_fraction = DISPERSION_MAX_TRANSPORT_FRACTION *
+  clamp01(wind_speed / DISPERSION_WIND_TRANSPORT_REFERENCE_MS)`, zero
+  below `DISPERSION_CALM_WIND_THRESHOLD_MS` or when a cell has no weather
+  reading at all (decay-only, no fabricated wind).
+- **Neighbor selection:** every H3 neighbor within
+  `DISPERSION_WIND_CONE_HALF_ANGLE_DEG` of the downwind bearing
+  (`wind_direction + 180`, since `wind_direction` is meteorological
+  "blowing from") gets a share, weighted linearly by closeness to
+  dead-on-downwind — a cone (usually 1-2 neighbors), not a single
+  nearest-bearing pick, so a small wind-direction change shifts weights
+  continuously instead of flipping 100% of transport from one hex to the
+  next (see `Coordinate.bearing_to`, added alongside `distance_km`).
+- **Mass conservation:** every coefficient (removal fraction, transport
+  fraction, each neighbor weight) is clamped into `[0, 1]`, and
+  `DISPERSION_MAX_TRANSPORT_FRACTION < 1` caps transport regardless of
+  wind speed — so the per-hour update is a substochastic linear map:
+  total mass across the modeled domain can only decrease (removal) or
+  leave through an open boundary, never increase, however extreme the
+  input (e.g. a corrupted 500 m/s wind reading). Concentrations are
+  floored at 0 defensively.
+- **Confidence:** propagates through the same transport as a
+  mass-weighted average (so a cell that mostly receives well-observed
+  inflow isn't penalized just for having a low confidence itself), then
+  discounted once per hour by `DISPERSION_CONFIDENCE_DECAY_PER_HOUR` and,
+  for an hour where a cell had no weather, by
+  `DISPERSION_MISSING_WEATHER_CONFIDENCE_PENALTY`.
+- **Known simplification:** weather is held constant across the whole
+  simulated horizon — there is no per-hour weather forecast feed yet.
+  This is the single biggest gap versus reality, documented rather than
+  hidden; a future `WeatherForecastProvider` would remove it without
+  changing this model's structure.
+
+`Forecast.predicted_pm25` is validated `>= 0` at construction (matching
+`GridState.pm25`/`SensorReading.value`), with a matching DB `CHECK`
+constraint — "values cannot become negative" is enforced at the type,
+not just trusted from the model's arithmetic.
+
+`app.services.forecasting.ForecastingService` is the pipeline
+orchestration (same relationship to the model as `SensorIngestionService`
+has to `OpenAQProvider`): reads `GridStateRepository.latest()` and
+`WeatherReadingRepository.list_latest()`, runs the model for
+`hours=(1, 3, 6)`, and persists every resulting `Forecast` via
+`ForecastRepository.add()`. `python -m app.cli forecast` is the manual
+development trigger, matching `ingest`/`ingest-weather`/`export-grid`.
+Once this has been run at least once, `/api/v1/grid/forecast` and
+`/api/v1/cells/{h3_cell}` serve the real, persisted rows instead of demo
+data automatically — no change to `GridService`/`CellService`/the API
+contract, since they already read from `ForecastRepository`.
+
 ## Configuration
 
 - **Env vars** (`.env`): infrastructure — DB connection, ports, CORS, log
   level, H3 resolution (grid and weather-sampling), OpenAQ/Open-Meteo
   ingestion settings (API key where needed, base URL, timeout/retries, the
   shared ingestion bounding box), IDW estimation thresholds
-  (`IDW_MAX_DISTANCE_KM`, `IDW_MIN_SENSORS`), and PDI weights
+  (`IDW_MAX_DISTANCE_KM`, `IDW_MIN_SENSORS`), PDI weights
   (`PDI_PM25_REFERENCE_UGM3`, `PDI_PM25_WEIGHT`, `PDI_ROAD_PRESSURE_WEIGHT`,
-  `PDI_INDUSTRIAL_PRESSURE_WEIGHT`). See `.env.example`. A
+  `PDI_INDUSTRIAL_PRESSURE_WEIGHT`), and dispersion/forecast model
+  parameters (`DISPERSION_DECAY_RATE_PER_HOUR`,
+  `DISPERSION_WET_REMOVAL_RATE_PER_HOUR`,
+  `DISPERSION_PRECIPITATION_REFERENCE_MM`,
+  `DISPERSION_MAX_TRANSPORT_FRACTION`,
+  `DISPERSION_WIND_TRANSPORT_REFERENCE_MS`,
+  `DISPERSION_CALM_WIND_THRESHOLD_MS`, `DISPERSION_WIND_CONE_HALF_ANGLE_DEG`,
+  `DISPERSION_CONFIDENCE_DECAY_PER_HOUR`,
+  `DISPERSION_MISSING_WEATHER_CONFIDENCE_PENALTY`). See `.env.example`. A
   `model_validator` on `Settings` rejects `WEATHER_H3_RESOLUTION` finer
   than `H3_RESOLUTION` at startup, rather than letting it fail confusingly
   inside H3 library calls the first time ingestion runs.
 - **Region config** (future `config/region.yaml`): domain tuning — QC
-  thresholds, forecast model parameters, alert thresholds. PDI weights
-  moved out of this "future" list in v0: they live in `.env` alongside
-  every other tunable this app currently has (IDW's included), the same
-  place they'd need to move out of once a real region-config file exists.
-  The ingestion bounding box also lives in `.env` for now (`INGEST_BBOX_*`,
+  thresholds, alert thresholds. PDI and dispersion-model parameters moved
+  out of this "future" list: they live in `.env` alongside every other
+  tunable this app currently has (IDW's included), the same place they'd
+  need to move out of once a real region-config file exists. The
+  ingestion bounding box also lives in `.env` for now (`INGEST_BBOX_*`,
   shared by both `ingest` and `ingest-weather`), not this future file —
   it's config for the adapters, not the shared region concept `/meta` will
   eventually expose.
@@ -391,6 +484,9 @@ the fields exist so a future source is a matter of populating
 |---|---|
 | New PM2.5 estimation model (Kriging, satellite fusion, ML) | New class implementing `PollutionEstimator` in `app/services/`; whatever calls `estimate()` — an API endpoint, a future pipeline — is unchanged |
 | Real road-density / industrial-proximity data | Populate `CellContext.road_pressure` / `.industrial_pressure` (normalized to `[0, 1]`) wherever a `CellContext` is built; `HeuristicPDIModel` and its caller are unchanged |
+| New dispersion/forecast model (higher-fidelity plume, ML) | New class implementing `PollutionForecastModel` in `app/services/`; `ForecastingService`, `app.cli forecast`, and the API are unchanged |
+| Per-hour forecast weather (instead of holding current weather constant) | A `WeatherForecastProvider`-shaped source feeding hour-indexed `WeatherReading`s into the model's per-hour loop; the model's coefficient/transport structure doesn't change |
+| Scheduled forecasting | A worker calling `ForecastingService.run()` on a timer, replacing the manual `python -m app.cli forecast` trigger — same pattern as scheduled ingestion |
 | New PDI model (e.g. one that also weighs forecasted trend, not just current state) | New class implementing `PDIModel` in `app/services/`; whatever calls `calculate()` is unchanged |
 | A "sink" factor that should lower PDI (e.g. precipitation washout) | Add the field to `CellContext`, populate it, give it a negative weight — `HeuristicPDIModel`'s formula already supports negative weights and stays bounded to `[-100, 100]` |
 | New forecast model | New module under `app/domain`, selected by config |

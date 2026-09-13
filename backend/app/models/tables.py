@@ -127,6 +127,7 @@ forecast = Table(
     CheckConstraint("forecast_hours > 0", name="ck_forecast_hours_positive"),
     CheckConstraint("confidence BETWEEN 0 AND 1", name="ck_forecast_confidence"),
     CheckConstraint("forecast_time > generated_at", name="ck_forecast_time_after_generated"),
+    CheckConstraint("predicted_pm25 >= 0", name="ck_forecast_predicted_pm25"),
     # One row per (cell, pipeline run, horizon) — reprocessing a run is a
     # conflict, not a duplicate forecast.
     UniqueConstraint("h3_cell", "generated_at", "forecast_hours", name="uq_forecast_run_horizon"),
