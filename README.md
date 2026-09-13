@@ -9,6 +9,8 @@ until that pipeline exists. So far the project has:
 - PM2.5 estimation v1 (`IDWPollutionEstimator`, inverse-distance-weighted)
   behind a `PollutionEstimator` interface, so Kriging, satellite fusion, or
   an ML model can replace it later without changing any caller
+- PDI v0 (`HeuristicPDIModel`): a heuristic "pollution pressure index",
+  **not** a scientific measurement, behind a `PDIModel` interface
 - OpenAQ ingestion for PM2.5 (`python -m app.cli ingest`) and Open-Meteo
   ingestion for weather (`python -m app.cli ingest-weather`), each behind
   a provider interface (`PollutionDataProvider` / `WeatherProvider`) so
@@ -101,6 +103,8 @@ override it.
 | `INGEST_MAX_READING_AGE_HOURS` | ingestion | A fetched PM2.5 reading older than this is dropped as stale |
 | `IDW_MAX_DISTANCE_KM` | estimation | Max distance (default 15km) from a cell center a sensor may be to count as evidence for that cell |
 | `IDW_MIN_SENSORS` | estimation | Min sensors (default 2) required within range before a cell gets an estimate at all |
+| `PDI_PM25_REFERENCE_UGM3` | PDI | PM2.5 (default 250 ug/m3) treated as "maximum pressure" when normalizing to [0, 1] — a normalization scale, not a scientific threshold |
+| `PDI_PM25_WEIGHT`, `PDI_ROAD_PRESSURE_WEIGHT`, `PDI_INDUSTRIAL_PRESSURE_WEIGHT` | PDI | Relative weights (default 0.7 / 0.2 / 0.1) of each factor in the PDI blend; renormalized over whichever factors are actually present for a cell |
 | `VITE_API_BASE_URL` (in `frontend/.env`) | Vite | Where the frontend calls the backend |
 
 The backend builds the database URL from the `POSTGRES_*` parts, so credentials
@@ -126,7 +130,8 @@ are defined only once.
 │  │  ├─ ingestion/         # openaq.py, open_meteo.py, shared retry policy in http.py
 │  │  ├─ models/            # database table definitions (the schema)
 │  │  ├─ services/          # per-resource logic, demo-data fallback, ingestion orchestration,
-│  │  │                     # geospatial.py (GeospatialService), estimation.py (IDWPollutionEstimator)
+│  │  │                     # geospatial.py (GeospatialService), estimation.py (IDWPollutionEstimator),
+│  │  │                     # pdi.py (HeuristicPDIModel)
 │  │  ├─ cli.py             # dev commands — `python -m app.cli ingest[-weather]|export-grid`
 │  │  └─ main.py            # FastAPI app entrypoint
 │  ├─ tests/
@@ -223,6 +228,34 @@ model layer only, exercised directly by
 - `pdi`/`wind_speed`/`wind_direction` are always `None` from this
   estimator (it only ever sees PM2.5 readings) — see
   `docs/architecture.md` for why `GridState`'s fields are `Optional`.
+
+## PDI (pollution pressure index)
+
+`app.services.pdi.HeuristicPDIModel` computes PDI for one cell at a time
+via `app.domain.pdi.PDIModel.calculate(cell_context) -> PDIResult`. **PDI
+is a heuristic "pollution pressure index", not a scientifically exact
+measurement of net emissions** — a configurable, weighted blend of
+normalized signals, meant for ranking/triage, not as a physical quantity.
+Not wired into a pipeline or the API's read path yet (`GridStateOut.pdi`
+already exists and accepts the value once something populates it); this
+is the model layer only, exercised directly by
+`backend/tests/test_pdi.py`.
+
+- v0 uses only the current PM2.5 estimate as input — the only factor with
+  a real data source today.
+- `CellContext.road_pressure` and `.industrial_pressure` are extension
+  points for when road-density/industrial-proximity data exists: pass
+  them in (pre-normalized to `[0, 1]`) and they're blended in
+  automatically, with no change to `HeuristicPDIModel` or its caller.
+- A cell with no available factor (or every available factor configured
+  with zero weight) gets `pdi=None` — never a fabricated score.
+- `PDIResult.factors` reports the *normalized* `[0, 1]` value of each
+  factor that contributed (e.g. `{"pm25": 0.81}`), not its weighted
+  share, so a caller/UI can show which signals drove the score.
+- Output is `0` to `100` today (only non-negative weights are
+  configured); a future negative-weighted "sink" factor (e.g.
+  precipitation washout) could push it toward `-100` without any formula
+  change.
 
 ## Ingestion
 

@@ -40,11 +40,11 @@ requested for the scaffold) maps onto it as follows:
 | Directory | Responsibility | May import |
 |---|---|---|
 | `app/core` | Settings, cross-cutting config | nothing internal |
-| `app/domain` | Pure domain types (`SensorReading`, `WeatherReading`, `GridState`, `Forecast`, `Alert`), repository/provider/estimator Protocols (ports), H3 helpers. No I/O. | `app/core` |
+| `app/domain` | Pure domain types (`SensorReading`, `WeatherReading`, `GridState`, `Forecast`, `Alert`), repository/provider/estimator/PDI Protocols (ports), H3 helpers. No I/O. | `app/core` |
 | `app/models` | SQLAlchemy Core table definitions (the schema) | `app/core`, `app/domain` (only for the `AlertSeverity` column type) |
 | `app/db` | Engine/session management, and `app/db/repositories/*` — concrete SQLAlchemy implementations of the domain repository Protocols | `app/core`, `app/domain`, `app/models` |
 | `app/ingestion` | Source adapters implementing `app.domain.providers.PollutionDataProvider` or `WeatherProvider`: `OpenAQProvider` and `OpenMeteoProvider` (both implemented); a shared retry policy in `http.py` | `app/core`, `app/domain` |
-| `app/services` | Business logic: per-resource read services (`SensorService`, `GridService`, `CellService`, `AlertService`, …) plus the demo-data fallback, `SensorIngestionService` / `WeatherIngestionService` (fetch → persist, skip duplicates), `GeospatialService` (the H3 facade), and `IDWPollutionEstimator` (see below) | `app/core`, `app/domain`, `app/ingestion`, `app/models`, `app/db` |
+| `app/services` | Business logic: per-resource read services (`SensorService`, `GridService`, `CellService`, `AlertService`, …) plus the demo-data fallback, `SensorIngestionService` / `WeatherIngestionService` (fetch → persist, skip duplicates), `GeospatialService` (the H3 facade), `IDWPollutionEstimator`, and `HeuristicPDIModel` (see below) | `app/core`, `app/domain`, `app/ingestion`, `app/models`, `app/db` |
 | `app/api` | FastAPI routes (thin — call a service, shape the response), Pydantic schemas, error handling, dependency wiring | `app/core`, `app/domain`, `app/db` (dependency wiring only, see `app/api/deps.py`), `app/services` |
 
 Domain code depends only on `app/core` and never on SQLAlchemy: repositories
@@ -310,28 +310,89 @@ combination, but a weather-only cell in a sparse sensor network is a real
 future case), rather than forcing every producer to invent values for
 fields it has no basis for.
 
+## PDI: pollution pressure index (implemented: v0, heuristic)
+
+**PDI is a heuristic "pollution pressure index", not a scientifically
+exact measurement of net emissions, a modeled pollutant budget, or a
+regulatory index.** Every place it's surfaced — API docs, UI labels, code
+comments — must describe it that way; this is a triage/ranking score, not
+a physical quantity.
+
+`app.domain.pdi.PDIModel` is the port: `calculate(cell_context:
+CellContext) -> PDIResult`, one cell at a time (unlike `PollutionEstimator`,
+which is grid-wide — a cell's PDI only ever depends on that cell's own
+context, so there's no batching concern to design around).
+`CellContext` carries the inputs available for one cell: `pm25` (the
+current estimate, e.g. from `GridState.pm25`) plus two extension points,
+`road_pressure` and `industrial_pressure`, pre-normalized to `[0, 1]` by
+whatever eventually produces them. `PDIResult` carries `pdi` (`None` if no
+factor was available or every available factor is zero-weighted — never a
+fabricated score) and `factors`, the *normalized* `[0, 1]` value of each
+factor that actually contributed, keyed by name — not each factor's
+weighted contribution — so a caller/UI can show which signals drove the
+score.
+
+`app.services.pdi.HeuristicPDIModel` is the first (and so far only)
+implementation. It normalizes `pm25` to `[0, 1]` by dividing by
+`PDI_PM25_REFERENCE_UGM3` and clamping, normalizes/clamps
+`road_pressure` and `industrial_pressure` defensively (they're expected to
+already be in `[0, 1]`), then combines whichever factors are present as a
+weight-normalized average using the *absolute value* of each configured
+weight:
+
+```
+pdi = 100 * sum(normalized_i * weight_i) / sum(abs(weight_i))
+```
+
+over only the present factors — so with only a PM2.5 estimate available
+(the realistic v0 case), `pdi` is driven entirely by it regardless of the
+configured weight split, rather than being capped below 100 because
+road/industrial pressure aren't available yet. With today's non-negative
+default weights (`PDI_PM25_WEIGHT`, `PDI_ROAD_PRESSURE_WEIGHT`,
+`PDI_INDUSTRIAL_PRESSURE_WEIGHT`) this stays within `[0, 100]`. A future
+negative-weighted "sink" factor (e.g. precipitation washout reducing
+pressure) would pull the result toward `-100` without any formula change —
+the absolute-value denominator already keeps the result bounded to
+`[-100, 100]` in that case.
+
+**Not yet done:** nothing calls `HeuristicPDIModel` from an API endpoint,
+CLI command, or persistence pipeline — like `IDWPollutionEstimator` before
+it, this turn is the model layer only. `GridState.pdi` and `GridStateOut`
+already existed and accept the value once something populates it. There is
+also no real data source for `road_pressure` or `industrial_pressure` yet;
+the fields exist so a future source is a matter of populating
+`CellContext`, not changing `HeuristicPDIModel` or its caller.
+
 ## Configuration
 
 - **Env vars** (`.env`): infrastructure — DB connection, ports, CORS, log
   level, H3 resolution (grid and weather-sampling), OpenAQ/Open-Meteo
   ingestion settings (API key where needed, base URL, timeout/retries, the
-  shared ingestion bounding box), and IDW estimation thresholds
-  (`IDW_MAX_DISTANCE_KM`, `IDW_MIN_SENSORS`). See `.env.example`. A
+  shared ingestion bounding box), IDW estimation thresholds
+  (`IDW_MAX_DISTANCE_KM`, `IDW_MIN_SENSORS`), and PDI weights
+  (`PDI_PM25_REFERENCE_UGM3`, `PDI_PM25_WEIGHT`, `PDI_ROAD_PRESSURE_WEIGHT`,
+  `PDI_INDUSTRIAL_PRESSURE_WEIGHT`). See `.env.example`. A
   `model_validator` on `Settings` rejects `WEATHER_H3_RESOLUTION` finer
   than `H3_RESOLUTION` at startup, rather than letting it fail confusingly
   inside H3 library calls the first time ingestion runs.
 - **Region config** (future `config/region.yaml`): domain tuning — QC
-  thresholds, model parameters, PDI weights, alert thresholds. Not yet
-  added; there's no model to configure. The ingestion bounding box lives in
-  `.env` for now (`INGEST_BBOX_*`, shared by both `ingest` and
-  `ingest-weather`), not this future file — it's config for the adapters,
-  not the shared region concept `/meta` will eventually expose.
+  thresholds, forecast model parameters, alert thresholds. PDI weights
+  moved out of this "future" list in v0: they live in `.env` alongside
+  every other tunable this app currently has (IDW's included), the same
+  place they'd need to move out of once a real region-config file exists.
+  The ingestion bounding box also lives in `.env` for now (`INGEST_BBOX_*`,
+  shared by both `ingest` and `ingest-weather`), not this future file —
+  it's config for the adapters, not the shared region concept `/meta` will
+  eventually expose.
 
 ## Extension points
 
 | Future change | What changes |
 |---|---|
 | New PM2.5 estimation model (Kriging, satellite fusion, ML) | New class implementing `PollutionEstimator` in `app/services/`; whatever calls `estimate()` — an API endpoint, a future pipeline — is unchanged |
+| Real road-density / industrial-proximity data | Populate `CellContext.road_pressure` / `.industrial_pressure` (normalized to `[0, 1]`) wherever a `CellContext` is built; `HeuristicPDIModel` and its caller are unchanged |
+| New PDI model (e.g. one that also weighs forecasted trend, not just current state) | New class implementing `PDIModel` in `app/services/`; whatever calls `calculate()` is unchanged |
+| A "sink" factor that should lower PDI (e.g. precipitation washout) | Add the field to `CellContext`, populate it, give it a negative weight — `HeuristicPDIModel`'s formula already supports negative weights and stays bounded to `[-100, 100]` |
 | New forecast model | New module under `app/domain`, selected by config |
 | New pollutant | New config entry + source field mapping (schema is already long-format) |
 | New pollution-data source (CPCB, satellite, private sensors) | New class implementing `PollutionDataProvider` in `app/ingestion/`; `SensorIngestionService` and the CLI are unchanged — only the wiring (which provider gets constructed) picks it |

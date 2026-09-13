@@ -83,6 +83,31 @@ class Settings(BaseSettings):
     # no estimate — one reading isn't corroborated evidence.
     idw_min_sensors: int = Field(default=2, ge=1)
 
+    # --- PDI heuristic pollution pressure index (app.services.pdi.HeuristicPDIModel) ---
+    # PDI is NOT a scientific measurement of net emissions — a heuristic,
+    # configurably-weighted blend of normalized signals. This is the PM2.5
+    # level treated as "maximum pressure" (normalized to 1.0) when scaling
+    # a raw ug/m3 value into [0, 1]; loosely informed by commonly used
+    # AQI "hazardous" ceilings, chosen as a normalization scale rather
+    # than a regulatory or scientific threshold.
+    pdi_pm25_reference_ugm3: float = Field(default=250.0, gt=0)
+    # Relative weights of each factor in the blend. Renormalized at
+    # calculation time over whichever factors are actually present for a
+    # cell (see HeuristicPDIModel), so PM2.5 alone still yields a full-
+    # range score today even though road/industrial pressure default to
+    # nonzero weights for when that data exists. Weights may be negative
+    # for a future "sink" factor (e.g. precipitation washout) that should
+    # pull the index down rather than up — nothing about the formula
+    # needs to change for that, only a nonzero weight and populated
+    # CellContext field.
+    pdi_pm25_weight: float = Field(default=0.7)
+    # No real road-density data source exists yet (see CellContext.road_pressure);
+    # this weight only has an effect once one populates the field.
+    pdi_road_pressure_weight: float = Field(default=0.2)
+    # No real industrial-proximity data source exists yet (see
+    # CellContext.industrial_pressure); same as above.
+    pdi_industrial_pressure_weight: float = Field(default=0.1)
+
     @model_validator(mode="after")
     def _check_weather_resolution_not_finer_than_grid(self) -> "Settings":
         if self.weather_h3_resolution > self.h3_resolution:

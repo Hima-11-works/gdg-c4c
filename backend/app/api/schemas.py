@@ -82,7 +82,15 @@ class GridStateOut(BaseModel):
     timestamp: datetime
     confidence: float
     pm25: float | None
-    pdi: float | None
+    pdi: float | None = Field(
+        description=(
+            "Heuristic 'pollution pressure index' (roughly -100 to 100; "
+            "0 to 100 while only non-negative factors are configured). "
+            "NOT a scientifically exact measurement of net emissions — a "
+            "configurable, weighted blend of normalized signals. See "
+            "app.services.pdi.HeuristicPDIModel."
+        )
+    )
     wind_speed: float | None
     wind_direction: float | None
 
