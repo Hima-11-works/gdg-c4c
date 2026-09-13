@@ -46,6 +46,7 @@ requested for the scaffold) maps onto it as follows:
 | `app/ingestion` | Source adapters implementing `app.domain.providers.PollutionDataProvider` or `WeatherProvider`: `OpenAQProvider` and `OpenMeteoProvider` (both implemented); a shared retry policy in `http.py` | `app/core`, `app/domain` |
 | `app/services` | Business logic: per-resource read services (`SensorService`, `GridService`, `CellService`, `AlertService`, …) plus the demo-data fallback, `SensorIngestionService` / `WeatherIngestionService` (fetch → persist, skip duplicates), `GeospatialService` (the H3 facade), `IDWPollutionEstimator`, `HeuristicPDIModel`, `DeterministicH3DispersionModel`, and `ForecastingService` (runs the dispersion model, persists results — see below) | `app/core`, `app/domain`, `app/ingestion`, `app/models`, `app/db` |
 | `app/api` | FastAPI routes (thin — call a service, shape the response), Pydantic schemas, error handling, dependency wiring | `app/core`, `app/domain`, `app/db` (dependency wiring only, see `app/api/deps.py`), `app/services` |
+| `app/pipeline` | `python -m app.pipeline.run`: the composition root for the full OpenAQ→...→alerts pipeline (see below). A second composition root alongside `app/main.py`/`app/cli.py`, but a real directory (unlike those two files), so it's a genuine layer here, not exempt | `app/core`, `app/domain`, `app/models`, `app/db`, `app/ingestion`, `app/services` |
 
 Domain code depends only on `app/core` and never on SQLAlchemy: repositories
 are consumed through the `app.domain.repositories` Protocols, so a service
@@ -57,18 +58,38 @@ Import direction is enforced by `backend/tests/test_architecture.py` (relative
 imports are banned by ruff so the check can't be bypassed). `app/main.py` is the
 composition root and may import any layer.
 
-## Data flow (once the pipeline exists)
+## Data flow (implemented)
 
-1. `t0` = latest full hour (UTC). Create a `model_run` row, status `running`.
-2. Fetch station readings and weather (coarse H3 cells, t0 → t0+max horizon).
-   Store both raw.
-3. Build model inputs: QC filter, max observation age, weather mapped to fine
-   cells.
-4. Per configured pollutant: nowcaster → h=0 field, forecaster → h=1/3/6,
-   then PDI, then alerts.
-5. Write everything in one transaction, mark the run `succeeded`. On failure,
-   mark `failed` with the error; the API keeps serving the previous
-   successful run.
+**Contract note:** this originally described a hypothetical `model_run`
+row with `running`/`succeeded`/`failed` status and one atomic
+all-or-nothing transaction — never built that way, and superseded by
+what's actually below (same situation as the API section's own contract
+note). What was actually built persists incrementally, per stage, not
+atomically: a stage's own persistence failure is that stage's reported
+failure, not a rollback of the whole run, and there is no `model_run`
+table.
+
+1. `t0` = `datetime.now(UTC)` when `python -m app.pipeline.run` starts —
+   one shared timestamp threaded through every stage of that run (never
+   read from a clock again mid-run, so a run is reproducible given its
+   inputs).
+2. Ingest OpenAQ (PM2.5) and Open-Meteo (weather) for the configured
+   bounding box, each independently — either can fail without affecting
+   the other or aborting the run (see "Pipeline" below).
+3. Estimate PM2.5 per H3 cell (`IDWPollutionEstimator`) from recent
+   `SensorReading` rows, fold in a PDI score per cell (`HeuristicPDIModel`),
+   persist the combined `GridState` rows.
+4. Forecast 1h/3h/6h (`DeterministicH3DispersionModel`) from the just-
+   written `GridState` + latest `WeatherReading` rows, persist `Forecast`
+   rows.
+5. Generate `Alert` rows from simple PM2.5 threshold rules
+   (`AlertGenerationService`), deduplicated against still-active alerts.
+6. Print a per-stage pass/fail report; exit non-zero if any stage failed.
+   The API keeps serving whatever was persisted by the most recent
+   successful run of each stage — there is no "roll back to the previous
+   run" concept, since each stage's table already only ever holds the
+   latest state per cell (`GridState`) or is naturally additive
+   (`Forecast`, `Alert`).
 
 ## Database (implemented)
 
@@ -127,13 +148,14 @@ Internal database ids are never exposed — `h3_cell` (+ `timestamp` /
 `generated_at` where relevant) already identifies a resource, and dropping
 ids keeps the contract independent of the storage backend.
 
-**Demo-data fallback.** Ingestion doesn't exist yet, so every endpoint
-falls back to small, deterministic seed data (`app/services/demo_data.py`)
-whenever its repository query returns nothing — never unconditionally, so
-real rows take over automatically once ingestion writes them. Every such
-response sets `is_demo: true`; the frontend should treat that as "this is
-illustrative, not measured" (e.g. a banner), not silently show fabricated
-numbers as real air-quality data.
+**Demo-data fallback.** Every endpoint falls back to small, deterministic
+seed data (`app/services/demo_data.py`) whenever its repository query
+returns nothing — before the pipeline has ever run, or for a region/cell
+it doesn't cover — never unconditionally, so real rows take over
+automatically once `python -m app.pipeline.run` (see "Pipeline" below)
+has written them. Every such response sets `is_demo: true`; the frontend
+should treat that as "this is illustrative, not measured" (e.g. a
+banner), not silently show fabricated numbers as real air-quality data.
 
 **Errors** are always `{"error": {"code": "...", "message": "...", "details": [...]?}}`
 (`app/api/errors.py`), for both explicitly-raised and unhandled exceptions.
@@ -448,6 +470,71 @@ Once this has been run at least once, `/api/v1/grid/forecast` and
 data automatically — no change to `GridService`/`CellService`/the API
 contract, since they already read from `ForecastRepository`.
 
+## Pipeline (implemented): the complete vertical slice
+
+`app/pipeline/run.py` (`python -m app.pipeline.run`) is the composition
+root that runs every stage above, in order, for the configured region,
+against one shared session/timestamp/bounding box: OpenAQ ingestion →
+Open-Meteo ingestion → grid computation (PM2.5 + PDI) → forecasting →
+alert generation. It is deliberately thin — no pollution/forecast/PDI
+logic lives in it, only wiring — and every stage it calls is a small
+orchestration service with its own test file, constructible with fakes
+independent of the others:
+
+| Stage | Service | Test file |
+|---|---|---|
+| Sensor ingestion | `SensorIngestionService` | `test_ingestion_service.py` |
+| Weather ingestion | `WeatherIngestionService` | `test_ingestion_service.py` |
+| Grid computation (PM2.5 + PDI) | `GridComputationService` (new) | `test_grid_computation_service.py` |
+| Forecasting | `ForecastingService` | `test_forecasting_service.py` |
+| Alert generation | `AlertGenerationService` (new) | `test_alert_generation_service.py` |
+
+**`GridComputationService`** is the piece that ties PM2.5 estimation to
+PDI: since `pm25` and `pdi` land on the *same* `GridState` row (see
+"Database" above), it reads recent `SensorReading` rows, covers the
+region with H3 cells (`GeospatialService`), runs `PollutionEstimator`
+(`IDWPollutionEstimator`), calls `PDIModel.calculate` (`HeuristicPDIModel`)
+once per resulting cell with `CellContext(h3_cell, pm25=state.pm25)`,
+and upserts the combined result once per cell — not two separate
+round trips to the same row.
+
+**`AlertGenerationService`** is new logic, not a Protocol/interface like
+the estimator/PDI/forecast models — it's two threshold comparisons, not
+a model, so there's no separate swappable abstraction for it (yet; if
+that changes, it would move to `app/domain/`). It walks (current state,
+then each forecast horizon in ascending order) for every cell and raises
+the *first* threshold it crosses:
+- Already exceeded **now** → `WARNING` (`ALERT_WARNING_THRESHOLD_UGM3`)
+  or `CRITICAL` (`ALERT_CRITICAL_THRESHOLD_UGM3`).
+- Only reached at a **future** forecast horizon → always `WATCH`,
+  regardless of which threshold — severity encodes "happening now" vs
+  "advance warning", not just magnitude, and a current condition always
+  takes priority over what a forecast says about the same cell.
+- A cell with an alert already created within `ALERT_ACTIVE_LOOKBACK_HOURS`
+  is skipped, so a persistent condition doesn't spawn a new `Alert` row
+  every pipeline run — the same window `app.services.alerts.AlertService`
+  (the `/alerts` read path) uses to decide what counts as "active".
+
+**Failure handling** (the explicit requirement behind this design): a
+failed external data source is a clear, reported per-stage failure, not
+a crash and not silent corruption. OpenAQ or Open-Meteo failing is
+reported and the run's exit code reflects it, but every stage after it
+still runs against whatever is already persisted — this is safe only
+because every downstream stage already has a well-defined, tested
+behavior for missing/stale/absent upstream data from earlier turns:
+`IDWPollutionEstimator` returns `pm25=None`/`confidence=0.0` rather than
+fabricating an estimate below `IDW_MIN_SENSORS`, and
+`DeterministicH3DispersionModel` forecasts decay-only rather than
+inventing wind for a cell with no weather reading. Only the database
+itself being unreachable is not caught — it raises and aborts the whole
+run, since no stage can produce a meaningful result without one.
+
+Every stage is also runnable individually for local development via
+`python -m app.cli <ingest|ingest-weather|forecast>` (grid computation
+and alert generation have no standalone CLI command yet — only via the
+full pipeline, since neither has an independent development need for one
+the way ingestion/forecasting do).
+
 ## Configuration
 
 - **Env vars** (`.env`): infrastructure — DB connection, ports, CORS, log
@@ -464,12 +551,15 @@ contract, since they already read from `ForecastRepository`.
   `DISPERSION_WIND_TRANSPORT_REFERENCE_MS`,
   `DISPERSION_CALM_WIND_THRESHOLD_MS`, `DISPERSION_WIND_CONE_HALF_ANGLE_DEG`,
   `DISPERSION_CONFIDENCE_DECAY_PER_HOUR`,
-  `DISPERSION_MISSING_WEATHER_CONFIDENCE_PENALTY`). See `.env.example`. A
-  `model_validator` on `Settings` rejects `WEATHER_H3_RESOLUTION` finer
-  than `H3_RESOLUTION` at startup, rather than letting it fail confusingly
-  inside H3 library calls the first time ingestion runs.
+  `DISPERSION_MISSING_WEATHER_CONFIDENCE_PENALTY`), and alert thresholds
+  (`ALERT_WARNING_THRESHOLD_UGM3`, `ALERT_CRITICAL_THRESHOLD_UGM3`,
+  `ALERT_ACTIVE_LOOKBACK_HOURS`). See `.env.example`. A `model_validator`
+  on `Settings` rejects `WEATHER_H3_RESOLUTION` finer than `H3_RESOLUTION`
+  at startup (and another rejects `ALERT_CRITICAL_THRESHOLD_UGM3` at or
+  below `ALERT_WARNING_THRESHOLD_UGM3`), rather than letting either fail
+  confusingly deep inside a pipeline run.
 - **Region config** (future `config/region.yaml`): domain tuning — QC
-  thresholds, alert thresholds. PDI and dispersion-model parameters moved
+  thresholds. PDI, dispersion-model, and alert-threshold parameters moved
   out of this "future" list: they live in `.env` alongside every other
   tunable this app currently has (IDW's included), the same place they'd
   need to move out of once a real region-config file exists. The
@@ -485,14 +575,13 @@ contract, since they already read from `ForecastRepository`.
 | New PM2.5 estimation model (Kriging, satellite fusion, ML) | New class implementing `PollutionEstimator` in `app/services/`; whatever calls `estimate()` — an API endpoint, a future pipeline — is unchanged |
 | Real road-density / industrial-proximity data | Populate `CellContext.road_pressure` / `.industrial_pressure` (normalized to `[0, 1]`) wherever a `CellContext` is built; `HeuristicPDIModel` and its caller are unchanged |
 | New dispersion/forecast model (higher-fidelity plume, ML) | New class implementing `PollutionForecastModel` in `app/services/`; `ForecastingService`, `app.cli forecast`, and the API are unchanged |
+| New/smarter alert rules (e.g. multi-cell trend, escalation tracking) | Change `AlertGenerationService` in `app/services/`; `app.pipeline.run` and the `/alerts` read path (`AlertService`) are unchanged |
+| Scheduled runs | A worker calling `app.pipeline.run.run_pipeline()` (the whole slice) or an individual stage's service (`SensorIngestionService.run()`, `ForecastingService.run()`, …) on a timer, replacing the manual `python -m app.pipeline.run` / `app.cli <command>` triggers — none of the services themselves change |
 | Per-hour forecast weather (instead of holding current weather constant) | A `WeatherForecastProvider`-shaped source feeding hour-indexed `WeatherReading`s into the model's per-hour loop; the model's coefficient/transport structure doesn't change |
-| Scheduled forecasting | A worker calling `ForecastingService.run()` on a timer, replacing the manual `python -m app.cli forecast` trigger — same pattern as scheduled ingestion |
 | New PDI model (e.g. one that also weighs forecasted trend, not just current state) | New class implementing `PDIModel` in `app/services/`; whatever calls `calculate()` is unchanged |
 | A "sink" factor that should lower PDI (e.g. precipitation washout) | Add the field to `CellContext`, populate it, give it a negative weight — `HeuristicPDIModel`'s formula already supports negative weights and stays bounded to `[-100, 100]` |
-| New forecast model | New module under `app/domain`, selected by config |
 | New pollutant | New config entry + source field mapping (schema is already long-format) |
 | New pollution-data source (CPCB, satellite, private sensors) | New class implementing `PollutionDataProvider` in `app/ingestion/`; `SensorIngestionService` and the CLI are unchanged — only the wiring (which provider gets constructed) picks it |
 | New weather source (ECMWF, another provider) | New class implementing `WeatherProvider` in `app/ingestion/`; `WeatherIngestionService`, the representative-sampling logic, and the CLI are all unchanged |
 | Satellite data specifically | Also likely a new `gridded_observation`-shaped table + a fusion nowcaster, since it isn't point-station data; forecaster/PDI/alerts/API/frontend untouched |
 | New region | New config file |
-| Scheduled ingestion | A worker process calling `SensorIngestionService.run()` on a timer, replacing the manual `python -m app.cli ingest` trigger — the service itself doesn't change |

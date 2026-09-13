@@ -10,6 +10,12 @@ APP_DIR = Path(__file__).resolve().parents[1] / "app"
 # and app/cli.py (dev commands, e.g. `python -m app.cli ingest`) are
 # composition roots and may import everything — neither is checked here,
 # since only directories under app/ are (see test_every_layer_has_a_rule).
+# app/pipeline IS a directory (unlike those two files), so it's checked
+# like any other layer below — it's also a composition root (the full
+# `python -m app.pipeline.run` pipeline needs every stage's ingestion
+# provider and orchestration service in one place), so it gets the same
+# breadth as `services` plus `services` itself, minus `api` (a batch
+# pipeline has no FastAPI/HTTP-layer concerns).
 ALLOWED_IMPORTS: dict[str, set[str]] = {
     "core": set(),
     "domain": {"core"},
@@ -22,6 +28,7 @@ ALLOWED_IMPORTS: dict[str, set[str]] = {
     # api may import services for business logic (routes stay thin) and db
     # only for the dependency-injection wiring in app/api/deps.py.
     "api": {"core", "domain", "db", "services"},
+    "pipeline": {"core", "domain", "models", "db", "ingestion", "services"},
 }
 
 

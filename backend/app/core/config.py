@@ -148,6 +148,26 @@ class Settings(BaseSettings):
     # weather reading (decay-only, degraded forecast for that cell/hour).
     dispersion_missing_weather_confidence_penalty: float = Field(default=0.5, gt=0, le=1)
 
+    # --- Alerts (app.services.alert_generation.AlertGenerationService) ---
+    # PM2.5 (µg/m3) at or above which a cell gets a WARNING alert if it's
+    # happening now, or a WATCH alert if only a forecast horizon reaches
+    # it. Default follows the commonly used AQI "Unhealthy" breakpoint —
+    # a normalization/triage choice, not a regulatory claim.
+    alert_warning_threshold_ugm3: float = Field(default=55.0, gt=0)
+    # PM2.5 at or above which a cell gets a CRITICAL alert if happening
+    # now (still only WATCH if just a forecast horizon reaches it — see
+    # AlertGenerationService's docstring for why severity encodes
+    # "happening now" vs "advance warning" rather than just magnitude).
+    # Default follows the AQI "Unhealthy" upper range / "Very Unhealthy"
+    # start.
+    alert_critical_threshold_ugm3: float = Field(default=150.0, gt=0)
+    # A cell with an alert already created within this many hours is
+    # skipped on the next pipeline run, so a persistent condition doesn't
+    # spawn a new alert every run. Shared with the read side (app.services
+    # .alerts.AlertService's "active" window) so both agree on what
+    # "still active" means.
+    alert_active_lookback_hours: float = Field(default=24.0, gt=0)
+
     @model_validator(mode="after")
     def _check_weather_resolution_not_finer_than_grid(self) -> "Settings":
         if self.weather_h3_resolution > self.h3_resolution:
@@ -155,6 +175,15 @@ class Settings(BaseSettings):
                 f"WEATHER_H3_RESOLUTION ({self.weather_h3_resolution}) must be <= "
                 f"H3_RESOLUTION ({self.h3_resolution}) — weather is sampled coarser "
                 "than the grid, not finer."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_alert_thresholds_ordered(self) -> "Settings":
+        if self.alert_critical_threshold_ugm3 <= self.alert_warning_threshold_ugm3:
+            raise ValueError(
+                f"ALERT_CRITICAL_THRESHOLD_UGM3 ({self.alert_critical_threshold_ugm3}) must be "
+                f"> ALERT_WARNING_THRESHOLD_UGM3 ({self.alert_warning_threshold_ugm3})"
             )
         return self
 

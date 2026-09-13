@@ -11,8 +11,10 @@ from app.services import demo_data
 from app.services.results import ServiceResult
 
 # There is no "alert run" or resolution concept yet (see docs/architecture.md);
-# "active" is approximated as "created recently".
-_ACTIVE_LOOKBACK = timedelta(hours=24)
+# "active" is approximated as "created within ALERT_ACTIVE_LOOKBACK_HOURS"
+# — the same window app.services.alert_generation.AlertGenerationService
+# uses to avoid re-alerting a still-ongoing condition, so both sides agree
+# on what "still active" means.
 
 
 class AlertService:
@@ -20,9 +22,9 @@ class AlertService:
         self._repository = repository
 
     def list_alerts(self) -> ServiceResult[list[Alert]]:
-        since = datetime.now(UTC) - _ACTIVE_LOOKBACK
+        settings = get_settings()
+        since = datetime.now(UTC) - timedelta(hours=settings.alert_active_lookback_hours)
         alerts = self._repository.list_active(since=since)
         if alerts:
             return ServiceResult(alerts, is_demo=False)
-        resolution = get_settings().h3_resolution
-        return ServiceResult(demo_data.demo_alerts(resolution), is_demo=True)
+        return ServiceResult(demo_data.demo_alerts(settings.h3_resolution), is_demo=True)

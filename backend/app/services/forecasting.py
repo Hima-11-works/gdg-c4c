@@ -20,6 +20,7 @@ from app.domain.repositories import (
     GridStateRepository,
     WeatherReadingRepository,
 )
+from app.domain.types import Forecast
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,11 @@ class ForecastingResult:
     cells: int = 0
     forecasts_generated: int = 0
     forecasts_saved: int = 0
+    # Exactly the forecasts actually persisted (so a caller like the
+    # pipeline's alert-generation stage can use them directly instead of
+    # re-querying) — on a partial persistence failure this is only the
+    # ones that made it, not the full attempted batch.
+    forecasts: list[Forecast] = field(default_factory=list)
     domain_outflow_by_hour: dict[int, float] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
 
@@ -65,21 +71,22 @@ class ForecastingService:
             logger.error("Forecasting aborted: %s", exc)
             return ForecastingResult(cells=len(current_state), errors=[str(exc)])
 
-        saved = 0
+        saved: list[Forecast] = []
         try:
             for forecast in result.forecasts:
                 self._forecast_repository.add(forecast)
-                saved += 1
+                saved.append(forecast)
         except Exception as exc:  # deliberately broad — see app.services.ingestion._persist_all
             logger.exception(
                 "Forecast pipeline: persistence failed after saving %d of %d forecast(s)",
-                saved,
+                len(saved),
                 len(result.forecasts),
             )
             return ForecastingResult(
                 cells=len(current_state),
                 forecasts_generated=len(result.forecasts),
-                forecasts_saved=saved,
+                forecasts_saved=len(saved),
+                forecasts=saved,
                 domain_outflow_by_hour=result.domain_outflow_by_hour,
                 errors=[f"persistence failed: {exc!r}"],
             )
@@ -88,11 +95,12 @@ class ForecastingService:
             "Forecast pipeline complete: %d cell(s), %d forecast(s) generated, %d saved",
             len(current_state),
             len(result.forecasts),
-            saved,
+            len(saved),
         )
         return ForecastingResult(
             cells=len(current_state),
             forecasts_generated=len(result.forecasts),
-            forecasts_saved=saved,
+            forecasts_saved=len(saved),
+            forecasts=saved,
             domain_outflow_by_hour=result.domain_outflow_by_hour,
         )
