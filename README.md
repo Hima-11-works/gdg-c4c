@@ -13,6 +13,9 @@ exist. So far the project has:
   later without touching anything downstream
 - a database layer: schema, migrations, and a repository per entity
   (`SensorReading`, `WeatherReading`, `GridState`, `Forecast`, `Alert`)
+- a dedicated geospatial service (`GeospatialService`) wrapping every H3
+  operation the app needs, and `python -m app.cli export-grid` to inspect
+  the region's grid as GeoJSON
 - a React + TypeScript frontend that displays backend health
 - PostgreSQL/PostGIS via Docker Compose, with Alembic migrations
 
@@ -114,11 +117,12 @@ are defined only once.
 │  │  ├─ core/              # settings
 │  │  ├─ db/                # SQLAlchemy engine/session
 │  │  │  └─ repositories/   # concrete (SQLAlchemy) repository implementations
-│  │  ├─ domain/            # pure types, repository/provider Protocols, H3 validation — no I/O
+│  │  ├─ domain/            # pure types, Protocols, h3_grid.py (all raw H3 calls) — no I/O
 │  │  ├─ ingestion/         # openaq.py, open_meteo.py, shared retry policy in http.py
 │  │  ├─ models/            # database table definitions (the schema)
-│  │  ├─ services/          # business logic per resource, demo-data fallback, ingestion orchestration
-│  │  ├─ cli.py             # dev commands — `python -m app.cli ingest[-weather]`
+│  │  ├─ services/          # per-resource logic, demo-data fallback, ingestion orchestration,
+│  │  │                     # geospatial.py (GeospatialService — the H3 facade)
+│  │  ├─ cli.py             # dev commands — `python -m app.cli ingest[-weather]|export-grid`
 │  │  └─ main.py            # FastAPI app entrypoint
 │  ├─ tests/
 │  ├─ pyproject.toml        # dependency ranges
@@ -176,6 +180,24 @@ two are kept in sync manually (see that migration's docstring). Repositories
 in `app/db/repositories/` are the only code that builds SQL against these
 tables; everything above `app/db` depends on the `app.domain.repositories`
 Protocols instead.
+
+## Geospatial
+
+All H3 logic goes through `app.services.geospatial.GeospatialService` —
+nothing else calls the `h3` library or hardcodes a resolution. It converts
+lat/lon to cells, cells to GeoJSON polygons, looks up neighbors, and
+generates the region's grid coverage. See `docs/architecture.md` for the
+full method list.
+
+```bash
+cd backend
+python -m app.cli export-grid                                # region from .env -> grid.geojson
+python -m app.cli export-grid --out sf.geojson     --min-lat 37.75 --min-lon -122.45 --max-lat 37.80 --max-lon -122.40
+```
+
+Writes the configured region's H3 coverage as a GeoJSON `FeatureCollection`
+— open the file directly at [geojson.io](https://geojson.io) to inspect
+the grid visually. No API key or database needed.
 
 ## Ingestion
 

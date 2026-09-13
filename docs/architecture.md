@@ -44,7 +44,7 @@ requested for the scaffold) maps onto it as follows:
 | `app/models` | SQLAlchemy Core table definitions (the schema) | `app/core`, `app/domain` (only for the `AlertSeverity` column type) |
 | `app/db` | Engine/session management, and `app/db/repositories/*` — concrete SQLAlchemy implementations of the domain repository Protocols | `app/core`, `app/domain`, `app/models` |
 | `app/ingestion` | Source adapters implementing `app.domain.providers.PollutionDataProvider` or `WeatherProvider`: `OpenAQProvider` and `OpenMeteoProvider` (both implemented); a shared retry policy in `http.py` | `app/core`, `app/domain` |
-| `app/services` | Business logic: per-resource read services (`SensorService`, `GridService`, `CellService`, `AlertService`, …) plus the demo-data fallback, and `SensorIngestionService` / `WeatherIngestionService` (fetch → persist, skip duplicates) | `app/core`, `app/domain`, `app/ingestion`, `app/models`, `app/db` |
+| `app/services` | Business logic: per-resource read services (`SensorService`, `GridService`, `CellService`, `AlertService`, …) plus the demo-data fallback, `SensorIngestionService` / `WeatherIngestionService` (fetch → persist, skip duplicates), and `GeospatialService` (the H3 facade — see below) | `app/core`, `app/domain`, `app/ingestion`, `app/models`, `app/db` |
 | `app/api` | FastAPI routes (thin — call a service, shape the response), Pydantic schemas, error handling, dependency wiring | `app/core`, `app/domain`, `app/db` (dependency wiring only, see `app/api/deps.py`), `app/services` |
 
 Domain code depends only on `app/core` and never on SQLAlchemy: repositories
@@ -141,6 +141,46 @@ numbers as real air-quality data.
 `internal_error`, or a generic `http_error` fallback. `/cells/{h3_cell}`
 returns 422 for a malformed or wrong-resolution H3 cell, 404 for a
 well-formed cell with no data at all (real or demo).
+
+## Geospatial (implemented)
+
+`app.domain.h3_grid` is the only module that imports the `h3` library
+directly — every H3 primitive (point → cell, cell → boundary, neighbors,
+region coverage, the two-resolution grouping weather sampling uses) lives
+there as a plain function taking a resolution explicitly, so it stays
+testable without settings.
+
+`app.services.geospatial.GeospatialService` is the facade everything else
+uses: constructed once with a resolution (normally `Settings.h3_resolution`,
+read at the composition root — see `app/cli.py`), it wraps those functions
+so callers never call `h3_grid` (or the `h3` library) directly and never
+have to pass `resolution=` on every call. It provides:
+
+| Method | Purpose |
+|---|---|
+| `cell_for_point(lat, lon)` | Lat/lon → H3 cell |
+| `cell_for_reading(reading)` | Which cell a `SensorReading`'s coordinates fall into (computed on demand — `sensor_reading` has no `h3_cell` column; see below) |
+| `cell_to_polygon(cell)` | Boundary ring as `list[Coordinate]`, open |
+| `cell_to_geojson_polygon(cell)` | The same ring as a GeoJSON `Polygon` geometry: `[lon, lat]` order, closed |
+| `cell_to_feature(cell)` | A GeoJSON `Feature` (`h3_cell`/`resolution` as properties) |
+| `neighbors(cell, k=1)` | Cells within `k` grid steps, excluding the cell itself |
+| `region_coverage(bbox)` | Every cell at this resolution covering bbox — the MVP region's grid |
+| `region_geojson(bbox)` | `region_coverage` as a GeoJSON `FeatureCollection` |
+
+**Why `cell_for_reading` doesn't persist anything:** a station's raw
+coordinates are the source of truth; which H3 cell it falls into is
+derived and would silently change meaning if `H3_RESOLUTION` were ever
+reconfigured. This method exists for whatever builds `GridState` from
+nearby stations later (the not-yet-implemented nowcaster) to bucket
+readings into cells on demand, not to add a stored column.
+
+**Inspecting the grid:** `python -m app.cli export-grid` writes the
+configured region's H3 coverage as a GeoJSON `FeatureCollection` to a file
+(default `grid.geojson`), viewable directly in geojson.io or any GIS tool.
+Chosen over a dev API endpoint because there's no auth system yet, and an
+unauthenticated introspection route would be a permanent addition to the
+API surface for what is purely a local development need — the CLI already
+has two ingestion commands following exactly this pattern.
 
 ## Ingestion (implemented: OpenAQ for PM2.5, Open-Meteo for weather)
 

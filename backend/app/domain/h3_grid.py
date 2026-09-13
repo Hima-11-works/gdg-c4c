@@ -25,6 +25,23 @@ def cell_center(h3_cell: str) -> tuple[float, float]:
     return h3.cell_to_latlng(h3_cell)
 
 
+def cell_boundary(h3_cell: str) -> list[tuple[float, float]]:
+    """(latitude, longitude) vertices of the cell's boundary polygon, in
+    order. Not closed — h3 does not repeat the first vertex at the end;
+    callers that need a closed ring (e.g. GeoJSON) must append it.
+    """
+    return [(lat, lon) for lat, lon in h3.cell_to_boundary(h3_cell)]
+
+
+def grid_disk(h3_cell: str, k: int) -> list[str]:
+    """Every cell within `k` grid steps of h3_cell, including h3_cell
+    itself (that's h3's own convention for grid_disk). Callers wanting
+    neighbors only should exclude the origin themselves — see
+    app.services.geospatial.GeospatialService.neighbors.
+    """
+    return list(h3.grid_disk(h3_cell, k))
+
+
 def cells_covering_bbox(bbox: BoundingBox, *, resolution: int) -> list[str]:
     """Every H3 cell at `resolution` whose center falls within bbox."""
     corners = [

@@ -5,8 +5,10 @@ import pytest
 
 from app.domain.h3_grid import (
     assert_valid_cell,
+    cell_boundary,
     cell_center,
     cells_covering_bbox,
+    grid_disk,
     is_valid_cell,
     representative_sample_points,
 )
@@ -74,3 +76,33 @@ def test_representative_sample_points_at_equal_resolutions_is_one_to_one() -> No
 def test_representative_sample_points_rejects_sample_finer_than_fine() -> None:
     with pytest.raises(ValueError, match="sample_resolution"):
         representative_sample_points(SF_BBOX, fine_resolution=6, sample_resolution=8)
+
+
+def test_cell_boundary_has_open_ring_of_lat_lon_vertices() -> None:
+    cell = h3.latlng_to_cell(*SAN_FRANCISCO, 9)
+    boundary = cell_boundary(cell)
+
+    assert len(boundary) in (5, 6)  # hexagon or (rarely) pentagon
+    assert boundary[0] != boundary[-1]  # not closed — h3's own convention
+    for lat, lon in boundary:
+        assert -90 <= lat <= 90
+        assert -180 <= lon <= 180
+
+
+def test_cell_boundary_matches_h3_directly() -> None:
+    cell = h3.latlng_to_cell(*SAN_FRANCISCO, 9)
+    assert cell_boundary(cell) == list(h3.cell_to_boundary(cell))
+
+
+def test_grid_disk_includes_origin_and_neighbors() -> None:
+    cell = h3.latlng_to_cell(*SAN_FRANCISCO, 9)
+    disk = grid_disk(cell, 1)
+
+    assert cell in disk
+    assert len(disk) == 7  # origin + 6 neighbors (SF cell isn't a pentagon)
+    assert all(h3.is_valid_cell(c) for c in disk)
+
+
+def test_grid_disk_k0_is_just_the_origin() -> None:
+    cell = h3.latlng_to_cell(*SAN_FRANCISCO, 9)
+    assert grid_disk(cell, 0) == [cell]

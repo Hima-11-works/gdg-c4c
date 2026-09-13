@@ -2,11 +2,14 @@
 
     python -m app.cli ingest [--min-lat --min-lon --max-lat --max-lon]
     python -m app.cli ingest-weather [--min-lat --min-lon --max-lat --max-lon]
+    python -m app.cli export-grid [--out grid.geojson] [--min-lat ...]
 
 Runs one ingestion pass against the bounding box from .env (overridable
 per-call with the flags above) and prints a summary. This is a manual
 trigger for local development — see docs/architecture.md for where a real
-scheduler/worker will eventually call the same services.
+scheduler/worker will eventually call the same services. `export-grid`
+writes the configured MVP region's H3 coverage as a GeoJSON
+FeatureCollection, for visual inspection (e.g. geojson.io or a GIS tool).
 
 Not subject to the app/* layer-import rules in tests/test_architecture.py
 (only directories under app/ are checked) — same treatment as app/main.py,
@@ -17,9 +20,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import sys
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import httpx
 
@@ -29,6 +34,7 @@ from app.db.session import get_session_factory
 from app.domain.types import BoundingBox
 from app.ingestion.open_meteo import OpenMeteoProvider
 from app.ingestion.openaq import OpenAQProvider
+from app.services.geospatial import GeospatialService
 from app.services.ingestion import IngestionResult, SensorIngestionService, WeatherIngestionService
 
 logger = logging.getLogger(__name__)
@@ -114,6 +120,21 @@ async def _run_ingest_weather(args: argparse.Namespace) -> int:
     return _report(result)
 
 
+async def _run_export_grid(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    bbox = _bbox_from_args(args)
+    service = GeospatialService(resolution=settings.h3_resolution)
+    feature_collection = service.region_geojson(bbox)
+
+    output_path = Path(args.out)
+    output_path.write_text(json.dumps(feature_collection, indent=2))
+    print(
+        f"Exported {len(feature_collection['features'])} H3 cell(s) at resolution "
+        f"{settings.h3_resolution} for {bbox} to {output_path}"
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.cli", description="Development commands.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -133,6 +154,16 @@ def main(argv: list[str] | None = None) -> int:
     weather_parser.add_argument("--max-lat", type=float, default=None)
     weather_parser.add_argument("--max-lon", type=float, default=None)
     weather_parser.set_defaults(func=_run_ingest_weather)
+
+    grid_parser = subparsers.add_parser(
+        "export-grid", help="Export the configured region's H3 grid as GeoJSON."
+    )
+    grid_parser.add_argument("--out", type=str, default="grid.geojson")
+    grid_parser.add_argument("--min-lat", type=float, default=None)
+    grid_parser.add_argument("--min-lon", type=float, default=None)
+    grid_parser.add_argument("--max-lat", type=float, default=None)
+    grid_parser.add_argument("--max-lon", type=float, default=None)
+    grid_parser.set_defaults(func=_run_export_grid)
 
     args = parser.parse_args(argv)
     logging.basicConfig(level=get_settings().log_level)
