@@ -15,10 +15,14 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "h3-js": "^4.5.0",
+    "maplibre-gl": "^6.9.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
   "devDependencies": {
+    "@maplibre/maplibre-gl-style-spec": "^26.4.2",
+    "@types/geojson": "^7946.0.16",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",

@@ -357,6 +357,23 @@ npm run lint       # oxlint
 npm run format     # prettier --write
 ```
 
+A single full-screen MapLibre GL JS map (`src/components/MapPage.tsx`), one page, no router. H3 hex
+boundaries are computed client-side with `h3-js` from the plain `h3_cell` strings the API returns
+(there's no live GeoJSON endpoint — see `src/lib/h3Geometry.ts`) and colored by PM2.5 or the
+heuristic PDI (`src/lib/colorScales.ts`), switchable per the Now/+1h/+3h/+6h timeline. Wind is drawn
+as rotated arrow glyphs from `/api/v1/weather`. Clicking a hex opens a detail sidebar
+(`/api/v1/cells/{h3_cell}`); a collapsible panel shows `/api/v1/alerts`.
+
+`src/lib/api.ts` is the only module that calls `fetch` — every export in it maps to one documented
+backend endpoint and does no computation beyond typing the JSON. All pollution/forecast/PDI math
+stays server-side; the frontend only ever displays what the API returns. Shared UI state (selected
+timeline horizon, PDI toggle, selected cell) lives in a small `useReducer` + Context
+(`src/state/`) — deliberately not Redux, since it's three fields read by a handful of sibling
+components. Server data is *not* kept there: each component fetches what it needs via
+`src/hooks/useApiResource.ts`, a ~50-line hook covering loading/success/error/polling/retry (no
+data-fetching library). PDI's contributing-factor breakdown isn't in the API yet
+(`GridStateOut.pdi` is a bare number), so the cell detail panel says so rather than fabricating one.
+
 ## Notes
 
 - Docker Compose runs only `db` and `api`. The frontend runs on the host with
