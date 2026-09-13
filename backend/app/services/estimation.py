@@ -18,6 +18,20 @@ from app.domain.types import Coordinate, GridState, SensorReading
 # a numerical-stability floor, not a modeling choice.
 _MIN_DISTANCE_KM = 0.01  # 10 m
 
+
+def _non_negative(value: float) -> float:
+    """Low-cost PM2.5 sensors commonly report small negative values near
+    true-zero concentration (calibration noise) — SensorReading.value is
+    intentionally unchecked so the raw station reading is preserved as
+    ingested. A physical PM2.5 concentration is never negative, so this
+    estimator treats any negative input as zero rather than either
+    propagating a negative estimate or letting GridState's >= 0
+    validation raise and crash the whole grid's estimation over one
+    noisy sensor.
+    """
+    return max(0.0, value)
+
+
 # Sensor counts above (min_sensors + this) don't add further confidence.
 # A small fixed margin, not a separate configuration knob: it only
 # controls how quickly count-based confidence saturates once the
@@ -90,11 +104,12 @@ class IDWPollutionEstimator:
             # distance. This is standard IDW practice, not a workaround —
             # an exact/near-exact match is the correct answer, full stop.
             exact = next(reading for reading, distance in nearby if distance <= _MIN_DISTANCE_KM)
-            pm25 = exact.value
+            pm25 = _non_negative(exact.value)
         else:
             weights = [1.0 / (distance**self._power) for _, distance in nearby]
             weighted_sum = sum(
-                weight * reading.value for (reading, _), weight in zip(nearby, weights, strict=True)
+                weight * _non_negative(reading.value)
+                for (reading, _), weight in zip(nearby, weights, strict=True)
             )
             pm25 = weighted_sum / sum(weights)
 

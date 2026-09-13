@@ -247,6 +247,41 @@ def test_an_exact_match_among_several_sensors_wins_outright() -> None:
     assert result.pm25 == 42.0
 
 
+# --- negative sensor readings (calibration noise near true zero) ---
+
+
+def test_negative_exact_match_reading_is_treated_as_zero_not_negative() -> None:
+    # Low-cost PM2.5 sensors commonly report small negative values right
+    # around true-zero concentration; SensorReading.value has no >= 0
+    # check (the raw station reading is preserved as ingested), so the
+    # estimator must not let this reach GridState's >= 0 validation and
+    # raise, or report a physically meaningless negative concentration.
+    sensor = _sensor("noisy", CENTER, -2.5)
+
+    [result] = _idw(max_distance_km=20.0, min_sensors=1).estimate(
+        [CELL], [sensor], timestamp=TIMESTAMP
+    )
+
+    assert result.pm25 == 0.0
+    assert result.confidence == 1.0
+
+
+def test_negative_weighted_reading_does_not_pull_the_estimate_below_zero() -> None:
+    sensors = [
+        _sensor("noisy", _point_km_north(2.0), -1.0),
+        _sensor("clean", _point_km_north(2.0), 3.0),
+    ]
+
+    [result] = _idw(max_distance_km=20.0, min_sensors=1).estimate(
+        [CELL], sensors, timestamp=TIMESTAMP
+    )
+
+    # Equidistant, so this is the plain average of the two *clamped*
+    # values (0.0 and 3.0), not the raw values (-1.0 and 3.0).
+    assert result.pm25 == pytest.approx(1.5)
+    assert result.pm25 >= 0.0
+
+
 # --- confidence ---
 
 

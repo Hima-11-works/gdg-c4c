@@ -174,6 +174,46 @@ def test_strong_wind_biases_transport_toward_the_downwind_neighbors() -> None:
     assert by_cell[least_downwind] == pytest.approx(0.0)
 
 
+@pytest.mark.parametrize(
+    ("wind_direction", "expect_south", "expect_north", "expect_east", "expect_west"),
+    [
+        (0.0, True, False, False, False),  # wind FROM the north -> blows south
+        (90.0, False, False, False, True),  # wind FROM the east -> blows west
+        (180.0, False, True, False, False),  # wind FROM the south -> blows north
+        (270.0, False, False, True, False),  # wind FROM the west -> blows east
+    ],
+)
+def test_cardinal_wind_directions_move_pollution_the_physically_correct_way(
+    wind_direction: float,
+    expect_south: bool,
+    expect_north: bool,
+    expect_east: bool,
+    expect_west: bool,
+) -> None:
+    # Deliberately checks the *geometric* lat/lon of the top-recipient
+    # neighbor directly (not via Coordinate.bearing_to, which the model
+    # itself uses) so this can't pass merely because a bug is consistent
+    # between the model and the test's own bearing math.
+    center_lat, center_lon = h3.cell_to_latlng(CENTER)
+    grid = [_state(CENTER, 1000.0)] + [_state(cell, 0.0) for cell in RING]
+    weather = [_weather(CENTER, wind_speed=8.0, wind_direction=wind_direction)]
+    result = _model(decay_rate_per_hour=0.0, wet_removal_rate_per_hour=0.0).forecast(
+        grid, weather, hours=(1,), generated_at=GENERATED_AT
+    )
+    by_cell = _by_cell(result, 1)
+    top = max(RING, key=lambda cell: by_cell[cell])
+    top_lat, top_lon = h3.cell_to_latlng(top)
+
+    if expect_south:
+        assert top_lat < center_lat
+    if expect_north:
+        assert top_lat > center_lat
+    if expect_east:
+        assert top_lon > center_lon
+    if expect_west:
+        assert top_lon < center_lon
+
+
 def test_strong_wind_transport_conserves_mass_with_full_neighbor_ring() -> None:
     grid = [_state(cell, 50.0 if cell == CENTER else 0.0) for cell in [CENTER, *RING]]
     weather = [_weather(cell, wind_speed=5.0, wind_direction=200.0) for cell in [CENTER, *RING]]
