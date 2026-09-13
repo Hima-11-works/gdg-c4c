@@ -35,7 +35,9 @@ class Settings(BaseSettings):
     # --- OpenAQ ingestion (app.ingestion.openaq) ---
     # No default: ingestion refuses to run without a real key rather than
     # silently hitting OpenAQ unauthenticated. Not needed to run the API.
-    openaq_api_key: str | None = None
+    # SecretStr, like postgres_password: a plain str lands in repr(settings)
+    # and therefore in any log line or error report that dumps config.
+    openaq_api_key: SecretStr | None = None
     openaq_base_url: str = "https://api.openaq.org/v3"
     openaq_timeout_seconds: float = Field(default=10.0, gt=0)
     openaq_max_retries: int = Field(default=3, ge=1, le=10)
@@ -65,6 +67,12 @@ class Settings(BaseSettings):
     # fine cells, since weather varies far less over a city block than PM2.5
     # does. Must be <= h3_resolution (checked below).
     weather_h3_resolution: int = Field(default=5, ge=0, le=15)
+
+    # Hard ceiling on the fan-out. The bbox is operator input, and cells grow
+    # with its area: a country-sized box at H3_RESOLUTION 8 is ~11M cells,
+    # i.e. ~11M WeatherReading objects built in memory and inserted one by
+    # one. Refuse loudly instead of appearing to hang.
+    weather_max_cells: int = Field(default=50_000, ge=1)
 
     @model_validator(mode="after")
     def _check_weather_resolution_not_finer_than_grid(self) -> "Settings":

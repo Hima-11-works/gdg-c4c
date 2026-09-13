@@ -10,6 +10,7 @@ module must not depend on, so that check lives at the persistence boundary
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -24,11 +25,23 @@ def _require_utc(value: datetime, field: str) -> None:
         raise ValueError(f"{field} must be a timezone-aware UTC datetime, got {value!r}")
 
 
+def _require_finite(value: float, field: str) -> None:
+    """NaN compares False against every bound, so a NaN slips through range
+    checks like `0 <= x < 360` and only surfaces later as a corrupt average.
+    Reject it (and infinities) at construction instead.
+    """
+    if not math.isfinite(value):
+        raise ValueError(f"{field} must be a finite number, got {value!r}")
+
+
 def _require_valid_weather_values(
     wind_speed: float, wind_direction: float, precipitation: float
 ) -> None:
     """Shared by WeatherReading and WeatherSample — same physical quantities,
     different field sets (one is tied to an h3_cell, the other isn't yet)."""
+    _require_finite(wind_speed, "wind_speed")
+    _require_finite(wind_direction, "wind_direction")
+    _require_finite(precipitation, "precipitation")
     if wind_speed < 0:
         raise ValueError(f"wind_speed must be >= 0: {wind_speed}")
     if not 0 <= wind_direction < 360:
@@ -90,6 +103,7 @@ class SensorReading:
 
     def __post_init__(self) -> None:
         _require_utc(self.measured_at, "measured_at")
+        _require_finite(self.value, "value")
         if not -90 <= self.latitude <= 90:
             raise ValueError(f"latitude out of range: {self.latitude}")
         if not -180 <= self.longitude <= 180:

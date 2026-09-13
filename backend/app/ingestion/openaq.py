@@ -24,10 +24,11 @@ Auth: X-API-Key header (required by OpenAQ v3 on every endpoint).
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+import math
+from datetime import UTC, datetime
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from app.domain.providers import ProviderError
 from app.domain.types import PM25, BoundingBox, SensorReading
@@ -36,6 +37,11 @@ from app.ingestion import http
 logger = logging.getLogger(__name__)
 
 SOURCE = "openaq"
+
+# Stop hammering OpenAQ once this many locations in a row have failed: with
+# a dead or rate-limiting API, every one of them burns `max_retries` requests
+# plus backoff, so a large bbox would otherwise spend minutes failing.
+MAX_CONSECUTIVE_LOCATION_FAILURES = 5
 
 
 # --- OpenAQ wire format (internal to this module; never leaks outside it) ---
@@ -65,12 +71,36 @@ class _Location(BaseModel):
     sensors: list[_SensorInfo] = Field(default_factory=list)
 
 
+class _Meta(BaseModel):
+    # OpenAQ reports the total match count here; it is not always an int.
+    found: int | str | None = None
+
+
 class _LocationsResponse(BaseModel):
+    meta: _Meta = Field(default_factory=_Meta)
     results: list[_Location] = Field(default_factory=list)
 
 
 class _DatetimeInfo(BaseModel):
     utc: datetime
+
+    @field_validator("utc")
+    @classmethod
+    def _normalise_to_utc(cls, value: datetime) -> datetime:
+        """OpenAQ documents this field as UTC but does not always send an
+        offset. Without this, a naive value flows into a comparison against
+        an aware `since` and raises TypeError, which is not a ValueError and
+        so escapes every handler here — killing the whole ingestion run over
+        one station's formatting. Naive is trusted as UTC (that is what the
+        field means); anything aware is converted, never overwritten.
+        """
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+
+class _LocationUnavailable(Exception):
+    """One location's /latest call failed. Internal to this module."""
 
 
 class _LatestItem(BaseModel):
@@ -84,6 +114,15 @@ class _LatestItem(BaseModel):
 
 class _LatestResponse(BaseModel):
     results: list[_LatestItem] = Field(default_factory=list)
+
+
+def _is_usable_value(value: float) -> bool:
+    """OpenAQ uses negative sentinels (-999 is the common one) to mean "no
+    value", and a negative PM2.5 mass concentration is meaningless anyway.
+    NaN/inf would pass the domain's range checks and then poison every
+    average computed downstream, so they are rejected here too.
+    """
+    return math.isfinite(value) and value >= 0
 
 
 def _first_present(*candidates: float | None) -> float | None:
@@ -142,8 +181,28 @@ class OpenAQProvider:
         )
 
         readings: list[SensorReading] = []
+        consecutive_failures = 0
         for location, sensor in pm25_by_location.values():
-            reading = await self._fetch_reading(location, sensor, since=since)
+            try:
+                reading = await self._fetch_reading(location, sensor, since=since)
+            except _LocationUnavailable as exc:
+                # One flaky station shouldn't fail the whole run — but a
+                # string of them means the API itself is down, and there is
+                # nothing to gain from retrying the remaining locations.
+                consecutive_failures += 1
+                logger.warning(
+                    "OpenAQ: skipping location %d (%r) after /latest failed: %s",
+                    location.id,
+                    location.name,
+                    exc,
+                )
+                if consecutive_failures >= MAX_CONSECUTIVE_LOCATION_FAILURES:
+                    raise ProviderError(
+                        f"OpenAQ: aborting after {consecutive_failures} consecutive "
+                        f"location failures (last: {exc})"
+                    ) from exc
+                continue
+            consecutive_failures = 0
             if reading is not None:
                 readings.append(reading)
         return readings
@@ -159,6 +218,18 @@ class OpenAQProvider:
             parsed = _LocationsResponse.model_validate(payload)
         except ValidationError as exc:
             raise ProviderError(f"OpenAQ: malformed /locations response: {exc}") from exc
+
+        if len(parsed.results) >= self._locations_limit:
+            # There is no pagination here by design (one page keeps the call
+            # count bounded), but silently ingesting a truncated slice of the
+            # region would look like real coverage. Say so.
+            logger.warning(
+                "OpenAQ: hit the %d-location page limit for this bbox (found=%s); "
+                "some stations were not fetched. Raise OPENAQ_LOCATIONS_LIMIT or "
+                "narrow INGEST_BBOX_*.",
+                self._locations_limit,
+                parsed.meta.found,
+            )
         return parsed.results
 
     async def _fetch_reading(
@@ -167,14 +238,9 @@ class OpenAQProvider:
         try:
             payload = await self._get_json(f"/locations/{location.id}/latest", {})
         except http.RequestFailedError as exc:
-            # One flaky station shouldn't fail the whole ingestion run.
-            logger.warning(
-                "OpenAQ: skipping location %d (%r) after /latest failed: %s",
-                location.id,
-                location.name,
-                exc,
-            )
-            return None
+            # Surfaced to fetch_readings, which decides whether this is one
+            # flaky station or the API being down (see MAX_CONSECUTIVE_*).
+            raise _LocationUnavailable(str(exc)) from exc
 
         try:
             latest = _LatestResponse.model_validate(payload)
@@ -194,6 +260,15 @@ class OpenAQProvider:
                 location.id,
                 location.name,
                 sensor.id,
+            )
+            return None
+
+        if not _is_usable_value(item.value):
+            logger.warning(
+                "OpenAQ: skipping location %d (%r), unusable value %r (null sentinel?)",
+                location.id,
+                location.name,
+                item.value,
             )
             return None
 

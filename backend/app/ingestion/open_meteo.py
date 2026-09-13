@@ -66,8 +66,15 @@ class _LocationWeather(BaseModel):
 _LocationWeatherList = TypeAdapter(list[_LocationWeather])
 
 
-def _as_utc(naive: datetime) -> datetime:
-    return naive.replace(tzinfo=UTC)
+def _as_utc(value: datetime) -> datetime:
+    """Every request pins timezone=UTC, so a naive timestamp here is UTC.
+    If the API ever does return an offset, convert rather than overwrite:
+    replace(tzinfo=UTC) on a +05:30 value would silently shift the instant
+    by five and a half hours instead of failing.
+    """
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _boundary_layer_height_at(hourly: _Hourly | None, when: datetime) -> float | None:

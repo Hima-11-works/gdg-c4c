@@ -193,3 +193,40 @@ async def test_weather_run_reports_persistence_failure_instead_of_raising() -> N
 
     assert result.succeeded is False
     assert "connection refused" in result.errors[0]
+
+
+async def test_weather_run_refuses_an_oversized_bbox(monkeypatch) -> None:
+    """The bbox is operator input and cell count grows with its area: a
+    country-sized box at resolution 8 is ~11M cells, i.e. ~11M rows built
+    in memory and inserted one by one. Refuse loudly instead of hanging."""
+    settings = get_settings()
+    capped = settings.model_copy(update={"weather_max_cells": 10})
+    monkeypatch.setattr("app.services.ingestion.get_settings", lambda: capped)
+
+    provider = FakeWeatherProvider(default_sample=_sample())
+    repository = FakeWeatherReadingRepository()
+
+    result = await WeatherIngestionService(provider, repository).run(BBOX)
+
+    assert result.succeeded is False
+    assert "WEATHER_MAX_CELLS" in result.errors[0]
+    assert provider.calls == []  # refused before spending an API call
+    assert repository.readings == []
+
+
+async def test_weather_run_rejects_a_provider_that_breaks_its_length_contract() -> None:
+    """WeatherProvider must return one entry per point; a provider that
+    doesn't would otherwise blow up zip(strict=True) mid-fan-out."""
+
+    class _WrongLengthProvider:
+        calls: list = []
+
+        async def fetch_weather(self, points):
+            return []  # contract says len(points)
+
+    result = await WeatherIngestionService(
+        _WrongLengthProvider(), FakeWeatherReadingRepository()
+    ).run(BBOX)
+
+    assert result.succeeded is False
+    assert "cannot map them back" in result.errors[0]

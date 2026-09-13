@@ -255,3 +255,42 @@ def _fake_sleep(record: list[float]):
         record.append(seconds)
 
     return sleep
+
+
+# --- regression tests for the integration review ---
+
+
+async def test_offset_datetime_is_converted_not_overwritten() -> None:
+    """Requests pin timezone=UTC, so timestamps come back naive. If the API
+    ever does return an offset, replace(tzinfo=UTC) would silently shift the
+    instant instead of converting it."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_location(current=_current(time="2026-01-01T17:30+05:30")))
+
+    async with _make_client(handler) as client:
+        samples = await _provider(client).fetch_weather([SF])
+
+    assert samples[0].measured_at == datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+
+
+async def test_non_finite_wind_speed_is_skipped() -> None:
+    """NaN passes every range check (`nan < 0` is False), so without an
+    explicit finite check it would be stored and corrupt any average."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raw = (
+            '[{"current":{"time":"2026-01-01T12:00","wind_speed_10m":NaN,'
+            '"wind_direction_10m":90.0,"precipitation":0.0}},'
+            '{"current":{"time":"2026-01-01T12:00","wind_speed_10m":3.0,'
+            '"wind_direction_10m":90.0,"precipitation":0.0}}]'
+        )
+        return httpx.Response(
+            200, content=raw.encode(), headers={"content-type": "application/json"}
+        )
+
+    async with _make_client(handler) as client:
+        samples = await _provider(client).fetch_weather([SF, NORTH_SF])
+
+    assert samples[0] is None
+    assert samples[1] is not None

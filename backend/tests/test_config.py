@@ -60,3 +60,18 @@ def test_weather_resolution_finer_than_grid_is_rejected() -> None:
             h3_resolution=5,
             weather_h3_resolution=8,
         )
+
+
+def test_openaq_api_key_is_not_exposed_in_repr() -> None:
+    """Same treatment as postgres_password: a plain str would land in any
+    log line or error report that dumps settings."""
+    settings = Settings(
+        postgres_user="u",
+        postgres_password="p",
+        postgres_db="d",
+        openaq_api_key="super-secret-key",
+    )
+
+    assert "super-secret-key" not in repr(settings)
+    assert settings.openaq_api_key is not None
+    assert settings.openaq_api_key.get_secret_value() == "super-secret-key"

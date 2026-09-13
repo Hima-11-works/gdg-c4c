@@ -216,3 +216,31 @@ def test_alert_forecast_time_is_optional() -> None:
         created_at=UTC_NOW,
     )
     assert alert.forecast_time is None
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_sensor_reading_rejects_non_finite_value(bad: float) -> None:
+    with pytest.raises(ValueError, match="finite"):
+        SensorReading(
+            source="openaq",
+            external_sensor_id="1",
+            latitude=0.0,
+            longitude=0.0,
+            pollutant="pm25",
+            value=bad,
+            unit="ug/m3",
+            measured_at=UTC_NOW,
+        )
+
+
+@pytest.mark.parametrize("field", ["wind_speed", "wind_direction", "precipitation"])
+def test_weather_sample_rejects_non_finite_values(field: str) -> None:
+    kwargs = {
+        "wind_speed": 1.0,
+        "wind_direction": 90.0,
+        "precipitation": 0.0,
+        "measured_at": UTC_NOW,
+        field: float("nan"),
+    }
+    with pytest.raises(ValueError, match="finite"):
+        WeatherSample(**kwargs)

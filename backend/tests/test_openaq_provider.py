@@ -282,3 +282,152 @@ def _fake_sleep(record: list[float]):
         record.append(seconds)
 
     return sleep
+
+
+# --- regression tests for the integration review ---
+
+
+async def test_naive_datetime_is_treated_as_utc_not_crash() -> None:
+    """OpenAQ documents this field as UTC but doesn't always send an offset.
+    A naive value used to reach a comparison against an aware `since` and
+    raise TypeError — which isn't ValueError, so it escaped every handler
+    and killed the whole run over one station's formatting."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v3/locations":
+            return httpx.Response(
+                200, json={"results": [_location(1, sensors=[_pm25_sensor(101)])]}
+            )
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "datetime": {"utc": "2026-01-01T12:00:00"},  # no offset
+                        "value": 12.3,
+                        "sensorsId": 101,
+                        "locationsId": 1,
+                    }
+                ]
+            },
+        )
+
+    async with _make_client(handler) as client:
+        readings = await _provider(client).fetch_readings(BBOX, since=NOW - timedelta(hours=3))
+
+    assert len(readings) == 1
+    assert readings[0].measured_at == datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+
+
+async def test_offset_datetime_is_converted_not_overwritten() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v3/locations":
+            return httpx.Response(
+                200, json={"results": [_location(1, sensors=[_pm25_sensor(101)])]}
+            )
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "datetime": {"utc": "2026-01-01T17:30:00+05:30"},
+                        "value": 12.3,
+                        "sensorsId": 101,
+                        "locationsId": 1,
+                    }
+                ]
+            },
+        )
+
+    async with _make_client(handler) as client:
+        readings = await _provider(client).fetch_readings(BBOX, since=NOW - timedelta(hours=3))
+
+    # 17:30+05:30 is 12:00Z — not 17:30Z, which replace(tzinfo=UTC) would give.
+    assert readings[0].measured_at == datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+
+
+@pytest.mark.parametrize("bad_value", [-999.0, -1.0])
+async def test_null_sentinel_and_negative_values_are_dropped(bad_value: float) -> None:
+    """OpenAQ uses negative sentinels for "no value"; storing -999 as a real
+    PM2.5 concentration would poison every downstream average."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v3/locations":
+            return httpx.Response(
+                200, json={"results": [_location(1, sensors=[_pm25_sensor(101)])]}
+            )
+        return httpx.Response(200, json={"results": [_latest_item(101, bad_value, NOW)]})
+
+    async with _make_client(handler) as client:
+        readings = await _provider(client).fetch_readings(BBOX, since=NOW - timedelta(hours=3))
+
+    assert readings == []
+
+
+async def test_non_finite_value_is_dropped() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v3/locations":
+            return httpx.Response(
+                200, json={"results": [_location(1, sensors=[_pm25_sensor(101)])]}
+            )
+        # Bare NaN: not standard JSON, but json.loads accepts it by default.
+        raw = (
+            '{"results":[{"datetime":{"utc":"2026-01-01T12:00:00Z"},'
+            '"value":NaN,"sensorsId":101,"locationsId":1}]}'
+        )
+        return httpx.Response(
+            200, content=raw.encode(), headers={"content-type": "application/json"}
+        )
+
+    async with _make_client(handler) as client:
+        readings = await _provider(client).fetch_readings(BBOX, since=NOW - timedelta(hours=3))
+
+    assert readings == []
+
+
+async def test_aborts_instead_of_hammering_a_dead_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every failing location burns max_retries requests plus backoff. With
+    a dead API and a wide bbox that used to mean hundreds of doomed requests
+    and minutes of sleeping; now it gives up after a run of failures."""
+    monkeypatch.setattr("app.ingestion.http.asyncio.sleep", _fake_sleep([]))
+    latest_calls = {"count": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v3/locations":
+            return httpx.Response(
+                200,
+                json={
+                    "results": [_location(i, sensors=[_pm25_sensor(100 + i)]) for i in range(1, 41)]
+                },
+            )
+        latest_calls["count"] += 1
+        return httpx.Response(503, text="down")
+
+    async with _make_client(handler) as client:
+        with pytest.raises(ProviderError, match="consecutive location failures"):
+            await _provider(client, max_retries=2).fetch_readings(BBOX, since=NOW)
+
+    # 5 locations x 2 attempts, not 40 x 2.
+    assert latest_calls["count"] == 10
+
+
+async def test_warns_when_the_location_page_is_truncated(caplog: pytest.LogCaptureFixture) -> None:
+    """Silently ingesting a truncated slice of the region would look like
+    full coverage."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v3/locations":
+            return httpx.Response(
+                200,
+                json={
+                    "meta": {"found": ">100"},
+                    "results": [_location(1, sensors=[_other_sensor(1)])],
+                },
+            )
+        raise AssertionError(request.url)
+
+    async with _make_client(handler) as client:
+        with caplog.at_level("WARNING"):
+            await _provider(client, locations_limit=1).fetch_readings(BBOX, since=NOW)
+
+    assert any("page limit" in r.getMessage() for r in caplog.records)

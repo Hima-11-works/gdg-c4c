@@ -57,7 +57,8 @@ def _report(result: IngestionResult) -> int:
 
 async def _run_ingest(args: argparse.Namespace) -> int:
     settings = get_settings()
-    if not settings.openaq_api_key:
+    api_key = settings.openaq_api_key.get_secret_value() if settings.openaq_api_key else ""
+    if not api_key:
         print(
             "OPENAQ_API_KEY is not set in .env - see .env.example.",
             file=sys.stderr,
@@ -72,7 +73,7 @@ async def _run_ingest(args: argparse.Namespace) -> int:
     try:
         async with httpx.AsyncClient(timeout=settings.openaq_timeout_seconds) as client:
             provider = OpenAQProvider(
-                api_key=settings.openaq_api_key,
+                api_key=api_key,
                 client=client,
                 base_url=settings.openaq_base_url,
                 timeout_seconds=settings.openaq_timeout_seconds,

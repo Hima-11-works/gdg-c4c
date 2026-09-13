@@ -86,6 +86,12 @@ class SensorIngestionService:
         except ProviderError as exc:
             logger.error("Sensor ingestion aborted: %s", exc)
             return IngestionResult(errors=[str(exc)])
+        except Exception as exc:  # deliberately broad — see _persist_all
+            # The Protocol says providers raise ProviderError, but a buggy
+            # or third-party one may not. One provider must never be able to
+            # take down the process that also ingests the other feed.
+            logger.exception("Sensor ingestion aborted by an unexpected provider error")
+            return IngestionResult(errors=[f"unexpected provider error: {exc!r}"])
 
         saved, skipped, error = _persist_all(readings, self._repository)
 
@@ -123,6 +129,17 @@ class WeatherIngestionService:
             fine_resolution=settings.h3_resolution,
             sample_resolution=settings.weather_h3_resolution,
         )
+        total_cells = sum(len(cells) for cells in groups.values())
+        if total_cells > settings.weather_max_cells:
+            message = (
+                f"Weather ingestion refused: bbox covers {total_cells} cells at "
+                f"resolution {settings.h3_resolution}, above WEATHER_MAX_CELLS "
+                f"({settings.weather_max_cells}). Narrow INGEST_BBOX_* or lower "
+                f"H3_RESOLUTION."
+            )
+            logger.error(message)
+            return IngestionResult(errors=[message])
+
         sample_cells = list(groups)
         centers = [cell_center(cell) for cell in sample_cells]
         points = [Coordinate(lat, lon) for lat, lon in centers]
@@ -132,6 +149,17 @@ class WeatherIngestionService:
         except ProviderError as exc:
             logger.error("Weather ingestion aborted: %s", exc)
             return IngestionResult(errors=[str(exc)])
+        except Exception as exc:  # deliberately broad — see _persist_all
+            logger.exception("Weather ingestion aborted by an unexpected provider error")
+            return IngestionResult(errors=[f"unexpected provider error: {exc!r}"])
+
+        if len(samples) != len(points):
+            message = (
+                f"Weather provider returned {len(samples)} sample(s) for "
+                f"{len(points)} point(s); cannot map them back to cells."
+            )
+            logger.error(message)
+            return IngestionResult(errors=[message])
 
         readings: list[WeatherReading] = []
         for sample_cell, (lat, lon), sample in zip(sample_cells, centers, samples, strict=True):

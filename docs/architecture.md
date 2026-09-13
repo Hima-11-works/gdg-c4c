@@ -194,6 +194,23 @@ schema and validation are untouched by this: every stored row is still at
 not a "current" one, so it's matched to the current reading's hour and left
 `None` if the model has no value for it — the "where available" case.
 
+**Data hygiene and failure containment** (from the integration review):
+OpenAQ timestamps are normalised to aware UTC in the adapter — a naive
+value used to reach a comparison against an aware `since` and raise
+TypeError, which is not a ValueError and so escaped every handler and
+killed the whole run. Negative/sentinel (`-999`) and non-finite values are
+dropped rather than stored as real concentrations, and the domain types
+reject non-finite numbers outright (NaN passes every range check). A run
+of consecutive per-location failures aborts the fetch instead of spending
+`max_retries` requests on each of a hundred stations against a dead API,
+and hitting the `OPENAQ_LOCATIONS_LIMIT` page size now logs a warning
+rather than silently ingesting a truncated slice of the region. Weather
+fan-out is capped by `WEATHER_MAX_CELLS`. Both services also contain a
+provider that violates its Protocol (raises something other than
+`ProviderError`, or returns the wrong number of samples), so one feed can
+never take down the process that also ingests the other — see
+`backend/tests/test_ingestion_resilience.py`.
+
 **Duplicate prevention:** both `SensorReadingRepository.add()` and
 `WeatherReadingRepository.add()` raise `DuplicateReadingError` — a
 domain-level exception, not `sqlalchemy.exc.IntegrityError` — for an exact

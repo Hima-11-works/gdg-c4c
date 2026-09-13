@@ -14,7 +14,12 @@ from app.models.tables import metadata
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers defaults to True, which would silence every
+    # logger already created — including the ingestion adapters' — for the
+    # rest of the process. Harmless when alembic runs as its own process,
+    # but not when it is invoked in-process (test fixtures, any future
+    # migrate-then-serve entrypoint).
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 config.set_main_option(
     "sqlalchemy.url", get_settings().database_url.render_as_string(hide_password=False)
