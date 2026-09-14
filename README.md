@@ -1,206 +1,406 @@
 # Pollution Intelligence Platform
 
-Project scaffold for a pollution intelligence MVP (PM2.5, H3 grid, weather-driven
-spread predictions). The full vertical slice is wired end to end — one command
-(`python -m app.pipeline.run`) takes it from OpenAQ/Open-Meteo ingestion through
-PM2.5 interpolation, PDI, forecasting, and alerting, and the API serves real
-persisted data once it's run. Any endpoint with nothing real behind it yet still
-falls back to deterministic demo data (`is_demo: true`). So far the project has:
-- a FastAPI backend: `/api/v1` (sensors, weather, grid, cells, alerts) plus
-  health/readiness, with a consistent error shape and OpenAPI docs at `/docs`
-- PM2.5 estimation v1 (`IDWPollutionEstimator`, inverse-distance-weighted)
-  behind a `PollutionEstimator` interface, so Kriging, satellite fusion, or
-  an ML model can replace it later without changing any caller
-- PDI v0 (`HeuristicPDIModel`): a heuristic "pollution pressure index",
-  **not** a scientific measurement, behind a `PDIModel` interface
-- a deterministic H3 dispersion/forecast model v0
-  (`DeterministicH3DispersionModel`): wind-driven advection, limited
-  neighbor diffusion, decay/precipitation removal, mass-conserving by
-  construction, behind a `PollutionForecastModel` interface
-- a very small rule-based alert engine (`AlertGenerationService`, **no
-  machine learning**) — threshold crossing (now or forecast), sharp
-  current-to-forecast increase, and high PDI + worsening forecast; see
-  "Alerts" below
-- OpenAQ ingestion for PM2.5 and Open-Meteo ingestion for weather, each
-  behind a provider interface (`PollutionDataProvider` / `WeatherProvider`)
-  so other sources (CPCB, satellite, ECMWF, private sensors) can be added
-  later without touching anything downstream
-- **`python -m app.pipeline.run`**: the complete pipeline (ingest → grid
-  state + PDI → forecasts → alerts) for the configured region in one
-  command, with a clear per-stage pass/fail report — see "Full pipeline"
-  below. Every stage is also runnable individually via `python -m app.cli
-  <command>` for local development.
-- a database layer: schema, migrations, and a repository per entity
-  (`SensorReading`, `WeatherReading`, `GridState`, `Forecast`, `Alert`)
-- a dedicated geospatial service (`GeospatialService`) wrapping every H3
-  operation the app needs, and `python -m app.cli export-grid` to inspect
-  the region's grid as GeoJSON
-- a React + TypeScript + MapLibre map dashboard (current PM2.5/PDI layers,
-  wind, the Now/+1h/+3h/+6h timeline, cell details, alerts)
-- PostgreSQL/PostGIS via Docker Compose, with Alembic migrations
+A pollution intelligence MVP: PM2.5 sensor ingestion, H3-grid spatial
+interpolation, a heuristic pollution-pressure score, a wind-driven
+short-range forecast, threshold-based alerting, and a map dashboard —
+end to end, with one command (`python -m app.pipeline.run`) running the
+whole thing and every model swappable behind a small interface.
 
-See `docs/architecture.md` for the full system design.
+This document is the developer-facing reference for the whole repo. For a
+deeper narrative on *why* things are built the way they are (design
+rationale, alternatives considered, full method lists), see
+[`docs/architecture.md`](docs/architecture.md) — this README stays
+focused on what exists and how to run it.
 
-## Stack
+## Table of contents
 
-- **Frontend:** React + TypeScript + Vite
-- **Backend:** Python + FastAPI
-- **Database:** PostgreSQL + PostGIS
-- **Local infra:** Docker Compose
+1. [What this project does](#what-this-project-does)
+2. [MVP limitations](#mvp-limitations)
+3. [Architecture](#architecture)
+4. [Repository structure](#repository-structure)
+5. [Data flow](#data-flow)
+6. [Requirements](#requirements)
+7. [Environment variables](#environment-variables)
+8. [Local installation](#local-installation)
+9. [Docker startup](#docker-startup)
+10. [Database migrations](#database-migrations)
+11. [Running ingestion](#running-ingestion)
+12. [Running the complete pipeline](#running-the-complete-pipeline)
+13. [Running the backend and frontend](#running-the-backend-and-frontend)
+14. [Running tests](#running-tests)
+15. [Demo mode](#demo-mode)
+16. [API overview](#api-overview)
+17. [PDI: current definition and disclaimer](#pdi-current-definition-and-disclaimer)
+18. [Forecast model: current assumptions](#forecast-model-current-assumptions)
+19. [Known limitations](#known-limitations)
+20. [Future extension points](#future-extension-points)
 
-## Prerequisites
+## What this project does
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or Docker Engine + Compose v2)
-- [Node.js](https://nodejs.org/) 20.19+ or 22.12+ (required by Vite 8)
-- Python 3.11+ (only needed to run the backend or its tests outside Docker)
+Given a bounding-box region, the platform:
 
-## Quick start
+1. **Ingests** recent PM2.5 sensor readings (OpenAQ) and current
+   wind/precipitation (Open-Meteo) for that region.
+2. **Interpolates** PM2.5 onto an [H3](https://h3geo.org/) hexagonal grid
+   covering the region, via inverse-distance weighting from nearby
+   stations.
+3. **Scores** each grid cell with a heuristic "pollution pressure index"
+   (PDI) — today, a normalized function of PM2.5 alone.
+4. **Forecasts** PM2.5 forward 1h/3h/6h per cell with a deterministic,
+   explainable wind-advection + decay box model.
+5. **Alerts** on threshold crossings (now or forecast), sharp increases,
+   and high-pressure-plus-worsening-trend cells, via a small rule-based
+   engine — no machine learning anywhere in this MVP.
+6. **Serves** all of the above through a versioned JSON API and a React +
+   MapLibre map dashboard (current/forecast PM2.5, PDI, wind, alerts, a
+   per-cell detail view).
 
-```bash
-# 1. Create .env and frontend/.env from the committed examples,
-#    then change POSTGRES_PASSWORD in .env
-./scripts/bootstrap.sh
+Every step above is a manual trigger today (`python -m app.cli ...` or
+`python -m app.pipeline.run`) — there is no scheduler yet. See
+[MVP limitations](#mvp-limitations) and [Known limitations](#known-limitations).
 
-# 2. Start PostgreSQL/PostGIS + the API
-docker compose up --build
+## MVP limitations
 
-# 3. In a second terminal, start the frontend
-cd frontend
-npm ci
-npm run dev
+Read this before assuming any of the following is out of scope by
+accident rather than by design:
+
+- **No scheduler.** Ingestion, grid computation, forecasting, and
+  alerting are all triggered manually via CLI commands. A worker/cron
+  calling the same services periodically is the natural next step (see
+  [Future extension points](#future-extension-points)) but doesn't exist
+  yet.
+- **One pollutant.** Only PM2.5 is ingested, estimated, and forecast.
+  `sensor_reading.pollutant` is already a free string (not tied to
+  PM2.5), but `grid_state` and `forecast` have PM2.5-specific columns —
+  see [Future extension points](#future-extension-points) for exactly
+  what adding a second pollutant requires.
+- **One region at a time.** One configured bounding box
+  (`INGEST_BBOX_*`), one H3 resolution, one Postgres database. There is
+  no multi-region/multi-tenant concept.
+- **PDI is a heuristic, not a measurement.** See
+  [PDI: current definition and disclaimer](#pdi-current-definition-and-disclaimer).
+- **The forecast model is a simple box model, not atmospheric physics.**
+  See [Forecast model: current assumptions](#forecast-model-current-assumptions).
+- **No machine learning anywhere.** Interpolation is IDW, PDI is a
+  weighted blend, the forecast model is a fixed-formula box model, and
+  alerts are plain threshold comparisons. Nothing is trained on data.
+- **No authentication or rate limiting** on the API — every `/api/v1/*`
+  route is open, `GET`-only, and unauthenticated.
+- **No live road/industrial/satellite data.** PDI's `road_pressure` and
+  `industrial_pressure` inputs exist in the code but nothing populates
+  them yet.
+- **Demo fallback is per-endpoint, not global.** If, say, `grid_state`
+  has real rows but `forecast` doesn't yet, `/grid/current` returns real
+  data while `/grid/forecast` returns demo data in the same session — see
+  [API overview](#api-overview).
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph EXT["External data sources"]
+        OpenAQ["OpenAQ API<br/>(PM2.5 stations)"]
+        OpenMeteo["Open-Meteo API<br/>(wind, precipitation)"]
+        Demo["app.ingestion.demo<br/>(DEMO_MODE=true)"]
+    end
+
+    subgraph ING["Ingestion — app.services.ingestion"]
+        SIS["SensorIngestionService"]
+        WIS["WeatherIngestionService"]
+    end
+
+    subgraph DB["PostgreSQL + PostGIS"]
+        SR[("sensor_reading")]
+        WR[("weather_reading")]
+        GS[("grid_state")]
+        FC[("forecast")]
+        AL[("alert")]
+    end
+
+    subgraph PIPE["python -m app.pipeline.run"]
+        GCS["GridComputationService<br/>IDW interpolation + PDI"]
+        FS["ForecastingService<br/>dispersion model"]
+        AGS["AlertGenerationService<br/>4 threshold rules"]
+    end
+
+    subgraph API["FastAPI /api/v1"]
+        Routes["sensors · weather · grid · cells · alerts"]
+    end
+
+    subgraph FE["Frontend — React + MapLibre"]
+        Map["MapPage / MapView"]
+    end
+
+    OpenAQ -- "PollutionDataProvider" --> SIS
+    OpenMeteo -- "WeatherProvider" --> WIS
+    Demo -. "factory-selected substitute for both" .-> SIS
+    Demo -. " " .-> WIS
+
+    SIS --> SR
+    WIS --> WR
+
+    SR --> GCS
+    GCS --> GS
+    GS --> FS
+    WR --> FS
+    FS --> FC
+    GS --> AGS
+    FC --> AGS
+    AGS --> AL
+
+    SR --> Routes
+    WR --> Routes
+    GS --> Routes
+    FC --> Routes
+    AL --> Routes
+    Routes -- "JSON, polled" --> Map
 ```
 
-| URL | What it is |
-|---|---|
-| http://localhost:5173 | Frontend |
-| http://localhost:8000/health | Liveness: the API process is up (never touches the DB) |
-| http://localhost:8000/health/ready | Readiness: PostgreSQL reachable and PostGIS installed (200 or 503) |
-| http://localhost:8000/docs | Swagger UI — every `/api/v1/*` endpoint |
-| http://localhost:8000/api/v1/sensors | Try it: latest sensor readings (demo data until ingestion exists) |
+Every box that isn't a database table or a raw external API sits behind
+a `Protocol` interface in `app/domain/`, with the concrete implementation
+in `app/services/` or `app/ingestion/`:
 
-## API
-
-| Endpoint | Returns |
-|---|---|
-| `GET /api/v1/sensors` | Latest reading per sensor |
-| `GET /api/v1/weather` | Latest weather per H3 cell |
-| `GET /api/v1/grid/current` | Current PM2.5/PDI state per cell |
-| `GET /api/v1/grid/forecast?hours=1\|3\|6` | Forecast per cell at that horizon |
-| `GET /api/v1/cells/{h3_cell}` | Current state + forecasts + weather for one cell |
-| `GET /api/v1/alerts` | Alerts from the last 24h |
-
-Every response is `{"generated_at", "is_demo", "data"}`. Ingestion isn't
-implemented, so `is_demo` is `true` until real rows exist — the frontend
-should treat that as "illustrative, not measured" (e.g. a banner), never as
-real air-quality data. Errors are always `{"error": {"code", "message", "details"?}}`.
-See `docs/architecture.md` for the full contract and the demo-data fallback rule.
-
-## Configuration
-
-`.env` at the repo root is the **single configuration file** for Docker Compose and
-the backend. The backend reads it by absolute path, so it is found whether you
-start from the repo root or from `backend/`. Real environment variables always
-override it.
-
-| Variable | Used by | Notes |
+| Protocol (`app/domain/...`) | Implementation | Purpose |
 |---|---|---|
-| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | db container, backend | **Required.** No defaults in code; Compose refuses to start without them |
-| `POSTGRES_HOST`, `POSTGRES_PORT` | backend | For host-side runs (`localhost:5432`). Compose overrides them to `db:5432` for the api container |
-| `API_PORT` | Compose | Host port for the API |
-| `ENVIRONMENT`, `LOG_LEVEL`, `CORS_ORIGINS` | backend | |
-| `DEMO_MODE` | ingestion | Default `false`. When `true`, substitutes a fixed, deterministic sensor/weather dataset for OpenAQ/Open-Meteo — no API key needed. See "Demo Mode" below |
-| `H3_RESOLUTION` | backend | H3 resolution (0-15, default 8) for every `h3_cell` column. Changing it on an existing database does not rewrite stored rows — treat it as a breaking change to stored data |
-| `OPENAQ_API_KEY` | ingestion | Required to ingest PM2.5 ([get one free](https://explore.openaq.org/register)). Leave blank to run everything else without it |
-| `OPENAQ_BASE_URL`, `OPENAQ_TIMEOUT_SECONDS`, `OPENAQ_MAX_RETRIES`, `OPENAQ_LOCATIONS_LIMIT` | ingestion | OpenAQ adapter tuning — see `.env.example` |
-| `OPEN_METEO_BASE_URL`, `OPEN_METEO_TIMEOUT_SECONDS`, `OPEN_METEO_MAX_RETRIES`, `OPEN_METEO_MAX_LOCATIONS_PER_REQUEST` | ingestion | Open-Meteo adapter tuning; no API key needed |
-| `WEATHER_MAX_CELLS` | ingestion | Safety ceiling (default 50000) on one weather run's fan-out; an oversized bbox is refused instead of building millions of rows |
-| `WEATHER_H3_RESOLUTION` | ingestion | Coarser H3 resolution (default 5) weather is sampled at, fanned out to every `H3_RESOLUTION` cell inside each sampled cell. Must be <= `H3_RESOLUTION` |
-| `INGEST_BBOX_MIN_LAT`/`MIN_LON`/`MAX_LAT`/`MAX_LON` | ingestion | Bounding box to ingest, shared by `ingest` and `ingest-weather` (default: San Francisco, matching the demo data) |
-| `INGEST_MAX_READING_AGE_HOURS` | ingestion | A fetched PM2.5 reading older than this is dropped as stale |
-| `IDW_MAX_DISTANCE_KM` | estimation | Max distance (default 15km) from a cell center a sensor may be to count as evidence for that cell |
-| `IDW_MIN_SENSORS` | estimation | Min sensors (default 2) required within range before a cell gets an estimate at all |
-| `PDI_PM25_REFERENCE_UGM3` | PDI | PM2.5 (default 250 ug/m3) treated as "maximum pressure" when normalizing to [0, 1] — a normalization scale, not a scientific threshold |
-| `PDI_PM25_WEIGHT`, `PDI_ROAD_PRESSURE_WEIGHT`, `PDI_INDUSTRIAL_PRESSURE_WEIGHT` | PDI | Relative weights (default 0.7 / 0.2 / 0.1) of each factor in the PDI blend; renormalized over whichever factors are actually present for a cell |
-| `DISPERSION_DECAY_RATE_PER_HOUR`, `DISPERSION_WET_REMOVAL_RATE_PER_HOUR`, `DISPERSION_PRECIPITATION_REFERENCE_MM` | dispersion | Baseline + precipitation-driven PM2.5 removal per hour (defaults 0.15, 0.25, 4mm) |
-| `DISPERSION_MAX_TRANSPORT_FRACTION`, `DISPERSION_WIND_TRANSPORT_REFERENCE_MS`, `DISPERSION_CALM_WIND_THRESHOLD_MS` | dispersion | How much of a cell's PM2.5 wind can move per hour, and at what speeds (defaults 0.6, 8 m/s, 0.5 m/s) |
-| `DISPERSION_WIND_CONE_HALF_ANGLE_DEG` | dispersion | Half-angle (default 50°) of the downwind neighbor-selection cone |
-| `DISPERSION_CONFIDENCE_DECAY_PER_HOUR`, `DISPERSION_MISSING_WEATHER_CONFIDENCE_PENALTY` | dispersion | Per-hour forecast confidence discount, and an extra one for a cell with no weather reading (defaults 0.9, 0.5) |
-| `ALERT_WARNING_THRESHOLD_UGM3`, `ALERT_CRITICAL_THRESHOLD_UGM3` | alerts | PM2.5 (µg/m3) at/above which a cell gets a WARNING/CRITICAL alert if happening now, or WATCH if only a forecast horizon reaches it (defaults 55, 150 — the AQI "Unhealthy" range) |
-| `ALERT_SHARP_INCREASE_THRESHOLD_UGM3` | alerts | Current-to-forecast PM2.5 jump (µg/m3) that counts as a "sharp increase" alert on its own (default 25) |
-| `ALERT_PDI_HIGH_THRESHOLD`, `ALERT_PDI_WORSENING_MIN_INCREASE_UGM3` | alerts | PDI considered "high pressure", and the (smaller) PM2.5 increase that counts as "worsening" when combined with it (defaults 60, 5) |
-| `ALERT_ACTIVE_LOOKBACK_HOURS` | alerts | A cell with an alert created within this many hours is skipped on the next pipeline run, and is what `/api/v1/alerts` considers "active" (default 24) |
-| `VITE_API_BASE_URL` (in `frontend/.env`) | Vite | Where the frontend calls the backend |
+| `providers.PollutionDataProvider` | `ingestion.openaq.OpenAQProvider` (or `ingestion.demo.DemoPollutionDataProvider`) | Fetch PM2.5 readings |
+| `providers.WeatherProvider` | `ingestion.open_meteo.OpenMeteoProvider` (or `ingestion.demo.DemoWeatherProvider`) | Fetch wind/precipitation |
+| `estimation.PollutionEstimator` | `services.estimation.IDWPollutionEstimator` | Interpolate PM2.5 onto the grid |
+| `pdi.PDIModel` | `services.pdi.HeuristicPDIModel` | Score pollution pressure per cell |
+| `dispersion.PollutionForecastModel` | `services.dispersion.DeterministicH3DispersionModel` | Forecast PM2.5 forward |
+| `repositories.*Repository` (5 of them) | `db.repositories.Sql*Repository` | Persistence, one per entity |
 
-The backend builds the database URL from the `POSTGRES_*` parts, so credentials
-are defined only once.
+`app.ingestion.factory` is the single place that decides whether
+ingestion gets the real providers or Demo Mode's substitutes (see
+[Demo mode](#demo-mode)) — nothing downstream of ingestion knows or cares
+which one ran.
 
-## Project layout
+## Repository structure
 
 ```
 .
-├─ docker-compose.yml       # db (PostGIS) + api
-├─ .env.example             # copy to .env
+├─ docker-compose.yml          # db (PostGIS) + api services
+├─ .env.example                # copy to .env
 ├─ backend/
 │  ├─ alembic.ini
-│  ├─ alembic/
-│  │  └─ versions/          # 0001_initial_schema.py
+│  ├─ alembic/versions/        # 0001_initial_schema.py (hand-maintained)
 │  ├─ app/
-│  │  ├─ api/               # routes (thin), schemas, error handling, DI wiring
-│  │  │  └─ routes/         # sensors, weather, grid, cells, alerts, health
-│  │  ├─ core/              # settings
-│  │  ├─ db/                # SQLAlchemy engine/session
-│  │  │  └─ repositories/   # concrete (SQLAlchemy) repository implementations
-│  │  ├─ domain/            # pure types, Protocols, h3_grid.py (all raw H3 calls) — no I/O
-│  │  ├─ ingestion/         # openaq.py, open_meteo.py, shared retry policy in http.py
-│  │  ├─ models/            # database table definitions (the schema)
-│  │  ├─ services/          # per-resource logic, demo-data fallback, ingestion orchestration,
-│  │  │                     # geospatial.py (GeospatialService), estimation.py (IDWPollutionEstimator),
-│  │  │                     # pdi.py (HeuristicPDIModel), dispersion.py (DeterministicH3DispersionModel),
-│  │  │                     # forecasting.py (ForecastingService — runs+persists the dispersion model)
-│  │  ├─ cli.py             # dev commands — `python -m app.cli ingest[-weather]|export-grid|forecast`
-│  │  └─ main.py            # FastAPI app entrypoint
-│  ├─ tests/
-│  ├─ pyproject.toml        # dependency ranges
-│  └─ requirements.lock     # exact versions installed in Docker
+│  │  ├─ core/                 # config.py — Settings, read from .env
+│  │  ├─ domain/                # pure types + Protocols, NO I/O
+│  │  │  ├─ types.py            #   dataclasses: SensorReading, WeatherReading/Sample,
+│  │  │  │                      #   GridState, Forecast, Alert, BoundingBox, Coordinate
+│  │  │  ├─ providers.py        #   PollutionDataProvider, WeatherProvider
+│  │  │  ├─ estimation.py       #   PollutionEstimator
+│  │  │  ├─ pdi.py              #   PDIModel, CellContext, PDIResult
+│  │  │  ├─ dispersion.py       #   PollutionForecastModel, ForecastResult
+│  │  │  ├─ repositories.py     #   one Protocol per entity + DuplicateReadingError
+│  │  │  └─ h3_grid.py          #   the ONLY module that imports the h3 library
+│  │  ├─ ingestion/             # openaq.py, open_meteo.py, demo.py, factory.py, http.py (shared retry)
+│  │  ├─ models/                # tables.py — SQLAlchemy Core table definitions (the schema)
+│  │  ├─ db/
+│  │  │  ├─ session.py          #   engine/session factory
+│  │  │  └─ repositories/       #   Sql*Repository — the only code that builds SQL
+│  │  ├─ services/               # implementations + orchestration
+│  │  │  ├─ estimation.py, pdi.py, dispersion.py   # the 3 model implementations above
+│  │  │  ├─ geospatial.py       #   GeospatialService — the only caller of domain.h3_grid
+│  │  │  ├─ ingestion.py        #   SensorIngestionService, WeatherIngestionService
+│  │  │  ├─ grid_computation.py #   GridComputationService (estimator + PDI, one GridState row)
+│  │  │  ├─ forecasting.py      #   ForecastingService (runs the dispersion model, persists)
+│  │  │  ├─ alert_generation.py #   AlertGenerationService (the 4 write-side alert rules)
+│  │  │  ├─ demo_data.py        #   per-endpoint illustrative fallback (`is_demo: true`)
+│  │  │  ├─ sensors.py, weather.py, grid.py, cells.py, alerts.py  # read-side, per API resource
+│  │  │  └─ results.py          #   ServiceResult (data + is_demo)
+│  │  ├─ api/
+│  │  │  ├─ routes/             #   sensors, weather, grid, cells, alerts, health — thin
+│  │  │  ├─ schemas.py          #   the public Pydantic response contract (Envelope[...])
+│  │  │  ├─ errors.py           #   one consistent {"error": {...}} shape
+│  │  │  ├─ deps.py             #   FastAPI dependency-injection wiring
+│  │  │  └─ router.py           #   assembles /api/v1
+│  │  ├─ pipeline/run.py        # composition root: python -m app.pipeline.run
+│  │  ├─ cli.py                 # composition root: python -m app.cli <command>
+│  │  └─ main.py                # FastAPI app entrypoint
+│  ├─ tests/                    # see "Running tests"
+│  ├─ pyproject.toml            # dependency ranges
+│  └─ requirements.lock         # exact versions installed in Docker
 ├─ frontend/
+│  └─ src/
+│     ├─ components/            # MapPage, MapView, AlertsPanel, CellDetailPanel, TimelineControl, ...
+│     ├─ lib/                    # api.ts (the only fetch caller), h3Geometry.ts, colorScales.ts, types.ts
+│     ├─ hooks/useApiResource.ts # loading/success/error/poll/retry, no data-fetching library
+│     └─ state/                  # small useReducer + Context for UI-only state
 ├─ scripts/
-│  ├─ bootstrap.sh          # copies .env.example → .env
-│  └─ lock-backend.sh       # regenerates backend/requirements.lock (needs uv)
-└─ docs/
-   └─ architecture.md
+│  ├─ bootstrap.sh              # copies .env.example → .env
+│  └─ lock-backend.sh           # regenerates backend/requirements.lock (needs uv)
+└─ docs/architecture.md         # design rationale, full method lists
 ```
 
-Layer boundaries (which `app/*` package may import which) are enforced by
-`backend/tests/test_architecture.py`.
+**Layer boundaries are enforced, not just documented.**
+`backend/tests/test_architecture.py` walks every file's imports and fails
+the build if a layer imports one it isn't allowed to (e.g. `domain` may
+import nothing under `app/`; `services` may import `domain`/`ingestion`/
+`db`/`models` but not `api`). `app/cli.py`, `app/main.py`, and
+`app/pipeline/run.py` are composition roots and are exempt — they're
+allowed to import everything, since something has to wire it all
+together.
 
-## Backend
+## Data flow
 
-Run outside Docker (with the database from `docker compose up -d db`):
+```
+OpenAQ ──┐                                   ┌── Open-Meteo
+         ▼                                   ▼
+  SensorIngestionService              WeatherIngestionService
+         │                                   │
+         ▼                                   ▼
+   sensor_reading table              weather_reading table
+         │                                   │
+         ▼                                   │
+  GridComputationService                     │
+   (IDW interpolation,                       │
+    then HeuristicPDIModel                   │
+    on the same row)                         │
+         │                                   │
+         ▼                                   │
+    grid_state table ◄────────────────────────
+         │            \
+         │             ╲
+         ▼              ╲
+  ForecastingService     │
+  (DeterministicH3        │
+   DispersionModel,       │
+   reads grid_state +     │
+   weather_reading)       │
+         │                │
+         ▼                │
+    forecast table        │
+         │                │
+         ▼                ▼
+      AlertGenerationService
+      (reads grid_state + forecast,
+       4 rules, at most 1 alert/cell/run)
+         │
+         ▼
+      alert table
+         │
+         ▼
+    FastAPI /api/v1/* ──── polled every 60s ──── React + MapLibre frontend
+```
+
+Everything above `sensor_reading`/`weather_reading` is a **manual
+trigger** (`python -m app.cli <command>` or `python -m app.pipeline.run`)
+— nothing runs on a timer. A single pipeline run persists real rows;
+every `/api/v1/*` endpoint reads from its repository first and only
+falls back to `app/services/demo_data.py`'s static illustrative values
+(`is_demo: true`) if that repository query returns nothing at all. See
+[API overview](#api-overview) and [Demo mode](#demo-mode) for the two
+different meanings of "demo" in this codebase — they are unrelated
+mechanisms that happen to share a name.
+
+## Requirements
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or Docker Engine + Compose v2)
+- [Node.js](https://nodejs.org/) 20.19+ or 22.12+ (required by Vite 8)
+- Python 3.11+ (only needed to run the backend or its tests outside Docker; the Docker image itself uses Python 3.12)
+- An [OpenAQ API key](https://explore.openaq.org/register) (free) — only if you want real PM2.5 ingestion; not needed for [Demo mode](#demo-mode) or for running the API/frontend against demo fallback data
+- No API key needed for Open-Meteo (weather)
+
+## Environment variables
+
+`.env` at the repo root is the **single configuration file** for Docker
+Compose and the backend (`app/core/config.py` resolves it by absolute
+path, so it's found whether you start from the repo root or `backend/`).
+Real environment variables always override it. `frontend/.env` is
+separate and only holds `VITE_API_BASE_URL`.
+
+| Variable | Used by | Notes |
+|---|---|---|
+| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | db container, backend | **Required**, no defaults — Compose refuses to start without them |
+| `POSTGRES_HOST`, `POSTGRES_PORT` | backend | For host-side runs (`localhost:5432`). Compose overrides both to `db:5432` for the `api` container |
+| `API_PORT` | Compose | Host port for the API |
+| `ENVIRONMENT`, `LOG_LEVEL`, `CORS_ORIGINS` | backend | Plain app config; `CORS_ORIGINS` is comma-separated |
+| `DEMO_MODE` | ingestion | Default `false`. See [Demo mode](#demo-mode) |
+| `H3_RESOLUTION` | backend | 0-15, default `8`. Changing it on an existing database does **not** rewrite stored `h3_cell` values — treat a change as a breaking change to stored data |
+| `OPENAQ_API_KEY` | ingestion | Required for real PM2.5 ingestion. Leave blank to run everything else (API, frontend, demo fallback, Demo Mode) without it |
+| `OPENAQ_BASE_URL`, `OPENAQ_TIMEOUT_SECONDS`, `OPENAQ_MAX_RETRIES`, `OPENAQ_LOCATIONS_LIMIT` | ingestion | OpenAQ adapter tuning |
+| `OPEN_METEO_BASE_URL`, `OPEN_METEO_TIMEOUT_SECONDS`, `OPEN_METEO_MAX_RETRIES`, `OPEN_METEO_MAX_LOCATIONS_PER_REQUEST` | ingestion | Open-Meteo adapter tuning; no key needed |
+| `WEATHER_MAX_CELLS` | ingestion | Safety ceiling (default 50000) on one weather run's fan-out; an oversized bbox is refused rather than building millions of rows |
+| `WEATHER_H3_RESOLUTION` | ingestion | Coarser resolution (default 5) weather is sampled at, fanned out to every `H3_RESOLUTION` cell inside. Must be ≤ `H3_RESOLUTION` (enforced by a `Settings` validator) |
+| `INGEST_BBOX_MIN_LAT`/`MIN_LON`/`MAX_LAT`/`MAX_LON` | ingestion | Bounding box, shared by `ingest` and `ingest-weather` (default: San Francisco) |
+| `INGEST_MAX_READING_AGE_HOURS` | ingestion | A fetched PM2.5 reading older than this is dropped as stale (default 3h) |
+| `IDW_MAX_DISTANCE_KM` | estimation | Max distance (default 15km) a sensor may be from a cell center to count as evidence |
+| `IDW_MIN_SENSORS` | estimation | Min sensors (default 2) required in range before a cell gets an estimate at all |
+| `PDI_PM25_REFERENCE_UGM3` | PDI | PM2.5 (default 250) treated as "maximum pressure" when normalizing to `[0, 1]` — a normalization scale, not a scientific threshold |
+| `PDI_PM25_WEIGHT`, `PDI_ROAD_PRESSURE_WEIGHT`, `PDI_INDUSTRIAL_PRESSURE_WEIGHT` | PDI | Relative weights (default 0.7 / 0.2 / 0.1); renormalized over whichever factors are actually present for a cell |
+| `DISPERSION_DECAY_RATE_PER_HOUR`, `DISPERSION_WET_REMOVAL_RATE_PER_HOUR`, `DISPERSION_PRECIPITATION_REFERENCE_MM` | dispersion | Baseline + precipitation-driven removal per hour (defaults 0.15, 0.25, 4mm) |
+| `DISPERSION_MAX_TRANSPORT_FRACTION`, `DISPERSION_WIND_TRANSPORT_REFERENCE_MS`, `DISPERSION_CALM_WIND_THRESHOLD_MS` | dispersion | How much PM2.5 wind can move per hour, and at what speeds (defaults 0.6, 8 m/s, 0.5 m/s) |
+| `DISPERSION_WIND_CONE_HALF_ANGLE_DEG` | dispersion | Half-angle (default 50°) of the downwind neighbor-selection cone |
+| `DISPERSION_CONFIDENCE_DECAY_PER_HOUR`, `DISPERSION_MISSING_WEATHER_CONFIDENCE_PENALTY` | dispersion | Per-hour confidence discount, and an extra one for a cell with no weather reading (defaults 0.9, 0.5) |
+| `ALERT_WARNING_THRESHOLD_UGM3`, `ALERT_CRITICAL_THRESHOLD_UGM3` | alerts | PM2.5 at/above which a cell alerts WARNING/CRITICAL now, or WATCH if only a forecast reaches it (defaults 55, 150) |
+| `ALERT_SHARP_INCREASE_THRESHOLD_UGM3` | alerts | Current-to-forecast jump (µg/m³) counted as a "sharp increase" alert (default 25) |
+| `ALERT_PDI_HIGH_THRESHOLD`, `ALERT_PDI_WORSENING_MIN_INCREASE_UGM3` | alerts | PDI considered "high pressure", and the smaller PM2.5 increase counted as "worsening" alongside it (defaults 60, 5) |
+| `ALERT_ACTIVE_LOOKBACK_HOURS` | alerts | A cell with an alert created within this many hours is skipped on the next run, and is what `/api/v1/alerts` considers "active" (default 24) |
+| `VITE_API_BASE_URL` (in `frontend/.env`) | frontend | Where the frontend calls the backend |
+
+The backend builds its database URL from the `POSTGRES_*` parts, so
+credentials are defined once. See `.env.example` for every default,
+inline.
+
+## Local installation
 
 ```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -e ".[dev]"
-uvicorn app.main:app --reload
+git clone <this repo>
+cd gdg-c4c
+
+# Copies .env.example -> .env and frontend/.env.example -> frontend/.env
+./scripts/bootstrap.sh
+
+# Edit .env: at minimum, change POSTGRES_PASSWORD.
+# Add OPENAQ_API_KEY if you want real PM2.5 ingestion (optional — see
+# Demo mode and "API overview" for what works without one).
 ```
 
-Tests and lint:
+From here you can either run everything in Docker ([Docker startup](#docker-startup))
+or run the backend directly on the host ([Running the backend and frontend](#running-the-backend-and-frontend)).
+Either way, the frontend always runs on the host with `npm run dev` (see
+that section for why).
+
+## Docker startup
 
 ```bash
-cd backend
-pytest                                   # unit tests, no database needed
-RUN_DB_TESTS=1 pytest                    # also checks real PostgreSQL/PostGIS (needs the db running)
-ruff check . && ruff format --check .
+docker compose up --build
 ```
 
-Dependencies: edit ranges in `pyproject.toml`, then run
-`./scripts/lock-backend.sh` to regenerate `requirements.lock`.
+This starts two services (`docker-compose.yml`):
 
-## Database
+- **`db`** — `postgis/postgis:16-3.4`, with a healthcheck (`pg_isready`)
+  that gates the `api` container's startup.
+- **`api`** — builds `backend/Dockerfile`, runs
+  `alembic upgrade head && uvicorn app.main:app --reload` (migrations
+  run automatically, every start — a no-op once the schema is already at
+  head), and only reports healthy once `GET /health/ready` returns 200
+  (PostGIS reachable).
 
-Docker Compose runs migrations automatically (`alembic upgrade head`) before
-starting the API. Outside Docker:
+The frontend is **not** in Docker Compose — run it on the host (see
+[Running the backend and frontend](#running-the-backend-and-frontend)),
+since Vite's dev server hot-reloads faster there than inside a container
+on Windows.
+
+| URL | What it is |
+|---|---|
+| http://localhost:8000/health | Liveness — the process is up, never touches the DB |
+| http://localhost:8000/health/ready | Readiness — PostgreSQL reachable + PostGIS installed (200 or 503) |
+| http://localhost:8000/docs | Swagger UI for every `/api/v1/*` endpoint |
+| http://localhost:8000/api/v1/sensors | Try it — demo data until ingestion has run |
+
+To run a CLI command inside the running `api` container instead of a
+separate host install:
+
+```bash
+docker compose exec api python -m app.cli ingest-weather
+```
+
+## Database migrations
+
+Docker Compose applies migrations automatically on every `api` container
+start (see above). Outside Docker:
 
 ```bash
 cd backend
@@ -208,129 +408,22 @@ alembic upgrade head          # apply migrations
 alembic downgrade -1          # roll back one revision
 ```
 
-The schema is defined once in `app/models/tables.py` and mirrored by hand in
-`alembic/versions/0001_initial_schema.py` — there was no live database
-available while building this to autogenerate a migration against, so the
-two are kept in sync manually (see that migration's docstring). Repositories
-in `app/db/repositories/` are the only code that builds SQL against these
-tables; everything above `app/db` depends on the `app.domain.repositories`
+The schema is defined once, in code, as SQLAlchemy Core `Table` objects
+in `app/models/tables.py` — five tables: `sensor_reading`,
+`weather_reading`, `grid_state`, `forecast`, `alert`. It is mirrored **by
+hand** in `alembic/versions/0001_initial_schema.py`; there is a test
+(`backend/tests/test_migrations_offline.py`) that asserts the migration's
+DDL and the live table metadata agree column-for-column and constraint-
+for-constraint, specifically because there's no live database available
+in this project's history to `alembic revision --autogenerate` against.
+**If you add or change a column in `tables.py`, you must hand-write the
+matching migration change yourself** — nothing generates it for you.
+
+Only `app/db/repositories/*.py` builds SQL against these tables directly;
+everything above `app/db` depends on the `app.domain.repositories`
 Protocols instead.
 
-## Geospatial
-
-All H3 logic goes through `app.services.geospatial.GeospatialService` —
-nothing else calls the `h3` library or hardcodes a resolution. It converts
-lat/lon to cells, cells to GeoJSON polygons, looks up neighbors, and
-generates the region's grid coverage. See `docs/architecture.md` for the
-full method list.
-
-```bash
-cd backend
-python -m app.cli export-grid                                # region from .env -> grid.geojson
-python -m app.cli export-grid --out sf.geojson \
-    --min-lat 37.75 --min-lon -122.45 --max-lat 37.80 --max-lon -122.40
-```
-
-Writes the configured region's H3 coverage as a GeoJSON `FeatureCollection`
-— open the file directly at [geojson.io](https://geojson.io) to inspect
-the grid visually. No API key or database needed.
-
-## PM2.5 estimation
-
-`app.services.estimation.IDWPollutionEstimator` fills in PM2.5 for grid
-cells that don't contain a sensor, via inverse-distance-weighted
-interpolation — behind `app.domain.estimation.PollutionEstimator`, so
-Kriging, satellite fusion, or an ML model can replace it later without any
-caller changing. Run and persisted via `python -m app.pipeline.run` (or
-`GridComputationService` directly — see "Full pipeline" below); exercised
-directly, independent of any pipeline, by
-`backend/tests/test_estimation.py`.
-
-- A cell with no sensor within `IDW_MAX_DISTANCE_KM`, or fewer than
-  `IDW_MIN_SENSORS` within that range, gets `pm25=None` and
-  `confidence=0.0` — never a fabricated value.
-- A sensor within 10m of a cell center is used directly rather than
-  divided by a near-zero distance.
-- `pdi`/`wind_speed`/`wind_direction` are always `None` from this
-  estimator (it only ever sees PM2.5 readings) — see
-  `docs/architecture.md` for why `GridState`'s fields are `Optional`.
-
-## PDI (pollution pressure index)
-
-`app.services.pdi.HeuristicPDIModel` computes PDI for one cell at a time
-via `app.domain.pdi.PDIModel.calculate(cell_context) -> PDIResult`. **PDI
-is a heuristic "pollution pressure index", not a scientifically exact
-measurement of net emissions** — a configurable, weighted blend of
-normalized signals, meant for ranking/triage, not as a physical quantity.
-Run and persisted onto the same `GridState` row PM2.5 estimation just
-wrote, via `python -m app.pipeline.run` (see `GridComputationService`
-below); exercised directly, independent of any pipeline, by
-`backend/tests/test_pdi.py`.
-
-- v0 uses only the current PM2.5 estimate as input — the only factor with
-  a real data source today.
-- `CellContext.road_pressure` and `.industrial_pressure` are extension
-  points for when road-density/industrial-proximity data exists: pass
-  them in (pre-normalized to `[0, 1]`) and they're blended in
-  automatically, with no change to `HeuristicPDIModel` or its caller.
-- A cell with no available factor (or every available factor configured
-  with zero weight) gets `pdi=None` — never a fabricated score.
-- `PDIResult.factors` reports the *normalized* `[0, 1]` value of each
-  factor that contributed (e.g. `{"pm25": 0.81}`), not its weighted
-  share, so a caller/UI can show which signals drove the score.
-- Output is `0` to `100` today (only non-negative weights are
-  configured); a future negative-weighted "sink" factor (e.g.
-  precipitation washout) could push it toward `-100` without any formula
-  change.
-
-## Dispersion / forecast model
-
-`app.services.dispersion.DeterministicH3DispersionModel` forecasts PM2.5
-forward hour by hour from `GridState`/`WeatherReading` data, behind
-`app.domain.dispersion.PollutionForecastModel`. **Not an atmospheric
-chemistry simulator** — a deliberately simple, explainable box model: each
-H3 cell is well-mixed; every hour its PM2.5 is reduced by a removal
-fraction (decay, boosted by precipitation) and split between what stays
-and what's transported into immediate H3 neighbors, biased toward
-whichever neighbor(s) are closest to the wind's downwind bearing. It
-redistributes/removes pollution that already exists — no emissions term.
-
-- **1h/3h/6h** are all produced from one run of the same hour-by-hour
-  loop (the 3h result is the literal state after 3 of the same steps used
-  to reach 6h) — never a shortcut, so the horizons are always mutually
-  consistent.
-- **Mass conservation:** every coefficient is clamped to `[0, 1]`, and
-  `DISPERSION_MAX_TRANSPORT_FRACTION < 1` caps transport regardless of
-  wind speed — so total mass across the modeled grid can only decrease
-  or leave through an open domain boundary, never increase, however
-  extreme the input. `predicted_pm25` is validated `>= 0` at construction
-  (`Forecast`, matching `GridState.pm25`), with a matching DB `CHECK`.
-- **Confidence** propagates through the same transport as a mass-weighted
-  average, then decays once per hour (`DISPERSION_CONFIDENCE_DECAY_PER_HOUR`)
-  and takes an extra penalty for any hour a cell had no weather reading.
-- **Known simplification:** weather is held constant across the whole
-  forecast horizon — there's no per-hour weather forecast feed yet.
-
-`app.services.forecasting.ForecastingService` reads the latest
-`GridState`/`WeatherReading` rows, runs the model for `hours=(1, 3, 6)`,
-and saves every resulting `Forecast`. Run it standalone with:
-
-```bash
-cd backend
-python -m app.cli forecast
-```
-
-or as one stage of `python -m app.pipeline.run` (the "Full pipeline"
-section below), which runs PM2.5 estimation and PDI first so this stage
-has fresh `GridState` rows to forecast from. Once it's run at least once,
-`/api/v1/grid/forecast` and
-`/api/v1/cells/{h3_cell}` automatically start serving the real, persisted
-forecasts instead of demo data — no API or service code changes needed,
-since they already read from `ForecastRepository`. See
-`backend/tests/test_dispersion.py` (the model) and
-`backend/tests/test_forecasting_service.py` (the pipeline).
-
-## Ingestion
+## Running ingestion
 
 ```bash
 cd backend
@@ -340,35 +433,31 @@ python -m app.cli ingest --min-lat 28.4 --min-lon 76.8 \
                           --max-lat 28.9 --max-lon 77.4      # override for one run
 ```
 
-Under Docker Compose, run either inside the `api` container instead:
-`docker compose exec api python -m app.cli ingest-weather`.
+- **`ingest`** requires `OPENAQ_API_KEY` (unless `DEMO_MODE=true` — see
+  [Demo mode](#demo-mode)) and a running database. Fetches recent PM2.5
+  readings for the bounding box, normalizes them into `SensorReading`,
+  and saves them — skipping exact duplicates (same
+  source/sensor/pollutant/timestamp) and stale readings (older than
+  `INGEST_MAX_READING_AGE_HOURS`).
+- **`ingest-weather`** never needs an API key. It samples weather at a
+  coarser H3 resolution (`WEATHER_H3_RESOLUTION`) than the grid and fans
+  each sample out to every fine `H3_RESOLUTION` cell it covers — one
+  batched Open-Meteo request typically produces far more `WeatherReading`
+  rows than points requested, deliberately (weather varies far less than
+  PM2.5 over a city block).
 
-- **`ingest`** requires `OPENAQ_API_KEY` in `.env` and the database
-  running. Fetches recent PM2.5 readings for the configured bounding box
-  from OpenAQ, normalizes them into `SensorReading`, and saves them —
-  skipping exact duplicates (same source/sensor/pollutant/timestamp) and
-  stale readings (older than `INGEST_MAX_READING_AGE_HOURS`).
-- **`ingest-weather`** needs no API key. Samples weather at a coarser H3
-  resolution than the grid (`WEATHER_H3_RESOLUTION`) and fans each sample
-  out to every fine `H3_RESOLUTION` cell it covers — one batched
-  Open-Meteo request typically produces far more `WeatherReading` rows
-  than points requested, which is deliberate (see `docs/architecture.md`).
+Both commands print a message and exit 1 on a network, API, or database
+failure — never an uncaught traceback. There is no scheduler; these are
+manual triggers for local development.
 
-Either command prints a message and exits 1 on a network, API, or
-database failure — never an uncaught traceback. There is no scheduler
-yet; both (and `forecast`) are manual triggers for local development. See
-`docs/architecture.md` for the full fetch flow and how to add another
-source (CPCB, satellite, ECMWF, private sensors) behind the same
-interfaces.
-
-## Full pipeline
+## Running the complete pipeline
 
 ```bash
 cd backend
 python -m app.pipeline.run
 ```
 
-Runs the complete vertical slice for the configured region in one command:
+Runs the full vertical slice for the configured region in one command:
 
 ```
 OpenAQ -> sensor ingestion -> H3 grid + PM2.5 interpolation -> PDI
@@ -376,40 +465,100 @@ OpenAQ -> sensor ingestion -> H3 grid + PM2.5 interpolation -> PDI
 forecasts -> alerts
 ```
 
-Prints one line per stage (`[OK  ] sensor_ingestion: fetched=12 saved=10 ...` /
-`[FAIL] ...: <reason>`) and exits 1 if any stage failed. Every stage is a
-small orchestration service with its own test file
+Prints one line per stage (`[OK  ] sensor_ingestion: fetched=12 saved=10 ...`
+or `[FAIL] ...: <reason>`) and exits 1 if any stage failed. Every stage is
+its own orchestration service, independently tested
 (`SensorIngestionService`, `WeatherIngestionService`,
-`GridComputationService`, `ForecastingService`, `AlertGenerationService`) —
-this module only wires them together in order against one shared
-session/timestamp/bounding box; none of the actual pollution/forecast/PDI
-logic lives in it.
+`GridComputationService`, `ForecastingService`, `AlertGenerationService`)
+— `app/pipeline/run.py` only wires them together in order.
 
 **A failed external data source doesn't corrupt or abort the run.** If
 OpenAQ or Open-Meteo is unreachable, that stage is reported as a clear
-failure (and the process exits 1), but every stage after it still runs —
-`IDWPollutionEstimator` already returns `pm25=None`/`confidence=0.0`
-rather than a fabricated estimate when there isn't enough sensor
-evidence, and `DeterministicH3DispersionModel` already forecasts
-decay-only for a cell with no weather reading rather than inventing
-wind — so continuing with whatever is already persisted is correct, not
-a silent corruption. Only the database itself being unreachable aborts
-the whole run (nothing below can do anything meaningful without one).
+failure (and the process exits 1), but every later stage still runs —
+`IDWPollutionEstimator` returns `pm25=None`/`confidence=0.0` rather than a
+fabricated estimate when there isn't enough evidence, and
+`DeterministicH3DispersionModel` forecasts decay-only for a cell with no
+weather reading. Only the database itself being unreachable aborts the
+whole run.
 
-`GridComputationService` is the one new orchestration piece this ties
-together: PM2.5 (`IDWPollutionEstimator`) and PDI (`HeuristicPDIModel`)
-land on the *same* `GridState` row, so it estimates, folds in a PDI
-score per cell, and persists once — see
-`backend/tests/test_grid_computation_service.py`.
+`GridComputationService` estimates PM2.5 (`IDWPollutionEstimator`) and
+folds in PDI (`HeuristicPDIModel`) onto the **same** `GridState` row, then
+persists every cell's row in one round trip. `ForecastingService` then
+persists every `(cell, horizon)` forecast from that run in one round
+trip too — both are one bulk database write per pipeline run, not one
+write per cell (a deliberate fix; see the git history for the
+before/after if you're curious).
 
-See "Alerts" below for `AlertGenerationService`'s rules in detail.
+There is no scheduler yet — a worker or cron job calling
+`python -m app.pipeline.run` periodically is the natural next step and
+wouldn't need any code here to change.
 
-There is no scheduler yet — this is a manual trigger, same as every
-other `app.cli`/`app.pipeline` command; a cron job or worker calling it
-periodically is the natural next step and wouldn't need any code here to
-change.
+## Running the backend and frontend
 
-## Demo Mode
+**Backend**, outside Docker (with the database from `docker compose up -d db`):
+
+```bash
+cd backend
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
+uvicorn app.main:app --reload
+```
+
+Dependencies: edit ranges in `pyproject.toml`, then run
+`./scripts/lock-backend.sh` to regenerate `requirements.lock` (the exact
+versions installed in Docker).
+
+**Frontend**, always on the host (faster hot-reload than Vite in Docker
+on Windows):
+
+```bash
+cd frontend
+npm ci             # exact versions from package-lock.json
+npm run dev        # dev server, http://localhost:5173
+npm run build      # type-check + production build
+npm run lint       # oxlint
+npm run format     # prettier --write
+```
+
+It's a single full-screen MapLibre GL JS map, one page, no router
+(`src/components/MapPage.tsx`). H3 hex boundaries are computed
+client-side with `h3-js` from the plain `h3_cell` strings the API
+returns — there's no GeoJSON endpoint. `src/lib/api.ts` is the only
+module that calls `fetch`; all pollution/forecast/PDI math stays
+server-side.
+
+## Running tests
+
+**Backend:**
+
+```bash
+cd backend
+pytest                                   # unit tests, no database needed
+RUN_DB_TESTS=1 pytest                    # also runs real-PostgreSQL round-trip tests
+ruff check . && ruff format --check .
+```
+
+Most of the suite runs against in-memory fakes (`tests/fakes.py`) and
+needs no database at all — including `test_migrations_offline.py`
+(compiles the Alembic migration against the PostgreSQL dialect without
+connecting to one) and `test_repository_statements_compile.py` (same
+idea for every repository's SQL statements). `RUN_DB_TESTS=1` additionally
+runs `tests/test_repositories.py` and `tests/test_db_integration.py`
+against a real PostgreSQL/PostGIS instance (`docker compose up -d db`
+first). `tests/test_architecture.py` enforces the layer-import rules
+described in [Repository structure](#repository-structure).
+`tests/test_mvp_scenarios.py` is a targeted resilience pass (15
+scenarios: provider failures, database unavailability, stale/missing
+data, calm wind, heavy rain, etc.) — see that file's docstring for the
+full list. `tests/test_demo_mode.py` runs the real pipeline services
+against Demo Mode's fixed dataset end to end (see [Demo mode](#demo-mode)).
+
+**Frontend:** there is no test runner configured. `npm run build`
+(type-checks via `tsc -b` then builds) and `npm run lint` (`oxlint`) are
+the checks that exist; run both before committing a frontend change.
+
+## Demo mode
 
 ```bash
 # .env
@@ -418,128 +567,410 @@ DEMO_MODE=true
 
 ```bash
 cd backend
-python -m app.cli ingest              # uses the demo dataset, no OPENAQ_API_KEY needed
-python -m app.cli ingest-weather      # uses the demo dataset, no API key needed either
-python -m app.cli forecast
-# or, in one shot:
-python -m app.pipeline.run
+python -m app.pipeline.run     # or ingest / ingest-weather / forecast individually
 ```
 
-For running the whole thing without a live network connection or working
-API keys (hackathon judging, offline demos, CI). `DEMO_MODE=true`
-substitutes a fixed, deterministic PM2.5/wind dataset
-(`app.ingestion.demo`) for OpenAQ/Open-Meteo — **that is the only thing
-it changes**. Every stage after ingestion (H3 grid coverage, IDW
-interpolation, PDI, `DeterministicH3DispersionModel`,
-`AlertGenerationService`, persistence, the API) is the exact same code
-path as live mode, running for real against this synthetic input; there
-is no separate demo API response shape and no `if demo_mode` branch
-anywhere outside `app.ingestion.factory` (the single place that decides
-which provider to build — see its docstring).
+For running the whole thing with no live network connection and no API
+keys — hackathon judging, offline demos, CI. `DEMO_MODE=true` substitutes
+a fixed, deterministic PM2.5/wind dataset (`app.ingestion.demo`) for
+OpenAQ/Open-Meteo, chosen by `app.ingestion.factory` — **that is the
+only thing it changes.** Every stage after ingestion (H3 grid coverage,
+IDW interpolation, PDI, the dispersion model, alert generation,
+persistence, the API) is the exact same code path as live mode, running
+for real against this synthetic input. There is no separate demo API
+response shape, and no `if demo_mode` branch anywhere outside
+`app.ingestion.factory`.
 
 The scenario is a wildfire-smoke-scale PM2.5 hotspot (280 µg/m³,
 downtown San Francisco) with four lower background readings around it
 and a steady 6 m/s westerly wind, chosen so a pipeline run against it is
-guaranteed — with no non-default configuration required — to produce:
-a clearly visible hotspot, forecast values that visibly carry it
-downwind (east) with a consistent directional signature at +1h/+3h/+6h,
-and at least one CRITICAL alert (280 µg/m³ is comfortably past the
-default `ALERT_CRITICAL_THRESHOLD_UGM3=150.0`). See
-`backend/tests/test_demo_mode.py` for an end-to-end assertion of exactly
-this, run through the real services.
+guaranteed — with no non-default configuration — to produce a clearly
+visible hotspot, forecast values that visibly carry it downwind over
++1h/+3h/+6h, and at least one CRITICAL alert (280 is comfortably past the
+default `ALERT_CRITICAL_THRESHOLD_UGM3=150.0`). `backend/tests/test_demo_mode.py`
+asserts exactly this, running the real services.
 
-`DEMO_MODE` is unrelated to a response's `is_demo` flag (see
-"Configuration" above): `is_demo` means "the repository had nothing at
-all, so `app.services.demo_data`'s static illustrative fallback is being
-shown instead" — a Demo Mode pipeline run persists real, computed rows,
-so `is_demo` stays `false` for them, same as live mode.
+**`DEMO_MODE` is unrelated to a response's `is_demo` flag.** This is the
+single most likely point of confusion in the whole codebase, so it's
+worth stating plainly:
 
-## Alerts
+| | `DEMO_MODE=true` | `is_demo: true` in a response |
+|---|---|---|
+| What it is | An ingestion-time config flag | A per-response flag in the `Envelope` |
+| What it changes | Which provider fetches sensor/weather data | Whether the response is real persisted data or a static fallback |
+| Where it's decided | `app.ingestion.factory`, once, at ingestion time | Each service (`app/services/{sensors,weather,grid,cells,alerts}.py`), per request, by checking whether its repository query returned anything |
+| Effect on persisted data | Produces real, computed, persisted rows | N/A — nothing is persisted for the fallback |
+| Effect on `is_demo` | None — stays `false`, same as live mode | This flag itself |
 
-`app.services.alert_generation.AlertGenerationService` is a very small
-rule-based alert engine — **no machine learning**, every rule is a plain,
-configurable comparison. Rules run in priority order per cell; the first
-one that matches wins, so a cell gets at most one alert per pipeline run:
+## API overview
 
-1. **Threshold crossed now** — current PM2.5 at/above
-   `ALERT_WARNING_THRESHOLD_UGM3` / `ALERT_CRITICAL_THRESHOLD_UGM3` →
-   `WARNING` / `CRITICAL`.
-2. **Threshold crossed in the forecast** — no current exceedance, but
-   some forecast horizon reaches a threshold → `WATCH` (advance warning,
-   not an active condition — see below).
-3. **Sharp increase** — current-to-forecast PM2.5 jump of at least
-   `ALERT_SHARP_INCREASE_THRESHOLD_UGM3` at some horizon, independent of
-   whether either value alone crosses a threshold → `WATCH`.
-4. **High PDI + worsening forecast** — current PDI at/above
-   `ALERT_PDI_HIGH_THRESHOLD` *and* a forecast horizon at least
-   `ALERT_PDI_WORSENING_MIN_INCREASE_UGM3` above current PM2.5 (a milder
-   bar than rule 3, since already-high pressure makes even a modest
-   uptick worth flagging) → `WATCH`.
+Base path `/api/v1`, plus unversioned `/health` and `/health/ready`.
+Interactive docs at `/docs` once the API is running.
 
-Severity encodes **when** a condition is or will be true, not just how
-severe it is: only rule 1 can produce `WARNING`/`CRITICAL`; every other
-rule is `WATCH`, regardless of which threshold a forecast value happens
-to cross. A cell already exceeding a threshold *now* always takes
-priority over anything a forecast says about it. A cell with an alert
-already created within `ALERT_ACTIVE_LOOKBACK_HOURS` is skipped
-entirely, so a persistent condition doesn't spawn a new alert every run.
-
-Every `Alert` carries the context it was raised with — never fabricated,
-so any of these can be null:
-
-| Field | Meaning |
+| Endpoint | Returns |
 |---|---|
-| `current_pm25` | The cell's current estimate, or null if it had none |
-| `forecast_pm25` / `forecast_hours` | The forecast attached to this alert — the horizon that triggered it (rules 2-4), or the nearest available horizon as trend context (rule 1); null only if the cell had no forecast at all |
-| `confidence` | Confidence in whichever value triggered the alert — the current estimate's confidence for rule 1, that forecast horizon's confidence otherwise |
-| `forecast_time` | When the alerted condition itself occurs; null if it's already true now (rule 1) |
+| `GET /health` | Liveness — process up, never touches the DB |
+| `GET /health/ready` | Readiness — PostgreSQL reachable + PostGIS installed |
+| `GET /api/v1/sensors` | Latest reading per sensor |
+| `GET /api/v1/weather` | Latest weather per H3 cell |
+| `GET /api/v1/grid/current` | Current PM2.5 + PDI per cell |
+| `GET /api/v1/grid/forecast?hours=1\|3\|6` | Forecast PM2.5 per cell at that horizon |
+| `GET /api/v1/cells/{h3_cell}` | Current state + forecasts + weather for one cell (404 if no data at all, 422 if `h3_cell` isn't valid at the configured resolution) |
+| `GET /api/v1/alerts` | Alerts created within `ALERT_ACTIVE_LOOKBACK_HOURS` |
 
-Rules are configurable (`ALERT_*` env vars, see Configuration above) and
-isolated behind `AlertGenerationService` — nothing else in the codebase
-knows how a threshold is evaluated. `app.services.alerts.AlertService`
-(the `/alerts` read path) is a separate, unrelated class: it only reads
-whatever `Alert` rows exist, from this engine or anywhere else, and is
-exposed at `GET /api/v1/alerts` (see "API" above) and displayed in the
-frontend's alerts panel (see "Frontend" below). See
-`backend/tests/test_alert_generation_service.py` for every rule's tests.
+Every successful response is an **Envelope**:
 
-## Frontend
-
-```bash
-cd frontend
-npm ci             # exact versions from package-lock.json
-npm run dev        # dev server
-npm run build      # type-check + production build
-npm run lint       # oxlint
-npm run format     # prettier --write
+```json
+{
+  "generated_at": "2026-01-01T12:00:00Z",
+  "is_demo": false,
+  "data": [...]
+}
 ```
 
-A single full-screen MapLibre GL JS map (`src/components/MapPage.tsx`), one page, no router. H3 hex
-boundaries are computed client-side with `h3-js` from the plain `h3_cell` strings the API returns
-(there's no live GeoJSON endpoint — see `src/lib/h3Geometry.ts`) and colored by PM2.5 or the
-heuristic PDI (`src/lib/colorScales.ts`), switchable per the Now/+1h/+3h/+6h timeline. Wind is drawn
-as rotated arrow glyphs from `/api/v1/weather`. Clicking a hex opens a detail sidebar
-(`/api/v1/cells/{h3_cell}`); a collapsible panel shows `/api/v1/alerts`.
+`is_demo` is `true` only when the underlying repository query returned
+nothing and `app/services/demo_data.py`'s static illustrative values are
+shown instead — never mix real and fabricated values without this flag.
+See [Demo mode](#demo-mode) for how this differs from `DEMO_MODE`.
 
-`src/lib/api.ts` is the only module that calls `fetch` — every export in it maps to one documented
-backend endpoint and does no computation beyond typing the JSON. All pollution/forecast/PDI math
-stays server-side; the frontend only ever displays what the API returns. Shared UI state (selected
-timeline horizon, PDI toggle, selected cell) lives in a small `useReducer` + Context
-(`src/state/`) — deliberately not Redux, since it's three fields read by a handful of sibling
-components. Server data is *not* kept there: each component fetches what it needs via
-`src/hooks/useApiResource.ts`, a ~50-line hook covering loading/success/error/polling/retry (no
-data-fetching library). PDI's contributing-factor breakdown isn't in the API yet
-(`GridStateOut.pdi` is a bare number), so the cell detail panel says so rather than fabricating one.
+Every error response — a raised `HTTPException`, a request-validation
+failure, or an unhandled exception — is:
 
-## Notes
+```json
+{"error": {"code": "not_found", "message": "...", "details": [...]}}
+```
 
-- Docker Compose runs only `db` and `api`. The frontend runs on the host with
-  `npm run dev`, which hot-reloads faster than Vite inside Docker on Windows.
-- The `api` container waits for the Postgres healthcheck. Its own healthcheck
-  uses `/health/ready`, so `docker compose ps` shows it healthy only once
-  PostGIS is reachable.
-- Nothing writes automatically — `ingest`, `ingest-weather`, `forecast`,
-  and the full `python -m app.pipeline.run` are all manually triggered
-  (see "Full pipeline" above). Every `/api/v1/*` endpoint falls back to
-  deterministic demo data (`app/services/demo_data.py`) when its
-  repository query is empty — see `is_demo` in every response.
+(`details` is omitted when there's nothing extra to say). All routes are
+`GET`-only, unauthenticated, and CORS-restricted to `CORS_ORIGINS`.
+
+**Alerts in detail** — `AlertGenerationService` is a small rule-based
+engine (no ML). Rules run in priority order per cell; the first match
+wins, so a cell gets at most one alert per pipeline run:
+
+1. **Threshold crossed now** — current PM2.5 ≥ `ALERT_WARNING_THRESHOLD_UGM3`
+   / `ALERT_CRITICAL_THRESHOLD_UGM3` → `WARNING` / `CRITICAL`.
+2. **Threshold crossed in the forecast** — no current exceedance, but
+   some horizon reaches a threshold → `WATCH`.
+3. **Sharp increase** — current-to-forecast jump ≥
+   `ALERT_SHARP_INCREASE_THRESHOLD_UGM3` at some horizon → `WATCH`.
+4. **High PDI + worsening forecast** — current PDI ≥
+   `ALERT_PDI_HIGH_THRESHOLD` *and* a horizon at least
+   `ALERT_PDI_WORSENING_MIN_INCREASE_UGM3` above current → `WATCH`.
+
+Only rule 1 can produce `WARNING`/`CRITICAL`; every other rule is
+`WATCH` regardless of magnitude, since severity here encodes *when* a
+condition is true, not just how severe it is. A cell with an alert
+already created within `ALERT_ACTIVE_LOOKBACK_HOURS` is skipped, so a
+persistent condition doesn't spawn a new alert every run.
+
+## PDI: current definition and disclaimer
+
+> **PDI ("pollution pressure index") is a heuristic ranking/triage
+> score. It is NOT a scientifically exact measurement of net emissions,
+> a modeled pollutant budget, or a regulatory index.** Every place it's
+> surfaced — API docs, UI labels, this README — must say so.
+
+Current formula (`app.services.pdi.HeuristicPDIModel`, v0):
+
+```
+pdi = 100 * Σ(normalized_i * weight_i) / Σ|weight_i|      (over available factors i)
+```
+
+- Each factor is normalized to `[0, 1]` before blending: `pm25` by
+  dividing by `PDI_PM25_REFERENCE_UGM3` and clamping;
+  `road_pressure`/`industrial_pressure` are assumed pre-normalized by
+  whatever eventually produces them.
+- **Only `pm25` has a real data source today.** `road_pressure` and
+  `industrial_pressure` are already wired into the formula and default
+  to nonzero weights (`PDI_ROAD_PRESSURE_WEIGHT=0.2`,
+  `PDI_INDUSTRIAL_PRESSURE_WEIGHT=0.1`) even though nothing populates
+  them — so today's PDI is, in effect, entirely a rescaled function of
+  PM2.5 (`pdi ≈ 100 * clamp01(pm25 / 250)`), because only one factor is
+  ever present and the weights renormalize over whichever factors
+  actually show up for a cell.
+- A cell with **no** available factor (or every available factor
+  configured with zero weight) gets `pdi = None` — never a fabricated
+  score. `GridState.pdi` and the API's `GridStateOut.pdi` are both
+  nullable for exactly this reason.
+- The result is `0`–`100` today (only non-negative weights are
+  configured). A future negative-weighted "sink" factor (e.g.
+  precipitation washout reducing pressure) could push it toward `-100`
+  with no formula change — the math already supports it via `Σ|weight_i|`
+  in the denominator.
+- `PDIResult.factors` reports each factor's *normalized* `[0, 1]` value
+  (e.g. `{"pm25": 0.81}`), not its weighted contribution, so a caller/UI
+  can show which signals drove the score — though the API doesn't expose
+  this breakdown yet (`GridStateOut.pdi` is a bare number; the frontend's
+  cell detail panel says so rather than fabricating one).
+
+## Forecast model: current assumptions
+
+`app.services.dispersion.DeterministicH3DispersionModel` is **not an
+atmospheric chemistry simulator.** It's a deliberately simple,
+explainable box model:
+
+- Each H3 cell is treated as **well-mixed** — one PM2.5 value per cell,
+  no sub-cell structure, no vertical layers (`boundary_layer_height` is
+  ingested and stored but not currently used by the transport math
+  itself).
+- Every simulated hour, a cell's PM2.5 is reduced by a **removal
+  fraction** (baseline decay, boosted by precipitation) and the
+  remainder is split between "stays in this cell" and "transported to
+  immediate H3 neighbors," biased toward whichever neighbor(s) fall
+  within a cone around the wind's downwind bearing
+  (`DISPERSION_WIND_CONE_HALF_ANGLE_DEG`). It **redistributes and
+  removes existing pollution — there is no emissions term** (nothing is
+  ever added beyond what a `GridState` already had).
+- **Weather is held constant across the whole forecast horizon** — there
+  is no per-hour weather forecast feed. The same wind/precipitation
+  reading used for "now" is reused for the 1h, 3h, and 6h steps alike.
+  This is the model's single biggest known simplification.
+- **1h/3h/6h come from one run of the same hour-by-hour loop** — the 3h
+  result is the literal state after 3 of the same steps used to reach
+  6h, never a separate shortcut calculation, so the three horizons are
+  always mutually consistent with each other.
+- **Mass conservation is enforced structurally, not just intended:**
+  every coefficient is clamped to `[0, 1]`, and
+  `DISPERSION_MAX_TRANSPORT_FRACTION < 1` caps transport regardless of
+  wind speed — so total mass across the modeled grid can only decrease
+  or leave through an open domain boundary (tracked and reported as
+  `domain_outflow_by_hour`, a diagnostic), never increase, however
+  extreme the input.
+- **Confidence** propagates through the same transport as a mass-weighted
+  average, decays a flat multiplicative amount per hour
+  (`DISPERSION_CONFIDENCE_DECAY_PER_HOUR`), and takes an extra penalty
+  for any hour a cell had no matching weather reading.
+- A cell with **no** weather reading is still forecast — decay-only, at
+  a reduced confidence — rather than skipped or given fabricated wind.
+- A cell with **no PM2.5 estimate** that receives no inflow from any cell
+  that has one gets **no forecast row** at that horizon, rather than a
+  placeholder `0.0` that the map would draw as "Good" air. If no cell in
+  the region has evidence at all, `/grid/forecast` is empty and falls back
+  to the flagged demo data like any other endpoint.
+
+## Known limitations
+
+Grouped by area, more exhaustive than [MVP limitations](#mvp-limitations) above:
+
+**Data**
+- Single-source PM2.5 ingestion (OpenAQ only); no satellite, low-cost
+  sensor network, or citizen-report inputs exist yet.
+- IDW interpolation has no terrain, elevation, or urban-canyon awareness
+  — pure geographic distance only, with a hard-coded near-zero-distance
+  guard (a sensor within 10m of a cell center is used directly).
+- Weather is sampled at a single point in time per ingestion run and
+  held constant through the whole forecast horizon (see above).
+- `boundary_layer_height` is ingested (from Open-Meteo's hourly data)
+  but not used by any model computation yet.
+
+**Modeling**
+- PDI is a heuristic blend of one real factor (PM2.5) today — see
+  [PDI: current definition and disclaimer](#pdi-current-definition-and-disclaimer).
+- The dispersion model has no chemistry, no vertical mixing, and no
+  emissions term — see
+  [Forecast model: current assumptions](#forecast-model-current-assumptions).
+- The alert engine has no escalation/trend tracking across runs beyond
+  the active-lookback dedup window — a cell alerted once stays
+  unalerted for `ALERT_ACTIVE_LOOKBACK_HOURS` even if conditions worsen
+  further within that window.
+- No model is trained on data; every numeric behavior in this codebase
+  comes from a fixed, human-chosen formula and configurable constants.
+
+**Operations**
+- No scheduler — every stage is a manual CLI trigger.
+- No authentication, authorization, or rate limiting on the API.
+- No horizontal scaling story: one Postgres instance, one configured
+  region, no caching layer in front of repository reads.
+- Migrations are hand-maintained (`alembic/versions/0001_initial_schema.py`
+  mirrors `app/models/tables.py` by hand) since no live database has
+  been available to autogenerate against — any schema change needs a
+  developer to update both, and `test_migrations_offline.py` is what
+  catches drift between them.
+- `is_demo` fallback is evaluated independently per endpoint (see
+  [MVP limitations](#mvp-limitations)), so a caller polling multiple
+  endpoints can transiently see a mix of real and demo data while
+  ingestion is still catching up.
+
+## Future extension points
+
+Every item below is written against the actual current code — what
+already supports it, what doesn't, and where the real work would land.
+
+### Another pollutant (e.g. PM10, NO₂, O₃)
+
+Partially free today, partially a schema change. `sensor_reading.pollutant`
+is already a plain string column (`app.domain.types.PM25 = "pm25"` is
+just a constant, not a closed enum) — ingesting a second pollutant into
+`sensor_reading` needs no schema change, just a provider that sets
+`pollutant="pm10"` (etc.) on the `SensorReading`s it returns.
+
+The real work is downstream: `grid_state` (`pm25` column) and `forecast`
+(`predicted_pm25` column) are pollutant-*specific*, not long-format like
+`sensor_reading`. Estimating and forecasting a second pollutant means
+either (a) adding parallel columns per pollutant, which doesn't scale
+past 2-3 pollutants, or (b) migrating `grid_state`/`forecast` to a
+long-format `(h3_cell, timestamp, pollutant, value, confidence)` shape
+matching `sensor_reading`'s own pattern — the latter is a real migration
+plus updates to every repository, `GridComputationService`, and the API
+schemas (`GridStateOut`, `ForecastOut`), even though `PollutionEstimator`
+and `PollutionForecastModel`'s Protocol *signatures* wouldn't need to
+change (they're already generic over "a pollution field").
+
+### Another `PollutionDataProvider` (e.g. CPCB, a national network)
+
+The cheapest extension point in the codebase. Implement
+`app.domain.providers.PollutionDataProvider`
+(`async fetch_readings(bbox, *, since) -> list[SensorReading]`, raising
+`ProviderError` on failure) as a new class under `app/ingestion/` —
+follow `app/ingestion/openaq.py`'s shape, including using the shared
+retry policy in `app/ingestion/http.py`. Wire it into
+`app.ingestion.factory.build_pollution_provider` (currently a two-way
+live/demo branch; a third real source needs a small provider-selection
+setting there). `SensorIngestionService`, `GridComputationService`, and
+everything above them need zero changes.
+
+### Satellite data
+
+Different in kind from a station provider, not just another
+implementation of one. Satellite pollution products (e.g. Sentinel-5P)
+are gridded/raster, not point readings from named stations — forcing
+them through `SensorReading` (which models one physical station) would
+be a lossy fit. Two real paths:
+
+1. **Resample to virtual point readings** — turn satellite pixels within
+   the bbox into synthetic `SensorReading`s (one per pixel or per grid
+   cell), reusing `PollutionDataProvider` and every downstream stage
+   unchanged. Fast to build, loses the fact that a satellite pixel is a
+   very different kind of evidence than a calibrated ground station
+   (different uncertainty, different spatial support).
+2. **A real fusion step** — a new domain type (something like
+   `GriddedObservation`, distinct from `SensorReading`) and a new table,
+   feeding a new `PollutionEstimator` implementation that blends ground
+   stations (via IDW, as today) with satellite-derived priors. This is
+   the more honest approach and the one that scales to reasoning about
+   satellite data's actual error characteristics, but it's real new
+   design work, not a drop-in provider.
+
+### Road/industrial pressure data
+
+The most "already wired, just needs data" extension point in the app.
+`app.domain.pdi.CellContext` already has `road_pressure: float | None`
+and `industrial_pressure: float | None` fields, `HeuristicPDIModel`
+already blends them into the PDI formula with configurable weights
+(`PDI_ROAD_PRESSURE_WEIGHT`, `PDI_INDUSTRIAL_PRESSURE_WEIGHT`, both
+nonzero by default), and `PDIResult.factors` already reports them by
+name once present. All that's missing: a data source (e.g. OpenStreetMap
+road density, an industrial-facility registry) and code that computes a
+`[0, 1]`-normalized value per H3 cell from it, passed into the
+`CellContext` that `GridComputationService._with_pdi` builds (today it
+only passes `pm25`). **No change needed** to `HeuristicPDIModel`, the
+`PDIModel` Protocol, the PDI formula, or any caller of `calculate()`.
+
+### A better interpolation algorithm (Kriging, ML-based, etc.)
+
+Implement `app.domain.estimation.PollutionEstimator`
+(`estimate(grid, sensor_readings, *, timestamp) -> list[GridState]`,
+never fabricating a value where evidence is insufficient — see that
+Protocol's docstring) as a new class under `app/services/`, then
+construct `GridComputationService` with it instead of
+`IDWPollutionEstimator` at its one composition point
+(`app/pipeline/run.py`). Nothing about `GridComputationService`, PDI,
+the dispersion model, alerts, or the API needs to change.
+
+### A new PDI model
+
+Implement `app.domain.pdi.PDIModel` (`calculate(cell_context) ->
+PDIResult`) as a new class, and construct `GridComputationService` with
+it instead of `HeuristicPDIModel`. You can reuse `CellContext` as-is, add
+fields to it (e.g. a "sink" factor like precipitation washout with a
+negative weight — the current formula's `Σ|weight_i|` denominator
+already supports negative weights with no change), or design an entirely
+different scoring approach — the Protocol only constrains the
+input/output shape, not the math.
+
+### A better atmospheric model
+
+Implement `app.domain.dispersion.PollutionForecastModel`
+(`forecast(current_state, weather, hours, *, generated_at) ->
+ForecastResult`) and construct `ForecastingService` with it instead of
+`DeterministicH3DispersionModel`. Concrete upgrades this would unlock
+without touching anything else: a per-hour weather forecast feed instead
+of held-constant weather, true Gaussian-plume or CFD-based transport,
+vertical mixing using the `boundary_layer_height` data already being
+ingested, or multi-pollutant chemistry. `ForecastingService`,
+`AlertGenerationService`, and the API only ever depend on the `Forecast`
+domain type and the Protocol — none of them would need to change.
+
+### ML correction
+
+No single insertion point — depends on what's being corrected:
+
+- **Correcting interpolation output**: wrap or replace
+  `IDWPollutionEstimator` with a `PollutionEstimator` implementation that
+  runs IDW (or any estimator) and then applies a trained correction
+  model to its output before returning `GridState`s. Same Protocol, same
+  call site as ["a better interpolation algorithm"](#a-better-interpolation-algorithm-kriging-ml-based-etc) above.
+- **Correcting forecasts**: the same idea one layer up, as a
+  `PollutionForecastModel` implementation or a small post-processing
+  step between `ForecastingService.run()` and persistence.
+- **No training data exists yet.** Nothing in this codebase currently
+  joins a past `Forecast` (or `GridState`) against the `SensorReading`/
+  `GridState` that later turned out to be true for the same cell/time —
+  that join (a "predicted vs. actual" export or table) would need to be
+  built first, before any correction model has something to learn from.
+
+### Citizen reports
+
+Doesn't fit `SensorReading` cleanly as-is — `SensorReading` expects a
+numeric `pollutant`/`value`/`unit` from a named `source`, while a
+citizen report ("smells like smoke here," a photo, a symptom report) is
+subjective, often non-numeric, and unverified. Two reasonable shapes:
+
+1. If a report reduces to a number (e.g. a self-reported AQI category
+   mapped to a PM2.5 midpoint), model it as a `SensorReading` with
+   `source="citizen"` — it flows through the entire existing pipeline
+   for free, though `IDWPollutionEstimator` would weight it purely by
+   distance like any station, with no trust/reliability weighting
+   mechanism (none exists in this codebase today).
+2. Otherwise, treat it as a new signal — a `citizen_report` table
+   (location, free text, optional category, timestamp) feeding PDI as
+   another `CellContext` factor (alongside `road_pressure`/
+   `industrial_pressure`) rather than PM2.5 estimation directly, since a
+   subjective report is closer to a "pressure/concern" signal than a
+   calibrated measurement.
+
+Either way, adding the data path doesn't require changing anything
+already built. A real trust/moderation/spam-filtering layer would be new
+work with no existing pattern in this codebase to build on.
+
+### Federated learning
+
+The extension point furthest from anything currently built — worth
+saying plainly rather than implying it's a small step. This system today
+is a single-region, single-Postgres deployment with **no trained model
+and no training loop at all**: IDW and the dispersion model are
+fixed-formula, not learned parameters. Federated learning presupposes
+(a) a trainable model to federate in the first place (see
+["ML correction"](#ml-correction) above) and (b) a coordination
+mechanism (a parameter-aggregation server, communication rounds, secure
+aggregation) that doesn't exist anywhere in this repo and isn't implied
+by any current Protocol.
+
+The realistic path, in order: build an ML-based `PollutionEstimator` or
+`PollutionForecastModel` implementation first (this repo, per the
+extension points above); deploy multiple independent instances of this
+app (e.g. one per city, each with its own database — nothing here
+prevents that today, since each deployment is already self-contained);
+then build a *separate* training/aggregation service, outside this
+repo's current boundaries, that each deployment's ML model periodically
+exchanges parameter updates with — never raw `SensorReading` rows.
+Nothing in the current domain layer blocks this later, but nothing in it
+enables it either.
+
+---
+
+For design rationale behind any of the above — why IDW over Kriging for
+v1, why the dispersion model is a box model and not a full plume model,
+why PDI renormalizes over "available" factors instead of defaulting
+missing ones to zero, and the full method list for every service — see
+[`docs/architecture.md`](docs/architecture.md).
