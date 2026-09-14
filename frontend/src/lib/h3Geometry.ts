@@ -28,6 +28,25 @@ export const EMPTY_FEATURE_COLLECTION: FeatureCollection = {
   features: [],
 }
 
+// A cell's hexagon boundary is a pure function of its h3_cell string — it
+// never changes. The map polls /grid/current, /grid/forecast, and
+// /weather every 60s (see components/MapPage.tsx), and each poll tick
+// hands cellsToFeatureCollection the same ~1900 cells with only `value`
+// possibly different, so recomputing cellToBoundary (real trigonometry,
+// not a cheap lookup) for every cell on every tick is wasted work. This
+// cache is unbounded, which is fine here: the cell set is the fixed H3
+// grid covering one configured MVP region, not user-generated data.
+const boundaryCache = new Map<string, Position[]>()
+
+function boundaryFor(h3Cell: string): Position[] {
+  let boundary = boundaryCache.get(h3Cell)
+  if (!boundary) {
+    boundary = cellToBoundary(h3Cell, true) as Position[]
+    boundaryCache.set(h3Cell, boundary)
+  }
+  return boundary
+}
+
 /** One polygon feature per cell, with `h3_cell` and `value` properties for
  * MapLibre's data-driven styling and click handling. `value` is left as
  * `null` when the backend had no estimate for that cell — features with a
@@ -41,7 +60,7 @@ export function cellsToFeatureCollection(
     properties: { h3_cell: cell.h3Cell, value: cell.value },
     geometry: {
       type: 'Polygon',
-      coordinates: [cellToBoundary(cell.h3Cell, true) as Position[]],
+      coordinates: [boundaryFor(cell.h3Cell)],
     },
   }))
   return { type: 'FeatureCollection', features }

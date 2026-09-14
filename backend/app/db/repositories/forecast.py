@@ -26,19 +26,27 @@ def _row_to_domain(row: Row) -> Forecast:
     )
 
 
+def _values(forecast: Forecast) -> dict:
+    return {
+        "h3_cell": forecast.h3_cell,
+        "generated_at": forecast.generated_at,
+        "forecast_time": forecast.forecast_time,
+        "forecast_hours": forecast.forecast_hours,
+        "predicted_pm25": forecast.predicted_pm25,
+        "confidence": forecast.confidence,
+    }
+
+
 def _insert_stmt(forecast: Forecast) -> Insert:
-    return (
-        forecast_table.insert()
-        .values(
-            h3_cell=forecast.h3_cell,
-            generated_at=forecast.generated_at,
-            forecast_time=forecast.forecast_time,
-            forecast_hours=forecast.forecast_hours,
-            predicted_pm25=forecast.predicted_pm25,
-            confidence=forecast.confidence,
-        )
-        .returning(forecast_table)
-    )
+    return forecast_table.insert().values(**_values(forecast)).returning(forecast_table)
+
+
+def _insert_many_stmt(forecasts: list[Forecast]) -> Insert:
+    """One multi-row INSERT for the whole batch, instead of one round trip
+    (and one transaction commit) per forecast — see
+    ForecastRepository.add_many's docstring for why that matters here.
+    """
+    return forecast_table.insert().values([_values(f) for f in forecasts]).returning(forecast_table)
 
 
 def _list_for_cell_stmt(h3_cell: str, generated_after: datetime | None) -> Select:
@@ -97,6 +105,16 @@ class SqlForecastRepository:
         row = self._session.execute(_insert_stmt(forecast)).one()
         self._session.commit()
         return _row_to_domain(row)
+
+    def add_many(self, forecasts: list[Forecast]) -> list[Forecast]:
+        if not forecasts:
+            return []
+        resolution = get_settings().h3_resolution
+        for forecast in forecasts:
+            assert_valid_cell(forecast.h3_cell, resolution=resolution)
+        rows = self._session.execute(_insert_many_stmt(forecasts)).all()
+        self._session.commit()
+        return [_row_to_domain(row) for row in rows]
 
     def list_for_cell(
         self, h3_cell: str, *, generated_after: datetime | None = None

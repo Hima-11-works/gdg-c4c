@@ -62,6 +62,9 @@ class _AlwaysFailsForecastRepository:
     def add(self, forecast: Forecast) -> Forecast:
         raise RuntimeError("connection refused")
 
+    def add_many(self, forecasts: list[Forecast]) -> list[Forecast]:
+        raise RuntimeError("connection refused")
+
 
 def test_run_persists_every_forecast_the_model_produces() -> None:
     grid_repo = FakeGridStateRepository()
@@ -125,7 +128,10 @@ def test_run_reports_model_validation_failure_instead_of_raising() -> None:
     assert "bad hours" in result.errors[0]
 
 
-def test_run_reports_persistence_failure_and_keeps_the_partial_save_count() -> None:
+def test_run_reports_persistence_failure_and_saves_nothing() -> None:
+    # Persistence is one all-or-nothing add_many() call for the whole run
+    # (see app.services.forecasting), so a failure here saves zero
+    # forecasts rather than however many made it through a per-item loop.
     grid_repo = FakeGridStateRepository()
     grid_repo.upsert(_grid_state())
     model = _FakeModel(forecasts=[_forecast(1), _forecast(3), _forecast(6)])

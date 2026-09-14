@@ -71,22 +71,21 @@ class ForecastingService:
             logger.error("Forecasting aborted: %s", exc)
             return ForecastingResult(cells=len(current_state), errors=[str(exc)])
 
-        saved: list[Forecast] = []
         try:
-            for forecast in result.forecasts:
-                self._forecast_repository.add(forecast)
-                saved.append(forecast)
+            # One round trip for every (cell, horizon) forecast from this
+            # run instead of one insert (and one commit) per forecast —
+            # several thousand rows at the MVP's default settings,
+            # all-or-nothing in a single transaction rather than
+            # partially saved on failure.
+            saved = self._forecast_repository.add_many(result.forecasts)
         except Exception as exc:  # deliberately broad — see app.services.ingestion._persist_all
             logger.exception(
-                "Forecast pipeline: persistence failed after saving %d of %d forecast(s)",
-                len(saved),
+                "Forecast pipeline: persistence failed for all %d forecast(s)",
                 len(result.forecasts),
             )
             return ForecastingResult(
                 cells=len(current_state),
                 forecasts_generated=len(result.forecasts),
-                forecasts_saved=len(saved),
-                forecasts=saved,
                 domain_outflow_by_hour=result.domain_outflow_by_hour,
                 errors=[f"persistence failed: {exc!r}"],
             )

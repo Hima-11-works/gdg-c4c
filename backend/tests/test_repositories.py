@@ -251,6 +251,32 @@ def test_grid_state_upsert_updates_existing_row(db_session, cell: str) -> None:
     assert repo.get(cell, NOW) == result
 
 
+def test_grid_state_upsert_many_inserts_and_updates_in_one_round_trip(db_session) -> None:
+    repo = SqlGridStateRepository(db_session)
+    resolution = get_settings().h3_resolution
+    cell_a = h3.latlng_to_cell(37.7749, -122.4194, resolution)
+    cell_b = h3.latlng_to_cell(37.8044, -122.2712, resolution)
+
+    # cell_a already exists; cell_b is new — one upsert_many() call must
+    # handle both the insert and the update in a single statement.
+    repo.upsert(GridState(h3_cell=cell_a, timestamp=NOW, pm25=10.0, confidence=0.5))
+
+    saved = repo.upsert_many(
+        [
+            GridState(h3_cell=cell_a, timestamp=NOW, pm25=15.0, confidence=0.9),
+            GridState(h3_cell=cell_b, timestamp=NOW, pm25=20.0, confidence=0.6),
+        ]
+    )
+
+    assert {s.h3_cell: s.pm25 for s in saved} == {cell_a: 15.0, cell_b: 20.0}
+    assert repo.get(cell_a, NOW).pm25 == 15.0
+    assert repo.get(cell_b, NOW).pm25 == 20.0
+
+
+def test_grid_state_upsert_many_with_no_states_is_a_no_op(db_session) -> None:
+    assert SqlGridStateRepository(db_session).upsert_many([]) == []
+
+
 def test_grid_state_with_null_pollution_fields_round_trips(db_session, cell: str) -> None:
     """A cell with insufficient evidence (see app.services.estimation) has
     pm25/pdi/wind as None, not a fabricated value — the columns must
@@ -365,6 +391,32 @@ def test_forecast_duplicate_run_and_horizon_is_rejected(db_session, cell: str) -
 
     with pytest.raises(IntegrityError):
         repo.add(forecast)
+
+
+def test_forecast_add_many_persists_every_forecast_in_one_round_trip(db_session, cell: str) -> None:
+    repo = SqlForecastRepository(db_session)
+    forecasts = [
+        Forecast(
+            h3_cell=cell,
+            generated_at=NOW,
+            forecast_time=NOW + timedelta(hours=hours),
+            forecast_hours=hours,
+            predicted_pm25=10.0 + hours,
+            confidence=0.7,
+        )
+        for hours in (1, 3, 6)
+    ]
+
+    saved = repo.add_many(forecasts)
+
+    # A multi-row INSERT's RETURNING order isn't guaranteed, so compare as
+    # a set; latest_for_cell() does its own ORDER BY, so that one is exact.
+    assert {f.forecast_hours for f in saved} == {1, 3, 6}
+    assert [f.forecast_hours for f in repo.latest_for_cell(cell)] == [1, 3, 6]
+
+
+def test_forecast_add_many_with_no_forecasts_is_a_no_op(db_session) -> None:
+    assert SqlForecastRepository(db_session).add_many([]) == []
 
 
 def test_forecast_latest_for_horizon_returns_one_row_per_cell(db_session) -> None:

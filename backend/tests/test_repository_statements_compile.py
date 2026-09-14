@@ -120,6 +120,21 @@ def test_grid_state_statements() -> None:
     assert "ORDER BY grid_state.timestamp DESC" in latest_for_cell_sql
     assert "LIMIT" in latest_for_cell_sql
 
+    other_cell = h3.latlng_to_cell(37.8044, -122.2712, 8)
+    upsert_many_sql = _sql(
+        grid_state_repo._upsert_many_stmt(
+            [state, GridState(h3_cell=other_cell, timestamp=NOW, confidence=0.5)]
+        )
+    )
+    assert "INSERT INTO grid_state" in upsert_many_sql
+    assert "ON CONFLICT" in upsert_many_sql
+    assert "DO UPDATE SET" in upsert_many_sql
+    assert "SET h3_cell" not in upsert_many_sql
+    assert "SET timestamp" not in upsert_many_sql
+    # Both rows' values are present in one statement, not two.
+    assert upsert_many_sql.count("INSERT INTO grid_state") == 1
+    assert CELL in upsert_many_sql and other_cell in upsert_many_sql
+
 
 def test_forecast_statements() -> None:
     forecast = Forecast(
@@ -141,6 +156,18 @@ def test_forecast_statements() -> None:
     assert "JOIN" in horizon_sql
     assert "GROUP BY forecast.h3_cell" in horizon_sql
     assert horizon_sql.count("forecast.forecast_hours = 3") == 2  # subquery + join condition
+
+    second_forecast = Forecast(
+        h3_cell=CELL,
+        generated_at=NOW,
+        forecast_time=LATER,
+        forecast_hours=6,
+        predicted_pm25=9.0,
+        confidence=0.4,
+    )
+    insert_many_sql = _sql(forecast_repo._insert_many_stmt([forecast, second_forecast]))
+    assert insert_many_sql.count("INSERT INTO forecast") == 1  # one statement, not two
+    assert "RETURNING" in insert_many_sql
 
 
 def test_alert_statements() -> None:

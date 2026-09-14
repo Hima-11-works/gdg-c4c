@@ -28,8 +28,8 @@ def _row_to_domain(row: Row) -> GridState:
     )
 
 
-def _upsert_stmt(state: GridState) -> PgInsert:
-    values = {
+def _values(state: GridState) -> dict:
+    return {
         "h3_cell": state.h3_cell,
         "timestamp": state.timestamp,
         "pm25": state.pm25,
@@ -38,8 +38,28 @@ def _upsert_stmt(state: GridState) -> PgInsert:
         "wind_speed": state.wind_speed,
         "wind_direction": state.wind_direction,
     }
+
+
+_UPDATE_COLUMNS = ("pm25", "pdi", "confidence", "wind_speed", "wind_direction")
+
+
+def _upsert_stmt(state: GridState) -> PgInsert:
+    values = _values(state)
     stmt = pg_insert(grid_state_table).values(**values)
-    update_values = {k: v for k, v in values.items() if k not in ("h3_cell", "timestamp")}
+    update_values = {k: v for k, v in values.items() if k in _UPDATE_COLUMNS}
+    return stmt.on_conflict_do_update(
+        index_elements=[grid_state_table.c.h3_cell, grid_state_table.c.timestamp],
+        set_=update_values,
+    ).returning(grid_state_table)
+
+
+def _upsert_many_stmt(states: list[GridState]) -> PgInsert:
+    """One multi-row INSERT ... ON CONFLICT DO UPDATE for the whole batch,
+    instead of one round trip (and one transaction commit) per state — see
+    GridStateRepository.upsert_many's docstring for why that matters here.
+    """
+    stmt = pg_insert(grid_state_table).values([_values(state) for state in states])
+    update_values = {col: getattr(stmt.excluded, col) for col in _UPDATE_COLUMNS}
     return stmt.on_conflict_do_update(
         index_elements=[grid_state_table.c.h3_cell, grid_state_table.c.timestamp],
         set_=update_values,
@@ -81,6 +101,16 @@ class SqlGridStateRepository:
         row = self._session.execute(_upsert_stmt(state)).one()
         self._session.commit()
         return _row_to_domain(row)
+
+    def upsert_many(self, states: list[GridState]) -> list[GridState]:
+        if not states:
+            return []
+        resolution = get_settings().h3_resolution
+        for state in states:
+            assert_valid_cell(state.h3_cell, resolution=resolution)
+        rows = self._session.execute(_upsert_many_stmt(states)).all()
+        self._session.commit()
+        return [_row_to_domain(row) for row in rows]
 
     def get(self, h3_cell: str, timestamp: datetime) -> GridState | None:
         row = self._session.execute(_get_stmt(h3_cell, timestamp)).first()

@@ -80,6 +80,9 @@ class FakeGridStateRepository:
         self.states[(state.h3_cell, state.timestamp)] = state
         return state
 
+    def upsert_many(self, states: list[GridState]) -> list[GridState]:
+        return [self.upsert(state) for state in states]
+
     def get(self, h3_cell: str, timestamp: datetime) -> GridState | None:
         return self.states.get((h3_cell, timestamp))
 
@@ -103,6 +106,9 @@ class FakeForecastRepository:
     def add(self, forecast: Forecast) -> Forecast:
         self.forecasts.append(forecast)
         return forecast
+
+    def add_many(self, forecasts: list[Forecast]) -> list[Forecast]:
+        return [self.add(forecast) for forecast in forecasts]
 
     def list_for_cell(
         self, h3_cell: str, *, generated_after: datetime | None = None

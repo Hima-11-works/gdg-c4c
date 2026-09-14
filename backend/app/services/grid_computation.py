@@ -92,22 +92,19 @@ class GridComputationService:
                 errors=[f"PDI calculation failed: {exc!r}"],
             )
 
-        saved: list[GridState] = []
         try:
-            for state in finalized:
-                self._grid_repository.upsert(state)
-                saved.append(state)
+            # One round trip for the whole region instead of one upsert
+            # (and one commit) per cell — a few thousand rows at the MVP's
+            # default H3 resolution, all-or-nothing in a single
+            # transaction rather than partially saved on failure.
+            saved = self._grid_repository.upsert_many(finalized)
         except Exception as exc:  # deliberately broad, same reasoning
             logger.exception(
-                "Grid computation: persistence failed after saving %d of %d cell(s)",
-                len(saved),
-                len(finalized),
+                "Grid computation: persistence failed for all %d cell(s)", len(finalized)
             )
             return GridComputationResult(
                 cells=len(grid),
                 sensors_used=len(sensor_readings),
-                cells_saved=len(saved),
-                states=saved,
                 errors=[f"persistence failed: {exc!r}"],
             )
 

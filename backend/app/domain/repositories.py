@@ -57,6 +57,14 @@ class WeatherReadingRepository(Protocol):
 class GridStateRepository(Protocol):
     def upsert(self, state: GridState) -> GridState: ...
 
+    def upsert_many(self, states: list[GridState]) -> list[GridState]:
+        """Same effect as calling upsert() once per state, but as one
+        round trip and one transaction. app.services.grid_computation
+        upserts every cell in the configured region on each run (a few
+        thousand rows at the MVP's default H3 resolution) — see that
+        module for why a per-cell loop there was worth avoiding."""
+        ...
+
     def get(self, h3_cell: str, timestamp: datetime) -> GridState | None: ...
 
     def latest(self) -> list[GridState]:
@@ -68,6 +76,13 @@ class GridStateRepository(Protocol):
 
 class ForecastRepository(Protocol):
     def add(self, forecast: Forecast) -> Forecast: ...
+
+    def add_many(self, forecasts: list[Forecast]) -> list[Forecast]:
+        """Same effect as calling add() once per forecast, but as one
+        round trip and one transaction. app.services.forecasting persists
+        every (cell, horizon) forecast from one run together — several
+        thousand rows at the MVP's default settings."""
+        ...
 
     def list_for_cell(
         self, h3_cell: str, *, generated_after: datetime | None = None

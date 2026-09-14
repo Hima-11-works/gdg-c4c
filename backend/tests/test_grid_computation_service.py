@@ -72,6 +72,9 @@ class _AlwaysFailsGridStateRepository:
     def upsert(self, state):
         raise RuntimeError("connection refused")
 
+    def upsert_many(self, states):
+        raise RuntimeError("connection refused")
+
     def get(self, h3_cell, timestamp):
         raise NotImplementedError
 
@@ -178,7 +181,10 @@ def test_run_reports_pdi_failure_instead_of_raising() -> None:
     assert "boom" in result.errors[0]
 
 
-def test_run_reports_persistence_failure_and_keeps_partial_save_count() -> None:
+def test_run_reports_persistence_failure_and_saves_nothing() -> None:
+    # Persistence is one all-or-nothing upsert_many() call for the whole
+    # region (see app.services.grid_computation), so a failure here saves
+    # zero cells rather than however many made it through a per-cell loop.
     service = GridComputationService(
         _FakeEstimator(),
         _FakePDIModel(),
