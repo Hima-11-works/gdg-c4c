@@ -15,25 +15,26 @@ focused on what exists and how to run it.
 ## Table of contents
 
 1. [What this project does](#what-this-project-does)
-2. [MVP limitations](#mvp-limitations)
-3. [Architecture](#architecture)
-4. [Repository structure](#repository-structure)
-5. [Data flow](#data-flow)
-6. [Requirements](#requirements)
-7. [Environment variables](#environment-variables)
-8. [Local installation](#local-installation)
-9. [Docker startup](#docker-startup)
-10. [Database migrations](#database-migrations)
-11. [Running ingestion](#running-ingestion)
-12. [Running the complete pipeline](#running-the-complete-pipeline)
-13. [Running the backend and frontend](#running-the-backend-and-frontend)
-14. [Running tests](#running-tests)
-15. [Demo mode](#demo-mode)
-16. [API overview](#api-overview)
-17. [PDI: current definition and disclaimer](#pdi-current-definition-and-disclaimer)
-18. [Forecast model: current assumptions](#forecast-model-current-assumptions)
-19. [Known limitations](#known-limitations)
-20. [Future extension points](#future-extension-points)
+2. [Quick start: step by step](#quick-start-step-by-step)
+3. [MVP limitations](#mvp-limitations)
+4. [Architecture](#architecture)
+5. [Repository structure](#repository-structure)
+6. [Data flow](#data-flow)
+7. [Requirements](#requirements)
+8. [Environment variables](#environment-variables)
+9. [Local installation](#local-installation)
+10. [Docker startup](#docker-startup)
+11. [Database migrations](#database-migrations)
+12. [Running ingestion](#running-ingestion)
+13. [Running the complete pipeline](#running-the-complete-pipeline)
+14. [Running the backend and frontend](#running-the-backend-and-frontend)
+15. [Running tests](#running-tests)
+16. [Demo mode](#demo-mode)
+17. [API overview](#api-overview)
+18. [PDI: current definition and disclaimer](#pdi-current-definition-and-disclaimer)
+19. [Forecast model: current assumptions](#forecast-model-current-assumptions)
+20. [Known limitations](#known-limitations)
+21. [Future extension points](#future-extension-points)
 
 ## What this project does
 
@@ -58,6 +59,126 @@ Given a bounding-box region, the platform:
 Every step above is a manual trigger today (`python -m app.cli ...` or
 `python -m app.pipeline.run`) — there is no scheduler yet. See
 [MVP limitations](#mvp-limitations) and [Known limitations](#known-limitations).
+
+## Quick start: step by step
+
+The fastest way to see the whole thing running is **Demo Mode**: no API
+keys, no live network dependency, and a guaranteed pollution hotspot with
+forecasts and alerts (see [Demo mode](#demo-mode)). Every step below links
+to the fuller reference section if you want more detail on it.
+
+**1. Get the code and create config files.**
+
+```bash
+git clone <this repo's URL>
+cd gdg-c4c
+./scripts/bootstrap.sh   # copies .env.example -> .env, frontend/.env.example -> frontend/.env
+```
+
+No `bash` available? Copy `.env.example` to `.env` and
+`frontend/.env.example` to `frontend/.env` by hand.
+
+**2. Edit `.env`** (repo root): set `POSTGRES_PASSWORD` to any password,
+and set `DEMO_MODE=true`. Leave `OPENAQ_API_KEY` blank for now — Demo
+Mode doesn't need it.
+
+Now pick **A** (you have Docker — recommended) or **B** (you don't).
+
+### A) With Docker
+
+**3.** Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) and start it.
+
+**4.** Start the database and API:
+```bash
+docker compose up --build
+```
+Wait for `Uvicorn running` in the log — migrations run automatically
+(see [Docker startup](#docker-startup)). Leave this terminal open.
+
+**5.** In a **second terminal**, load data:
+```bash
+docker compose exec api python -m app.pipeline.run
+```
+All five stages should print `[OK  ]` (see
+[Running the complete pipeline](#running-the-complete-pipeline)).
+
+**6.** In a **third terminal**, start the frontend:
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+### B) Without Docker
+
+**3.** Install PostgreSQL 16 with the PostGIS extension (on Windows: the
+[EDB installer](https://www.postgresql.org/download/windows/), then run
+Stack Builder and add PostGIS under Spatial Extensions).
+
+**4.** Create the database and enable PostGIS, matching whatever
+`POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB` you put in `.env`:
+```sql
+CREATE USER pollution WITH PASSWORD '...';
+CREATE DATABASE pollution OWNER pollution;
+\c pollution
+CREATE EXTENSION postgis;
+```
+
+**5.** Set up and start the backend (see
+[Running the backend and frontend](#running-the-backend-and-frontend) and
+[Database migrations](#database-migrations) for more on these commands):
+```bash
+cd backend
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
+alembic upgrade head
+python -m app.pipeline.run       # loads data — all 5 stages should print [OK  ]
+uvicorn app.main:app --reload    # leave this running
+```
+
+**6.** In a **second terminal**, start the frontend:
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+### 7. Open the app
+
+**http://localhost:5173.** You should see PM2.5-colored hexagons over
+San Francisco with a hotspot downtown and blue wind arrows. Check
+**Show PDI layer** to switch to the pressure score; click **+1h / +3h /
++6h** to watch the hotspot fade and drift east with the wind; click a
+hexagon to open its detail panel (PM2.5, PDI, wind, forecast,
+confidence); **Alerts** (top right) lists what the rule engine raised.
+
+Also useful: **http://localhost:8000/docs** (interactive API reference)
+and **http://localhost:8000/health/ready** (confirms the database
+connection — see [API overview](#api-overview)).
+
+### Switching to live data later
+
+1. Get a free key at [explore.openaq.org/register](https://explore.openaq.org/register).
+2. In `.env`, set `DEMO_MODE=false` and `OPENAQ_API_KEY=<your key>`.
+3. Re-run the pipeline (step 5 above). **No frontend changes are
+   needed** — see the comparison table in [Demo mode](#demo-mode).
+
+Sensor/weather readings from the previous mode stay in use for up to
+`INGEST_MAX_READING_AGE_HOURS` (default 3h) after switching, since
+they're not stale yet. To switch cleanly, clear the tables first:
+```sql
+TRUNCATE sensor_reading, weather_reading, grid_state, forecast, alert;
+```
+
+### Running the tests (optional)
+
+```bash
+cd backend && pytest                          # no database needed
+cd ../frontend && npm run build && npm run lint
+```
+See [Running tests](#running-tests) for the full picture, including the
+real-PostgreSQL suite (`RUN_DB_TESTS=1`).
 
 ## MVP limitations
 
