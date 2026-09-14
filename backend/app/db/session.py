@@ -23,7 +23,13 @@ def get_engine() -> Engine:
         _engine = create_engine(
             get_settings().database_url,
             pool_pre_ping=True,
-            connect_args={"connect_timeout": CONNECT_TIMEOUT_SECONDS},
+            connect_args={
+                "connect_timeout": CONNECT_TIMEOUT_SECONDS,
+                # timestamptz values come back in the session's timezone, and
+                # app.domain.types rejects anything but UTC — without this, a
+                # server whose default timezone isn't UTC fails every read.
+                "options": "-c timezone=UTC",
+            },
         )
     return _engine
 

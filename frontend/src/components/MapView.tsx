@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
-import { GeoJSONSource, Map as MapLibreMap, NavigationControl } from 'maplibre-gl'
+import { GeoJSONSource, Map as MapLibreMap, NavigationControl, setWorkerUrl } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
+import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
+
+// MapLibre derives its worker URL at runtime from a variable filename, which
+// neither Vite's dev pre-bundler nor the production build can see — without
+// this the worker 404s and the map never renders. `?worker&url` makes Vite
+// bundle the worker (with its shared chunk) and hand back a real URL.
+setWorkerUrl(maplibreWorkerUrl)
 import { colorScaleExpression, PDI_COLOR_SCALE, PM25_COLOR_SCALE } from '../lib/colorScales'
 import {
   cellsToFeatureCollection,
@@ -24,6 +31,33 @@ const SOURCE_PDI = 'cells-pdi'
 const LAYER_PDI_FILL = 'cells-pdi-fill'
 const SOURCE_WIND = 'wind-points'
 const LAYER_WIND = 'wind-arrows'
+const WIND_ARROW_IMAGE = 'wind-arrow'
+
+/** A north-pointing arrow drawn on a canvas; the layer rotates it to the
+ * downwind bearing. */
+function windArrowImage(): ImageData {
+  const size = 32
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const ctx = canvas.getContext('2d')!
+  ctx.beginPath()
+  ctx.moveTo(16, 2)
+  ctx.lineTo(27, 16)
+  ctx.lineTo(20, 16)
+  ctx.lineTo(20, 30)
+  ctx.lineTo(12, 30)
+  ctx.lineTo(12, 16)
+  ctx.lineTo(5, 16)
+  ctx.closePath()
+  ctx.lineJoin = 'round'
+  ctx.lineWidth = 3
+  ctx.strokeStyle = '#ffffff'
+  ctx.stroke()
+  ctx.fillStyle = '#1d4ed8'
+  ctx.fill()
+  return ctx.getImageData(0, 0, size, size)
+}
 
 interface MapViewProps {
   currentGrid: AsyncResource<GridStateOut[]>
@@ -54,7 +88,7 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
       zoom: INITIAL_ZOOM,
     })
     mapRef.current = map
-    map.addControl(new NavigationControl({ showCompass: false }), 'top-right')
+    map.addControl(new NavigationControl({ showCompass: false }), 'bottom-right')
 
     map.on('load', () => {
       map.addSource(SOURCE_PM25, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
@@ -87,22 +121,21 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
       })
 
       map.addSource(SOURCE_WIND, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+      // An image icon rather than a '↑' text glyph: the basemap's glyph
+      // server has no arrow characters, so a text arrow silently renders
+      // nothing.
+      map.addImage(WIND_ARROW_IMAGE, windArrowImage())
       map.addLayer({
         id: LAYER_WIND,
         type: 'symbol',
         source: SOURCE_WIND,
         layout: {
-          'text-field': '↑',
-          'text-rotate': ['get', 'rotation'],
-          'text-rotation-alignment': 'map',
-          'text-allow-overlap': true,
-          'text-ignore-placement': true,
-          'text-size': ['interpolate', ['linear'], ['get', 'wind_speed'], 0, 12, 15, 26],
-        },
-        paint: {
-          'text-color': '#1d4ed8',
-          'text-halo-color': '#ffffff',
-          'text-halo-width': 1.5,
+          'icon-image': WIND_ARROW_IMAGE,
+          'icon-rotate': ['get', 'rotation'],
+          'icon-rotation-alignment': 'map',
+          'icon-allow-overlap': true,
+          'icon-ignore-placement': true,
+          'icon-size': ['interpolate', ['linear'], ['get', 'wind_speed'], 0, 0.5, 15, 1.1],
         },
       })
 

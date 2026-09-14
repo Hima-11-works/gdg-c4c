@@ -152,7 +152,9 @@ def test_weather_reading_round_trip_and_latest_for_cell(db_session, cell: str) -
 
     assert saved.id is not None
     assert repo.latest_for_cell(cell) == saved
-    assert repo.latest_for_cell("8828308281fffff") != saved  # different cell
+    other_cell = h3.latlng_to_cell(37.8044, -122.2712, get_settings().h3_resolution)
+    assert other_cell != cell
+    assert repo.latest_for_cell(other_cell) is None
 
 
 def test_weather_reading_duplicate_identity_is_rejected(db_session, cell: str) -> None:
@@ -354,7 +356,9 @@ def test_grid_state_latest_for_cell_returns_most_recent_row(db_session, cell: st
 
     assert result is not None
     assert result.timestamp == later
-    assert repo.latest_for_cell("8828308281fffff") is None
+    other_cell = h3.latlng_to_cell(37.8044, -122.2712, get_settings().h3_resolution)
+    assert other_cell != cell
+    assert repo.latest_for_cell(other_cell) is None
 
 
 def test_forecast_round_trip_and_latest_for_cell(db_session, cell: str) -> None:

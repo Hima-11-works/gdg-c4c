@@ -207,6 +207,7 @@ class DeterministicH3DispersionModel:
         weather_by_cell = {reading.h3_cell: reading for reading in weather}
 
         pm25 = {state.h3_cell: (state.pm25 or 0.0) for state in current_state}
+        unestimated = {state.h3_cell for state in current_state if state.pm25 is None}
         confidence = {state.h3_cell: state.confidence for state in current_state}
         coefficients = {
             cell: self._coefficients_for(cell, weather_by_cell.get(cell)) for cell in cells
@@ -222,6 +223,11 @@ class DeterministicH3DispersionModel:
 
             if hour in horizons:
                 forecast_time = generated_at + timedelta(hours=hour)
+                # A cell that started with no estimate and still holds exactly
+                # 0.0 has received no inflow from any cell with evidence: its
+                # value is the `or 0.0` placeholder above, not a prediction,
+                # and publishing it would show "clean air" where the truth is
+                # "unknown". (A real 0.0 estimate is still published.)
                 forecasts.extend(
                     Forecast(
                         h3_cell=cell,
@@ -232,6 +238,7 @@ class DeterministicH3DispersionModel:
                         confidence=confidence[cell],
                     )
                     for cell in cells
+                    if not (cell in unestimated and pm25[cell] == 0.0)
                 )
 
         return ForecastResult(

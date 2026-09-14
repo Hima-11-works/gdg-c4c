@@ -436,6 +436,21 @@ def test_none_pm25_seed_cell_can_receive_nonzero_inflow() -> None:
     assert 0.0 < _confidence_by_cell(result, 1)[downwind] <= 1.0
 
 
+def test_cell_with_no_evidence_at_all_gets_no_forecast_rather_than_zero() -> None:
+    """A null-PM2.5, zero-confidence cell that nothing flows into must not be
+    published as predicted_pm25=0.0 — that would render as "Good" air
+    where the honest answer is "no estimate"."""
+    no_evidence = RING[0]
+    grid = [_state(CENTER, 80.0, confidence=1.0), _state(no_evidence, None, confidence=0.0)]
+    calm = [_weather(cell, wind_speed=0.0, wind_direction=0.0) for cell in (CENTER, no_evidence)]
+
+    result = _model().forecast(grid, calm, hours=(1, 3, 6), generated_at=GENERATED_AT)
+
+    for hours in (1, 3, 6):
+        assert no_evidence not in _by_cell(result, hours)
+        assert _by_cell(result, hours)[CENTER] > 0
+
+
 # --- confidence ---
 
 

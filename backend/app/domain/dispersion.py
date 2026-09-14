@@ -25,7 +25,9 @@ class ForecastResult:
 
     `forecasts` holds one Forecast per (cell, requested horizon) pair —
     cells come from `current_state`, horizons from the `hours` argument
-    passed to `forecast()`.
+    passed to `forecast()` — except cells that had no PM2.5 estimate of
+    their own and received no inflow from any cell that did by that
+    horizon, which are omitted rather than published as a placeholder 0.0.
 
     `domain_outflow_by_hour` is a diagnostic, not a modeling input: the
     total PM2.5 that left the tracked grid at each simulated hour

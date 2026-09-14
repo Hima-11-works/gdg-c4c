@@ -60,6 +60,12 @@ export function AlertsPanel() {
             </p>
           )}
 
+          {resource.status === 'success' && resource.isDemo && (
+            <p className="banner banner-demo" role="status">
+              Demo data — illustrative, not measured.
+            </p>
+          )}
+
           {resource.status === 'success' && resource.data.length === 0 && <p>No active alerts.</p>}
 
           {resource.status === 'success' &&
