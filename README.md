@@ -550,7 +550,7 @@ in `app/models/tables.py` — five tables: `sensor_reading`,
 `weather_reading`, `grid_state`, `forecast`, `alert`. It is mirrored **by
 hand** across `alembic/versions/` (`0001_initial_schema.py`'s `CREATE
 TABLE`s, plus one `ALTER TABLE` migration per schema change since —
-`0002_weather_temperature_humidity.py` is the first); there is a test
+`0002_weather_temp_humidity.py` is the first); there is a test
 (`backend/tests/test_migrations_offline.py`) that asserts the *combined*
 DDL of the whole migration chain and the live table metadata agree
 column-for-column and constraint-for-constraint, specifically because
@@ -568,10 +568,14 @@ became a no-op against it (a database already at revision `0001`
 doesn't re-run `0001`, edited or not), leaving `weather_reading` missing
 columns the rest of the app assumed existed
 (`column "temperature" of relation "weather_reading" does not exist`).
-`0002_weather_temperature_humidity.py` is both the fix for that specific
+`0002_weather_temp_humidity.py` is both the fix for that specific
 column and the template for every migration after it: run `alembic
 upgrade head` (`docker compose exec api alembic upgrade head` under
 Docker) against an existing database to pick up new migrations like it.
+Keep every revision id at or under 32 characters — alembic's own
+`alembic_version.version_num` column is `VARCHAR(32)`, and a longer id
+fails on the final `UPDATE alembic_version` step with
+`StringDataRightTruncation`, rolling back the whole migration.
 
 Only `app/db/repositories/*.py` builds SQL against these tables directly;
 everything above `app/db` depends on the `app.domain.repositories`

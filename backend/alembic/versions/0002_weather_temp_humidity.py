@@ -9,7 +9,16 @@ error, this is the migration that fixes it — run
 `alembic upgrade head` (or `docker compose exec api alembic upgrade
 head`) against your existing database.
 
-Revision ID: 0002_weather_temperature_humidity
+Revision id is deliberately abbreviated to "weather_temp_humidity"
+rather than the fuller "weather_temperature_humidity": alembic's
+built-in `alembic_version.version_num` column is `VARCHAR(32)` and
+does not stretch to fit a longer id — a revision id over 32 characters
+fails with `psycopg.errors.StringDataRightTruncation` on the final
+`UPDATE alembic_version` of the upgrade, inside the same transaction
+as the rest of the migration, so the column adds above roll back too.
+Every future revision id must stay at or under 32 characters.
+
+Revision ID: 0002_weather_temp_humidity
 Revises: 0001_initial_schema
 Create Date: 2026-09-15
 """
@@ -22,7 +31,7 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "0002_weather_temperature_humidity"
+revision: str = "0002_weather_temp_humidity"
 down_revision: str | None = "0001_initial_schema"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

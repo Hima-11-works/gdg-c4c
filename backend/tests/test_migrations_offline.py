@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.schema import CreateTable
 
@@ -18,6 +19,12 @@ from alembic import command
 from app.models.tables import metadata
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
+
+# alembic_version.version_num is VARCHAR(32), a width alembic itself
+# defines and this project cannot configure — see
+# 0002_weather_temp_humidity.py's docstring for how a longer revision id
+# fails, and only on the final step of the migration.
+ALEMBIC_VERSION_NUM_MAX_LENGTH = 32
 
 
 def _run_offline_upgrade(capsys) -> str:
@@ -36,7 +43,7 @@ def _table_bodies(ddl: str) -> dict[str, set[str]]:
 
     Also folds in `ALTER TABLE ... ADD COLUMN ...` / `ADD CONSTRAINT ...`
     statements from any migration layered on top of the table's initial
-    `CREATE TABLE` (e.g. 0002_weather_temperature_humidity) — a real
+    `CREATE TABLE` (e.g. 0002_weather_temp_humidity) — a real
     multi-migration table's full current shape is CREATE plus every
     later ALTER, not just its first migration, and the whole point of
     this comparison is catching the ADD COLUMN itself, not the table it
@@ -66,6 +73,26 @@ def test_initial_migration_generates_expected_ddl(capsys) -> None:
     assert "GIST" in output.upper()
 
 
+def test_revision_ids_fit_the_alembic_version_column() -> None:
+    """A revision id over 32 characters fails on the final `UPDATE
+    alembic_version` step of `alembic upgrade head` with
+    `psycopg.errors.StringDataRightTruncation`, rolling back the whole
+    migration in the same transaction (transactional DDL) — exactly
+    what happened when 0002 first shipped as
+    `0002_weather_temperature_humidity` (33 characters), before being
+    shortened to `0002_weather_temp_humidity` (26 characters).
+    """
+    cfg = Config(str(BACKEND_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    script_dir = ScriptDirectory.from_config(cfg)
+
+    for script in script_dir.walk_revisions():
+        assert len(script.revision) <= ALEMBIC_VERSION_NUM_MAX_LENGTH, (
+            f"{script.revision!r} is {len(script.revision)} chars, over the "
+            f"{ALEMBIC_VERSION_NUM_MAX_LENGTH}-char alembic_version.version_num limit"
+        )
+
+
 def test_migration_columns_and_constraints_match_the_models_exactly(capsys) -> None:
     """Every migration is hand-written — there is no live database to
     autogenerate one against when a new migration is added — so nothing
@@ -75,7 +102,7 @@ def test_migration_columns_and_constraints_match_the_models_exactly(capsys) -> N
     Column-by-column, constraint-by-constraint, catching a drift here
     (test failure) beats catching it the first time a real migration
     runs against a real database with a mismatched schema — which is
-    exactly how 0002_weather_temperature_humidity came to exist:
+    exactly how 0002_weather_temp_humidity came to exist:
     0001 was edited in place to add temperature/humidity while no real
     database existed yet to run it against, which silently stopped
     working the moment one did (`alembic upgrade head` is a no-op once a

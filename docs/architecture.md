@@ -106,9 +106,11 @@ All tables live in `app/models/tables.py` (the schema's reference
 definition) and `alembic/versions/*.py` — `0001_initial_schema.py`'s
 `CREATE TABLE`s plus one `ALTER TABLE` migration per schema change since
 (hand-written to match `tables.py` — see that file's docstring for why
-there's no autogenerate here, and `0002_weather_temperature_humidity.py`'s
+there's no autogenerate here, and `0002_weather_temp_humidity.py`'s
 docstring for why a schema change is always a *new* migration, never an
-edit to an old one, once a real database might exist at that revision).
+edit to an old one, once a real database might exist at that revision —
+and for why every revision id must stay at or under 32 characters,
+alembic's own `alembic_version.version_num` column width).
 Timestamps are always `timestamptz`, written and read as UTC; the app layer
 rejects naive or non-UTC datetimes before they ever reach SQL
 (`app.domain.types._require_utc`).
