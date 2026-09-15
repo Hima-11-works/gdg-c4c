@@ -33,11 +33,26 @@ def _table_bodies(ddl: str) -> dict[str, set[str]]:
     CreateTable compile — normalized (whitespace-stripped, trailing comma
     dropped) and order-independent, since declaration order affects
     neither correctness nor what a database actually enforces.
+
+    Also folds in `ALTER TABLE ... ADD COLUMN ...` / `ADD CONSTRAINT ...`
+    statements from any migration layered on top of the table's initial
+    `CREATE TABLE` (e.g. 0002_weather_temperature_humidity) — a real
+    multi-migration table's full current shape is CREATE plus every
+    later ALTER, not just its first migration, and the whole point of
+    this comparison is catching the ADD COLUMN itself, not the table it
+    started as. `ADD COLUMN col TYPE` normalizes to the same `col TYPE`
+    string a CreateTable column clause would use; `ADD CONSTRAINT name
+    CHECK (...)` to the same `CONSTRAINT name CHECK (...)` a CreateTable
+    constraint clause would use — see this module's own comment above
+    each assertion that relies on that equivalence.
     """
     bodies: dict[str, set[str]] = {}
     for match in re.finditer(r"CREATE TABLE (\w+) \((.*?)\n\)", ddl, re.DOTALL):
         name, body = match.group(1), match.group(2)
         bodies[name] = {line.strip().rstrip(",") for line in body.splitlines() if line.strip()}
+    for match in re.finditer(r"ALTER TABLE (\w+) ADD (?:COLUMN )?(.+?);", ddl):
+        name, clause = match.group(1), match.group(2).strip()
+        bodies.setdefault(name, set()).add(clause)
     return bodies
 
 
@@ -52,13 +67,21 @@ def test_initial_migration_generates_expected_ddl(capsys) -> None:
 
 
 def test_migration_columns_and_constraints_match_the_models_exactly(capsys) -> None:
-    """0001_initial_schema.py is hand-maintained — there is no live
-    database to autogenerate a migration against (see that file's own
-    docstring) — so nothing stops it silently drifting from
+    """Every migration is hand-written — there is no live database to
+    autogenerate one against when a new migration is added — so nothing
+    stops the *combined* effect of the whole chain (0001's CREATE TABLE
+    plus every later ALTER TABLE) silently drifting from
     app.models.tables as columns/constraints are added across turns.
     Column-by-column, constraint-by-constraint, catching a drift here
     (test failure) beats catching it the first time a real migration
-    runs against a real database with a mismatched schema.
+    runs against a real database with a mismatched schema — which is
+    exactly how 0002_weather_temperature_humidity came to exist:
+    0001 was edited in place to add temperature/humidity while no real
+    database existed yet to run it against, which silently stopped
+    working the moment one did (`alembic upgrade head` is a no-op once a
+    database already thinks it's at head). A later migration is the
+    right fix for an already-deployed schema; editing an old one in
+    place is not.
     """
     migration_tables = _table_bodies(_run_offline_upgrade(capsys))
     dialect = postgresql.dialect()

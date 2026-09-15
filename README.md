@@ -314,7 +314,7 @@ which one ran.
 ├─ .env.example                # copy to .env
 ├─ backend/
 │  ├─ alembic.ini
-│  ├─ alembic/versions/        # 0001_initial_schema.py (hand-maintained)
+│  ├─ alembic/versions/        # hand-maintained: 0001_initial_schema.py + one ALTER per schema change since
 │  ├─ app/
 │  │  ├─ core/                 # config.py — Settings, read from .env
 │  │  ├─ domain/                # pure types + Protocols, NO I/O
@@ -548,13 +548,30 @@ alembic downgrade -1          # roll back one revision
 The schema is defined once, in code, as SQLAlchemy Core `Table` objects
 in `app/models/tables.py` — five tables: `sensor_reading`,
 `weather_reading`, `grid_state`, `forecast`, `alert`. It is mirrored **by
-hand** in `alembic/versions/0001_initial_schema.py`; there is a test
-(`backend/tests/test_migrations_offline.py`) that asserts the migration's
-DDL and the live table metadata agree column-for-column and constraint-
-for-constraint, specifically because there's no live database available
-in this project's history to `alembic revision --autogenerate` against.
-**If you add or change a column in `tables.py`, you must hand-write the
-matching migration change yourself** — nothing generates it for you.
+hand** across `alembic/versions/` (`0001_initial_schema.py`'s `CREATE
+TABLE`s, plus one `ALTER TABLE` migration per schema change since —
+`0002_weather_temperature_humidity.py` is the first); there is a test
+(`backend/tests/test_migrations_offline.py`) that asserts the *combined*
+DDL of the whole migration chain and the live table metadata agree
+column-for-column and constraint-for-constraint, specifically because
+there's no live database available in this project's history to
+`alembic revision --autogenerate` against. **If you add or change a
+column in `tables.py`, you must hand-write the matching migration
+yourself** — nothing generates it for you.
+
+**Always add a new migration for a schema change — never edit an old
+one in place**, the moment any real database might already exist at
+that revision. `0001_initial_schema.py` was itself edited in place a few
+times early on (there was no live database yet to run it against, so it
+cost nothing) — until one existed and `alembic upgrade head` silently
+became a no-op against it (a database already at revision `0001`
+doesn't re-run `0001`, edited or not), leaving `weather_reading` missing
+columns the rest of the app assumed existed
+(`column "temperature" of relation "weather_reading" does not exist`).
+`0002_weather_temperature_humidity.py` is both the fix for that specific
+column and the template for every migration after it: run `alembic
+upgrade head` (`docker compose exec api alembic upgrade head` under
+Docker) against an existing database to pick up new migrations like it.
 
 Only `app/db/repositories/*.py` builds SQL against these tables directly;
 everything above `app/db` depends on the `app.domain.repositories`
@@ -1069,11 +1086,13 @@ Grouped by area, more exhaustive than [MVP limitations](#mvp-limitations) above:
 - No authentication, authorization, or rate limiting on the API.
 - No horizontal scaling story: one Postgres instance, one configured
   region, no caching layer in front of repository reads.
-- Migrations are hand-maintained (`alembic/versions/0001_initial_schema.py`
-  mirrors `app/models/tables.py` by hand) since no live database has
-  been available to autogenerate against — any schema change needs a
+- Migrations are hand-maintained (`alembic/versions/*.py` mirrors
+  `app/models/tables.py` by hand) since no live database has been
+  available to autogenerate against — any schema change needs a
   developer to update both, and `test_migrations_offline.py` is what
-  catches drift between them.
+  catches drift between them. See [Database migrations](#database-migrations)
+  for why that must always be a *new* migration once a real database
+  might exist, never an edit to an old one.
 - `is_demo` fallback is evaluated independently per endpoint (see
   [MVP limitations](#mvp-limitations)), so a caller polling multiple
   endpoints can transiently see a mix of real and demo data while

@@ -79,8 +79,6 @@ def upgrade() -> None:
         sa.Column("wind_direction", sa.Float(), nullable=False),
         sa.Column("precipitation", sa.Float(), nullable=False),
         sa.Column("boundary_layer_height", sa.Float(), nullable=True),
-        sa.Column("temperature", sa.Float(), nullable=True),
-        sa.Column("humidity", sa.Float(), nullable=True),
         sa.Column("measured_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint("wind_speed >= 0", name="ck_weather_reading_wind_speed"),
         sa.CheckConstraint(
@@ -88,13 +86,6 @@ def upgrade() -> None:
             name="ck_weather_reading_wind_direction",
         ),
         sa.CheckConstraint("precipitation >= 0", name="ck_weather_reading_precipitation"),
-        sa.CheckConstraint(
-            "temperature IS NULL OR temperature BETWEEN -90 AND 60",
-            name="ck_weather_reading_temperature",
-        ),
-        sa.CheckConstraint(
-            "humidity IS NULL OR humidity BETWEEN 0 AND 100", name="ck_weather_reading_humidity"
-        ),
         sa.UniqueConstraint("h3_cell", "measured_at", name="uq_weather_reading_cell_time"),
     )
     op.create_index("ix_weather_reading_measured_at", "weather_reading", ["measured_at"])
