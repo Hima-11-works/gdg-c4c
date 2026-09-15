@@ -72,6 +72,8 @@ class WeatherReadingOut(BaseModel):
     wind_direction: float
     precipitation: float
     boundary_layer_height: float | None
+    temperature: float | None
+    humidity: float | None
     measured_at: datetime
 
 
@@ -84,11 +86,13 @@ class GridStateOut(BaseModel):
     pm25: float | None
     pdi: float | None = Field(
         description=(
-            "Heuristic 'pollution pressure index' (roughly -100 to 100; "
-            "0 to 100 while only non-negative factors are configured). "
-            "NOT a scientifically exact measurement of net emissions — a "
-            "configurable, weighted blend of normalized signals. See "
-            "app.services.pdi.HeuristicPDIModel."
+            "Pollution Development Index (PDI) — a heuristic pollution-pressure score in "
+            "roughly [-100, 100] (positive = net pressure, e.g. industrial/road activity; "
+            "negative = net sink, e.g. dense vegetation). NOT a scientifically exact "
+            "measurement of emissions or absorption — a configurable, weighted blend of "
+            "normalized signals, independent of pm25 above (they can and do diverge for "
+            "the same cell). See GET /cells/{h3_cell}'s pdi_factors for the breakdown, and "
+            "app.services.pdi.HeuristicPDIModel for the formula."
         )
     )
     wind_speed: float | None
@@ -143,6 +147,17 @@ class CellDetailOut(BaseModel):
     current: GridStateOut | None
     forecasts: list[ForecastOut]
     weather: WeatherReadingOut | None
+    pdi_factors: dict[str, float] | None = Field(
+        default=None,
+        description=(
+            "The normalized [0, 1] value of each factor behind current.pdi (e.g. "
+            "{'pm25': 0.24, 'industrial_pressure': 1.0, 'road_pressure': 1.0, "
+            "'vegetation_sink': 0.45}) — not each factor's weighted contribution to the "
+            "score, just how strongly that signal was present here. Null when no "
+            "breakdown is available for this reading (current pipeline behavior for real "
+            "data: a pdi score is computed but its factors aren't persisted yet)."
+        ),
+    )
 
 
 class ErrorDetail(BaseModel):

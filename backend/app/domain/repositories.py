@@ -53,6 +53,13 @@ class WeatherReadingRepository(Protocol):
         """The most recent reading for every cell that has one."""
         ...
 
+    def list_latest_in_cells(self, cells: list[str]) -> list[WeatherReading]:
+        """Same as list_latest, restricted to these specific H3 cells —
+        a cell with no reading is simply absent, never fabricated. Used
+        for resolution/viewport-scoped API reads; see
+        app.services.weather.WeatherService."""
+        ...
+
 
 class GridStateRepository(Protocol):
     def upsert(self, state: GridState) -> GridState: ...
@@ -69,6 +76,12 @@ class GridStateRepository(Protocol):
 
     def latest(self) -> list[GridState]:
         """The most recent row for every cell that has one."""
+        ...
+
+    def latest_in_cells(self, cells: list[str]) -> list[GridState]:
+        """Same as latest, restricted to these specific H3 cells — a cell
+        with no row is simply absent, never fabricated. Used for
+        resolution/viewport-scoped API reads; see app.services.grid.GridService."""
         ...
 
     def latest_for_cell(self, h3_cell: str) -> GridState | None: ...
@@ -94,6 +107,12 @@ class ForecastRepository(Protocol):
 
     def latest_for_horizon(self, hours: int) -> list[Forecast]:
         """The most recent forecast at this horizon, for every cell that has one."""
+        ...
+
+    def latest_for_horizon_in_cells(self, hours: int, cells: list[str]) -> list[Forecast]:
+        """Same as latest_for_horizon, restricted to these specific H3
+        cells. Used for resolution/viewport-scoped API reads; see
+        app.services.grid.GridService."""
         ...
 
 

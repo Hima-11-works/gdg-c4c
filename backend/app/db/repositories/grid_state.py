@@ -81,6 +81,15 @@ def _latest_stmt() -> Select:
     )
 
 
+def _latest_in_cells_stmt(cells: list[str]) -> Select:
+    return (
+        select(grid_state_table)
+        .where(grid_state_table.c.h3_cell.in_(cells))
+        .distinct(grid_state_table.c.h3_cell)
+        .order_by(grid_state_table.c.h3_cell, grid_state_table.c.timestamp.desc())
+    )
+
+
 def _latest_for_cell_stmt(h3_cell: str) -> Select:
     return (
         select(grid_state_table)
@@ -118,6 +127,12 @@ class SqlGridStateRepository:
 
     def latest(self) -> list[GridState]:
         rows = self._session.execute(_latest_stmt()).all()
+        return [_row_to_domain(row) for row in rows]
+
+    def latest_in_cells(self, cells: list[str]) -> list[GridState]:
+        if not cells:
+            return []
+        rows = self._session.execute(_latest_in_cells_stmt(cells)).all()
         return [_row_to_domain(row) for row in rows]
 
     def latest_for_cell(self, h3_cell: str) -> GridState | None:

@@ -94,6 +94,11 @@ def test_weather_reading_statements() -> None:
     assert "DISTINCT ON" in list_latest_sql
     assert "weather_reading.h3_cell" in list_latest_sql
 
+    other_cell = h3.latlng_to_cell(37.8044, -122.2712, 8)
+    in_cells_sql = _sql(weather_reading_repo._list_latest_in_cells_stmt([CELL, other_cell]))
+    assert "DISTINCT ON" in in_cells_sql
+    assert "weather_reading.h3_cell IN" in in_cells_sql
+
 
 def test_grid_state_statements() -> None:
     state = GridState(
@@ -135,6 +140,10 @@ def test_grid_state_statements() -> None:
     assert upsert_many_sql.count("INSERT INTO grid_state") == 1
     assert CELL in upsert_many_sql and other_cell in upsert_many_sql
 
+    in_cells_sql = _sql(grid_state_repo._latest_in_cells_stmt([CELL, other_cell]))
+    assert "DISTINCT ON" in in_cells_sql
+    assert "grid_state.h3_cell IN" in in_cells_sql
+
 
 def test_forecast_statements() -> None:
     forecast = Forecast(
@@ -168,6 +177,13 @@ def test_forecast_statements() -> None:
     insert_many_sql = _sql(forecast_repo._insert_many_stmt([forecast, second_forecast]))
     assert insert_many_sql.count("INSERT INTO forecast") == 1  # one statement, not two
     assert "RETURNING" in insert_many_sql
+
+    other_cell = h3.latlng_to_cell(37.8044, -122.2712, 8)
+    horizon_in_cells_sql = _sql(
+        forecast_repo._latest_for_horizon_in_cells_stmt(3, [CELL, other_cell])
+    )
+    assert "JOIN" in horizon_in_cells_sql
+    assert "forecast.h3_cell IN" in horizon_in_cells_sql
 
 
 def test_alert_statements() -> None:

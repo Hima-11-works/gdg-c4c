@@ -6,6 +6,7 @@
 
 import type {
   AlertOut,
+  BoundingBox,
   CellDetailOut,
   Envelope,
   ForecastHorizonHours,
@@ -35,6 +36,34 @@ export class ApiError extends Error {
   }
 }
 
+/** A level-of-detail read: which H3 resolution to request, and which
+ * viewport to scope it to (omitted entirely for the country tier — see
+ * lib/lod.ts's `scopedToViewport` and app.api.deps.get_bbox_query on the
+ * backend, which requires all four bbox params together or none). */
+export interface LodQuery {
+  resolution?: number
+  bbox?: BoundingBox
+}
+
+function buildQuery(params: Record<string, string | number | undefined>): string {
+  const search = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined) search.set(key, String(value))
+  }
+  const query = search.toString()
+  return query ? `?${query}` : ''
+}
+
+function lodParams(query: LodQuery): Record<string, string | number | undefined> {
+  return {
+    resolution: query.resolution,
+    min_lat: query.bbox?.minLat,
+    min_lon: query.bbox?.minLon,
+    max_lat: query.bbox?.maxLat,
+    max_lon: query.bbox?.maxLon,
+  }
+}
+
 async function apiGet<T>(path: string): Promise<T> {
   let response: Response
   try {
@@ -55,22 +84,28 @@ async function apiGet<T>(path: string): Promise<T> {
   return response.json() as Promise<T>
 }
 
-export function fetchGridCurrent(): Promise<Envelope<GridStateOut[]>> {
-  return apiGet('/api/v1/grid/current')
+export function fetchGridCurrent(query: LodQuery = {}): Promise<Envelope<GridStateOut[]>> {
+  return apiGet(`/api/v1/grid/current${buildQuery(lodParams(query))}`)
 }
 
-export function fetchGridForecast(hours: ForecastHorizonHours): Promise<Envelope<ForecastOut[]>> {
-  return apiGet(`/api/v1/grid/forecast?hours=${hours}`)
+export function fetchGridForecast(
+  hours: ForecastHorizonHours,
+  query: LodQuery = {},
+): Promise<Envelope<ForecastOut[]>> {
+  return apiGet(`/api/v1/grid/forecast${buildQuery({ hours, ...lodParams(query) })}`)
 }
 
-export function fetchWeather(): Promise<Envelope<WeatherReadingOut[]>> {
-  return apiGet('/api/v1/weather')
+export function fetchWeather(query: LodQuery = {}): Promise<Envelope<WeatherReadingOut[]>> {
+  return apiGet(`/api/v1/weather${buildQuery(lodParams(query))}`)
 }
 
 export function fetchAlerts(): Promise<Envelope<AlertOut[]>> {
   return apiGet('/api/v1/alerts')
 }
 
-export function fetchCellDetail(h3Cell: string): Promise<Envelope<CellDetailOut>> {
-  return apiGet(`/api/v1/cells/${encodeURIComponent(h3Cell)}`)
+export function fetchCellDetail(
+  h3Cell: string,
+  resolution?: number,
+): Promise<Envelope<CellDetailOut>> {
+  return apiGet(`/api/v1/cells/${encodeURIComponent(h3Cell)}${buildQuery({ resolution })}`)
 }

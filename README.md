@@ -30,7 +30,7 @@ focused on what exists and how to run it.
 14. [Running the backend and frontend](#running-the-backend-and-frontend)
 15. [Running tests](#running-tests)
 16. [Demo mode](#demo-mode)
-17. [Country overview vs. per-location detail](#country-overview-vs-per-location-detail)
+17. [Level of detail](#level-of-detail)
 18. [API overview](#api-overview)
 19. [PDI: current definition and disclaimer](#pdi-current-definition-and-disclaimer)
 20. [Forecast model: current assumptions](#forecast-model-current-assumptions)
@@ -148,15 +148,16 @@ npm run dev
 ### 7. Open the app
 
 **http://localhost:5173.** The app is scoped to India: you should see the
-whole country on load, with one colored marker per major city (PM2.5,
-"very generalized") and wind arrows — see
-["Country overview vs. per-location detail"](#country-overview-vs-per-location-detail)
-below. Zoom into a city (e.g. Delhi, the demo hotspot) to see its
-markers give way to real per-hex detail. Check **Show PDI layer** to
-switch to the pressure score; click **+1h / +3h /
-+6h** to watch the hotspot fade and drift with the wind; click a
-hexagon to open its detail panel (PM2.5, PDI, wind, forecast,
-confidence); **Alerts** (top right) lists what the rule engine raised.
+whole country on load, with a coarse, "very generalized" PM2.5 hex per
+city-sized area nationwide, plus wind arrows — see
+["Level of detail"](#level-of-detail) below. Zoom into a city (e.g.
+Delhi, the demo hotspot) to see those give way to a real, finer per-hex
+grid for just that area. Check **Show PDI layer** to switch to the
+pressure score (only visible once zoomed in past the country tier);
+click **+1h / +3h / +6h** to watch the hotspot fade and drift with the
+wind; click any hex to open its detail panel (PM2.5, PDI, wind,
+forecast, confidence); **Alerts** (top right) lists what the rule engine
+raised.
 
 Also useful: **http://localhost:8000/docs** (interactive API reference)
 and **http://localhost:8000/health/ready** (confirms the database
@@ -212,9 +213,11 @@ accident rather than by design:
   alerts are plain threshold comparisons. Nothing is trained on data.
 - **No authentication or rate limiting** on the API — every `/api/v1/*`
   route is open, `GET`-only, and unauthenticated.
-- **No live road/industrial/satellite data.** PDI's `road_pressure` and
-  `industrial_pressure` inputs exist in the code but nothing populates
-  them yet.
+- **No live road/industrial/vegetation/satellite data.** PDI's
+  `road_pressure`, `industrial_pressure`, and `vegetation_sink` inputs
+  exist in the code but nothing real populates them yet (the demo
+  fallback fabricates illustrative values for all three; see
+  [PDI: current definition and disclaimer](#pdi-current-definition-and-disclaimer)).
 - **Demo fallback is per-endpoint, not global.** If, say, `grid_state`
   has real rows but `forecast` doesn't yet, `/grid/current` returns real
   data while `/grid/forecast` returns demo data in the same session — see
@@ -319,7 +322,8 @@ which one ran.
 │  │  │  ├─ pdi.py              #   PDIModel, CellContext, PDIResult
 │  │  │  ├─ dispersion.py       #   PollutionForecastModel, ForecastResult
 │  │  │  ├─ repositories.py     #   one Protocol per entity + DuplicateReadingError
-│  │  │  └─ h3_grid.py          #   the ONLY module that imports the h3 library
+│  │  │  ├─ h3_grid.py          #   the ONLY module that imports the h3 library
+│  │  │  └─ numeric.py          #   clamp/clamp01 — shared by dispersion, pdi, demo_data
 │  │  ├─ ingestion/             # openaq.py, open_meteo.py, demo.py, factory.py, http.py (shared retry)
 │  │  ├─ models/                # tables.py — SQLAlchemy Core table definitions (the schema)
 │  │  ├─ db/
@@ -332,7 +336,8 @@ which one ran.
 │  │  │  ├─ grid_computation.py #   GridComputationService (estimator + PDI, one GridState row)
 │  │  │  ├─ forecasting.py      #   ForecastingService (runs the dispersion model, persists)
 │  │  │  ├─ alert_generation.py #   AlertGenerationService (the 4 write-side alert rules)
-│  │  │  ├─ demo_data.py        #   per-endpoint illustrative fallback (`is_demo: true`)
+│  │  │  ├─ grid_query.py       #   resolve_cells — bbox+resolution -> capped H3 cell list (level of detail)
+│  │  │  ├─ demo_data.py        #   is_demo:true fallback — continuous synthetic field over India
 │  │  │  ├─ sensors.py, weather.py, grid.py, cells.py, alerts.py  # read-side, per API resource
 │  │  │  └─ results.py          #   ServiceResult (data + is_demo)
 │  │  ├─ api/
@@ -350,8 +355,10 @@ which one ran.
 ├─ frontend/
 │  └─ src/
 │     ├─ components/            # MapPage, MapView, AlertsPanel, CellDetailPanel, TimelineControl, ...
-│     ├─ lib/                    # api.ts (the only fetch caller), h3Geometry.ts, colorScales.ts, types.ts
-│     ├─ hooks/useApiResource.ts # loading/success/error/poll/retry, no data-fetching library
+│     ├─ lib/                    # api.ts (the only fetch caller), lod.ts (zoom -> resolution/bbox),
+│     │                          #   h3Geometry.ts, stateBoundaries.ts, colorScales.ts, format.ts, types.ts
+│     ├─ hooks/                  # useApiResource.ts (loading/success/error/poll/retry, no data-fetching
+│     │                          #   library), useStateBoundaries.ts
 │     └─ state/                  # small useReducer + Context for UI-only state
 ├─ scripts/
 │  ├─ bootstrap.sh              # copies .env.example → .env
@@ -444,17 +451,18 @@ separate and only holds `VITE_API_BASE_URL`.
 | `ENVIRONMENT`, `LOG_LEVEL`, `CORS_ORIGINS` | backend | Plain app config; `CORS_ORIGINS` is comma-separated |
 | `DEMO_MODE` | ingestion | Default `false`. See [Demo mode](#demo-mode) |
 | `H3_RESOLUTION` | backend | 0-15, default `8`. Changing it on an existing database does **not** rewrite stored `h3_cell` values — treat a change as a breaking change to stored data |
+| `GRID_QUERY_MAX_CELLS` | backend | Safety ceiling (default 50000) on one level-of-detail read (`/grid/current`, `/grid/forecast`, `/weather` with a bbox) — see [Level of detail](#level-of-detail) |
 | `OPENAQ_API_KEY` | ingestion | Required for real PM2.5 ingestion. Leave blank to run everything else (API, frontend, demo fallback, Demo Mode) without it |
 | `OPENAQ_BASE_URL`, `OPENAQ_TIMEOUT_SECONDS`, `OPENAQ_MAX_RETRIES`, `OPENAQ_LOCATIONS_LIMIT` | ingestion | OpenAQ adapter tuning |
 | `OPEN_METEO_BASE_URL`, `OPEN_METEO_TIMEOUT_SECONDS`, `OPEN_METEO_MAX_RETRIES`, `OPEN_METEO_MAX_LOCATIONS_PER_REQUEST` | ingestion | Open-Meteo adapter tuning; no key needed |
 | `WEATHER_MAX_CELLS` | ingestion | Safety ceiling (default 50000) on one weather run's fan-out; an oversized bbox is refused rather than building millions of rows |
 | `WEATHER_H3_RESOLUTION` | ingestion | Coarser resolution (default 5) weather is sampled at, fanned out to every `H3_RESOLUTION` cell inside. Must be ≤ `H3_RESOLUTION` (enforced by a `Settings` validator) |
-| `INGEST_BBOX_MIN_LAT`/`MIN_LON`/`MAX_LAT`/`MAX_LON` | ingestion | Bounding box, shared by `ingest` and `ingest-weather` (default: Delhi NCR — a single city/region, not all of India; see [Country overview vs. per-location detail](#country-overview-vs-per-location-detail)) |
+| `INGEST_BBOX_MIN_LAT`/`MIN_LON`/`MAX_LAT`/`MAX_LON` | ingestion | Bounding box, shared by `ingest` and `ingest-weather` (default: Delhi NCR — a single city/region, not all of India; see [Level of detail](#level-of-detail)) |
 | `INGEST_MAX_READING_AGE_HOURS` | ingestion | A fetched PM2.5 reading older than this is dropped as stale (default 3h) |
 | `IDW_MAX_DISTANCE_KM` | estimation | Max distance (default 15km) a sensor may be from a cell center to count as evidence |
 | `IDW_MIN_SENSORS` | estimation | Min sensors (default 2) required in range before a cell gets an estimate at all |
 | `PDI_PM25_REFERENCE_UGM3` | PDI | PM2.5 (default 250) treated as "maximum pressure" when normalizing to `[0, 1]` — a normalization scale, not a scientific threshold |
-| `PDI_PM25_WEIGHT`, `PDI_ROAD_PRESSURE_WEIGHT`, `PDI_INDUSTRIAL_PRESSURE_WEIGHT` | PDI | Relative weights (default 0.7 / 0.2 / 0.1); renormalized over whichever factors are actually present for a cell |
+| `PDI_PM25_WEIGHT`, `PDI_ROAD_PRESSURE_WEIGHT`, `PDI_INDUSTRIAL_PRESSURE_WEIGHT`, `PDI_VEGETATION_SINK_WEIGHT` | PDI | Relative weights (default 0.7 / 0.2 / 0.1 / -0.15 — the last negative, since vegetation is a sink); renormalized over whichever factors are actually present for a cell. Also drives `app/services/demo_data.py`'s illustrative PDI |
 | `DISPERSION_DECAY_RATE_PER_HOUR`, `DISPERSION_WET_REMOVAL_RATE_PER_HOUR`, `DISPERSION_PRECIPITATION_REFERENCE_MM` | dispersion | Baseline + precipitation-driven removal per hour (defaults 0.15, 0.25, 4mm) |
 | `DISPERSION_MAX_TRANSPORT_FRACTION`, `DISPERSION_WIND_TRANSPORT_REFERENCE_MS`, `DISPERSION_CALM_WIND_THRESHOLD_MS` | dispersion | How much PM2.5 wind can move per hour, and at what speeds (defaults 0.6, 8 m/s, 0.5 m/s) |
 | `DISPERSION_WIND_CONE_HALF_ANGLE_DEG` | dispersion | Half-angle (default 50°) of the downwind neighbor-selection cone |
@@ -728,52 +736,128 @@ worth stating plainly:
 | Effect on persisted data | Produces real, computed, persisted rows | N/A — nothing is persisted for the fallback |
 | Effect on `is_demo` | None — stays `false`, same as live mode | This flag itself |
 
-## Country overview vs. per-location detail
+## Level of detail
 
-The app is scoped to **India**. On load, the frontend fits the whole
-country in view rather than centering on one city (`INDIA_BOUNDS` in
-`frontend/src/components/MapView.tsx`), and shows a "very generalized"
-country-wide picture: one colored marker per major city for PM2.5, plus
-wind arrows, all visible at any zoom. Zoom into a particular city and
-those markers give way to the real per-hex detail view (the same
-fill/outline/PDI hex layers this README describes elsewhere) — click
-either a marker or a hex for that location's full reading (PM2.5, PDI,
-wind, forecast, confidence).
+The app is scoped to **India**, and never loads fine-resolution data for
+the whole country at once. What's on screen is driven entirely by the
+current **zoom level**, via `frontend/src/lib/lod.ts`'s `lodForZoom`:
 
-This split is purely a **frontend rendering choice**, driven by MapLibre
-layer `minzoom`/`maxzoom` (`OVERVIEW_MAX_ZOOM`, default `6`, in
-`MapView.tsx`) — both the country-wide markers and the per-hex detail
-are built from the exact same API data (`h3_cell` + a value), just drawn
-as circles at one zoom range and true hex polygons at another
-(`cellsToCenterPointFeatureCollection` vs. `cellsToFeatureCollection` in
-`frontend/src/lib/h3Geometry.ts`). No new backend endpoint or bbox
-parameter exists for this — the backend has no concept of "zoom level."
+| Zoom | H3 resolution | ~Cell area | Scope of the request |
+|---|---|---|---|
+| < 6 (country) | 3 | ~12,400 km² | Always all of India (`INDIA_BBOX`) — always ~800 cells, too small to bother scoping to viewport |
+| 6 – 7 | 4 | ~1,770 km² | The current map viewport |
+| 7 – 8 | 5 | ~253 km² | The current map viewport |
+| 8 – 9 | 6 | ~36 km² | The current map viewport |
+| 9 – 10 | 7 | ~5.2 km² | The current map viewport |
+| ≥ 10 (local) | 8 | ~0.7 km² | The current map viewport |
+
+Resolution steps up by exactly one H3 level roughly every zoom level in
+the 6–10 range rather than jumping straight from 3 to 8 in one bound —
+each H3 resolution step is already a ~7x jump in cell density on its
+own, so five smaller steps reveal detail progressively as you zoom
+instead of one abrupt jump. Weather (wind arrows) uses this same
+resolution at every tier *except* country, where it deliberately
+requests a coarser resolution (2, not 3) than the PM2.5 grid — the map
+only ever renders a thinned-down, sparse subset of wind points anyway,
+so fetching them at the grid's full country-tier resolution would be
+wasted payload (measured: ~210KB → ~29KB).
+
+On load the map fits all of India (`INDIA_BOUNDS` in
+`frontend/src/components/MapView.tsx`) and shows the coarse country
+tier: a full nationwide PM2.5 choropleth (not sparse dots — see "Where
+the data comes from today" below) plus wind arrows — "generalized"
+because the resolution itself is coarse, not because anything is
+hidden. Zoom into a region and the same hex/wind/PDI layers this README
+describes elsewhere start rendering denser, finer cells for just that
+area; zoom into a city and they become the full per-hex grid. PDI is
+state-tier-and-finer only (`PDI_MIN_ZOOM` in `frontend/src/lib/lod.ts`,
+tied to the same zoom-6 breakpoint above) — not part of the bare
+country overview. Clicking any hex opens the same full detail panel
+(location, PM2.5, PDI + its factor breakdown, wind, weather, forecast,
+confidence) regardless of tier.
+
+**How the frontend decides what to fetch** — `frontend/src/lib/lod.ts`'s
+`lodForZoom(zoom)` maps the current zoom to `{ resolution, bbox? }`.
+`components/MapView.tsx` reports the live viewport (zoom + bounds) to
+`MapUiContext` on `moveend` (debounced 300ms so a fast scroll-wheel
+flick doesn't fire one request per tick); `components/MapPage.tsx` reads
+that state and passes `{ resolution, bbox }` into `fetchGridCurrent` /
+`fetchGridForecast` / `fetchWeather` (`frontend/src/lib/api.ts`), which
+send them as `resolution`/`min_lat`/`min_lon`/`max_lat`/`max_lon` query
+params. State/local tiers wait for a real viewport before fetching
+(never fall back to "no bbox" for a fine resolution — see below).
+
+**How the backend supports this** — every one of those three endpoints
+accepts an optional `resolution` and an optional bounding box
+(`app.api.deps.get_bbox_query`: all four of `min_lat`/`min_lon`/`max_lat`/
+`max_lon` together, or none — a partial set is a 422). Given both,
+`app.services.grid_query.resolve_cells` computes exactly the H3 cells at
+that resolution covering that bbox (`GeospatialService.region_coverage`,
+the same method the ingestion pipeline already used) and the service
+reads only those cells (`GridStateRepository.latest_in_cells` and its
+`ForecastRepository`/`WeatherReadingRepository` equivalents) — a cell
+with no row is simply absent, never fabricated. **`resolution` only
+takes effect together with a bbox** — omitting bbox entirely preserves
+the exact pre-level-of-detail behavior (return whatever is persisted,
+unfiltered, at the configured default `H3_RESOLUTION`), since "no bbox"
+already meant something before this feature existed and silently
+reinterpreting it as "resolution N, nationwide" would risk a client
+that forgets the bbox asking for millions of cells by accident.
+
+**The safety net, and why there are two checks, not one:**
+`GRID_QUERY_MAX_CELLS` (default 50,000) caps how many cells one
+resolution+bbox request may cover. Enumerating the cells first and
+checking the count after is itself too expensive to be the only guard —
+at a fine resolution, a country-sized bbox is millions of cells, and
+building that list before rejecting it measured **22 seconds** in
+testing. `resolve_cells` rejects an obviously oversized request from its
+*area* alone first (`h3.average_hexagon_area`, an O(1) lookup — no
+enumeration), in well under a second, and only falls through to the
+exact count for requests already in a plausible range. The zoom
+breakpoints above aren't arbitrary either: they were tuned against a
+table of real `resolve_cells` counts for both a full-India and a
+single-city desktop viewport at every candidate resolution (see the
+comment above `lodForZoom` in `frontend/src/lib/lod.ts`) so that an
+ordinary zoom-in/out gesture on an ordinary screen stays comfortably
+under the cap at every step; a very large/ultra-wide monitor can still
+occasionally exceed it at a tier's lowest zoom, which the backend
+rejects with a clear 422 rather than truncating silently.
+
+**A cell fetched from a coarser tier and passed back** —
+`GET /api/v1/cells/{h3_cell}` also accepts an optional `resolution`,
+because an `h3_cell` string is only valid at the resolution it was
+minted at. Clicking a country/state-tier hex is rejected as "invalid
+cell" unless the frontend passes that same resolution back; it does this
+automatically (`selectedCellResolution` in `MapUiContext`, captured at
+click time — not read live from the current zoom, since the user may
+have zoomed again before the detail panel finishes loading).
 
 **Where the data comes from today** (all dummy/illustrative — see
 [MVP limitations](#mvp-limitations)):
 
 - `app/services/demo_data.py` — the `is_demo: true` fallback shown when
-  a repository is empty — now spans **~19 major Indian cities**, each
-  rendered as a small 7-cell cluster (a center hex at the city's own
-  illustrative PM2.5 value, surrounded by a ring at a gentle falloff)
-  so zooming into any of them reveals a visible blob of detail, not a
-  single dot. Values are shaped like each city's real-world reputation
-  (the Indo-Gangetic plain markedly worse than the south/coast) so the
-  map reads as a plausible national picture.
+  a repository is empty — is a **continuous synthetic field over all of
+  India**, not a lookup table of ~19 cities: every cell anywhere in the
+  country gets a value (rural regions genuinely lower, not absent), built
+  from a smooth regional background (inverse-distance-weighted from a
+  dozen hand-placed climate/pollution anchors — the Indo-Gangetic plain
+  markedly worse than the Western Ghats, Thar desert hot/dry/windy, etc.)
+  plus Gaussian "hotspot" bumps for ~19 major cities (a handful flagged
+  industrial) and 2 standalone synthetic anomalies (e.g. a crop-residue
+  burning plume), so the map reads as a plausible national picture rather
+  than sparse dots. Forecasts (`+1h`/`+3h`/`+6h`) advect and disperse each
+  hotspot downwind using its local wind (see
+  [Forecast model: current assumptions](#forecast-model-current-assumptions))
+  so stepping through the timeline visibly shows pollution moving, not
+  every cell's number just changing in place. Deterministic and cached
+  per-cell within a process — same seed, same numbers, every run.
 - `app/ingestion/demo.py` (`DEMO_MODE=true`) and `INGEST_BBOX_*`'s
   default both point at **Delhi NCR** — a real pipeline run (ingestion,
   IDW, PDI, dispersion, alerts) only ever covers one city-sized region
-  at a time, the same as before this app was scoped to India; see
+  at a time, same as before this app was scoped to India; see
   [Demo mode](#demo-mode). Nothing about this pipeline changed — it
-  isn't what powers the country-wide overview.
-
-**Known limitation:** "detail on zoom" only has something to show for
-the ~19 cities in `app/services/demo_data.py` (until real ingestion
-covers more) — zooming into an arbitrary empty stretch of the country
-shows no hexes, which is expected for illustrative data rather than a
-bug. A real deployment would need either many ingestion regions or a
-genuinely dynamic, viewport-scoped query — neither exists yet (see
-[Future extension points](#future-extension-points)).
+  isn't what powers the level-of-detail reads above, and is a
+  completely separate concept from `app/services/demo_data.py`.
 
 ## API overview
 
@@ -784,12 +868,17 @@ Interactive docs at `/docs` once the API is running.
 |---|---|
 | `GET /health` | Liveness — process up, never touches the DB |
 | `GET /health/ready` | Readiness — PostgreSQL reachable + PostGIS installed |
-| `GET /api/v1/sensors` | Latest reading per sensor |
-| `GET /api/v1/weather` | Latest weather per H3 cell |
-| `GET /api/v1/grid/current` | Current PM2.5 + PDI per cell |
-| `GET /api/v1/grid/forecast?hours=1\|3\|6` | Forecast PM2.5 per cell at that horizon |
-| `GET /api/v1/cells/{h3_cell}` | Current state + forecasts + weather for one cell (404 if no data at all, 422 if `h3_cell` isn't valid at the configured resolution) |
+| `GET /api/v1/sensors` | Latest reading per sensor (raw ingestion audit trail — the only endpoint that names a `source`; not part of the map/grid contract below, and the frontend never calls it) |
+| `GET /api/v1/weather?resolution=&min_lat=&min_lon=&max_lat=&max_lon=` | Latest weather per H3 cell |
+| `GET /api/v1/grid/current?resolution=&min_lat=&min_lon=&max_lat=&max_lon=` | Current PM2.5 + PDI per cell |
+| `GET /api/v1/grid/forecast?hours=1\|3\|6&resolution=&min_lat=&min_lon=&max_lat=&max_lon=` | Forecast PM2.5 per cell at that horizon |
+| `GET /api/v1/cells/{h3_cell}?resolution=` | Current state + forecasts + weather + PDI factor breakdown for one cell (404 if no data at all, 422 if `h3_cell` isn't valid at the configured resolution) |
 | `GET /api/v1/alerts` | Alerts created within `ALERT_ACTIVE_LOOKBACK_HOURS` |
+
+`resolution` and the four bbox params are optional and independent of
+each other's endpoint — see [Level of detail](#level-of-detail) for the
+full level-of-detail contract (all four bbox params together or none;
+`resolution` alone has no effect).
 
 Every successful response is an **Envelope**:
 
@@ -802,9 +891,13 @@ Every successful response is an **Envelope**:
 ```
 
 `is_demo` is `true` only when the underlying repository query returned
-nothing and `app/services/demo_data.py`'s static illustrative values are
-shown instead — never mix real and fabricated values without this flag.
-See [Demo mode](#demo-mode) for how this differs from `DEMO_MODE`.
+nothing and `app/services/demo_data.py`'s illustrative values are shown
+instead — never mix real and fabricated values without this flag. It's
+also the *only* signal a response ever gives about provenance: no field,
+at any of these endpoints, ever names OpenAQ, Open-Meteo, "demo", or any
+future source (satellite, a government sensor feed, ...) — see
+`tests/test_api_contract.py`, which pins this down. See
+[Demo mode](#demo-mode) for how `is_demo` differs from `DEMO_MODE`.
 
 Every error response — a raised `HTTPException`, a request-validation
 failure, or an unhandled exception — is:
@@ -838,10 +931,12 @@ persistent condition doesn't spawn a new alert every run.
 
 ## PDI: current definition and disclaimer
 
-> **PDI ("pollution pressure index") is a heuristic ranking/triage
-> score. It is NOT a scientifically exact measurement of net emissions,
-> a modeled pollutant budget, or a regulatory index.** Every place it's
-> surfaced — API docs, UI labels, this README — must say so.
+> **The Pollution Development Index (PDI) is a heuristic
+> pollution-pressure score. It is NOT a scientifically exact measurement
+> of emissions, absorption, or a modeled pollutant budget, and it is
+> deliberately independent of PM2.5 — the two can and do diverge for the
+> same cell.** Every place it's surfaced — API docs, UI labels, this
+> README — must say so.
 
 Current formula (`app.services.pdi.HeuristicPDIModel`, v0):
 
@@ -849,32 +944,49 @@ Current formula (`app.services.pdi.HeuristicPDIModel`, v0):
 pdi = 100 * Σ(normalized_i * weight_i) / Σ|weight_i|      (over available factors i)
 ```
 
-- Each factor is normalized to `[0, 1]` before blending: `pm25` by
-  dividing by `PDI_PM25_REFERENCE_UGM3` and clamping;
-  `road_pressure`/`industrial_pressure` are assumed pre-normalized by
-  whatever eventually produces them.
-- **Only `pm25` has a real data source today.** `road_pressure` and
-  `industrial_pressure` are already wired into the formula and default
-  to nonzero weights (`PDI_ROAD_PRESSURE_WEIGHT=0.2`,
-  `PDI_INDUSTRIAL_PRESSURE_WEIGHT=0.1`) even though nothing populates
-  them — so today's PDI is, in effect, entirely a rescaled function of
-  PM2.5 (`pdi ≈ 100 * clamp01(pm25 / 250)`), because only one factor is
-  ever present and the weights renormalize over whichever factors
+- Four factors: `pm25` (pollution level), `industrial_pressure`
+  (urban/industrial pressure), `road_pressure` (road/activity pressure),
+  and `vegetation_sink` (a pollution *sink*, not a pressure — see below).
+  Each is normalized to `[0, 1]` before blending: `pm25` by dividing by
+  `PDI_PM25_REFERENCE_UGM3` and clamping; the other three are assumed
+  pre-normalized by whatever produces them.
+- **Only `pm25` has a real data source today.** `road_pressure`,
+  `industrial_pressure`, and `vegetation_sink` are already wired into
+  the formula with configurable weights
+  (`PDI_ROAD_PRESSURE_WEIGHT=0.2`, `PDI_INDUSTRIAL_PRESSURE_WEIGHT=0.1`,
+  `PDI_VEGETATION_SINK_WEIGHT=-0.15`) even though nothing *real*
+  populates them yet — so the real pipeline's PDI is, in effect, still a
+  rescaled function of PM2.5 today, because only one factor is ever
+  present there and the weights renormalize over whichever factors
   actually show up for a cell.
+- **The demo fallback (`app/services/demo_data.py`) populates all four**
+  — `industrial_pressure` from proximity to an industrial-flagged city,
+  `road_pressure` from proximity to any city (a tighter Gaussian falloff
+  than the pollution bump itself), and `vegetation_sink` from a regional
+  "greenness" value independently authored per climate anchor (not
+  derived from that region's own PM2.5 number) — so demo PDI genuinely
+  diverges from demo PM2.5: two cells with the same pollution level can
+  land on different PDI scores, and a lower-PM2.5 industrial city can
+  outrank a higher-PM2.5 non-industrial one.
+- `PDI_VEGETATION_SINK_WEIGHT` is **negative** by default: more
+  vegetation cover pulls the index *down*, not up, since vegetation
+  absorbs rather than pressures.
 - A cell with **no** available factor (or every available factor
   configured with zero weight) gets `pdi = None` — never a fabricated
   score. `GridState.pdi` and the API's `GridStateOut.pdi` are both
-  nullable for exactly this reason.
-- The result is `0`–`100` today (only non-negative weights are
-  configured). A future negative-weighted "sink" factor (e.g.
-  precipitation washout reducing pressure) could push it toward `-100`
-  with no formula change — the math already supports it via `Σ|weight_i|`
-  in the denominator.
+  nullable for exactly this reason. (The demo fallback always has all
+  four factors, so this only happens for real data today.)
+- The result is in `[-100, 100]` — bounded because `Σ|weight_i|` is
+  always in the denominator, and it does go negative in practice now
+  that `vegetation_sink` has a real negative default weight.
 - `PDIResult.factors` reports each factor's *normalized* `[0, 1]` value
-  (e.g. `{"pm25": 0.81}`), not its weighted contribution, so a caller/UI
-  can show which signals drove the score — though the API doesn't expose
-  this breakdown yet (`GridStateOut.pdi` is a bare number; the frontend's
-  cell detail panel says so rather than fabricating one).
+  (e.g. `{"pm25": 0.81, "industrial_pressure": 1.0, "road_pressure": 1.0,
+  "vegetation_sink": 0.45}`), not its weighted contribution — exposed via
+  `GET /api/v1/cells/{h3_cell}`'s `pdi_factors` field (`null` when no
+  breakdown is available, which today means real data — the real
+  pipeline computes a `pdi` score but doesn't persist its per-factor
+  breakdown anywhere yet). The frontend's cell detail panel renders this
+  as a labeled bar per factor when present.
 
 ## Forecast model: current assumptions
 
@@ -1024,20 +1136,25 @@ be a lossy fit. Two real paths:
    satellite data's actual error characteristics, but it's real new
    design work, not a drop-in provider.
 
-### Road/industrial pressure data
+### Road/industrial/vegetation data
 
 The most "already wired, just needs data" extension point in the app.
-`app.domain.pdi.CellContext` already has `road_pressure: float | None`
-and `industrial_pressure: float | None` fields, `HeuristicPDIModel`
-already blends them into the PDI formula with configurable weights
-(`PDI_ROAD_PRESSURE_WEIGHT`, `PDI_INDUSTRIAL_PRESSURE_WEIGHT`, both
-nonzero by default), and `PDIResult.factors` already reports them by
-name once present. All that's missing: a data source (e.g. OpenStreetMap
-road density, an industrial-facility registry) and code that computes a
-`[0, 1]`-normalized value per H3 cell from it, passed into the
-`CellContext` that `GridComputationService._with_pdi` builds (today it
-only passes `pm25`). **No change needed** to `HeuristicPDIModel`, the
-`PDIModel` Protocol, the PDI formula, or any caller of `calculate()`.
+`app.domain.pdi.CellContext` already has `road_pressure: float | None`,
+`industrial_pressure: float | None`, and `vegetation_sink: float | None`
+fields, `HeuristicPDIModel` already blends them into the PDI formula
+with configurable weights (`PDI_ROAD_PRESSURE_WEIGHT`,
+`PDI_INDUSTRIAL_PRESSURE_WEIGHT`, `PDI_VEGETATION_SINK_WEIGHT` — the
+last already negative by default, since vegetation is a sink), and
+`PDIResult.factors` already reports them by name once present. All
+that's missing: a data source per factor (e.g. OpenStreetMap road
+density, an industrial-facility registry, land-cover/NDVI data for
+vegetation) and code that computes a `[0, 1]`-normalized value per H3
+cell from each, passed into the `CellContext` that
+`GridComputationService._with_pdi` builds (today it only passes `pm25`).
+**No change needed** to `HeuristicPDIModel`, the `PDIModel` Protocol,
+the PDI formula, or any caller of `calculate()` — see
+`app/services/demo_data.py`'s illustrative versions of all three for
+one way to shape a plausible per-cell value geographically.
 
 ### A better interpolation algorithm (Kriging, ML-based, etc.)
 

@@ -158,6 +158,7 @@ def test_scenario_03_no_sensors_through_the_full_grid_computation_service(
             pm25_weight=0.7,
             road_pressure_weight=0.2,
             industrial_pressure_weight=0.1,
+            vegetation_sink_weight=-0.15,
         ),
         geospatial,
         fake_repos.sensor,
@@ -402,6 +403,7 @@ def test_scenario_13_unusually_high_pm25_flows_through_end_to_end_without_crashi
         pm25_weight=0.7,
         road_pressure_weight=0.2,
         industrial_pressure_weight=0.1,
+        vegetation_sink_weight=-0.15,
     )
     from app.domain.pdi import CellContext
 

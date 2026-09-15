@@ -50,6 +50,10 @@ _WIND_SPEED_MS = 6.0
 _WIND_DIRECTION_DEG = 270.0
 _PRECIPITATION_MM = 0.0
 _BOUNDARY_LAYER_HEIGHT_M = 800.0
+# A still, hazy winter afternoon in Delhi — the kind of stagnant, humid
+# conditions that let a smog episode like this scenario's build up.
+_TEMPERATURE_C = 22.0
+_HUMIDITY_PCT = 65.0
 
 
 def _now() -> datetime:
@@ -98,5 +102,7 @@ class DemoWeatherProvider:
             precipitation=_PRECIPITATION_MM,
             measured_at=now,
             boundary_layer_height=_BOUNDARY_LAYER_HEIGHT_M,
+            temperature=_TEMPERATURE_C,
+            humidity=_HUMIDITY_PCT,
         )
         return [sample for _ in points]

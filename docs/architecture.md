@@ -144,10 +144,10 @@ later, it's just not what exists today.
 | `GET /health` | API liveness — never touches the database |
 | `GET /health/ready` | PostgreSQL + PostGIS readiness, 200/503 |
 | `GET /api/v1/sensors` | Latest reading per sensor |
-| `GET /api/v1/weather` | Latest weather per cell |
-| `GET /api/v1/grid/current` | Current `GridState` per cell |
-| `GET /api/v1/grid/forecast?hours=1\|3\|6` | Latest `Forecast` per cell at that horizon |
-| `GET /api/v1/cells/{h3_cell}` | Current state + all forecasts + weather for one cell |
+| `GET /api/v1/weather?resolution=&min_lat=&min_lon=&max_lat=&max_lon=` | Latest weather per cell |
+| `GET /api/v1/grid/current?resolution=&min_lat=&min_lon=&max_lat=&max_lon=` | Current `GridState` per cell |
+| `GET /api/v1/grid/forecast?hours=1\|3\|6&resolution=&min_lat=&min_lon=&max_lat=&max_lon=` | Latest `Forecast` per cell at that horizon |
+| `GET /api/v1/cells/{h3_cell}?resolution=` | Current state + all forecasts + weather for one cell |
 | `GET /api/v1/alerts` | Alerts created within `ALERT_ACTIVE_LOOKBACK_HOURS` (default 24h; see `app/services/alerts.py`) |
 
 Every response (`/health` excepted) is wrapped the same way:
@@ -156,6 +156,35 @@ a list for collection endpoints, a single object for `/cells/{h3_cell}`.
 Internal database ids are never exposed — `h3_cell` (+ `timestamp` /
 `generated_at` where relevant) already identifies a resource, and dropping
 ids keeps the contract independent of the storage backend.
+
+**Level of detail.** `resolution` and the four bbox params
+(`min_lat`/`min_lon`/`max_lat`/`max_lon`) are optional on `/weather`,
+`/grid/current`, and `/grid/forecast` — all four bbox params must be
+given together or all omitted (`app.api.deps.get_bbox_query`), and
+`resolution` alone (without a bbox) has no effect, matching the pre-LOD
+"return whatever is persisted, unfiltered" behavior exactly. `/cells/{h3_cell}`'s
+`resolution` isn't for scoping a read — it's required whenever `h3_cell`
+came from a coarser (country/state-tier) LOD read, since a cell string
+only means anything at the resolution it was minted at. This is what lets
+a map frontend request only the resolution and area its current zoom
+level can actually show — see `app.services.grid_query.resolve_cells` and
+`frontend/src/lib/lod.ts`'s zoom→resolution mapping — rather than always
+reading the whole configured region at full detail.
+
+**Source-agnostic contract.** No response field, at any endpoint, ever
+names where a value came from — not "openaq", "open-meteo", "demo", nor
+any future source (satellite retrievals, government sensor feeds, ...).
+`is_demo` is the one exception, and it answers a different question
+("is this illustrative or measured?"), not "which system produced this?".
+`GET /api/v1/sensors`' `source`/`external_sensor_id` fields are the sole,
+deliberate exception — that endpoint is a raw ingestion audit trail, not
+part of the map/grid contract, and the frontend never calls it. Swapping
+`app.ingestion.demo` for a real provider, or adding a new one, never
+requires a frontend change: `app.services.demo_data` and every real
+`*Provider` implementation both terminate in the exact same domain types
+(`GridState`, `Forecast`, `WeatherReading`), which `app/api/schemas.py`
+serializes identically regardless of which one produced them. See
+`tests/test_api_contract.py` for the tests that pin this down.
 
 **Demo-data fallback.** Every endpoint falls back to small, deterministic
 seed data (`app/services/demo_data.py`) whenever its repository query
@@ -264,6 +293,11 @@ schema and validation are untouched by this: every stored row is still at
 `boundary_layer_height` is only available as an hourly Open-Meteo variable,
 not a "current" one, so it's matched to the current reading's hour and left
 `None` if the model has no value for it — the "where available" case.
+`temperature` and `humidity` (`temperature_2m`/`relative_humidity_2m`) are,
+by contrast, in the same `current=` request as wind/precipitation, so they
+come back with every sample; `WeatherSample`/`WeatherReading` still type
+them as optional (matching `boundary_layer_height`'s "where available"
+idiom) since not every provider/source will have them.
 
 **Data hygiene and failure containment** (from the integration review):
 OpenAQ timestamps are normalised to aware UTC in the adapter — a naive
@@ -378,58 +412,71 @@ combination, but a weather-only cell in a sparse sensor network is a real
 future case), rather than forcing every producer to invent values for
 fields it has no basis for.
 
-## PDI: pollution pressure index (implemented: v0, heuristic)
+## PDI: Pollution Development Index (implemented: v0, heuristic)
 
-**PDI is a heuristic "pollution pressure index", not a scientifically
-exact measurement of net emissions, a modeled pollutant budget, or a
-regulatory index.** Every place it's surfaced — API docs, UI labels, code
-comments — must describe it that way; this is a triage/ranking score, not
-a physical quantity.
+**PDI is a heuristic pollution-pressure score, not a scientifically
+exact measurement of emissions, absorption, or a modeled pollutant
+budget, and it is deliberately independent of PM2.5** — the two can and
+do diverge for the same cell. Every place it's surfaced — API docs, UI
+labels, code comments — must describe it that way; this is a
+triage/ranking score, not a physical quantity.
 
 `app.domain.pdi.PDIModel` is the port: `calculate(cell_context:
 CellContext) -> PDIResult`, one cell at a time (unlike `PollutionEstimator`,
 which is grid-wide — a cell's PDI only ever depends on that cell's own
 context, so there's no batching concern to design around).
 `CellContext` carries the inputs available for one cell: `pm25` (the
-current estimate, e.g. from `GridState.pm25`) plus two extension points,
-`road_pressure` and `industrial_pressure`, pre-normalized to `[0, 1]` by
-whatever eventually produces them. `PDIResult` carries `pdi` (`None` if no
-factor was available or every available factor is zero-weighted — never a
+current estimate, e.g. from `GridState.pm25`) plus three extension
+points — `road_pressure`, `industrial_pressure`, and `vegetation_sink`
+(a *sink*, not a pressure) — pre-normalized to `[0, 1]` by whatever
+eventually produces them. `PDIResult` carries `pdi` (`None` if no factor
+was available or every available factor is zero-weighted — never a
 fabricated score) and `factors`, the *normalized* `[0, 1]` value of each
 factor that actually contributed, keyed by name — not each factor's
 weighted contribution — so a caller/UI can show which signals drove the
-score.
+score. Exposed via `GET /api/v1/cells/{h3_cell}`'s `pdi_factors` field.
 
 `app.services.pdi.HeuristicPDIModel` is the first (and so far only)
 implementation. It normalizes `pm25` to `[0, 1]` by dividing by
-`PDI_PM25_REFERENCE_UGM3` and clamping, normalizes/clamps
-`road_pressure` and `industrial_pressure` defensively (they're expected to
-already be in `[0, 1]`), then combines whichever factors are present as a
-weight-normalized average using the *absolute value* of each configured
-weight:
+`PDI_PM25_REFERENCE_UGM3` and clamping, normalizes/clamps the other
+three factors defensively (they're expected to already be in `[0, 1]`),
+then combines whichever factors are present as a weight-normalized
+average using the *absolute value* of each configured weight:
 
 ```
 pdi = 100 * sum(normalized_i * weight_i) / sum(abs(weight_i))
 ```
 
 over only the present factors — so with only a PM2.5 estimate available
-(the realistic v0 case), `pdi` is driven entirely by it regardless of the
-configured weight split, rather than being capped below 100 because
-road/industrial pressure aren't available yet. With today's non-negative
-default weights (`PDI_PM25_WEIGHT`, `PDI_ROAD_PRESSURE_WEIGHT`,
-`PDI_INDUSTRIAL_PRESSURE_WEIGHT`) this stays within `[0, 100]`. A future
-negative-weighted "sink" factor (e.g. precipitation washout reducing
-pressure) would pull the result toward `-100` without any formula change —
-the absolute-value denominator already keeps the result bounded to
-`[-100, 100]` in that case.
+(the realistic v0 case for *real* data), `pdi` is driven entirely by it
+regardless of the configured weight split, rather than being capped
+below 100 because the other three aren't available yet. `PDI_PM25_WEIGHT`,
+`PDI_ROAD_PRESSURE_WEIGHT`, and `PDI_INDUSTRIAL_PRESSURE_WEIGHT` default
+non-negative; `PDI_VEGETATION_SINK_WEIGHT` defaults *negative*
+(vegetation is a sink, so more of it pulls the index down, not up) — the
+result is bounded to `[-100, 100]` by the absolute-value denominator
+regardless of sign.
 
-**Not yet done:** nothing calls `HeuristicPDIModel` from an API endpoint,
-CLI command, or persistence pipeline — like `IDWPollutionEstimator` before
-it, this turn is the model layer only. `GridState.pdi` and `GridStateOut`
-already existed and accept the value once something populates it. There is
-also no real data source for `road_pressure` or `industrial_pressure` yet;
-the fields exist so a future source is a matter of populating
-`CellContext`, not changing `HeuristicPDIModel` or its caller.
+`app.services.demo_data`'s illustrative PDI (the `is_demo: true`
+fallback) reads these same four `Settings` weights and reuses the same
+formula, but populates all four factors — `industrial_pressure` from
+proximity to an industrial-flagged city, `road_pressure` from proximity
+to any city, `vegetation_sink` from a regional "greenness" value
+independently authored per climate anchor (not derived from that
+region's own PM2.5 number) — specifically so demo PDI diverges from demo
+PM2.5 rather than reading as a rescaled copy of it.
+
+**Wired into the real pipeline:** `app.pipeline.run` constructs
+`HeuristicPDIModel` from `Settings` and passes it to
+`GridComputationService`, which builds a `CellContext` per cell (today
+only `pm25` — see below) and persists the result on `GridState.pdi`.
+
+**Not yet done:** there is no real data source for `road_pressure`,
+`industrial_pressure`, or `vegetation_sink` yet; the fields exist so a
+future source is a matter of populating `CellContext`, not changing
+`HeuristicPDIModel` or its caller. The real pipeline also doesn't
+persist a per-cell factor breakdown anywhere, so `pdi_factors` is
+`null` for real data in the API today (only the demo fallback has one).
 
 ## Dispersion / forecast model (implemented: v0, deterministic H3 box model)
 
@@ -618,10 +665,13 @@ the way ingestion/forecasting do).
   level, H3 resolution (grid and weather-sampling), `DEMO_MODE` (see
   "Demo Mode" under Ingestion above), OpenAQ/Open-Meteo
   ingestion settings (API key where needed, base URL, timeout/retries, the
-  shared ingestion bounding box), IDW estimation thresholds
+  shared ingestion bounding box), the level-of-detail read cap
+  (`GRID_QUERY_MAX_CELLS`), IDW estimation thresholds
   (`IDW_MAX_DISTANCE_KM`, `IDW_MIN_SENSORS`), PDI weights
   (`PDI_PM25_REFERENCE_UGM3`, `PDI_PM25_WEIGHT`, `PDI_ROAD_PRESSURE_WEIGHT`,
-  `PDI_INDUSTRIAL_PRESSURE_WEIGHT`), and dispersion/forecast model
+  `PDI_INDUSTRIAL_PRESSURE_WEIGHT`, `PDI_VEGETATION_SINK_WEIGHT` — the
+  last negative by default — also read by `app.services.demo_data`'s
+  illustrative PDI), and dispersion/forecast model
   parameters (`DISPERSION_DECAY_RATE_PER_HOUR`,
   `DISPERSION_WET_REMOVAL_RATE_PER_HOUR`,
   `DISPERSION_PRECIPITATION_REFERENCE_MM`,

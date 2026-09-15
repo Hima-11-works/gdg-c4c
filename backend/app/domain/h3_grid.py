@@ -77,6 +77,16 @@ def representative_sample_points(
     return dict(groups)
 
 
+def average_cell_area_km2(resolution: int) -> float:
+    """Average area (km²) of a cell at `resolution` — an O(1) lookup, used
+    to estimate a cell count from a bounding box's area without actually
+    enumerating it (see app.services.grid_query.resolve_cells, which
+    rejects an obviously oversized resolution+bbox combination using this
+    before paying to enumerate it for real).
+    """
+    return h3.average_hexagon_area(resolution, unit="km^2")
+
+
 def is_valid_cell(h3_cell: str, *, resolution: int) -> bool:
     """True if h3_cell is a real H3 cell address at exactly `resolution`."""
     return h3.is_valid_cell(h3_cell) and h3.get_resolution(h3_cell) == resolution
@@ -85,11 +95,12 @@ def is_valid_cell(h3_cell: str, *, resolution: int) -> bool:
 def assert_valid_cell(h3_cell: str, *, resolution: int) -> None:
     """Raise ValueError unless h3_cell is valid at `resolution`.
 
-    Used by app.db.repositories so a misconfigured or malformed cell is
-    rejected at write time rather than corrupting the grid silently.
+    Used by app.db.repositories (always the configured H3_RESOLUTION —
+    misconfigured or malformed writes are rejected rather than silently
+    corrupting the grid) and by app.services.cells.CellService (a
+    caller-supplied resolution, for a cell fetched from a level-of-detail
+    read at some other resolution) — the message below doesn't assume
+    which, since it's true either way.
     """
     if not is_valid_cell(h3_cell, resolution=resolution):
-        raise ValueError(
-            f"{h3_cell!r} is not a valid H3 cell at the configured resolution "
-            f"({resolution}, from the H3_RESOLUTION environment variable)"
-        )
+        raise ValueError(f"{h3_cell!r} is not a valid H3 cell at resolution {resolution}")

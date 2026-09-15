@@ -14,15 +14,8 @@ from datetime import datetime, timedelta
 
 from app.domain.dispersion import ForecastResult
 from app.domain.h3_grid import cell_center, grid_disk
+from app.domain.numeric import clamp, clamp01
 from app.domain.types import Coordinate, Forecast, GridState, WeatherReading
-
-
-def _clamp(value: float, low: float, high: float) -> float:
-    return max(low, min(high, value))
-
-
-def _clamp01(value: float) -> float:
-    return _clamp(value, 0.0, 1.0)
 
 
 def _angular_difference(bearing_a: float, bearing_b: float) -> float:
@@ -257,8 +250,8 @@ class DeterministicH3DispersionModel:
                 has_weather=False,
             )
 
-        precip_factor = _clamp01(reading.precipitation / self._precipitation_reference_mm)
-        removal_fraction = _clamp(
+        precip_factor = clamp01(reading.precipitation / self._precipitation_reference_mm)
+        removal_fraction = clamp(
             self._decay_rate_per_hour + self._wet_removal_rate_per_hour * precip_factor, 0.0, 1.0
         )
 
@@ -270,7 +263,7 @@ class DeterministicH3DispersionModel:
                 has_weather=True,
             )
 
-        transport_fraction = self._max_transport_fraction * _clamp01(
+        transport_fraction = self._max_transport_fraction * clamp01(
             reading.wind_speed / self._wind_transport_reference_ms
         )
         center = Coordinate(*cell_center(cell))
@@ -336,7 +329,7 @@ class DeterministicH3DispersionModel:
             penalty = (
                 1.0 if coefficients[cell].has_weather else self._missing_weather_confidence_penalty
             )
-            new_confidence[cell] = _clamp01(blended * self._confidence_decay_per_hour * penalty)
+            new_confidence[cell] = clamp01(blended * self._confidence_decay_per_hour * penalty)
 
         new_pm25 = {cell: max(0.0, new_mass[cell]) for cell in cells}
         return new_pm25, new_confidence, outflow

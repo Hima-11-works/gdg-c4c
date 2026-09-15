@@ -4,14 +4,16 @@ API shape (verified with live requests against api.open-meteo.com — the
 docs page is a JS app WebFetch can't render, so this was checked directly):
 
   GET /v1/forecast?latitude=lat1,lat2&longitude=lon1,lon2
-      &current=wind_speed_10m,wind_direction_10m,precipitation
+      &current=wind_speed_10m,wind_direction_10m,precipitation,
+               temperature_2m,relative_humidity_2m
       &hourly=boundary_layer_height&wind_speed_unit=ms&timezone=UTC
       -> for >1 location: a JSON *array*, one object per location, in the
          same order as the input lists (values are float-quantized, not
          re-sorted). For exactly 1 location: a single JSON *object*, not a
          one-element array — both shapes are handled here.
       Each object: {"current": {"time", "wind_speed_10m",
-                                 "wind_direction_10m", "precipitation"},
+                                 "wind_direction_10m", "precipitation",
+                                 "temperature_2m", "relative_humidity_2m"},
                      "hourly": {"time": [...], "boundary_layer_height": [...]}}
 
 boundary_layer_height is only available hourly, not as a `current` value
@@ -50,6 +52,8 @@ class _Current(BaseModel):
     wind_speed_10m: float
     wind_direction_10m: float
     precipitation: float
+    temperature_2m: float
+    relative_humidity_2m: float
 
 
 class _Hourly(BaseModel):
@@ -128,7 +132,10 @@ class OpenMeteoProvider:
         params = {
             "latitude": ",".join(f"{p.latitude:.5f}" for p in points),
             "longitude": ",".join(f"{p.longitude:.5f}" for p in points),
-            "current": "wind_speed_10m,wind_direction_10m,precipitation",
+            "current": (
+                "wind_speed_10m,wind_direction_10m,precipitation,"
+                "temperature_2m,relative_humidity_2m"
+            ),
             "hourly": "boundary_layer_height",
             "wind_speed_unit": "ms",
             "timezone": "UTC",
@@ -174,6 +181,8 @@ class OpenMeteoProvider:
                 precipitation=current.precipitation,
                 measured_at=_as_utc(current.time),
                 boundary_layer_height=blh,
+                temperature=current.temperature_2m,
+                humidity=current.relative_humidity_2m,
             )
         except ValueError as exc:
             # e.g. a wind_direction outside [0, 360) — a bad upstream

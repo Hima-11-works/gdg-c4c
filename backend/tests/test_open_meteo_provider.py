@@ -23,6 +23,8 @@ def _current(
     wind_speed: float = 5.0,
     wind_direction: float = 270.0,
     precipitation: float = 0.0,
+    temperature: float = 25.0,
+    humidity: float = 50.0,
     time: str = "2026-01-01T12:00",
 ) -> dict:
     return {
@@ -31,6 +33,8 @@ def _current(
         "wind_speed_10m": wind_speed,
         "wind_direction_10m": wind_direction,
         "precipitation": precipitation,
+        "temperature_2m": temperature,
+        "relative_humidity_2m": humidity,
     }
 
 
@@ -91,7 +95,9 @@ async def test_multi_point_preserves_order_and_sets_request_params() -> None:
         assert query["latitude"] == ["37.77490,37.80440"]
         assert query["longitude"] == ["-122.41940,-122.27120"]
         assert query["wind_speed_unit"] == ["ms"]
-        assert query["current"] == ["wind_speed_10m,wind_direction_10m,precipitation"]
+        assert query["current"] == [
+            "wind_speed_10m,wind_direction_10m,precipitation,temperature_2m,relative_humidity_2m"
+        ]
         assert query["hourly"] == ["boundary_layer_height"]
         return httpx.Response(
             200,
@@ -281,9 +287,11 @@ async def test_non_finite_wind_speed_is_skipped() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raw = (
             '[{"current":{"time":"2026-01-01T12:00","wind_speed_10m":NaN,'
-            '"wind_direction_10m":90.0,"precipitation":0.0}},'
+            '"wind_direction_10m":90.0,"precipitation":0.0,'
+            '"temperature_2m":25.0,"relative_humidity_2m":50.0}},'
             '{"current":{"time":"2026-01-01T12:00","wind_speed_10m":3.0,'
-            '"wind_direction_10m":90.0,"precipitation":0.0}}]'
+            '"wind_direction_10m":90.0,"precipitation":0.0,'
+            '"temperature_2m":25.0,"relative_humidity_2m":50.0}}]'
         )
         return httpx.Response(
             200, content=raw.encode(), headers={"content-type": "application/json"}

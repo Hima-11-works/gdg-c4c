@@ -24,6 +24,14 @@ class CellDetail:
     current: GridState | None
     forecasts: list[Forecast]
     weather: WeatherReading | None
+    # The normalized [0, 1] value of each factor behind `current.pdi` —
+    # see app.domain.pdi.PDIResult.factors for the real-pipeline shape
+    # this mirrors. None (not an empty dict) when no breakdown is
+    # available: the real pipeline computes a PDI score but doesn't
+    # persist its per-factor breakdown anywhere yet, so a real cell's
+    # detail view has a `pdi` but not (yet) a `pdi_factors`. Demo cells
+    # always have one — see app.services.demo_data.generate_pdi_factors.
+    pdi_factors: dict[str, float] | None = None
 
 
 class CellService:
@@ -37,16 +45,25 @@ class CellService:
         self._forecast_repository = forecast_repository
         self._weather_repository = weather_repository
 
-    def get_cell(self, h3_cell: str) -> ServiceResult[CellDetail] | None:
+    def get_cell(
+        self, h3_cell: str, *, resolution: int | None = None
+    ) -> ServiceResult[CellDetail] | None:
         """Look up everything known about one cell.
 
+        `resolution` defaults to the configured H3_RESOLUTION, but a
+        caller that fetched h3_cell from a coarser (country/state-tier)
+        read must pass that same resolution back here — otherwise a
+        perfectly valid coarse cell is rejected as "wrong resolution" (see
+        assert_valid_cell below). The frontend does this automatically
+        (see state.lod.resolution in MapUiContext).
+
         Raises ValueError (via app.domain.h3_grid.assert_valid_cell) if
-        h3_cell isn't a real H3 cell at the configured resolution — the
-        caller should treat that as a 422. Returns None if the cell is
-        valid but there is no data for it at all, real or demo — the
-        caller should treat that as a 404.
+        h3_cell isn't a real H3 cell at that resolution — the caller
+        should treat that as a 422. Returns None if the cell is valid but
+        there is no data for it at all, real or demo — the caller should
+        treat that as a 404.
         """
-        resolution = get_settings().h3_resolution
+        resolution = resolution if resolution is not None else get_settings().h3_resolution
         assert_valid_cell(h3_cell, resolution=resolution)
 
         current = self._grid_repository.latest_for_cell(h3_cell)
@@ -56,16 +73,14 @@ class CellService:
         if current is not None or forecasts or weather is not None:
             return ServiceResult(CellDetail(h3_cell, current, forecasts, weather), is_demo=False)
 
-        demo_cell_ids = demo_data.demo_cells(resolution)
-        if h3_cell not in demo_cell_ids:
+        if not demo_data.is_within_demo_domain(h3_cell):
             return None
 
-        index = demo_cell_ids.index(h3_cell)
-        demo_current = demo_data.demo_grid_states(resolution)[index]
-        demo_forecasts = [
-            demo_data.demo_forecasts(resolution, hours)[index] for hours in _DEMO_HORIZONS
-        ]
-        demo_weather = demo_data.demo_weather_readings(resolution)[index]
+        demo_current = demo_data.generate_grid_state(h3_cell)
+        demo_forecasts = [demo_data.generate_forecast(h3_cell, hours) for hours in _DEMO_HORIZONS]
+        demo_weather = demo_data.generate_weather_reading(h3_cell)
+        demo_pdi_factors = demo_data.generate_pdi_factors(h3_cell)
         return ServiceResult(
-            CellDetail(h3_cell, demo_current, demo_forecasts, demo_weather), is_demo=True
+            CellDetail(h3_cell, demo_current, demo_forecasts, demo_weather, demo_pdi_factors),
+            is_demo=True,
         )

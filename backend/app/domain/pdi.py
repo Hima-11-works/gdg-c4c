@@ -20,17 +20,22 @@ class CellContext:
 
     `pm25` is the current PM2.5 estimate for the cell (e.g. from a
     PollutionEstimator / GridState.pm25) and is the only input guaranteed
-    to be present in v0. `road_pressure` and `industrial_pressure` are
-    extension points: pre-normalized to [0, 1] by whatever produces them
-    (there is no real data source for either yet), and None until one
-    exists. A PDIModel must treat a None factor as "not available", never
-    as zero pressure.
+    to be present in v0. `road_pressure`, `industrial_pressure`, and
+    `vegetation_sink` are extension points: pre-normalized to [0, 1] by
+    whatever produces them (there is no real data source for any of them
+    yet), and None until one exists. A PDIModel must treat a None factor
+    as "not available", never as zero pressure. `vegetation_sink` is a
+    *sink* rather than a pressure — 1.0 means "strong pollution sink
+    here" (dense vegetation), not "high pollution pressure" — see
+    HeuristicPDIModel for how a negative weight turns that into a
+    downward pull on the index rather than an upward one.
     """
 
     h3_cell: str
     pm25: float | None
     road_pressure: float | None = None
     industrial_pressure: float | None = None
+    vegetation_sink: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

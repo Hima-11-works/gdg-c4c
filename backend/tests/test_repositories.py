@@ -206,6 +206,32 @@ def test_weather_reading_list_latest_returns_one_per_cell(db_session, cell: str)
     assert matching[0].wind_speed == 2.0
 
 
+def test_weather_reading_list_latest_in_cells_filters_by_cell(db_session, cell: str) -> None:
+    resolution = get_settings().h3_resolution
+    other_cell = h3.latlng_to_cell(37.8044, -122.2712, resolution)
+    repo = SqlWeatherReadingRepository(db_session)
+    for target_cell in (cell, other_cell):
+        repo.add(
+            WeatherReading(
+                h3_cell=target_cell,
+                latitude=37.7749,
+                longitude=-122.4194,
+                wind_speed=1.0,
+                wind_direction=0.0,
+                precipitation=0.0,
+                measured_at=NOW,
+            )
+        )
+
+    result = repo.list_latest_in_cells([cell])
+
+    assert {r.h3_cell for r in result} == {cell}
+
+
+def test_weather_reading_list_latest_in_cells_with_no_cells_is_a_no_op(db_session) -> None:
+    assert SqlWeatherReadingRepository(db_session).list_latest_in_cells([]) == []
+
+
 def test_weather_reading_rejects_cell_at_wrong_resolution(db_session) -> None:
     wrong_cell = h3.latlng_to_cell(37.7749, -122.4194, get_settings().h3_resolution + 1)
     repo = SqlWeatherReadingRepository(db_session)
@@ -324,6 +350,22 @@ def test_grid_state_latest_returns_one_row_per_cell(db_session, cell: str) -> No
 
     assert len(matching) == 1
     assert matching[0].timestamp == later
+
+
+def test_grid_state_latest_in_cells_filters_by_cell(db_session, cell: str) -> None:
+    resolution = get_settings().h3_resolution
+    other_cell = h3.latlng_to_cell(37.8044, -122.2712, resolution)
+    repo = SqlGridStateRepository(db_session)
+    for target_cell in (cell, other_cell):
+        repo.upsert(GridState(h3_cell=target_cell, timestamp=NOW, confidence=0.5, pm25=10.0))
+
+    result = repo.latest_in_cells([cell])
+
+    assert {state.h3_cell for state in result} == {cell}
+
+
+def test_grid_state_latest_in_cells_with_no_cells_is_a_no_op(db_session) -> None:
+    assert SqlGridStateRepository(db_session).latest_in_cells([]) == []
 
 
 def test_grid_state_latest_for_cell_returns_most_recent_row(db_session, cell: str) -> None:
@@ -476,6 +518,14 @@ def test_forecast_latest_for_horizon_returns_one_row_per_cell(db_session) -> Non
     assert set(results) == {cell_a, cell_b}
     assert results[cell_a].predicted_pm25 == 11.0  # the later run for cell_a wins
     assert results[cell_b].predicted_pm25 == 20.0
+
+    in_cells_results = {f.h3_cell: f for f in repo.latest_for_horizon_in_cells(1, [cell_a])}
+    assert set(in_cells_results) == {cell_a}
+    assert in_cells_results[cell_a].predicted_pm25 == 11.0
+
+
+def test_forecast_latest_for_horizon_in_cells_with_no_cells_is_a_no_op(db_session) -> None:
+    assert SqlForecastRepository(db_session).latest_for_horizon_in_cells(1, []) == []
 
 
 def test_alert_round_trip_and_list_active(db_session, cell: str) -> None:

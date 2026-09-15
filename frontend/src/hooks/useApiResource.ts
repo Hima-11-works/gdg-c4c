@@ -71,7 +71,18 @@ export function useApiResource<T>(
     }
 
     load(false)
-    const interval = pollIntervalMs ? setInterval(() => load(true), pollIntervalMs) : undefined
+    // Skipped while the tab isn't visible — a background tab has no map
+    // to update, so there's no point re-fetching grid/weather/alerts
+    // every pollIntervalMs while the user is elsewhere; picks back up on
+    // its own next tick once the tab is visible again (no need to fetch
+    // immediately on visibilitychange — the existing interval is close
+    // enough, and this stays a one-line check rather than a second
+    // effect/listener).
+    const interval = pollIntervalMs
+      ? setInterval(() => {
+          if (document.visibilityState === 'visible') load(true)
+        }, pollIntervalMs)
+      : undefined
 
     return () => {
       cancelled = true

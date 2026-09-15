@@ -21,12 +21,14 @@ def _model(
     pm25_weight: float = 0.7,
     road_pressure_weight: float = 0.2,
     industrial_pressure_weight: float = 0.1,
+    vegetation_sink_weight: float = -0.15,
 ) -> HeuristicPDIModel:
     return HeuristicPDIModel(
         pm25_reference=pm25_reference,
         pm25_weight=pm25_weight,
         road_pressure_weight=road_pressure_weight,
         industrial_pressure_weight=industrial_pressure_weight,
+        vegetation_sink_weight=vegetation_sink_weight,
     )
 
 
@@ -118,6 +120,28 @@ def test_all_three_factors_blend_matches_hand_computation() -> None:
     assert result.pdi == pytest.approx(expected)
 
 
+def test_all_four_factors_blend_matches_hand_computation() -> None:
+    model = _model(
+        pm25_reference=100.0,
+        pm25_weight=0.4,
+        road_pressure_weight=0.3,
+        industrial_pressure_weight=0.2,
+        vegetation_sink_weight=-0.1,
+    )
+    context = CellContext(
+        h3_cell=CELL, pm25=40.0, road_pressure=0.8, industrial_pressure=0.2, vegetation_sink=0.9
+    )
+    result = model.calculate(context)
+    assert result.factors == {
+        "pm25": pytest.approx(0.4),
+        "road_pressure": pytest.approx(0.8),
+        "industrial_pressure": pytest.approx(0.2),
+        "vegetation_sink": pytest.approx(0.9),
+    }
+    expected = 100.0 * (0.4 * 0.4 + 0.8 * 0.3 + 0.2 * 0.2 + 0.9 * -0.1) / (0.4 + 0.3 + 0.2 + 0.1)
+    assert result.pdi == pytest.approx(expected)
+
+
 def test_road_pressure_present_without_pm25_still_scores() -> None:
     # pm25 has no evidence for this cell (e.g. IDWPollutionEstimator found
     # nothing nearby) but an extension-point factor is available: score
@@ -135,6 +159,14 @@ def test_road_pressure_present_without_pm25_still_scores() -> None:
 def test_road_pressure_outside_unit_range_is_clamped(road_pressure: float) -> None:
     result = _model().calculate(CellContext(h3_cell=CELL, pm25=None, road_pressure=road_pressure))
     assert 0.0 <= result.factors["road_pressure"] <= 1.0
+
+
+@pytest.mark.parametrize("vegetation_sink", [-0.5, 1.5, 10.0])
+def test_vegetation_sink_outside_unit_range_is_clamped(vegetation_sink: float) -> None:
+    result = _model().calculate(
+        CellContext(h3_cell=CELL, pm25=None, vegetation_sink=vegetation_sink)
+    )
+    assert 0.0 <= result.factors["vegetation_sink"] <= 1.0
 
 
 # --- output range stays within the documented earliest-implementation bound ---
@@ -155,6 +187,29 @@ def test_pdi_stays_within_zero_to_hundred_with_default_nonnegative_weights(
     result = _model().calculate(context)
     assert result.pdi is not None
     assert 0.0 <= result.pdi <= 100.0
+
+
+# --- vegetation_sink: the one factor with a real (negative) default weight ---
+
+
+def test_vegetation_sink_pulls_pdi_down_not_up() -> None:
+    # High vegetation_sink (dense cover, a strong pollution sink) should
+    # suppress the score below what pm25 alone would give, not add to it.
+    model = _model(pm25_weight=0.7, road_pressure_weight=0.0, industrial_pressure_weight=0.0)
+    pm25_only = model.calculate(CellContext(h3_cell=CELL, pm25=125.0))
+    with_sink = model.calculate(CellContext(h3_cell=CELL, pm25=125.0, vegetation_sink=1.0))
+    assert with_sink.pdi is not None
+    assert pm25_only.pdi is not None
+    assert with_sink.pdi < pm25_only.pdi
+
+
+def test_vegetation_sink_absent_by_default_does_not_affect_pm25_only_score() -> None:
+    # A cell with no vegetation-cover data (the real-pipeline case today —
+    # no producer exists yet) must score exactly as if the factor weren't
+    # configured at all, not as if it were present at 0.
+    result = _model().calculate(CellContext(h3_cell=CELL, pm25=125.0))
+    assert "vegetation_sink" not in result.factors
+    assert result.pdi == pytest.approx(50.0)
 
 
 # --- a future negative-weighted "sink" factor can pull the index below zero ---

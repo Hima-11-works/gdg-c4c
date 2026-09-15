@@ -50,6 +50,22 @@ def _require_valid_weather_values(
         raise ValueError(f"precipitation must be >= 0: {precipitation}")
 
 
+def _require_valid_weather_extras(temperature: float | None, humidity: float | None) -> None:
+    """temperature/humidity are optional — same "where available" idiom as
+    boundary_layer_height, since not every provider/source has them — but
+    must be physically plausible when present. Shared by WeatherReading
+    and WeatherSample, same as _require_valid_weather_values above.
+    """
+    if temperature is not None:
+        _require_finite(temperature, "temperature")
+        if not -90 <= temperature <= 60:
+            raise ValueError(f"temperature outside a plausible range (-90 to 60 C): {temperature}")
+    if humidity is not None:
+        _require_finite(humidity, "humidity")
+        if not 0 <= humidity <= 100:
+            raise ValueError(f"humidity must be within [0, 100]: {humidity}")
+
+
 _EARTH_RADIUS_KM = 6371.0088  # IUGG mean radius
 
 
@@ -97,6 +113,36 @@ class Coordinate:
         x = math.sin(dlon) * math.cos(lat2)
         y = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dlon)
         return math.degrees(math.atan2(x, y)) % 360
+
+    def destination_point(self, bearing_deg: float, distance_km: float) -> Coordinate:
+        """The point `distance_km` away from this one, in the direction
+        `bearing_deg` (0 = north, 90 = east) — the forward/direct geodesic
+        problem, inverse of bearing_to/distance_km. Used by
+        app.services.demo_data to sample a synthetic pollution field
+        upwind of a cell, approximating advection without a real
+        dispersion solve; not otherwise provider- or demo-specific.
+        Same spherical-approximation caveat as distance_km/bearing_to.
+        """
+        lat1 = math.radians(self.latitude)
+        lon1 = math.radians(self.longitude)
+        bearing = math.radians(bearing_deg)
+        angular_distance = distance_km / _EARTH_RADIUS_KM
+
+        lat2 = math.asin(
+            math.sin(lat1) * math.cos(angular_distance)
+            + math.cos(lat1) * math.sin(angular_distance) * math.cos(bearing)
+        )
+        lon2 = lon1 + math.atan2(
+            math.sin(bearing) * math.sin(angular_distance) * math.cos(lat1),
+            math.cos(angular_distance) - math.sin(lat1) * math.sin(lat2),
+        )
+        latitude = math.degrees(lat2)
+        longitude = (math.degrees(lon2) + 540) % 360 - 180  # normalize to [-180, 180)
+        # Clamp latitude: a destination point beyond the pole is a
+        # degenerate case for this module's use (short hops within
+        # India), not worth raising over.
+        latitude = max(-90.0, min(90.0, latitude))
+        return Coordinate(latitude, longitude)
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,11 +204,14 @@ class WeatherReading:
     precipitation: float
     measured_at: datetime
     boundary_layer_height: float | None = None
+    temperature: float | None = None
+    humidity: float | None = None
     id: int | None = None
 
     def __post_init__(self) -> None:
         _require_utc(self.measured_at, "measured_at")
         _require_valid_weather_values(self.wind_speed, self.wind_direction, self.precipitation)
+        _require_valid_weather_extras(self.temperature, self.humidity)
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,10 +228,13 @@ class WeatherSample:
     precipitation: float
     measured_at: datetime
     boundary_layer_height: float | None = None
+    temperature: float | None = None
+    humidity: float | None = None
 
     def __post_init__(self) -> None:
         _require_utc(self.measured_at, "measured_at")
         _require_valid_weather_values(self.wind_speed, self.wind_direction, self.precipitation)
+        _require_valid_weather_extras(self.temperature, self.humidity)
 
 
 @dataclass(frozen=True, slots=True)

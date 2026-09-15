@@ -251,6 +251,12 @@ body,
   font-size: 1rem;
 }
 
+.cell-detail-location {
+  margin: 0.4rem 0 0;
+  font-size: 0.8rem;
+  color: light-dark(#666, #aaa);
+}
+
 .cell-detail-grid {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -276,6 +282,36 @@ body,
 
 .cell-forecast-list li {
   padding: 0.2rem 0;
+}
+
+.pdi-factor-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.pdi-factor-list li {
+  padding: 0.25rem 0;
+}
+
+.pdi-factor-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.15rem;
+}
+
+.pdi-factor-bar {
+  height: 0.4rem;
+  border-radius: 0.2rem;
+  background: light-dark(#e5e5e5, #333);
+  overflow: hidden;
+}
+
+.pdi-factor-bar-fill {
+  height: 100%;
+  background: light-dark(#dd6b20, #f0973d);
 }
 
 .muted {

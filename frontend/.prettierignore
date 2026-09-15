@@ -1,2 +1,6 @@
 dist
 node_modules
+
+# A ~330KB minified vendored data asset (see lib/stateBoundaries.ts) —
+# pretty-printing it would bloat it many times over for no benefit.
+public/data/india_states.geojson

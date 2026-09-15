@@ -144,6 +144,7 @@ def _compute_grid(
         pm25_weight=settings.pdi_pm25_weight,
         road_pressure_weight=settings.pdi_road_pressure_weight,
         industrial_pressure_weight=settings.pdi_industrial_pressure_weight,
+        vegetation_sink_weight=settings.pdi_vegetation_sink_weight,
     )
     geospatial = GeospatialService(resolution=settings.h3_resolution)
     service = GridComputationService(

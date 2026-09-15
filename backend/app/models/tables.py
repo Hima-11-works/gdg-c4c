@@ -81,12 +81,24 @@ weather_reading = Table(
     Column("wind_direction", Float, nullable=False),
     Column("precipitation", Float, nullable=False),
     Column("boundary_layer_height", Float, nullable=True),
+    # Nullable, "where available" — same idiom as boundary_layer_height:
+    # not every provider/source has these (see app.ingestion.open_meteo
+    # vs. e.g. a station that only reports wind).
+    Column("temperature", Float, nullable=True),
+    Column("humidity", Float, nullable=True),
     Column("measured_at", DateTime(timezone=True), nullable=False),
     CheckConstraint("wind_speed >= 0", name="ck_weather_reading_wind_speed"),
     CheckConstraint(
         "wind_direction >= 0 AND wind_direction < 360", name="ck_weather_reading_wind_direction"
     ),
     CheckConstraint("precipitation >= 0", name="ck_weather_reading_precipitation"),
+    CheckConstraint(
+        "temperature IS NULL OR temperature BETWEEN -90 AND 60",
+        name="ck_weather_reading_temperature",
+    ),
+    CheckConstraint(
+        "humidity IS NULL OR humidity BETWEEN 0 AND 100", name="ck_weather_reading_humidity"
+    ),
     UniqueConstraint("h3_cell", "measured_at", name="uq_weather_reading_cell_time"),
     Index("ix_weather_reading_measured_at", "measured_at"),
     Index("ix_weather_reading_h3_cell", "h3_cell"),

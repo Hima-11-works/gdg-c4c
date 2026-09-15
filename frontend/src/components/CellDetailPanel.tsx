@@ -1,13 +1,20 @@
 import { fetchCellDetail } from '../lib/api'
-import { compassLabel, formatNumber } from '../lib/format'
+import { PDI_LABEL, PDI_TOOLTIP, compassLabel, formatNumber, pdiFactorLabel } from '../lib/format'
+import { cellCenter } from '../lib/h3Geometry'
+import { findStateForPoint } from '../lib/stateBoundaries'
 import { useApiResource } from '../hooks/useApiResource'
+import { useStateBoundaries } from '../hooks/useStateBoundaries'
 import { useMapUi } from '../state/MapUiContext'
 import type { CellDetailOut } from '../lib/types'
 
-function CellDetailContent({ detail }: { detail: CellDetailOut }) {
+function CellDetailContent({ detail, isDemo }: { detail: CellDetailOut; isDemo: boolean }) {
   const current = detail.current
   const windSpeed = detail.weather?.wind_speed ?? current?.wind_speed ?? null
   const windDirection = detail.weather?.wind_direction ?? current?.wind_direction ?? null
+
+  const boundaries = useStateBoundaries()
+  const [lat, lon] = cellCenter(detail.h3_cell)
+  const stateName = boundaries ? findStateForPoint(lat, lon, boundaries) : null
 
   if (current === null && detail.forecasts.length === 0 && detail.weather === null) {
     return <p>No data for this cell yet.</p>
@@ -15,12 +22,20 @@ function CellDetailContent({ detail }: { detail: CellDetailOut }) {
 
   return (
     <>
+      {isDemo && (
+        <p className="banner banner-demo" role="status">
+          Demo data — illustrative, not measured.
+        </p>
+      )}
+
+      {stateName !== null && <p className="cell-detail-location">{stateName}</p>}
+
       <dl className="cell-detail-grid">
         <dt>PM2.5</dt>
         <dd>{formatNumber(current?.pm25)} µg/m³</dd>
 
-        <dt>PDI</dt>
-        <dd>{formatNumber(current?.pdi)} (heuristic, not a measurement)</dd>
+        <dt title={PDI_TOOLTIP}>{PDI_LABEL}</dt>
+        <dd>{formatNumber(current?.pdi)}</dd>
 
         <dt>Wind speed</dt>
         <dd>{formatNumber(windSpeed)} m/s</dd>
@@ -30,6 +45,23 @@ function CellDetailContent({ detail }: { detail: CellDetailOut }) {
           {windDirection === null
             ? '—'
             : `${formatNumber(windDirection, 0)}° (${compassLabel(windDirection)}, blowing from)`}
+        </dd>
+
+        <dt>Temperature</dt>
+        <dd>
+          {detail.weather?.temperature == null
+            ? '—'
+            : `${formatNumber(detail.weather.temperature)} °C`}
+        </dd>
+
+        <dt>Humidity</dt>
+        <dd>
+          {detail.weather?.humidity == null ? '—' : `${formatNumber(detail.weather.humidity)}%`}
+        </dd>
+
+        <dt>Precipitation</dt>
+        <dd>
+          {detail.weather === null ? '—' : `${formatNumber(detail.weather.precipitation)} mm`}
         </dd>
 
         <dt>Confidence</dt>
@@ -50,11 +82,29 @@ function CellDetailContent({ detail }: { detail: CellDetailOut }) {
         </ul>
       )}
 
-      <h3>PDI contributing factors</h3>
-      <p className="muted">
-        Not available from the API yet — PDI is currently a single value with no per-factor
-        breakdown exposed by the backend.
-      </p>
+      <h3 title={PDI_TOOLTIP}>{PDI_LABEL} factors</h3>
+      {detail.pdi_factors === null ? (
+        <p className="muted">
+          Not available for this reading — its PDI score has no stored per-factor breakdown.
+        </p>
+      ) : (
+        <ul className="pdi-factor-list">
+          {Object.entries(detail.pdi_factors).map(([key, value]) => {
+            const percent = Math.round(value * 100)
+            return (
+              <li key={key}>
+                <div className="pdi-factor-row">
+                  <span>{pdiFactorLabel(key)}</span>
+                  <span className="muted">{percent}%</span>
+                </div>
+                <div className="pdi-factor-bar">
+                  <div className="pdi-factor-bar-fill" style={{ width: `${percent}%` }} />
+                </div>
+              </li>
+            )
+          })}
+        </ul>
+      )}
     </>
   )
 }
@@ -62,10 +112,14 @@ function CellDetailContent({ detail }: { detail: CellDetailOut }) {
 export function CellDetailPanel() {
   const { state, dispatch } = useMapUi()
   const selectedCell = state.selectedCell
+  // Captured at click time (see mapUiReducer's SELECT_CELL case), not
+  // read live from state.lod — the user may have zoomed since, and a
+  // cell string only means anything at the resolution it was minted at.
+  const resolution = state.selectedCellResolution ?? undefined
 
   const { resource, refetch } = useApiResource(
-    () => fetchCellDetail(selectedCell ?? ''),
-    [selectedCell],
+    () => fetchCellDetail(selectedCell ?? '', resolution),
+    [selectedCell, resolution],
     { enabled: selectedCell !== null },
   )
 
@@ -95,7 +149,9 @@ export function CellDetailPanel() {
         </p>
       )}
 
-      {resource.status === 'success' && <CellDetailContent detail={resource.data} />}
+      {resource.status === 'success' && (
+        <CellDetailContent detail={resource.data} isDemo={resource.isDemo} />
+      )}
     </aside>
   )
 }

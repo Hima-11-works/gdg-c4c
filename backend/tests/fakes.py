@@ -71,6 +71,10 @@ class FakeWeatherReadingRepository:
     def list_latest(self) -> list[WeatherReading]:
         return list(self.readings)
 
+    def list_latest_in_cells(self, cells: list[str]) -> list[WeatherReading]:
+        cell_set = set(cells)
+        return [r for r in self.list_latest() if r.h3_cell in cell_set]
+
 
 class FakeGridStateRepository:
     def __init__(self) -> None:
@@ -93,6 +97,10 @@ class FakeGridStateRepository:
             if current is None or state.timestamp > current.timestamp:
                 by_cell[state.h3_cell] = state
         return list(by_cell.values())
+
+    def latest_in_cells(self, cells: list[str]) -> list[GridState]:
+        cell_set = set(cells)
+        return [s for s in self.latest() if s.h3_cell in cell_set]
 
     def latest_for_cell(self, h3_cell: str) -> GridState | None:
         matches = [s for s in self.states.values() if s.h3_cell == h3_cell]
@@ -139,6 +147,10 @@ class FakeForecastRepository:
             if current is None or f.generated_at > current.generated_at:
                 by_cell[f.h3_cell] = f
         return sorted(by_cell.values(), key=lambda f: f.h3_cell)
+
+    def latest_for_horizon_in_cells(self, hours: int, cells: list[str]) -> list[Forecast]:
+        cell_set = set(cells)
+        return [f for f in self.latest_for_horizon(hours) if f.h3_cell in cell_set]
 
 
 class FakeAlertRepository:

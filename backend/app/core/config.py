@@ -89,6 +89,18 @@ class Settings(BaseSettings):
     # one. Refuse loudly instead of appearing to hang.
     weather_max_cells: int = Field(default=50_000, ge=1)
 
+    # Hard ceiling on how many H3 cells a single resolution+bbox-scoped read
+    # (GET /grid/current, /grid/forecast, /weather) may cover — see
+    # app.services.grid_query.resolve_cells. The bbox there is client input
+    # (a map viewport), and a fine resolution paired with an accidentally
+    # huge one should fail clearly and cheaply rather than enumerating
+    # millions of cells. Same default as WEATHER_MAX_CELLS, for the read
+    # side — generous enough that frontend/src/lib/lod.ts's zoom/resolution
+    # tiers stay comfortably under it on an ordinary screen (verified live;
+    # see that module's own comments), while still catching a genuinely
+    # oversized request (a very large monitor, or a non-map caller).
+    grid_query_max_cells: int = Field(default=50_000, ge=1)
+
     # --- PM2.5 estimation (app.services.estimation.IDWPollutionEstimator) ---
     # A cell with no sensor within this radius gets no estimate (pm25=None,
     # confidence=0.0) rather than a value extrapolated from something too
@@ -110,11 +122,13 @@ class Settings(BaseSettings):
     # calculation time over whichever factors are actually present for a
     # cell (see HeuristicPDIModel), so PM2.5 alone still yields a full-
     # range score today even though road/industrial pressure default to
-    # nonzero weights for when that data exists. Weights may be negative
-    # for a future "sink" factor (e.g. precipitation washout) that should
-    # pull the index down rather than up — nothing about the formula
-    # needs to change for that, only a nonzero weight and populated
-    # CellContext field.
+    # nonzero weights for when that data exists. A negative weight (see
+    # pdi_vegetation_sink_weight below) pulls the index down rather than
+    # up — nothing about the formula needs to change for that, only a
+    # negative weight and a populated CellContext field. These same
+    # weights also drive app.services.demo_data's illustrative PDI, so
+    # they're configurable in one place for both the real model and the
+    # demo fallback.
     pdi_pm25_weight: float = Field(default=0.7)
     # No real road-density data source exists yet (see CellContext.road_pressure);
     # this weight only has an effect once one populates the field.
@@ -122,6 +136,11 @@ class Settings(BaseSettings):
     # No real industrial-proximity data source exists yet (see
     # CellContext.industrial_pressure); same as above.
     pdi_industrial_pressure_weight: float = Field(default=0.1)
+    # Negative: vegetation/green cover is a pollution *sink*, not a
+    # pressure, so more of it should pull PDI down, not up. No real
+    # vegetation-cover data source exists yet (see
+    # CellContext.vegetation_sink); same caveat as the two above.
+    pdi_vegetation_sink_weight: float = Field(default=-0.15)
 
     # --- Dispersion / forecast model (app.services.dispersion.DeterministicH3DispersionModel) ---
     # Baseline fraction of a cell's PM2.5 removed per hour regardless of

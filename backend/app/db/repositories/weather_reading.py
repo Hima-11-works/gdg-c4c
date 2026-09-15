@@ -26,6 +26,8 @@ _COLUMNS = (
     weather_reading_table.c.wind_direction,
     weather_reading_table.c.precipitation,
     weather_reading_table.c.boundary_layer_height,
+    weather_reading_table.c.temperature,
+    weather_reading_table.c.humidity,
     weather_reading_table.c.measured_at,
 )
 
@@ -44,6 +46,8 @@ def _row_to_domain(row: Row) -> WeatherReading:
         wind_direction=row.wind_direction,
         precipitation=row.precipitation,
         boundary_layer_height=row.boundary_layer_height,
+        temperature=row.temperature,
+        humidity=row.humidity,
         measured_at=row.measured_at,
     )
 
@@ -60,6 +64,8 @@ def _insert_stmt(reading: WeatherReading) -> Insert:
             wind_direction=reading.wind_direction,
             precipitation=reading.precipitation,
             boundary_layer_height=reading.boundary_layer_height,
+            temperature=reading.temperature,
+            humidity=reading.humidity,
             measured_at=reading.measured_at,
         )
         .returning(*_COLUMNS)
@@ -86,6 +92,15 @@ def _latest_for_cell_stmt(h3_cell: str) -> Select:
 def _list_latest_stmt() -> Select:
     return (
         select(*_COLUMNS)
+        .distinct(weather_reading_table.c.h3_cell)
+        .order_by(weather_reading_table.c.h3_cell, weather_reading_table.c.measured_at.desc())
+    )
+
+
+def _list_latest_in_cells_stmt(cells: list[str]) -> Select:
+    return (
+        select(*_COLUMNS)
+        .where(weather_reading_table.c.h3_cell.in_(cells))
         .distinct(weather_reading_table.c.h3_cell)
         .order_by(weather_reading_table.c.h3_cell, weather_reading_table.c.measured_at.desc())
     )
@@ -121,4 +136,10 @@ class SqlWeatherReadingRepository:
 
     def list_latest(self) -> list[WeatherReading]:
         rows = self._session.execute(_list_latest_stmt()).all()
+        return [_row_to_domain(row) for row in rows]
+
+    def list_latest_in_cells(self, cells: list[str]) -> list[WeatherReading]:
+        if not cells:
+            return []
+        rows = self._session.execute(_list_latest_in_cells_stmt(cells)).all()
         return [_row_to_domain(row) for row in rows]

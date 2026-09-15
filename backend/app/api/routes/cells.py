@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api.deps import get_cell_service
 from app.api.schemas import (
@@ -33,10 +33,21 @@ router = APIRouter(prefix="/cells", tags=["cells"])
     },
 )
 def get_cell(
-    h3_cell: str, service: CellService = Depends(get_cell_service)
+    h3_cell: str,
+    resolution: int | None = Query(
+        None,
+        ge=0,
+        le=15,
+        description=(
+            "The resolution h3_cell was fetched at, if not H3_RESOLUTION — required for a cell "
+            "from a country/state-tier (coarser) level-of-detail read, otherwise it's rejected "
+            "as an invalid cell. See docs/architecture.md's 'Level of detail' section."
+        ),
+    ),
+    service: CellService = Depends(get_cell_service),
 ) -> Envelope[CellDetailOut]:
     try:
-        result = service.get_cell(h3_cell)
+        result = service.get_cell(h3_cell, resolution=resolution)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
@@ -56,5 +67,6 @@ def get_cell(
             current=GridStateOut.model_validate(detail.current) if detail.current else None,
             forecasts=[ForecastOut.model_validate(f) for f in detail.forecasts],
             weather=WeatherReadingOut.model_validate(detail.weather) if detail.weather else None,
+            pdi_factors=detail.pdi_factors,
         ),
     )

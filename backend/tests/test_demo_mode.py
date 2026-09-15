@@ -190,6 +190,7 @@ async def test_demo_mode_end_to_end_produces_a_hotspot_downwind_movement_and_an_
             pm25_weight=settings.pdi_pm25_weight,
             road_pressure_weight=settings.pdi_road_pressure_weight,
             industrial_pressure_weight=settings.pdi_industrial_pressure_weight,
+            vegetation_sink_weight=settings.pdi_vegetation_sink_weight,
         ),
         geospatial,
         sensor_repo,

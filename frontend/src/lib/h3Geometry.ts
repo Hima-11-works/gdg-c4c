@@ -21,7 +21,6 @@ export interface WindPoint {
 }
 
 type CellFeature = Feature<Polygon, { h3_cell: string; value: number | null }>
-type CenterPointFeature = Feature<Point, { h3_cell: string; value: number | null }>
 type WindFeature = Feature<Point, { wind_speed: number; rotation: number }>
 
 export const EMPTY_FEATURE_COLLECTION: FeatureCollection = {
@@ -30,18 +29,36 @@ export const EMPTY_FEATURE_COLLECTION: FeatureCollection = {
 }
 
 // A cell's hexagon boundary is a pure function of its h3_cell string — it
-// never changes. The map polls /grid/current, /grid/forecast, and
-// /weather every 60s (see components/MapPage.tsx), and each poll tick
-// hands cellsToFeatureCollection the same ~1900 cells with only `value`
-// possibly different, so recomputing cellToBoundary (real trigonometry,
-// not a cheap lookup) for every cell on every tick is wasted work. This
-// cache is unbounded, which is fine here: the cell set is the fixed H3
-// grid covering one configured MVP region, not user-generated data.
+// never changes. The map polls its current level-of-detail data every
+// 60s (see components/MapPage.tsx) without the user necessarily having
+// moved, and each poll tick hands cellsToFeatureCollection the same
+// cells with only `value` possibly different, so recomputing
+// cellToBoundary (real trigonometry, not a cheap lookup) for every cell
+// on every tick is wasted work.
+//
+// Bounded rather than left to grow forever: demo_data's continuous
+// nationwide field (see backend/app/services/demo_data.py) means a
+// session that pans/zooms around several different cities at local-tier
+// resolution can rack up tens of thousands of distinct cell ids, each
+// worth a handful of coordinate pairs — small individually, not
+// negligible after a long session. Simplest possible bound: once the
+// cache grows past CACHE_MAX_ENTRIES, drop it and start over, rather
+// than a real LRU — a cleared cache just means the next few cells pay
+// the recompute cost again, which is cheap.
+const CACHE_MAX_ENTRIES = 20_000
 const boundaryCache = new Map<string, Position[]>()
+
+/** A cell's center as [latitude, longitude] — used to look up which
+ * state a clicked cell falls in (see lib/stateBoundaries.ts), not for
+ * rendering (the polygon boundary above is what's drawn). */
+export function cellCenter(h3Cell: string): [number, number] {
+  return cellToLatLng(h3Cell) as [number, number]
+}
 
 function boundaryFor(h3Cell: string): Position[] {
   let boundary = boundaryCache.get(h3Cell)
   if (!boundary) {
+    if (boundaryCache.size >= CACHE_MAX_ENTRIES) boundaryCache.clear()
     boundary = cellToBoundary(h3Cell, true) as Position[]
     boundaryCache.set(h3Cell, boundary)
   }
@@ -64,27 +81,6 @@ export function cellsToFeatureCollection(
       coordinates: [boundaryFor(cell.h3Cell)],
     },
   }))
-  return { type: 'FeatureCollection', features }
-}
-
-/** One Point feature per cell, at its H3 center, carrying the same
- * `h3_cell`/`value` properties as cellsToFeatureCollection — the country-
- * wide overview layer's data (see components/MapView.tsx). A resolution-8
- * hex is under a km wide, effectively invisible at country zoom, so the
- * overview renders this as a fixed-size circle instead of the true
- * polygon; it's the same underlying cells and values, just a different
- * geometry for a different zoom range. */
-export function cellsToCenterPointFeatureCollection(
-  cells: CellValue[],
-): FeatureCollection<Point, CenterPointFeature['properties']> {
-  const features: CenterPointFeature[] = cells.map((cell) => {
-    const [latitude, longitude] = cellToLatLng(cell.h3Cell)
-    return {
-      type: 'Feature',
-      properties: { h3_cell: cell.h3Cell, value: cell.value },
-      geometry: { type: 'Point', coordinates: [longitude, latitude] },
-    }
-  })
   return { type: 'FeatureCollection', features }
 }
 

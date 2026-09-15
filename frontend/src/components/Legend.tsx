@@ -1,4 +1,5 @@
 import { NO_DATA_COLOR, PDI_COLOR_SCALE, PM25_COLOR_SCALE } from '../lib/colorScales'
+import { PDI_LABEL, PDI_TOOLTIP } from '../lib/format'
 import { useMapUi } from '../state/MapUiContext'
 
 export function Legend() {
@@ -18,7 +19,8 @@ export function Legend() {
 
       {state.showPdi && (
         <section>
-          <h3>PDI (heuristic, not a measurement)</h3>
+          <h3 title={PDI_TOOLTIP}>{PDI_LABEL}</h3>
+          <p className="muted legend-note">{PDI_TOOLTIP}</p>
           {PDI_COLOR_SCALE.map((stop) => (
             <div className="legend-row" key={stop.value}>
               <span className="swatch" style={{ backgroundColor: stop.color }} />
@@ -40,8 +42,8 @@ export function Legend() {
 
       <section>
         <p className="muted legend-note">
-          Zoomed out: one marker per city. Zoom in on a city to see per-hex detail, or click any
-          marker/hex for its full readings.
+          Zoomed out: a generalized nationwide picture. Zoom in for finer detail, or click any hex
+          for its full readings.
         </p>
       </section>
     </div>
