@@ -148,16 +148,19 @@ npm run dev
 ### 7. Open the app
 
 **http://localhost:5173.** The app is scoped to India: you should see the
-whole country on load, with a coarse, "very generalized" PM2.5 hex per
-city-sized area nationwide, plus wind arrows — see
-["Level of detail"](#level-of-detail) below. Zoom into a city (e.g.
-Delhi, the demo hotspot) to see those give way to a real, finer per-hex
-grid for just that area. Check **Show PDI layer** to switch to the
+whole country on load, state boundaries included, with a coarse,
+generalized PM2.5 hex covering every part of the country, plus wind
+arrows — see ["Level of detail"](#level-of-detail) below. Zoom into a
+city (e.g. Delhi, the Demo Mode pipeline scenario's hotspot) to see
+those give way to a real, finer per-hex grid for just that area. Check
+**Show Pollution Development Index (PDI) layer** to switch to the
 pressure score (only visible once zoomed in past the country tier);
-click **+1h / +3h / +6h** to watch the hotspot fade and drift with the
-wind; click any hex to open its detail panel (PM2.5, PDI, wind,
-forecast, confidence); **Alerts** (top right) lists what the rule engine
-raised.
+click **+1h / +3h / +6h** to watch hotspots visibly move and disperse
+downwind with the wind, not just fade in place; click any hex to open
+its detail panel — the state it's in, PM2.5, PDI (plus a breakdown of
+the four factors behind it), wind, temperature, humidity, precipitation,
+confidence, and the forecast at each horizon; **Alerts** (top right)
+lists what the rule engine raised.
 
 Also useful: **http://localhost:8000/docs** (interactive API reference)
 and **http://localhost:8000/health/ready** (confirms the database
