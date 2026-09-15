@@ -30,11 +30,12 @@ focused on what exists and how to run it.
 14. [Running the backend and frontend](#running-the-backend-and-frontend)
 15. [Running tests](#running-tests)
 16. [Demo mode](#demo-mode)
-17. [API overview](#api-overview)
-18. [PDI: current definition and disclaimer](#pdi-current-definition-and-disclaimer)
-19. [Forecast model: current assumptions](#forecast-model-current-assumptions)
-20. [Known limitations](#known-limitations)
-21. [Future extension points](#future-extension-points)
+17. [Country overview vs. per-location detail](#country-overview-vs-per-location-detail)
+18. [API overview](#api-overview)
+19. [PDI: current definition and disclaimer](#pdi-current-definition-and-disclaimer)
+20. [Forecast model: current assumptions](#forecast-model-current-assumptions)
+21. [Known limitations](#known-limitations)
+22. [Future extension points](#future-extension-points)
 
 ## What this project does
 
@@ -146,10 +147,14 @@ npm run dev
 
 ### 7. Open the app
 
-**http://localhost:5173.** You should see PM2.5-colored hexagons over
-San Francisco with a hotspot downtown and blue wind arrows. Check
-**Show PDI layer** to switch to the pressure score; click **+1h / +3h /
-+6h** to watch the hotspot fade and drift east with the wind; click a
+**http://localhost:5173.** The app is scoped to India: you should see the
+whole country on load, with one colored marker per major city (PM2.5,
+"very generalized") and wind arrows — see
+["Country overview vs. per-location detail"](#country-overview-vs-per-location-detail)
+below. Zoom into a city (e.g. Delhi, the demo hotspot) to see its
+markers give way to real per-hex detail. Check **Show PDI layer** to
+switch to the pressure score; click **+1h / +3h /
++6h** to watch the hotspot fade and drift with the wind; click a
 hexagon to open its detail panel (PM2.5, PDI, wind, forecast,
 confidence); **Alerts** (top right) lists what the rule engine raised.
 
@@ -444,7 +449,7 @@ separate and only holds `VITE_API_BASE_URL`.
 | `OPEN_METEO_BASE_URL`, `OPEN_METEO_TIMEOUT_SECONDS`, `OPEN_METEO_MAX_RETRIES`, `OPEN_METEO_MAX_LOCATIONS_PER_REQUEST` | ingestion | Open-Meteo adapter tuning; no key needed |
 | `WEATHER_MAX_CELLS` | ingestion | Safety ceiling (default 50000) on one weather run's fan-out; an oversized bbox is refused rather than building millions of rows |
 | `WEATHER_H3_RESOLUTION` | ingestion | Coarser resolution (default 5) weather is sampled at, fanned out to every `H3_RESOLUTION` cell inside. Must be ≤ `H3_RESOLUTION` (enforced by a `Settings` validator) |
-| `INGEST_BBOX_MIN_LAT`/`MIN_LON`/`MAX_LAT`/`MAX_LON` | ingestion | Bounding box, shared by `ingest` and `ingest-weather` (default: San Francisco) |
+| `INGEST_BBOX_MIN_LAT`/`MIN_LON`/`MAX_LAT`/`MAX_LON` | ingestion | Bounding box, shared by `ingest` and `ingest-weather` (default: Delhi NCR — a single city/region, not all of India; see [Country overview vs. per-location detail](#country-overview-vs-per-location-detail)) |
 | `INGEST_MAX_READING_AGE_HOURS` | ingestion | A fetched PM2.5 reading older than this is dropped as stale (default 3h) |
 | `IDW_MAX_DISTANCE_KM` | estimation | Max distance (default 15km) a sensor may be from a cell center to count as evidence |
 | `IDW_MIN_SENSORS` | estimation | Min sensors (default 2) required in range before a cell gets an estimate at all |
@@ -702,9 +707,9 @@ for real against this synthetic input. There is no separate demo API
 response shape, and no `if demo_mode` branch anywhere outside
 `app.ingestion.factory`.
 
-The scenario is a wildfire-smoke-scale PM2.5 hotspot (280 µg/m³,
-downtown San Francisco) with four lower background readings around it
-and a steady 6 m/s westerly wind, chosen so a pipeline run against it is
+The scenario is a smog-episode-scale PM2.5 hotspot (280 µg/m³, central
+Delhi) with four lower background readings around it and a steady 6 m/s
+westerly wind, chosen so a pipeline run against it is
 guaranteed — with no non-default configuration — to produce a clearly
 visible hotspot, forecast values that visibly carry it downwind over
 +1h/+3h/+6h, and at least one CRITICAL alert (280 is comfortably past the
@@ -722,6 +727,53 @@ worth stating plainly:
 | Where it's decided | `app.ingestion.factory`, once, at ingestion time | Each service (`app/services/{sensors,weather,grid,cells,alerts}.py`), per request, by checking whether its repository query returned anything |
 | Effect on persisted data | Produces real, computed, persisted rows | N/A — nothing is persisted for the fallback |
 | Effect on `is_demo` | None — stays `false`, same as live mode | This flag itself |
+
+## Country overview vs. per-location detail
+
+The app is scoped to **India**. On load, the frontend fits the whole
+country in view rather than centering on one city (`INDIA_BOUNDS` in
+`frontend/src/components/MapView.tsx`), and shows a "very generalized"
+country-wide picture: one colored marker per major city for PM2.5, plus
+wind arrows, all visible at any zoom. Zoom into a particular city and
+those markers give way to the real per-hex detail view (the same
+fill/outline/PDI hex layers this README describes elsewhere) — click
+either a marker or a hex for that location's full reading (PM2.5, PDI,
+wind, forecast, confidence).
+
+This split is purely a **frontend rendering choice**, driven by MapLibre
+layer `minzoom`/`maxzoom` (`OVERVIEW_MAX_ZOOM`, default `6`, in
+`MapView.tsx`) — both the country-wide markers and the per-hex detail
+are built from the exact same API data (`h3_cell` + a value), just drawn
+as circles at one zoom range and true hex polygons at another
+(`cellsToCenterPointFeatureCollection` vs. `cellsToFeatureCollection` in
+`frontend/src/lib/h3Geometry.ts`). No new backend endpoint or bbox
+parameter exists for this — the backend has no concept of "zoom level."
+
+**Where the data comes from today** (all dummy/illustrative — see
+[MVP limitations](#mvp-limitations)):
+
+- `app/services/demo_data.py` — the `is_demo: true` fallback shown when
+  a repository is empty — now spans **~19 major Indian cities**, each
+  rendered as a small 7-cell cluster (a center hex at the city's own
+  illustrative PM2.5 value, surrounded by a ring at a gentle falloff)
+  so zooming into any of them reveals a visible blob of detail, not a
+  single dot. Values are shaped like each city's real-world reputation
+  (the Indo-Gangetic plain markedly worse than the south/coast) so the
+  map reads as a plausible national picture.
+- `app/ingestion/demo.py` (`DEMO_MODE=true`) and `INGEST_BBOX_*`'s
+  default both point at **Delhi NCR** — a real pipeline run (ingestion,
+  IDW, PDI, dispersion, alerts) only ever covers one city-sized region
+  at a time, the same as before this app was scoped to India; see
+  [Demo mode](#demo-mode). Nothing about this pipeline changed — it
+  isn't what powers the country-wide overview.
+
+**Known limitation:** "detail on zoom" only has something to show for
+the ~19 cities in `app/services/demo_data.py` (until real ingestion
+covers more) — zooming into an arbitrary empty stretch of the country
+shows no hexes, which is expected for illustrative data rather than a
+bug. A real deployment would need either many ingestion regions or a
+genuinely dynamic, viewport-scoped query — neither exists yet (see
+[Future extension points](#future-extension-points)).
 
 ## API overview
 

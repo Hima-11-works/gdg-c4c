@@ -4,7 +4,7 @@
 // (h3_cell, value) pairs already computed by the backend into GeoJSON for
 // MapLibre. No interpolation, estimation, or forecasting happens here.
 
-import { cellToBoundary } from 'h3-js'
+import { cellToBoundary, cellToLatLng } from 'h3-js'
 import type { Feature, FeatureCollection, Point, Polygon, Position } from 'geojson'
 
 export interface CellValue {
@@ -21,6 +21,7 @@ export interface WindPoint {
 }
 
 type CellFeature = Feature<Polygon, { h3_cell: string; value: number | null }>
+type CenterPointFeature = Feature<Point, { h3_cell: string; value: number | null }>
 type WindFeature = Feature<Point, { wind_speed: number; rotation: number }>
 
 export const EMPTY_FEATURE_COLLECTION: FeatureCollection = {
@@ -63,6 +64,27 @@ export function cellsToFeatureCollection(
       coordinates: [boundaryFor(cell.h3Cell)],
     },
   }))
+  return { type: 'FeatureCollection', features }
+}
+
+/** One Point feature per cell, at its H3 center, carrying the same
+ * `h3_cell`/`value` properties as cellsToFeatureCollection — the country-
+ * wide overview layer's data (see components/MapView.tsx). A resolution-8
+ * hex is under a km wide, effectively invisible at country zoom, so the
+ * overview renders this as a fixed-size circle instead of the true
+ * polygon; it's the same underlying cells and values, just a different
+ * geometry for a different zoom range. */
+export function cellsToCenterPointFeatureCollection(
+  cells: CellValue[],
+): FeatureCollection<Point, CenterPointFeature['properties']> {
+  const features: CenterPointFeature[] = cells.map((cell) => {
+    const [latitude, longitude] = cellToLatLng(cell.h3Cell)
+    return {
+      type: 'Feature',
+      properties: { h3_cell: cell.h3Cell, value: cell.value },
+      geometry: { type: 'Point', coordinates: [longitude, latitude] },
+    }
+  })
   return { type: 'FeatureCollection', features }
 }
 

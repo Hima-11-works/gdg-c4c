@@ -37,6 +37,13 @@ export function Legend() {
           <span aria-hidden="true">↑</span> Wind direction (arrow points downwind)
         </div>
       </section>
+
+      <section>
+        <p className="muted legend-note">
+          Zoomed out: one marker per city. Zoom in on a city to see per-hex detail, or click any
+          marker/hex for its full readings.
+        </p>
+      </section>
     </div>
   )
 }

@@ -10,10 +10,12 @@ import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&ur
 setWorkerUrl(maplibreWorkerUrl)
 import { colorScaleExpression, PDI_COLOR_SCALE, PM25_COLOR_SCALE } from '../lib/colorScales'
 import {
+  cellsToCenterPointFeatureCollection,
   cellsToFeatureCollection,
   EMPTY_FEATURE_COLLECTION,
   windToFeatureCollection,
 } from '../lib/h3Geometry'
+import type { CellValue } from '../lib/h3Geometry'
 import { useMapUi } from '../state/MapUiContext'
 import type { AsyncResource } from '../hooks/useApiResource'
 import type { ForecastOut, GridStateOut, WeatherReadingOut } from '../lib/types'
@@ -21,9 +23,23 @@ import type { ForecastOut, GridStateOut, WeatherReadingOut } from '../lib/types'
 // A free, key-less MapLibre-maintained basemap — good enough for an MVP;
 // swap for a hosted style later without touching anything below.
 const MAP_STYLE = 'https://demotiles.maplibre.org/style.json'
-const INITIAL_CENTER: [number, number] = [-122.4194, 37.7749] // San Francisco, matches backend demo data
-const INITIAL_ZOOM = 9
 
+// The app is scoped to India: on load, fit the whole country in view
+// rather than centering on one city — see the overview/detail split below.
+const INDIA_BOUNDS: [[number, number], [number, number]] = [
+  [68.0, 6.5], // southwest: min lon, min lat
+  [97.5, 37.5], // northeast: max lon, max lat
+]
+
+// Below this zoom, show one easy-to-read circle per city (the country-
+// wide "generalized" overview); at/above it, show the real per-hex
+// detail. A resolution-8 hex is under a km wide — invisible at country
+// zoom — so the two need genuinely different geometry, not just
+// different colors. Tune freely; nothing else depends on this number.
+const OVERVIEW_MAX_ZOOM = 6
+
+const SOURCE_OVERVIEW = 'cells-overview'
+const LAYER_OVERVIEW = 'cells-overview-circle'
 const SOURCE_PM25 = 'cells-pm25'
 const LAYER_PM25_FILL = 'cells-pm25-fill'
 const LAYER_PM25_OUTLINE = 'cells-pm25-outline'
@@ -84,18 +100,40 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
     const map = new MapLibreMap({
       container: containerRef.current,
       style: MAP_STYLE,
-      center: INITIAL_CENTER,
-      zoom: INITIAL_ZOOM,
+      bounds: INDIA_BOUNDS,
+      fitBoundsOptions: { padding: 20 },
     })
     mapRef.current = map
     map.addControl(new NavigationControl({ showCompass: false }), 'bottom-right')
 
     map.on('load', () => {
+      // Country-wide overview: one circle per city, visible only when
+      // zoomed out past OVERVIEW_MAX_ZOOM. Same h3_cell/value data as the
+      // hex fill layer below, fed by the same effect (see "PM2.5 /
+      // forecast layer data").
+      map.addSource(SOURCE_OVERVIEW, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+      map.addLayer({
+        id: LAYER_OVERVIEW,
+        type: 'circle',
+        source: SOURCE_OVERVIEW,
+        maxzoom: OVERVIEW_MAX_ZOOM,
+        paint: {
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 7, OVERVIEW_MAX_ZOOM, 16],
+          'circle-color': colorScaleExpression(PM25_COLOR_SCALE, 'value'),
+          'circle-stroke-color': '#ffffff',
+          'circle-stroke-width': 1.5,
+          'circle-opacity': 0.9,
+        },
+      })
+
+      // Per-hex detail: only rendered once zoomed in far enough for
+      // individual hexagons to be legible.
       map.addSource(SOURCE_PM25, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
       map.addLayer({
         id: LAYER_PM25_FILL,
         type: 'fill',
         source: SOURCE_PM25,
+        minzoom: OVERVIEW_MAX_ZOOM,
         paint: {
           'fill-color': colorScaleExpression(PM25_COLOR_SCALE, 'value'),
           'fill-opacity': 0.65,
@@ -105,6 +143,7 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
         id: LAYER_PM25_OUTLINE,
         type: 'line',
         source: SOURCE_PM25,
+        minzoom: OVERVIEW_MAX_ZOOM,
         paint: { 'line-color': '#00000040', 'line-width': 1 },
       })
 
@@ -113,6 +152,7 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
         id: LAYER_PDI_FILL,
         type: 'fill',
         source: SOURCE_PDI,
+        minzoom: OVERVIEW_MAX_ZOOM,
         layout: { visibility: 'none' },
         paint: {
           'fill-color': colorScaleExpression(PDI_COLOR_SCALE, 'value'),
@@ -139,7 +179,7 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
         },
       })
 
-      const clickableLayers = [LAYER_PM25_FILL, LAYER_PDI_FILL]
+      const clickableLayers = [LAYER_PM25_FILL, LAYER_PDI_FILL, LAYER_OVERVIEW]
       map.on('click', clickableLayers, (event) => {
         const h3Cell = event.features?.[0]?.properties?.h3_cell
         if (typeof h3Cell === 'string') dispatch({ type: 'SELECT_CELL', cell: h3Cell })
@@ -161,24 +201,30 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
     }
   }, [dispatch])
 
-  // PM2.5 / forecast layer data — switches source with the timeline.
+  // PM2.5 / forecast layer data — switches source with the timeline, and
+  // feeds both the per-hex detail source and the country-wide overview
+  // source (same cells/values, two different geometries — see the layer
+  // setup above).
   useEffect(() => {
     if (!mapReady || !mapRef.current) return
     const source = mapRef.current.getSource(SOURCE_PM25)
-    if (!(source instanceof GeoJSONSource)) return
+    const overviewSource = mapRef.current.getSource(SOURCE_OVERVIEW)
+    if (!(source instanceof GeoJSONSource) || !(overviewSource instanceof GeoJSONSource)) return
 
+    let cells: CellValue[] | null = null
     if (state.horizon === 'now') {
-      if (currentGrid.status !== 'success') return
-      const cells = currentGrid.data.map((cell) => ({ h3Cell: cell.h3_cell, value: cell.pm25 }))
-      source.setData(cellsToFeatureCollection(cells))
-    } else {
-      if (forecastGrid.status !== 'success') return
-      const cells = forecastGrid.data.map((forecast) => ({
+      if (currentGrid.status === 'success') {
+        cells = currentGrid.data.map((cell) => ({ h3Cell: cell.h3_cell, value: cell.pm25 }))
+      }
+    } else if (forecastGrid.status === 'success') {
+      cells = forecastGrid.data.map((forecast) => ({
         h3Cell: forecast.h3_cell,
         value: forecast.predicted_pm25,
       }))
-      source.setData(cellsToFeatureCollection(cells))
     }
+    if (!cells) return
+    source.setData(cellsToFeatureCollection(cells))
+    overviewSource.setData(cellsToCenterPointFeatureCollection(cells))
   }, [mapReady, state.horizon, currentGrid, forecastGrid])
 
   // PDI layer data — always from current state; there is no forecasted PDI.

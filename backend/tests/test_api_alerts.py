@@ -14,7 +14,9 @@ def test_list_alerts_falls_back_to_demo_data_when_empty(api_client: TestClient) 
     assert body["is_demo"] is True
     assert len(body["data"]) == 1
     alert = body["data"][0]
-    assert alert["severity"] == "warning"
+    # The demo dataset's worst city (Delhi) is above the default critical
+    # threshold — see app.services.demo_data.demo_alerts.
+    assert alert["severity"] == "critical"
     assert set(alert.keys()) == {
         "h3_cell",
         "severity",

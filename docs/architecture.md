@@ -311,9 +311,9 @@ built, nothing else. `app.ingestion.factory.build_pollution_provider`/
 itself, which is what keeps `if settings.demo_mode` out of every layer
 above ingestion. In demo mode the factory returns
 `app.ingestion.demo.DemoPollutionDataProvider`/`DemoWeatherProvider`
-instead: a fixed hotspot-plus-background PM2.5 dataset (San Francisco,
-matching `app.services.demo_data`'s layout for visual consistency, though
-the two modules don't depend on each other) and a steady westerly wind,
+instead: a fixed hotspot-plus-background PM2.5 dataset (Delhi, matching
+`INGEST_BBOX_*`'s default region — the two modules don't depend on each
+other in code) and a steady westerly wind,
 both ignoring `bbox`/`since` — Demo Mode always shows the same scenario
 regardless of the configured region. `measured_at` is still stamped with
 the real current time on every call, not a fixed timestamp, so the data

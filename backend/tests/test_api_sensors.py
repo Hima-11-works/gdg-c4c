@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from fastapi.testclient import TestClient
 
 from app.domain.types import PM25, SensorReading
+from app.services import demo_data
 from tests.conftest import FakeRepos
 
 
@@ -13,7 +14,7 @@ def test_list_sensors_falls_back_to_demo_data_when_empty(api_client: TestClient)
     body = response.json()
     assert body["is_demo"] is True
     assert "generated_at" in body
-    assert len(body["data"]) == 5
+    assert len(body["data"]) == len(demo_data.demo_sensor_readings())
     first = body["data"][0]
     assert first["source"] == "demo"
     assert first["pollutant"] == "pm25"

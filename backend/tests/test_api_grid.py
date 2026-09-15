@@ -3,7 +3,9 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core.config import get_settings
 from app.domain.types import Forecast, GridState
+from app.services import demo_data
 from tests.conftest import FakeRepos
 
 
@@ -13,7 +15,7 @@ def test_current_grid_falls_back_to_demo_data_when_empty(api_client: TestClient)
     assert response.status_code == 200
     body = response.json()
     assert body["is_demo"] is True
-    assert len(body["data"]) == 5
+    assert len(body["data"]) == len(demo_data.demo_cells(get_settings().h3_resolution))
     first = body["data"][0]
     assert set(first.keys()) == {
         "h3_cell",
@@ -60,7 +62,7 @@ def test_forecast_grid_falls_back_to_demo_data_when_empty(
     assert response.status_code == 200
     body = response.json()
     assert body["is_demo"] is True
-    assert len(body["data"]) == 5
+    assert len(body["data"]) == len(demo_data.demo_cells(get_settings().h3_resolution))
     assert all(f["forecast_hours"] == hours for f in body["data"])
 
 

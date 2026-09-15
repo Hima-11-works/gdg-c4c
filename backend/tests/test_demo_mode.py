@@ -29,7 +29,7 @@ from app.services.pdi import HeuristicPDIModel
 from tests.fakes import FakeAlertRepository, FakeGridStateRepository, FakeSensorReadingRepository
 
 NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
-BBOX = BoundingBox(min_lat=37.6, min_lon=-122.6, max_lat=37.9, max_lon=-122.1)
+BBOX = BoundingBox(min_lat=28.40, min_lon=76.80, max_lat=28.90, max_lon=77.50)
 
 
 def _settings(**overrides) -> Settings:
@@ -168,7 +168,7 @@ async def test_demo_mode_end_to_end_produces_a_hotspot_downwind_movement_and_an_
     """
     settings = _settings(demo_mode=True)
     resolution = settings.h3_resolution
-    hotspot_cell = h3.latlng_to_cell(37.7749, -122.4194, resolution)
+    hotspot_cell = h3.latlng_to_cell(28.6139, 77.2090, resolution)
     downwind_cell = _nearest_neighbor_to_bearing(hotspot_cell, target_bearing=90.0)  # east
     upwind_cell = _nearest_neighbor_to_bearing(hotspot_cell, target_bearing=270.0)  # west
 

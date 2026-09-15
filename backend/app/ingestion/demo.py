@@ -15,15 +15,16 @@ persisted rows via the real pipeline, so `is_demo` stays false for them.
 See app.core.config.Settings.demo_mode for that distinction spelled out
 again at the point someone is most likely to be confused by it.
 
-Scenario: a wildfire-smoke-scale PM2.5 hotspot in San Francisco (a
-"downtown" point matching app.services.demo_data's own layout, for
-visual/conceptual consistency between the two — not a code dependency;
-this module defines its own constants) with four lower-value background
-readings around it, and a steady westerly wind so the forecast layer
-visibly carries it eastward over +1h/+3h/+6h. The hotspot value (280
-µg/m³) is comfortably past ALERT_CRITICAL_THRESHOLD_UGM3's default (150),
-so a real pipeline run against this data is guaranteed to raise at least
-one CRITICAL alert without depending on any non-default configuration.
+Scenario: a smog-episode-scale PM2.5 hotspot in Delhi (matching
+INGEST_BBOX_*'s default region, so `python -m app.cli ingest` against the
+default bbox and a Demo Mode pipeline run cover the same area — not a
+code dependency; this module defines its own constants) with four
+lower-value background readings around it, and a steady wind so the
+forecast layer visibly carries it over +1h/+3h/+6h. The hotspot value
+(280 µg/m³) is comfortably past ALERT_CRITICAL_THRESHOLD_UGM3's default
+(150), so a real pipeline run against this data is guaranteed to raise
+at least one CRITICAL alert without depending on any non-default
+configuration.
 """
 
 from __future__ import annotations
@@ -32,13 +33,14 @@ from datetime import UTC, datetime
 
 from app.domain.types import PM25, BoundingBox, Coordinate, SensorReading, WeatherSample
 
-# (latitude, longitude, PM2.5 µg/m³) — index 0 is the hotspot.
+# (latitude, longitude, PM2.5 µg/m³) — index 0 is the hotspot, in and
+# around Delhi (matches INGEST_BBOX_*'s default region).
 _DEMO_READINGS = [
-    (37.7749, -122.4194, 280.0),  # downtown: wildfire-smoke-scale hotspot
-    (37.8044, -122.2712, 18.0),  # north: background
-    (37.7213, -122.1420, 22.0),  # east: background
-    (37.6879, -122.4702, 15.0),  # south: background
-    (37.7599, -122.5076, 20.0),  # west: background
+    (28.6139, 77.2090, 280.0),  # central Delhi: smog-episode-scale hotspot
+    (28.6434, 77.3572, 18.0),  # north: background
+    (28.5603, 77.4864, 22.0),  # east: background
+    (28.5269, 77.1582, 15.0),  # south: background
+    (28.5989, 77.1208, 20.0),  # west: background
 ]
 
 # A steady westerly (blowing FROM the west, i.e. TOWARD the east) —

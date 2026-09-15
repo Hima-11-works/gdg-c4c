@@ -56,12 +56,15 @@ class Settings(BaseSettings):
     openaq_locations_limit: int = Field(default=100, ge=1, le=1000)
 
     # Bounding box ingestion is scoped to (a city/region, not "the world").
-    # Defaults to the same San Francisco area as app.services.demo_data, so
-    # ingestion works out of the box locally once OPENAQ_API_KEY is set.
-    ingest_bbox_min_lat: float = 37.60
-    ingest_bbox_min_lon: float = -122.60
-    ingest_bbox_max_lat: float = 37.90
-    ingest_bbox_max_lon: float = -122.10
+    # Defaults to the Delhi NCR area, matching app.ingestion.demo's Demo
+    # Mode scenario. app.services.demo_data's own fallback dataset now
+    # spans many Indian cities (a country-wide "generalized" view — see
+    # frontend/src/components/MapView.tsx), so it's no longer the same
+    # single area this bbox covers the way it used to be.
+    ingest_bbox_min_lat: float = 28.40
+    ingest_bbox_min_lon: float = 76.80
+    ingest_bbox_max_lat: float = 28.90
+    ingest_bbox_max_lon: float = 77.50
     # A reading older than this is considered stale and dropped.
     ingest_max_reading_age_hours: float = Field(default=3.0, gt=0)
 

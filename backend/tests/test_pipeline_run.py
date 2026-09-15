@@ -58,7 +58,12 @@ def test_report_with_no_stages_is_vacuously_successful() -> None:
 
 
 async def test_ingest_sensors_without_an_api_key_is_a_clear_failure_not_a_crash() -> None:
-    settings = _settings(openaq_api_key=None)
+    # demo_mode is pinned explicitly (not just left at Settings' False
+    # default): this test reads the real repo-root .env via Settings'
+    # env_file, and DEMO_MODE=true there (a valid thing for a developer to
+    # have set locally) would otherwise silently change which branch of
+    # _ingest_sensors this test actually exercises.
+    settings = _settings(openaq_api_key=None, demo_mode=False)
 
     # This branch returns before touching `session` at all, so a real
     # database session is unnecessary here.
