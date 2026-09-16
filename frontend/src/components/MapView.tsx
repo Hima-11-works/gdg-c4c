@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { GeoJSONSource, Map as MapLibreMap, NavigationControl, setWorkerUrl } from 'maplibre-gl'
+import { cellToBoundary } from 'h3-js'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
 
@@ -17,9 +18,22 @@ import {
 import { INDIA_BBOX, PDI_MIN_ZOOM } from '../lib/lod'
 import { INDIA_OUTLINE_URL, STATE_BOUNDARIES_URL } from '../lib/stateBoundaries'
 import { BASE_STYLE_URL, OVERLAY, WIND, BASEMAP, patchBasemapStyle } from '../lib/mapTheme'
+import {
+  CELL_BORDER_COLOR,
+  CELL_BORDER_WIDTH,
+  COLOR_TRANSITION_DURATION_MS,
+  LAYER_CROSSFADE_DURATION_MS,
+  PDI_FILL_OPACITY,
+  PM25_FILL_OPACITY,
+  prefersReducedMotion,
+  SELECTED_CELL_BORDER_COLOR,
+  SELECTED_CELL_BORDER_WIDTH,
+} from '../lib/visualConfig'
 import { useMapUi } from '../state/MapUiContext'
 import type { AsyncResource } from '../hooks/useApiResource'
 import type { BoundingBox, ForecastOut, GridStateOut, WeatherReadingOut } from '../lib/types'
+import type { Feature, FeatureCollection, Polygon, Position } from 'geojson'
+import type { ExpressionSpecification } from '@maplibre/maplibre-gl-style-spec'
 
 // The app is scoped to India: on load, fit the whole country in view
 // rather than centering on one city. Level of detail (which resolution
@@ -65,6 +79,9 @@ const LAYER_INDIA_OUTLINE_LINE = 'india-outline-line'
 const SOURCE_WIND = 'wind-points'
 const LAYER_WIND = 'wind-arrows'
 const WIND_ARROW_IMAGE = 'wind-arrow'
+
+const SOURCE_SELECTED = 'selected-cell'
+const LAYER_SELECTED_OUTLINE = 'selected-cell-outline'
 
 // Wind arrows are supplementary/decorative ("generalized meteorological
 // information"), not the primary data layer the way the PM2.5/PDI cells
@@ -125,6 +142,85 @@ function windArrowImage(): ImageData {
   return ctx.getImageData(0, 0, size, size)
 }
 
+// ---------------------------------------------------------------------------
+// Color transition helpers — interpolate between old and new cell values
+// using MapLibre paint-property expressions (no React state per frame).
+// ---------------------------------------------------------------------------
+
+type MergedCellFeature = Feature<Polygon, { h3_cell: string; oldValue: number | null; newValue: number | null }>
+
+/** Build a MapLibre expression that lerps between oldValue and newValue
+ * at the given progress (0 = old, 1 = new). Progress is baked into the
+ * expression so we only need setPaintProperty per frame, not setData. */
+function transitionColorExpression(
+  scale: typeof PM25_COLOR_SCALE | typeof PDI_COLOR_SCALE,
+  progress: number,
+): ExpressionSpecification {
+  const colorStops = scale.flatMap((s) => [s.value, s.color])
+  if (progress <= 0) {
+    return [
+      'case',
+      ['==', ['get', 'oldValue'], null],
+      '#2a2e36',
+      ['interpolate', ['linear'], ['get', 'oldValue'], ...colorStops],
+    ] as unknown as ExpressionSpecification
+  }
+  if (progress >= 1) {
+    return [
+      'case',
+      ['==', ['get', 'newValue'], null],
+      '#2a2e36',
+      ['interpolate', ['linear'], ['get', 'newValue'], ...colorStops],
+    ] as unknown as ExpressionSpecification
+  }
+  return [
+    'case',
+    ['all', ['==', ['get', 'oldValue'], null], ['==', ['get', 'newValue'], null]],
+    '#2a2e36',
+    [
+      'interpolate',
+      ['linear'],
+      ['+', ['*', ['coalesce', ['get', 'oldValue'], 0], 1 - progress], ['*', ['coalesce', ['get', 'newValue'], 0], progress]],
+      ...colorStops,
+    ],
+  ] as unknown as ExpressionSpecification
+}
+
+/** Merge old and new feature collections: every cell carries both
+ * oldValue and newValue, so the transition expression can lerp between them. */
+function mergeFeatureCollections(
+  oldFc: FeatureCollection,
+  newFc: FeatureCollection,
+): MergedCellFeature[] {
+  const oldMap = new Map<string, Feature<Polygon, { h3_cell: string; value: number | null }>>()
+  for (const f of oldFc.features) {
+    if (f.properties) oldMap.set(f.properties.h3_cell, f as Feature<Polygon, { h3_cell: string; value: number | null }>)
+  }
+
+  const newMap = new Map<string, Feature<Polygon, { h3_cell: string; value: number | null }>>()
+  for (const f of newFc.features) {
+    if (f.properties) newMap.set(f.properties.h3_cell, f as Feature<Polygon, { h3_cell: string; value: number | null }>)
+  }
+
+  const allKeys = new Set([...oldMap.keys(), ...newMap.keys()])
+  const merged: MergedCellFeature[] = []
+  for (const key of allKeys) {
+    const oldF = oldMap.get(key)
+    const newF = newMap.get(key)
+    const geometry = (newF ?? oldF)!.geometry
+    merged.push({
+      type: 'Feature',
+      properties: {
+        h3_cell: key,
+        oldValue: oldF?.properties?.value ?? null,
+        newValue: newF?.properties?.value ?? null,
+      },
+      geometry,
+    })
+  }
+  return merged
+}
+
 interface MapViewProps {
   currentGrid: AsyncResource<GridStateOut[]>
   forecastGrid: AsyncResource<ForecastOut[]>
@@ -153,6 +249,26 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
   useEffect(() => {
     lodResolutionRef.current = state.lod.resolution
   }, [state.lod.resolution])
+
+  // Track the displayed forecast minutes separately so we can detect
+  // keyframe transitions and animate the color change.
+  const displayedMinutesRef = useRef(0)
+
+  // Transition state — refs to avoid re-renders during animation.
+  const oldGeojsonRef = useRef<FeatureCollection | null>(null)
+  const transitionRafRef = useRef<number | null>(null)
+
+  // Track which fill layer is currently visible for the PDI crossfade.
+  const activeFillLayerRef = useRef<string>(LAYER_PM25_FILL)
+
+  const reducedMotion = prefersReducedMotion()
+
+  // Cancel any running transition on unmount.
+  useEffect(() => {
+    return () => {
+      if (transitionRafRef.current !== null) cancelAnimationFrame(transitionRafRef.current)
+    }
+  }, [])
 
   // Create the map once: fetch the base style, patch it to a dark
   // monochrome palette, then initialize MapLibre with the patched style.
@@ -219,14 +335,17 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
             source: SOURCE_PM25,
             paint: {
               'fill-color': colorScaleExpression(PM25_COLOR_SCALE, 'value'),
-              'fill-opacity': 0.75,
+              'fill-opacity': PM25_FILL_OPACITY,
             },
           })
           map!.addLayer({
             id: LAYER_PM25_OUTLINE,
             type: 'line',
             source: SOURCE_PM25,
-            paint: { 'line-color': OVERLAY.cellOutline, 'line-width': 1 },
+            paint: {
+              'line-color': CELL_BORDER_COLOR,
+              'line-width': CELL_BORDER_WIDTH,
+            },
           })
 
           // PDI — state-tier-and-finer, hidden below PDI_MIN_ZOOM.
@@ -239,7 +358,7 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
             layout: { visibility: 'none' },
             paint: {
               'fill-color': colorScaleExpression(PDI_COLOR_SCALE, 'value'),
-              'fill-opacity': 0.65,
+              'fill-opacity': PDI_FILL_OPACITY,
             },
           })
 
@@ -266,6 +385,21 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
               'line-color': OVERLAY.indiaBorder,
               'line-width': 1.5,
               'line-opacity': 0.8,
+            },
+          })
+
+          // Selected cell highlight — drawn above the data fill layers
+          // so the selection border is always visible. Only the selected
+          // cell's hex appears here; the highlight stays stable during
+          // timeline transitions (the data layers animate underneath).
+          map!.addSource(SOURCE_SELECTED, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+          map!.addLayer({
+            id: LAYER_SELECTED_OUTLINE,
+            type: 'line',
+            source: SOURCE_SELECTED,
+            paint: {
+              'line-color': SELECTED_CELL_BORDER_COLOR,
+              'line-width': SELECTED_CELL_BORDER_WIDTH,
             },
           })
 
@@ -315,25 +449,143 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
     }
   }, [dispatch])
 
+  // Selected cell highlight — updates independently of the data layers
+  // so it stays stable during timeline transitions. The outline is drawn
+  // on a separate source/layer above the fill; clicking a cell updates
+  // it immediately; the fill color beneath animates on its own schedule.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    const source = mapRef.current.getSource(SOURCE_SELECTED)
+    if (!(source instanceof GeoJSONSource)) return
+
+    const cell = state.selectedCell
+    if (cell === null) {
+      source.setData(EMPTY_FEATURE_COLLECTION)
+    } else {
+      try {
+        const coords = cellToBoundaryCoords(cell)
+        source.setData({
+          type: 'FeatureCollection',
+          features: [
+            {
+              type: 'Feature',
+              properties: { h3_cell: cell },
+              geometry: { type: 'Polygon', coordinates: [coords] },
+            },
+          ],
+        })
+      } catch {
+        source.setData(EMPTY_FEATURE_COLLECTION)
+      }
+    }
+  }, [mapReady, state.selectedCell])
+
+  // PDI layer visibility toggle — crossfade opacity between PM2.5 and
+  // PDI fill layers so switching modes never interpolates between
+  // unrelated color palettes. Uses MapLibre's setPaintProperty for the
+  // opacity crossfade (no React state updates per frame).
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    const map = mapRef.current
+
+    if (state.showPdi) {
+      // Show PDI, hide PM2.5 — crossfade.
+      map.setLayoutProperty(LAYER_PDI_FILL, 'visibility', 'visible')
+      animateOpacityCrossfade(map, LAYER_PM25_FILL, LAYER_PDI_FILL)
+      activeFillLayerRef.current = LAYER_PDI_FILL
+    } else {
+      // Show PM2.5, hide PDI — crossfade.
+      map.setLayoutProperty(LAYER_PM25_FILL, 'visibility', 'visible')
+      animateOpacityCrossfade(map, LAYER_PDI_FILL, LAYER_PM25_FILL)
+      activeFillLayerRef.current = LAYER_PM25_FILL
+    }
+  }, [mapReady, state.showPdi])
+
   // PM2.5 / forecast layer data — switches source with the timeline.
+  // When the forecast keyframe changes, performs a color interpolation
+  // transition. When the structural data changes (zoom/viewport), snaps
+  // immediately.
   useEffect(() => {
     if (!mapReady || !mapRef.current) return
     const source = mapRef.current.getSource(SOURCE_PM25)
     if (!(source instanceof GeoJSONSource)) return
 
+    let newData: FeatureCollection
     if (state.forecastMinutes === 0) {
       if (currentGrid.status !== 'success') return
       const cells = currentGrid.data.map((cell) => ({ h3Cell: cell.h3_cell, value: cell.pm25 }))
-      source.setData(cellsToFeatureCollection(cells))
+      newData = cellsToFeatureCollection(cells)
     } else {
       if (forecastGrid.status !== 'success') return
       const cells = forecastGrid.data.map((forecast) => ({
         h3Cell: forecast.h3_cell,
         value: forecast.predicted_pm25,
       }))
-      source.setData(cellsToFeatureCollection(cells))
+      newData = cellsToFeatureCollection(cells)
     }
-  }, [mapReady, state.forecastMinutes, currentGrid, forecastGrid])
+
+    const prevMinutes = displayedMinutesRef.current
+    const isKeyframeChange =
+      prevMinutes !== state.forecastMinutes &&
+      oldGeojsonRef.current !== null &&
+      !state.showPdi
+
+    if (isKeyframeChange && !reducedMotion) {
+      // Animate the color transition between keyframes using
+      // setPaintProperty per frame (only updates the expression, not the
+      // source data — much cheaper than setData for large cell counts).
+      const merged = mergeFeatureCollections(oldGeojsonRef.current!, newData)
+      const transitionData: FeatureCollection = { type: 'FeatureCollection', features: merged }
+
+      // Cancel any in-progress transition.
+      if (transitionRafRef.current !== null) cancelAnimationFrame(transitionRafRef.current)
+
+      source.setData(transitionData)
+
+      const map = mapRef.current!
+      const duration = COLOR_TRANSITION_DURATION_MS
+      const startTime = performance.now()
+
+      const animate = (now: number) => {
+        const elapsed = now - startTime
+        const progress = Math.min(1, elapsed / duration)
+        const eased = progress < 0.5 ? 2 * progress * progress : 1 - Math.pow(-2 * progress + 2, 2) / 2
+
+        map.setPaintProperty(
+          LAYER_PM25_FILL,
+          'fill-color',
+          transitionColorExpression(PM25_COLOR_SCALE, eased),
+        )
+
+        if (progress < 1) {
+          transitionRafRef.current = requestAnimationFrame(animate)
+        } else {
+          transitionRafRef.current = null
+          // Snap to final state with normal color expression.
+          source.setData(newData)
+          map.setPaintProperty(
+            LAYER_PM25_FILL,
+            'fill-color',
+            colorScaleExpression(PM25_COLOR_SCALE, 'value'),
+          )
+          oldGeojsonRef.current = newData
+        }
+      }
+
+      transitionRafRef.current = requestAnimationFrame(animate)
+    } else {
+      // Snap immediately — either structural change, PDI active, or reduced motion.
+      source.setData(newData)
+      mapRef.current.setPaintProperty(
+        LAYER_PM25_FILL,
+        'fill-color',
+        colorScaleExpression(PM25_COLOR_SCALE, 'value'),
+      )
+      oldGeojsonRef.current = newData
+    }
+
+    displayedMinutesRef.current = state.forecastMinutes
+  }, [mapReady, state.forecastMinutes, currentGrid, forecastGrid, state.showPdi, reducedMotion])
 
   // PDI layer data — always from current state; there is no forecasted PDI.
   // Skipped entirely while the layer is hidden (off by default, and below
@@ -346,16 +598,6 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
     const source = mapRef.current.getSource(SOURCE_PDI)
     if (source instanceof GeoJSONSource) source.setData(cellsToFeatureCollection(cells))
   }, [mapReady, currentGrid, state.showPdi])
-
-  // PDI layer visibility toggle.
-  useEffect(() => {
-    if (!mapReady || !mapRef.current) return
-    mapRef.current.setLayoutProperty(
-      LAYER_PDI_FILL,
-      'visibility',
-      state.showPdi ? 'visible' : 'none',
-    )
-  }, [mapReady, state.showPdi])
 
   // Wind arrows — thinned to at most one per cell of a fixed-size grid
   // over the current viewport (see thinBySpatialGrid), so "generalized
@@ -378,4 +620,52 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
   }, [mapReady, weather, state.lod, state.bbox])
 
   return <div ref={containerRef} className="map-canvas" />
+}
+
+// ---------------------------------------------------------------------------
+// Transition helpers — extracted to module scope so they don't close over
+// component refs and can be unit-tested independently.
+// ---------------------------------------------------------------------------
+
+function cellToBoundaryCoords(h3Cell: string): Position[] {
+  return cellToBoundary(h3Cell, true) as unknown as Position[]
+}
+
+function animateOpacityCrossfade(
+  map: MapLibreMap,
+  fadeOutLayer: string,
+  fadeInLayer: string,
+): void {
+  if (prefersReducedMotion()) {
+    map.setPaintProperty(fadeOutLayer, 'fill-opacity', 0)
+    map.setLayoutProperty(fadeOutLayer, 'visibility', 'none')
+    map.setPaintProperty(
+      fadeInLayer,
+      'fill-opacity',
+      fadeInLayer === LAYER_PDI_FILL ? PDI_FILL_OPACITY : PM25_FILL_OPACITY,
+    )
+    return
+  }
+
+  const duration = LAYER_CROSSFADE_DURATION_MS
+  const targetOpacity = fadeInLayer === LAYER_PDI_FILL ? PDI_FILL_OPACITY : PM25_FILL_OPACITY
+  const startTime = performance.now()
+
+  const animate = (now: number) => {
+    const elapsed = now - startTime
+    const progress = Math.min(1, elapsed / duration)
+    const eased = progress < 0.5 ? 2 * progress * progress : 1 - Math.pow(-2 * progress + 2, 2) / 2
+
+    map.setPaintProperty(fadeOutLayer, 'fill-opacity', targetOpacity * (1 - eased))
+    map.setPaintProperty(fadeInLayer, 'fill-opacity', targetOpacity * eased)
+
+    if (progress < 1) {
+      requestAnimationFrame(animate)
+    } else {
+      map.setLayoutProperty(fadeOutLayer, 'visibility', 'none')
+      map.setPaintProperty(fadeOutLayer, 'fill-opacity', 0)
+    }
+  }
+
+  requestAnimationFrame(animate)
 }
