@@ -1,5 +1,4 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:air_health_flutter/data/providers/dummy_pollution_data_provider.dart';
 import 'package:air_health_flutter/data/providers/scenario_data.dart';
