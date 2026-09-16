@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../../domain/models/alert_models.dart';
+import '../../domain/models/user_alert_preferences.dart';
 import '../app_colors.dart';
 import '../app_radius.dart';
 import '../app_spacing.dart';
