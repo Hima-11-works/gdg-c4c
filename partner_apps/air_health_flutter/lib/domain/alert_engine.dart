@@ -226,8 +226,8 @@ class AlertEngine {
         'Consider reducing prolonged outdoor exposure and follow your '
         'existing care plan if needed.',
       AlertSeverity.warning =>
-        'Reduce prolonged outdoor exposure. Keep medications accessible '
-        'and follow your existing care plan.',
+        'Reduce prolonged outdoor exposure. Follow your existing care plan '
+        'and keep any prescribed treatments accessible.',
       AlertSeverity.urgent =>
         'Avoid outdoor activity. Stay indoors with windows closed. '
         'Follow your existing care plan and seek medical attention if needed.',
