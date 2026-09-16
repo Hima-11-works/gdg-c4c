@@ -39,7 +39,7 @@ def _state(pm25: float | None, cell: str = CELL, *, pdi: float | None = None) ->
 
 
 def _forecast(
-    hours: int, predicted_pm25: float, cell: str = CELL, *, confidence: float = 0.8
+    hours: float, predicted_pm25: float, cell: str = CELL, *, confidence: float = 0.8
 ) -> Forecast:
     return Forecast(
         h3_cell=cell,

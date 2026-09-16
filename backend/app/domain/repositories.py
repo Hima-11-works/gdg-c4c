@@ -105,11 +105,11 @@ class ForecastRepository(Protocol):
         """All horizons from the most recent pipeline run for this cell."""
         ...
 
-    def latest_for_horizon(self, hours: int) -> list[Forecast]:
+    def latest_for_horizon(self, hours: float) -> list[Forecast]:
         """The most recent forecast at this horizon, for every cell that has one."""
         ...
 
-    def latest_for_horizon_in_cells(self, hours: int, cells: list[str]) -> list[Forecast]:
+    def latest_for_horizon_in_cells(self, hours: float, cells: list[str]) -> list[Forecast]:
         """Same as latest_for_horizon, restricted to these specific H3
         cells. Used for resolution/viewport-scoped API reads; see
         app.services.grid.GridService."""

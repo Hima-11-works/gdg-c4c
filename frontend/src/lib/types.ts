@@ -47,13 +47,12 @@ export interface GridStateOut {
   wind_direction: number | null
 }
 
-export type ForecastHorizonHours = 1 | 3 | 6
-
 export interface ForecastOut {
   h3_cell: string
   generated_at: string
   forecast_time: string
   forecast_hours: number
+  forecast_minutes: number
   predicted_pm25: number
   confidence: number
 }

@@ -138,7 +138,7 @@ class FakeForecastRepository:
             key=lambda f: f.forecast_hours,
         )
 
-    def latest_for_horizon(self, hours: int) -> list[Forecast]:
+    def latest_for_horizon(self, hours: float) -> list[Forecast]:
         by_cell: dict[str, Forecast] = {}
         for f in self.forecasts:
             if f.forecast_hours != hours:
@@ -148,7 +148,7 @@ class FakeForecastRepository:
                 by_cell[f.h3_cell] = f
         return sorted(by_cell.values(), key=lambda f: f.h3_cell)
 
-    def latest_for_horizon_in_cells(self, hours: int, cells: list[str]) -> list[Forecast]:
+    def latest_for_horizon_in_cells(self, hours: float, cells: list[str]) -> list[Forecast]:
         cell_set = set(cells)
         return [f for f in self.latest_for_horizon(hours) if f.h3_cell in cell_set]
 

@@ -25,7 +25,7 @@ def _grid_state(pm25: float = 10.0) -> GridState:
     return GridState(h3_cell=CELL, timestamp=GENERATED_AT, confidence=1.0, pm25=pm25)
 
 
-def _forecast(hours: int, predicted_pm25: float = 5.0) -> Forecast:
+def _forecast(hours: float, predicted_pm25: float = 5.0) -> Forecast:
     from datetime import timedelta
 
     return Forecast(

@@ -124,32 +124,148 @@ body,
   }
 }
 
-/* --- timeline --- */
+/* --- timeline slider --- */
 
 .timeline-control {
-  display: flex;
-  gap: 0.25rem;
+  position: relative;
+  width: min(85vw, 32rem);
+  padding: 0.4rem 0.7rem 0.5rem;
 }
 
-.timeline-control button,
 .layer-toggle,
 .alerts-toggle {
   cursor: pointer;
 }
 
-.timeline-control button {
-  border: 1px solid #3a3f4a;
-  background: rgba(18, 20, 26, 0.8);
-  border-radius: 6px;
-  padding: 0.35rem 0.7rem;
-  font-size: 0.85rem;
-  color: #9ca3af;
+.timeline-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.3rem;
 }
 
-.timeline-control button.active {
-  background: #2563eb;
-  color: white;
-  border-color: #2563eb;
+.timeline-buttons {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.timeline-btn {
+  background: none;
+  border: 1px solid #3a3f4a;
+  border-radius: 4px;
+  color: #9ca3af;
+  font-size: 0.85rem;
+  padding: 0.15rem 0.4rem;
+  cursor: pointer;
+  line-height: 1;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.timeline-btn:hover {
+  color: #e5e7eb;
+  border-color: #6b7280;
+}
+
+.timeline-btn-play {
+  font-size: 0.7rem;
+  min-width: 1.8rem;
+}
+
+.timeline-horizon {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #e5e7eb;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.timeline-ticks {
+  position: relative;
+  height: 1.2rem;
+  margin-bottom: 0.15rem;
+}
+
+.timeline-tick {
+  position: absolute;
+  transform: translateX(-50%);
+  font-size: 0.65rem;
+  font-weight: 500;
+  color: #6b7280;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s;
+}
+
+.timeline-tick:hover,
+.timeline-tick.active {
+  color: #e5e7eb;
+}
+
+.timeline-track {
+  position: relative;
+  height: 6px;
+  background: #2a2e36;
+  border-radius: 3px;
+  cursor: pointer;
+  outline: none;
+  touch-action: none;
+}
+
+.timeline-track:focus-visible {
+  box-shadow: 0 0 0 2px #3b82f6;
+}
+
+.timeline-track-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: #3b82f6;
+  border-radius: 3px;
+  pointer-events: none;
+}
+
+.timeline-mark {
+  position: absolute;
+  top: 50%;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #3a3f4a;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.timeline-mark.major {
+  width: 6px;
+  height: 6px;
+  background: #4a5060;
+}
+
+.timeline-mark.active {
+  background: #3b82f6;
+  transform: translate(-50%, -50%) scale(1.4);
+}
+
+.timeline-handle {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #e5e7eb;
+  border: 2px solid #3b82f6;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+  transition: left 0.08s ease-out;
+}
+
+.timeline-track:focus-visible .timeline-handle {
+  box-shadow: 0 0 0 3px #3b82f6;
 }
 
 /* --- legend --- */

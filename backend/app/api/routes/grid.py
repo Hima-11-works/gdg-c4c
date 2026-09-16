@@ -55,13 +55,24 @@ def get_current_grid(
     "/forecast", response_model=Envelope[list[ForecastOut]], summary="Forecast grid at a horizon"
 )
 def get_forecast_grid(
-    hours: ForecastHorizon = Query(..., description="Forecast horizon in hours: 1, 3, or 6."),
+    hours: ForecastHorizon | None = Query(
+        None, description="Forecast horizon in hours: 1, 3, or 6. DEPRECATED: use minutes."
+    ),
+    minutes: int | None = Query(
+        None, ge=0, le=360, description="Forecast horizon in minutes (0-360, step 15). Overrides hours if both given."
+    ),
     resolution: int | None = _RESOLUTION_QUERY,
     bbox: BoundingBox | None = Depends(get_bbox_query),
     service: GridService = Depends(get_grid_service),
 ) -> Envelope[list[ForecastOut]]:
+    if minutes is not None:
+        horizon_minutes = minutes
+    elif hours is not None:
+        horizon_minutes = int(hours) * 60
+    else:
+        horizon_minutes = 60
     try:
-        result = service.forecast(int(hours), resolution=resolution, bbox=bbox)
+        result = service.forecast(horizon_minutes, resolution=resolution, bbox=bbox)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)

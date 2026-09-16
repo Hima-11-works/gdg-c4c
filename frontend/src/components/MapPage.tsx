@@ -10,7 +10,6 @@ import { MapView } from './MapView'
 import { StatusBanner } from './StatusBanner'
 import { TimelineControl } from './TimelineControl'
 import type { LodQuery } from '../lib/api'
-import type { ForecastHorizonHours } from '../lib/types'
 
 const POLL_INTERVAL_MS = 60_000
 
@@ -27,15 +26,8 @@ function lodKey(query: LodQuery): string {
 
 export function MapPage() {
   const { state } = useMapUi()
-  const { lod, bbox } = state
+  const { lod, bbox, forecastMinutes } = state
 
-  // Country tier always requests INDIA_BBOX explicitly rather than
-  // omitting bbox — the backend only applies `resolution` together with
-  // a bbox (see app.services.grid's docstring); omitting it means
-  // "unfiltered", not "nationwide". State/local tiers use the real
-  // viewport, which MapView hasn't reported yet for the first instant
-  // after a tier change — skip fetching rather than ask for a
-  // fine-resolution read with no bbox.
   const viewportReady = !lod.scopedToViewport || bbox !== null
   const query: LodQuery = {
     resolution: lod.resolution,
@@ -48,28 +40,23 @@ export function MapPage() {
     enabled: viewportReady,
   })
 
-  const forecastHours: ForecastHorizonHours | null = state.horizon === 'now' ? null : state.horizon
+  const isNow = forecastMinutes === 0
   const forecastGrid = useApiResource(
-    () => fetchGridForecast(forecastHours ?? 1, query),
-    [forecastHours, queryKey],
-    { pollIntervalMs: POLL_INTERVAL_MS, enabled: viewportReady && forecastHours !== null },
+    () => fetchGridForecast(forecastMinutes, query),
+    [forecastMinutes, queryKey],
+    { pollIntervalMs: POLL_INTERVAL_MS, enabled: viewportReady && !isNow },
   )
 
-  // A coarser resolution than the PM2.5 grid at the country tier — see
-  // lib/lod.ts's weatherResolutionForLod: the map only ever renders a
-  // thinned, sparse subset of these points, so fetching them at the
-  // grid's own (much finer) country-tier resolution would be wasted
-  // payload. Its own query key: a resolution-only change must still
-  // trigger a re-fetch even though `bbox` didn't change.
   const weatherQuery: LodQuery = { ...query, resolution: weatherResolutionForLod(lod) }
   const weather = useApiResource(() => fetchWeather(weatherQuery), [lodKey(weatherQuery)], {
     pollIntervalMs: POLL_INTERVAL_MS,
     enabled: viewportReady,
   })
 
-  const activeBaseLayer = state.horizon === 'now' ? currentGrid : forecastGrid
-  const activeLabel =
-    state.horizon === 'now' ? 'current conditions' : `the +${state.horizon}h forecast`
+  const activeBaseLayer = isNow ? currentGrid : forecastGrid
+  const activeLabel = isNow
+    ? 'current conditions'
+    : `the +${forecastMinutes >= 60 ? `${Math.floor(forecastMinutes / 60)}h ` : ''}${forecastMinutes % 60 ? `${forecastMinutes % 60}m ` : ''}forecast`.trim()
 
   return (
     <div className="map-page">

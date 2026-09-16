@@ -15,7 +15,7 @@ from datetime import datetime
 from enum import IntEnum
 from typing import Generic, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from app.domain.types import AlertSeverity
 
@@ -105,9 +105,14 @@ class ForecastOut(BaseModel):
     h3_cell: str
     generated_at: datetime
     forecast_time: datetime
-    forecast_hours: int
+    forecast_hours: float
     predicted_pm25: float
     confidence: float
+
+    @computed_field
+    @property
+    def forecast_minutes(self) -> int:
+        return round(self.forecast_hours * 60)
 
 
 class AlertOut(BaseModel):
@@ -129,7 +134,7 @@ class AlertOut(BaseModel):
             "an alert triggered by current conditions."
         )
     )
-    forecast_hours: int | None = Field(description="Horizon (hours) forecast_pm25 refers to.")
+    forecast_hours: float | None = Field(description="Horizon (hours) forecast_pm25 refers to.")
     confidence: float | None = Field(
         description=(
             "Confidence in the value that triggered this alert — the current estimate's "

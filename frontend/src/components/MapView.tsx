@@ -321,7 +321,7 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
     const source = mapRef.current.getSource(SOURCE_PM25)
     if (!(source instanceof GeoJSONSource)) return
 
-    if (state.horizon === 'now') {
+    if (state.forecastMinutes === 0) {
       if (currentGrid.status !== 'success') return
       const cells = currentGrid.data.map((cell) => ({ h3Cell: cell.h3_cell, value: cell.pm25 }))
       source.setData(cellsToFeatureCollection(cells))
@@ -333,7 +333,7 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
       }))
       source.setData(cellsToFeatureCollection(cells))
     }
-  }, [mapReady, state.horizon, currentGrid, forecastGrid])
+  }, [mapReady, state.forecastMinutes, currentGrid, forecastGrid])
 
   // PDI layer data — always from current state; there is no forecasted PDI.
   // Skipped entirely while the layer is hidden (off by default, and below

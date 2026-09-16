@@ -71,11 +71,11 @@ def _downwind_bearing_from(source: str, target: str) -> float:
     return (_bearing(source, target) + 180.0) % 360.0
 
 
-def _by_cell(result, hours: int) -> dict[str, float]:
+def _by_cell(result, hours: float) -> dict[str, float]:
     return {f.h3_cell: f.predicted_pm25 for f in result.forecasts if f.forecast_hours == hours}
 
 
-def _confidence_by_cell(result, hours: int) -> dict[str, float]:
+def _confidence_by_cell(result, hours: float) -> dict[str, float]:
     return {f.h3_cell: f.confidence for f in result.forecasts if f.forecast_hours == hours}
 
 

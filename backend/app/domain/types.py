@@ -283,7 +283,7 @@ class Forecast:
     h3_cell: str
     generated_at: datetime
     forecast_time: datetime
-    forecast_hours: int
+    forecast_hours: float
     predicted_pm25: float
     confidence: float
     id: int | None = None
@@ -333,7 +333,7 @@ class Alert:
     created_at: datetime
     current_pm25: float | None = None
     forecast_pm25: float | None = None
-    forecast_hours: int | None = None
+    forecast_hours: float | None = None
     confidence: float | None = None
     forecast_time: datetime | None = None
     id: int | None = None

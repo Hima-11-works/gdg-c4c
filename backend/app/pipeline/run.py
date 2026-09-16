@@ -191,7 +191,11 @@ def _forecast(
         SqlWeatherReadingRepository(session),
         SqlForecastRepository(session),
     )
-    result = service.run(generated_at=timestamp)
+    result = service.run(
+        generated_at=timestamp,
+        hours=[i * 0.25 for i in range(1, 25)],
+        step_minutes=15,
+    )
 
     if not result.succeeded:
         message = f"Forecasting failed: {'; '.join(result.errors)}"

@@ -46,8 +46,9 @@ class GridService:
         return ServiceResult(demo_data.grid_states_for_cells(cells), is_demo=True)
 
     def forecast(
-        self, hours: int, *, resolution: int | None = None, bbox: BoundingBox | None = None
+        self, minutes: int, *, resolution: int | None = None, bbox: BoundingBox | None = None
     ) -> ServiceResult[list[Forecast]]:
+        hours = minutes / 60.0
         if bbox is None:
             forecasts = self._forecast_repository.latest_for_horizon(hours)
             if forecasts:

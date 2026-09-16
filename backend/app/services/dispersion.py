@@ -8,6 +8,7 @@ module holds implementations of it, the same split as estimators
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -179,9 +180,10 @@ class DeterministicH3DispersionModel:
         self,
         current_state: list[GridState],
         weather: list[WeatherReading],
-        hours: Sequence[int] = (1, 3, 6),
+        hours: Sequence[float] = (1, 3, 6),
         *,
         generated_at: datetime,
+        step_minutes: float = 60,
     ) -> ForecastResult:
         if not current_state:
             return ForecastResult(
@@ -190,7 +192,7 @@ class DeterministicH3DispersionModel:
 
         horizons = sorted(set(hours))
         if not horizons or horizons[0] <= 0:
-            raise ValueError(f"hours must be a non-empty sequence of positive integers: {hours}")
+            raise ValueError(f"hours must be a non-empty sequence of positive values: {hours}")
 
         cells = [state.h3_cell for state in current_state]
         if len(set(cells)) != len(cells):
@@ -207,26 +209,34 @@ class DeterministicH3DispersionModel:
         }
 
         forecasts: list[Forecast] = []
-        domain_outflow_by_hour: dict[int, float] = {}
+        domain_outflow_by_hour: dict[float, float] = {}
+
+        step_hours = step_minutes / 60.0
         max_horizon = horizons[-1]
+        total_steps = math.ceil(max_horizon / step_hours)
 
-        for hour in range(1, max_horizon + 1):
-            pm25, confidence, outflow = self._step(cells, domain, pm25, confidence, coefficients)
-            domain_outflow_by_hour[hour] = outflow
+        # Precompute which step numbers correspond to requested horizons
+        horizon_steps: dict[int, float] = {}
+        for h in horizons:
+            step_num = round(h / step_hours)
+            horizon_steps[step_num] = h
 
-            if hour in horizons:
-                forecast_time = generated_at + timedelta(hours=hour)
-                # A cell that started with no estimate and still holds exactly
-                # 0.0 has received no inflow from any cell with evidence: its
-                # value is the `or 0.0` placeholder above, not a prediction,
-                # and publishing it would show "clean air" where the truth is
-                # "unknown". (A real 0.0 estimate is still published.)
+        for step in range(1, total_steps + 1):
+            pm25, confidence, outflow = self._step(
+                cells, domain, pm25, confidence, coefficients, step_hours
+            )
+            current_h = step * step_hours
+            domain_outflow_by_hour[current_h] = outflow
+
+            if step in horizon_steps:
+                h = horizon_steps[step]
+                forecast_time = generated_at + timedelta(hours=h)
                 forecasts.extend(
                     Forecast(
                         h3_cell=cell,
                         generated_at=generated_at,
                         forecast_time=forecast_time,
-                        forecast_hours=hour,
+                        forecast_hours=h,
                         predicted_pm25=pm25[cell],
                         confidence=confidence[cell],
                     )
@@ -295,6 +305,7 @@ class DeterministicH3DispersionModel:
         pm25: dict[str, float],
         confidence: dict[str, float],
         coefficients: dict[str, _CellCoefficients],
+        step_hours: float = 1.0,
     ) -> tuple[dict[str, float], dict[str, float], float]:
         new_mass = dict.fromkeys(cells, 0.0)
         confidence_numerator = dict.fromkeys(cells, 0.0)
@@ -303,9 +314,11 @@ class DeterministicH3DispersionModel:
 
         for cell in cells:
             coeff = coefficients[cell]
-            remaining = pm25[cell] * (1.0 - coeff.removal_fraction)
-            retained = remaining * (1.0 - coeff.transport_fraction)
-            transported_out = remaining * coeff.transport_fraction
+            effective_removal = min(1.0, coeff.removal_fraction * step_hours)
+            remaining = pm25[cell] * (1.0 - effective_removal)
+            effective_transport = min(1.0, coeff.transport_fraction * step_hours)
+            retained = remaining * (1.0 - effective_transport)
+            transported_out = remaining * effective_transport
 
             new_mass[cell] += retained
             confidence_numerator[cell] += retained * confidence[cell]
@@ -329,7 +342,8 @@ class DeterministicH3DispersionModel:
             penalty = (
                 1.0 if coefficients[cell].has_weather else self._missing_weather_confidence_penalty
             )
-            new_confidence[cell] = clamp01(blended * self._confidence_decay_per_hour * penalty)
+            decay_factor = self._confidence_decay_per_hour ** step_hours
+            new_confidence[cell] = clamp01(blended * decay_factor * penalty)
 
         new_pm25 = {cell: max(0.0, new_mass[cell]) for cell in cells}
         return new_pm25, new_confidence, outflow

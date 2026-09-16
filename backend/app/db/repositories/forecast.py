@@ -69,7 +69,7 @@ def _latest_for_cell_stmt(h3_cell: str) -> Select:
     )
 
 
-def _latest_for_horizon_stmt(forecast_hours: int) -> Select:
+def _latest_for_horizon_stmt(forecast_hours: float) -> Select:
     # Per cell, the most recent run that produced a forecast at this
     # horizon — cells can be on different run cadences, so this is a
     # per-cell max, not a single global "latest run" timestamp.
@@ -94,7 +94,7 @@ def _latest_for_horizon_stmt(forecast_hours: int) -> Select:
     )
 
 
-def _latest_for_horizon_in_cells_stmt(forecast_hours: int, cells: list[str]) -> Select:
+def _latest_for_horizon_in_cells_stmt(forecast_hours: float, cells: list[str]) -> Select:
     latest_per_cell = (
         select(
             forecast_table.c.h3_cell,
@@ -151,11 +151,11 @@ class SqlForecastRepository:
         rows = self._session.execute(_latest_for_cell_stmt(h3_cell)).all()
         return [_row_to_domain(row) for row in rows]
 
-    def latest_for_horizon(self, hours: int) -> list[Forecast]:
+    def latest_for_horizon(self, hours: float) -> list[Forecast]:
         rows = self._session.execute(_latest_for_horizon_stmt(hours)).all()
         return [_row_to_domain(row) for row in rows]
 
-    def latest_for_horizon_in_cells(self, hours: int, cells: list[str]) -> list[Forecast]:
+    def latest_for_horizon_in_cells(self, hours: float, cells: list[str]) -> list[Forecast]:
         if not cells:
             return []
         rows = self._session.execute(_latest_for_horizon_in_cells_stmt(hours, cells)).all()

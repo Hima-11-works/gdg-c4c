@@ -325,7 +325,7 @@ def _advect(
     amplitude0: float,
     sigma0_km: float,
     industrial_bump0: float,
-    hours: int,
+    hours: float,
 ) -> _AdvectedHotspot:
     """Where this one hotspot's plume is, and what it looks like, `hours`
     after "now" — the model behind "the plume visibly moves" rather than
@@ -371,8 +371,8 @@ def _advect(
     )
 
 
-@lru_cache(maxsize=4 * len(_CITIES))
-def _advected_city(index: int, hours: int) -> _AdvectedHotspot:
+@lru_cache(maxsize=100)
+def _advected_city(index: int, hours: float) -> _AdvectedHotspot:
     """Cached per (city, hours) — not per queried cell: only a handful of
     distinct `hours` values are ever requested (0 for "current", 1/3/6
     for a forecast horizon), so this is computed at most 4x per city per
@@ -385,13 +385,13 @@ def _advected_city(index: int, hours: int) -> _AdvectedHotspot:
     return _advect(lat, lon, amplitude0, _CITY_BUMP_SIGMA_KM, industrial_bump0, hours)
 
 
-@lru_cache(maxsize=4 * len(_ANOMALY_HOTSPOTS))
-def _advected_anomaly(index: int, hours: int) -> _AdvectedHotspot:
+@lru_cache(maxsize=100)
+def _advected_anomaly(index: int, hours: float) -> _AdvectedHotspot:
     lat, lon, _label, peak_bump, sigma_km = _ANOMALY_HOTSPOTS[index]
     return _advect(lat, lon, peak_bump, sigma_km, 0.0, hours)
 
 
-def _hotspot_bumps_at(latitude: float, longitude: float, hours: int) -> tuple[float, float, float]:
+def _hotspot_bumps_at(latitude: float, longitude: float, hours: float) -> tuple[float, float, float]:
     """(pm25_bump, industrial_pdi_bump, nearest_city_km) at `hours` from
     now — hours=0 (used by the "current" field) matches the original
     static-hotspot shape exactly; hours>0 (used by generate_forecast)
@@ -632,7 +632,7 @@ def generate_weather_reading(h3_cell: str, *, timestamp: datetime | None = None)
 
 
 @lru_cache(maxsize=200_000)
-def _forecast_core(h3_cell: str, hours: int) -> tuple[float, float]:
+def _forecast_core(h3_cell: str, hours: float) -> tuple[float, float]:
     """(predicted_pm25, confidence) — everything about a forecast except
     its timestamps, which is a pure function of (h3_cell, hours) and
     therefore cacheable exactly like _field_for_cell.
@@ -657,7 +657,7 @@ def _forecast_core(h3_cell: str, hours: int) -> tuple[float, float]:
     return round(predicted_pm25, 1), round(confidence, 2)
 
 
-def generate_forecast(h3_cell: str, hours: int, *, timestamp: datetime | None = None) -> Forecast:
+def generate_forecast(h3_cell: str, hours: float, *, timestamp: datetime | None = None) -> Forecast:
     now = timestamp or _now()
     predicted_pm25, confidence = _forecast_core(h3_cell, hours)
     return Forecast(
@@ -680,7 +680,7 @@ def weather_readings_for_cells(cells: list[str]) -> list[WeatherReading]:
     return [generate_weather_reading(c, timestamp=now) for c in cells if is_within_demo_domain(c)]
 
 
-def forecasts_for_cells(cells: list[str], hours: int) -> list[Forecast]:
+def forecasts_for_cells(cells: list[str], hours: float) -> list[Forecast]:
     now = _now()
     return [generate_forecast(c, hours, timestamp=now) for c in cells if is_within_demo_domain(c)]
 
@@ -747,7 +747,7 @@ def demo_grid_states(resolution: int) -> list[GridState]:
     return grid_states_for_cells(demo_cells(resolution))
 
 
-def demo_forecasts(resolution: int, hours: int) -> list[Forecast]:
+def demo_forecasts(resolution: int, hours: float) -> list[Forecast]:
     return forecasts_for_cells(demo_cells(resolution), hours)
 
 

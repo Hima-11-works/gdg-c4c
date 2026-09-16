@@ -10,10 +10,12 @@ import { lodForZoom } from '../lib/lod'
 import type { Lod } from '../lib/lod'
 import type { BoundingBox } from '../lib/types'
 
-export type TimelineSelection = 'now' | 1 | 3 | 6
-
 export interface MapUiState {
-  horizon: TimelineSelection
+  /** Forecast horizon in minutes. 0 = current conditions ("Now"),
+   *  15–720 = forecast at that many minutes ahead. Snaps to 15-min
+   *  keyframes (0, 15, 30, …, 720). This is the single canonical
+   *  timeline state — no separate button/slider/hour states. */
+  forecastMinutes: number
   showPdi: boolean
   selectedCell: string | null
   /** The H3 resolution `selectedCell` was fetched at, captured at click
@@ -33,7 +35,7 @@ export interface MapUiState {
 }
 
 export type MapUiAction =
-  | { type: 'SELECT_HORIZON'; horizon: TimelineSelection }
+  | { type: 'SELECT_FORECAST'; minutes: number }
   | { type: 'TOGGLE_PDI' }
   | { type: 'SELECT_CELL'; cell: string | null; resolution?: number }
   | { type: 'SET_VIEWPORT'; zoom: number; bbox: BoundingBox }
@@ -42,7 +44,7 @@ export type MapUiAction =
 // this matches lodForZoom's own country-tier default rather than
 // guessing a zoom before the map has told us its real one.
 export const initialMapUiState: MapUiState = {
-  horizon: 'now',
+  forecastMinutes: 0,
   showPdi: false,
   selectedCell: null,
   selectedCellResolution: null,
@@ -52,8 +54,8 @@ export const initialMapUiState: MapUiState = {
 
 export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState {
   switch (action.type) {
-    case 'SELECT_HORIZON':
-      return { ...state, horizon: action.horizon }
+    case 'SELECT_FORECAST':
+      return { ...state, forecastMinutes: action.minutes }
     case 'TOGGLE_PDI':
       return { ...state, showPdi: !state.showPdi }
     case 'SELECT_CELL':

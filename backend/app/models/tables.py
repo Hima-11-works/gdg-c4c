@@ -133,7 +133,7 @@ forecast = Table(
     Column("h3_cell", String(H3_CELL_LENGTH), nullable=False),
     Column("generated_at", DateTime(timezone=True), nullable=False),
     Column("forecast_time", DateTime(timezone=True), nullable=False),
-    Column("forecast_hours", SmallInteger, nullable=False),
+    Column("forecast_hours", Float, nullable=False),
     Column("predicted_pm25", Float, nullable=False),
     Column("confidence", Float, nullable=False),
     CheckConstraint("forecast_hours > 0", name="ck_forecast_hours_positive"),
@@ -180,7 +180,7 @@ alert = Table(
     # if the cell had no forecast at all.
     Column("current_pm25", Float, nullable=True),
     Column("forecast_pm25", Float, nullable=True),
-    Column("forecast_hours", SmallInteger, nullable=True),
+    Column("forecast_hours", Float, nullable=True),
     Column("confidence", Float, nullable=True),
     Column("forecast_time", DateTime(timezone=True), nullable=True),
     CheckConstraint("current_pm25 IS NULL OR current_pm25 >= 0", name="ck_alert_current_pm25"),

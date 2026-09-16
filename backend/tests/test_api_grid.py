@@ -59,7 +59,7 @@ def test_current_grid_returns_real_data_when_present(
 def test_forecast_grid_falls_back_to_demo_data_when_empty(
     api_client: TestClient, hours: int
 ) -> None:
-    response = api_client.get("/api/v1/grid/forecast", params={"hours": hours})
+    response = api_client.get("/api/v1/grid/forecast", params={"minutes": hours * 60})
 
     assert response.status_code == 200
     body = response.json()

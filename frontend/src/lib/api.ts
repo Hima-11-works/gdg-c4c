@@ -9,7 +9,6 @@ import type {
   BoundingBox,
   CellDetailOut,
   Envelope,
-  ForecastHorizonHours,
   ForecastOut,
   GridStateOut,
   WeatherReadingOut,
@@ -89,10 +88,10 @@ export function fetchGridCurrent(query: LodQuery = {}): Promise<Envelope<GridSta
 }
 
 export function fetchGridForecast(
-  hours: ForecastHorizonHours,
+  minutes: number,
   query: LodQuery = {},
 ): Promise<Envelope<ForecastOut[]>> {
-  return apiGet(`/api/v1/grid/forecast${buildQuery({ hours, ...lodParams(query) })}`)
+  return apiGet(`/api/v1/grid/forecast${buildQuery({ minutes, ...lodParams(query) })}`)
 }
 
 export function fetchWeather(query: LodQuery = {}): Promise<Envelope<WeatherReadingOut[]>> {

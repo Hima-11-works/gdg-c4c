@@ -18,6 +18,8 @@ from typing import Protocol
 
 from app.domain.types import Forecast, GridState, WeatherReading
 
+# Re-export for convenience; callers that need step_minutes import from here.
+
 
 @dataclass(frozen=True, slots=True)
 class ForecastResult:
@@ -39,7 +41,7 @@ class ForecastResult:
 
     generated_at: datetime
     forecasts: list[Forecast]
-    domain_outflow_by_hour: dict[int, float]
+    domain_outflow_by_hour: dict[float, float]
 
 
 class PollutionForecastModel(Protocol):
@@ -47,11 +49,12 @@ class PollutionForecastModel(Protocol):
         self,
         current_state: list[GridState],
         weather: list[WeatherReading],
-        hours: Sequence[int] = (1, 3, 6),
+        hours: Sequence[float] = (1, 3, 6),
         *,
         generated_at: datetime,
+        step_minutes: float = 60,
     ) -> ForecastResult:
-        """Forecast PM2.5 forward from `current_state`, hour by hour, and
+        """Forecast PM2.5 forward from `current_state`, step by step, and
         return the state at each horizon in `hours`.
 
         The modeled domain is exactly the cells present in
@@ -67,16 +70,19 @@ class PollutionForecastModel(Protocol):
         same call always produces the same result.
 
         Every horizon's output is the literal simulated state at that
-        many hourly steps (e.g. the 3-hour result is the state after
+        many steps (e.g. the 3-hour result is the state after
         exactly 3 of the same per-hour updates used to reach 6 hours),
         never a shortcut/closed-form approximation, so requesting
         multiple horizons from one call is guaranteed internally
         consistent.
 
+        `step_minutes` controls the simulation step size (default 60 =
+        hourly). Use 15 for quarter-hourly forecasts.
+
         Must never produce a negative predicted_pm25 or a confidence
         outside [0, 1] (enforced by Forecast's own validation regardless
         of the implementation), and must never let total system mass
         (summed across `current_state`'s cells) increase from one
-        simulated hour to the next.
+        simulated step to the next.
         """
         ...
