@@ -1,105 +1,159 @@
 import '../domain/models/models.dart';
 import 'sensitivity_rules.dart';
 
+/// Result of an engine evaluation — decisions plus updated dedup state.
+class AlertEngineResult {
+  const AlertEngineResult({
+    required this.decisions,
+    required this.dedupState,
+  });
+
+  /// Decisions that should fire (after cooldown/dedup filtering).
+  final List<AlertDecision> decisions;
+
+  /// Updated dedup state — pass back into the next evaluation.
+  final List<DedupEntry> dedupState;
+}
+
 /// Pure-Dart alert engine — no Flutter, no I/O, no storage.
 ///
-/// Takes the current environmental state and a user profile, returns
-/// zero or more [AlertDecision]s. The caller (a Riverpod provider)
-/// is responsible for deduplication, cooldown, and notification dispatch.
+/// Takes the current environmental state, user profile, and prior
+/// alert state, returns filtered decisions plus updated dedup state.
+///
+/// Supports: cooldown, deduplication, hysteresis, severity escalation,
+/// recovery detection.
 class AlertEngine {
   const AlertEngine();
 
-  /// Evaluate all alert rules and return every decision that should fire.
+  /// Evaluate all alert rules and return decisions that should fire.
   ///
-  /// Rules run in priority order; the caller may further filter by
-  /// [UserAlertPreferences.minimumSeverity].
+  /// [priorAlerts] is the dedup state from previous runs — the engine
+  /// filters duplicates and cooldown violations, and returns updated
+  /// state in [AlertEngineResult.dedupState].
   ///
   /// [now] defaults to [DateTime.now()] but can be overridden for tests.
-  List<AlertDecision> evaluate({
+  AlertEngineResult evaluate({
     required UserSensitivityProfile profile,
     required AirQualityReading current,
     required List<ForecastPoint> forecast,
     required List<PollutionEvent> events,
     required DataFreshness freshness,
+    List<DedupEntry> priorAlerts = const [],
     DateTime? now,
   }) {
-    if (!profile.preferences.alertsEnabled) return const [];
+    if (!profile.preferences.alertsEnabled) {
+      return AlertEngineResult(decisions: const [], dedupState: priorAlerts);
+    }
     final effectiveNow = now ?? DateTime.now();
-
     final rules = SensitivityRules.forProfile(profile);
-    final decisions = <AlertDecision>[];
 
-    // 1. Current threshold.
-    final currentDecision = _checkCurrentThreshold(
-      current: current,
-      rules: rules,
-      now: effectiveNow,
-    );
-    if (currentDecision != null) decisions.add(currentDecision);
+    // 1. Generate all candidate decisions.
+    final candidates = <AlertDecision>[
+      ..._checkCurrentThreshold(
+          current: current, rules: rules, now: effectiveNow),
+      ..._checkForecastThreshold(
+          current: current,
+          forecast: forecast,
+          rules: rules,
+          now: effectiveNow),
+      ..._checkRapidRise(
+          current: current,
+          forecast: forecast,
+          rules: rules,
+          now: effectiveNow),
+      ..._checkApproachingPollution(
+          current: current,
+          events: events,
+          rules: rules,
+          now: effectiveNow),
+      ..._checkRecovery(
+          current: current,
+          priorAlerts: priorAlerts,
+          rules: rules,
+          profile: profile,
+          now: effectiveNow),
+    ];
 
-    // 2. Forecast threshold.
-    final forecastDecision = _checkForecastThreshold(
-      current: current,
-      forecast: forecast,
-      rules: rules,
-      now: effectiveNow,
-    );
-    if (forecastDecision != null) decisions.add(forecastDecision);
+    // 2. Filter by cooldown and dedup.
+    final filtered = <AlertDecision>[];
+    final updatedDedup = List<DedupEntry>.from(priorAlerts);
 
-    // 3. Rapid rise.
-    final rapidRiseDecision = _checkRapidRise(
-      current: current,
-      forecast: forecast,
-      rules: rules,
-      now: effectiveNow,
-    );
-    if (rapidRiseDecision != null) decisions.add(rapidRiseDecision);
+    for (final candidate in candidates) {
+      final existing = _findExisting(updatedDedup, candidate.dedupKey);
 
-    // 4. Approaching pollution.
-    final approachingDecisions = _checkApproachingPollution(
-      current: current,
-      events: events,
-      rules: rules,
-      now: effectiveNow,
-    );
-    decisions.addAll(approachingDecisions);
+      if (existing != null) {
+        // Cooldown check.
+        final elapsed =
+            effectiveNow.difference(existing.lastAlertedAt).inMinutes;
+        if (elapsed < rules.cooldownMinutes) {
+          // Escalation check — if severity increased, allow through.
+          if (!_isEscalation(existing, candidate)) continue;
+        }
+      }
 
-    // 5. Recovery.
-    if (profile.preferences.recoveryAlertsEnabled) {
-      // Recovery needs prior alert state — skip if we have none.
-      // The caller tracks dedup state and passes it in if needed.
+      // Hysteresis — don't re-alert for the same category if we just
+      // recovered from it (unless severity escalated).
+      if (_isHysteresisViolation(candidate, priorAlerts, rules)) continue;
+
+      filtered.add(candidate);
+
+      // Update dedup state.
+      if (existing != null) {
+        updatedDedup.remove(existing);
+        updatedDedup.add(DedupEntry(
+          key: candidate.dedupKey,
+          lastAlertedAt: effectiveNow,
+          escalated: candidate.severity.index > AlertSeverity.advisory.index,
+        ));
+      } else {
+        updatedDedup.add(DedupEntry(
+          key: candidate.dedupKey,
+          lastAlertedAt: effectiveNow,
+          escalated: candidate.severity.index > AlertSeverity.advisory.index,
+        ));
+      }
     }
 
-    return decisions;
+    // 3. Clean stale entries (older than 24h).
+    updatedDedup.removeWhere(
+      (e) => effectiveNow.difference(e.lastAlertedAt).inHours > 24,
+    );
+
+    return AlertEngineResult(
+      decisions: filtered,
+      dedupState: updatedDedup,
+    );
   }
 
   // ── Rule 1: Current threshold ────────────────────────────────────────
 
-  AlertDecision? _checkCurrentThreshold({
+  List<AlertDecision> _checkCurrentThreshold({
     required AirQualityReading current,
     required SensitivityRules rules,
     required DateTime now,
   }) {
     final category = current.category;
-    if (category.index < rules.warningCategory.index) return null;
+    if (category.index < rules.warningCategory.index) return const [];
 
     final severity = _severityForCategory(category);
-    return AlertDecision(
-      shouldAlert: true,
-      severity: severity,
-      trigger: AlertTrigger.currentThreshold,
-      currentAqi: current.aqiCpcb,
-      confidence: 1.0,
-      messageContext: 'Current air quality is ${category.label} '
-          '(AQI ${current.aqiCpcb}).',
-      dedupKey: 'current_${category.name}',
-      guidance: _guidanceForSeverity(severity),
-    );
+    return [
+      AlertDecision(
+        shouldAlert: true,
+        severity: severity,
+        trigger: AlertTrigger.currentThreshold,
+        currentAqi: current.aqiCpcb,
+        confidence: 1.0,
+        messageContext:
+            'Current air quality is ${category.label} (AQI ${current.aqiCpcb}).',
+        dedupKey: 'current_${category.name}',
+        guidance: _guidanceForSeverity(severity),
+      ),
+    ];
   }
 
   // ── Rule 2: Forecast threshold ───────────────────────────────────────
 
-  AlertDecision? _checkForecastThreshold({
+  List<AlertDecision> _checkForecastThreshold({
     required AirQualityReading current,
     required List<ForecastPoint> forecast,
     required SensitivityRules rules,
@@ -111,66 +165,68 @@ class AlertEngine {
         final lead = point.at.difference(now);
         if (lead > rules.leadTimePreference) continue;
 
-        return AlertDecision(
-          shouldAlert: true,
-          severity: AlertSeverity.advisory,
-          trigger: AlertTrigger.forecastThreshold,
-          currentAqi: current.aqiCpcb,
-          predictedAqi: point.aqiCpcb,
-          predictedTime: point.at,
-          leadTime: lead,
-          confidence: point.confidence,
-          messageContext:
-              'Air quality is expected to reach ${point.category.label} '
-              'around ${_formatTime(point.at)}.',
-          dedupKey: 'forecast_${point.category.name}_${_dateKey(point.at)}',
-          guidance: _guidanceForSeverity(AlertSeverity.advisory),
-        );
+        return [
+          AlertDecision(
+            shouldAlert: true,
+            severity: AlertSeverity.advisory,
+            trigger: AlertTrigger.forecastThreshold,
+            currentAqi: current.aqiCpcb,
+            predictedAqi: point.aqiCpcb,
+            predictedTime: point.at,
+            leadTime: lead,
+            confidence: point.confidence,
+            messageContext:
+                'Air quality is expected to reach ${point.category.label} '
+                'around ${_formatTime(point.at)}.',
+            dedupKey:
+                'forecast_${point.category.name}_${_dateKey(point.at)}',
+            guidance: _guidanceForSeverity(AlertSeverity.advisory),
+          ),
+        ];
       }
     }
-    return null;
+    return const [];
   }
 
   // ── Rule 3: Rapid rise ───────────────────────────────────────────────
 
-  AlertDecision? _checkRapidRise({
+  List<AlertDecision> _checkRapidRise({
     required AirQualityReading current,
     required List<ForecastPoint> forecast,
     required SensitivityRules rules,
     required DateTime now,
   }) {
-    if (forecast.isEmpty) return null;
-    // Check if AQI rises faster than the threshold in the first 3 hours.
-    final earlyPoints = forecast.where(
-      (f) => f.at.difference(now).inHours <= 3,
-    );
-    if (earlyPoints.isEmpty) return null;
+    if (forecast.isEmpty) return const [];
+    final earlyPoints =
+        forecast.where((f) => f.at.difference(now).inHours <= 3).toList();
+    if (earlyPoints.isEmpty) return const [];
 
     final maxRise = earlyPoints
         .map((f) => f.aqiCpcb - current.aqiCpcb)
         .reduce((a, b) => a > b ? a : b);
 
-    if (maxRise < rules.rapidRiseAqiPerHour * 2) return null;
+    if (maxRise < rules.rapidRiseAqiPerHour * 2) return const [];
 
-    final peak = earlyPoints.reduce(
-      (a, b) => a.aqiCpcb > b.aqiCpcb ? a : b,
-    );
+    final peak =
+        earlyPoints.reduce((a, b) => a.aqiCpcb > b.aqiCpcb ? a : b);
 
-    return AlertDecision(
-      shouldAlert: true,
-      severity: AlertSeverity.warning,
-      trigger: AlertTrigger.rapidRise,
-      currentAqi: current.aqiCpcb,
-      predictedAqi: peak.aqiCpcb,
-      predictedTime: peak.at,
-      leadTime: peak.at.difference(now),
-      confidence: peak.confidence,
-      messageContext:
-          'Air quality is rising rapidly — expected to reach '
-          '${peak.category.label} within a few hours.',
-      dedupKey: 'rapid_rise_${_dateKey(peak.at)}',
-      guidance: _guidanceForSeverity(AlertSeverity.warning),
-    );
+    return [
+      AlertDecision(
+        shouldAlert: true,
+        severity: AlertSeverity.warning,
+        trigger: AlertTrigger.rapidRise,
+        currentAqi: current.aqiCpcb,
+        predictedAqi: peak.aqiCpcb,
+        predictedTime: peak.at,
+        leadTime: peak.at.difference(now),
+        confidence: peak.confidence,
+        messageContext:
+            'Air quality is rising rapidly — expected to reach '
+            '${peak.category.label} within a few hours.',
+        dedupKey: 'rapid_rise_${_dateKey(peak.at)}',
+        guidance: _guidanceForSeverity(AlertSeverity.warning),
+      ),
+    ];
   }
 
   // ── Rule 4: Approaching pollution ────────────────────────────────────
@@ -205,7 +261,89 @@ class AlertEngine {
     return decisions;
   }
 
-  // ── Helpers ──────────────────────────────────────────────────────────
+  // ── Rule 5: Recovery ─────────────────────────────────────────────────
+
+  List<AlertDecision> _checkRecovery({
+    required AirQualityReading current,
+    required List<DedupEntry> priorAlerts,
+    required SensitivityRules rules,
+    required UserSensitivityProfile profile,
+    required DateTime now,
+  }) {
+    if (!profile.preferences.recoveryAlertsEnabled) return const [];
+    if (priorAlerts.isEmpty) return const [];
+
+    // Check if we previously alerted for a "current threshold" situation
+    // and the AQI has now dropped below the hysteresis band.
+    final currentPrior =
+        priorAlerts.where((a) => a.key.startsWith('current_')).toList();
+    if (currentPrior.isEmpty) return const [];
+
+    final hysteresisFloor =
+        _categoryLowerBound(rules.warningCategory) - rules.hysteresisAqi;
+    if (current.aqiCpcb > hysteresisFloor) return const [];
+
+    // Recovery confirmed.
+    return [
+      AlertDecision(
+        shouldAlert: true,
+        severity: AlertSeverity.info,
+        trigger: AlertTrigger.recovery,
+        currentAqi: current.aqiCpcb,
+        confidence: 1.0,
+        messageContext:
+            'Air quality has improved to ${current.category.label} '
+            '(AQI ${current.aqiCpcb}).',
+        dedupKey: 'recovery_${current.category.name}',
+        guidance: _guidanceForSeverity(AlertSeverity.info),
+      ),
+    ];
+  }
+
+  // ── Dedup / cooldown / escalation helpers ────────────────────────────
+
+  static DedupEntry? _findExisting(List<DedupEntry> state, String key) {
+    for (final entry in state) {
+      if (entry.key == key) return entry;
+    }
+    return null;
+  }
+
+  /// Whether the new decision represents a severity escalation over
+  /// the existing dedup entry.
+  static bool _isEscalation(DedupEntry existing, AlertDecision candidate) {
+    return candidate.severity.index > (existing.escalated ? 2 : 1);
+  }
+
+  /// Whether the candidate would violate hysteresis — re-alerting for
+  /// the same category too soon after a recovery.
+  static bool _isHysteresisViolation(
+    AlertDecision candidate,
+    List<DedupEntry> priorAlerts,
+    SensitivityRules rules,
+  ) {
+    if (candidate.trigger != AlertTrigger.currentThreshold) return false;
+
+    // Check if there's a recent recovery entry for a lower category.
+    final recentRecoveries =
+        priorAlerts.where((a) => a.key.startsWith('recovery_'));
+    for (final recovery in recentRecoveries) {
+      if (recovery.key.contains(candidate.dedupKey.split('_').last)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // ── Severity / guidance helpers ──────────────────────────────────────
+
+  /// The AQI value at which a CPCB category begins (e.g. Poor starts at 201).
+  static int _categoryLowerBound(CpcbCategory cat) {
+    if (cat == CpcbCategory.good) return 0;
+    // Each category starts one above the previous category's upperBound.
+    final prevIndex = cat.index - 1;
+    return CpcbCategory.values[prevIndex].upperBound + 1;
+  }
 
   static AlertSeverity _severityForCategory(CpcbCategory cat) {
     return switch (cat) {

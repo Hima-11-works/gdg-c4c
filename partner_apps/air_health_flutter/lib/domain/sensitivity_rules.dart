@@ -13,6 +13,8 @@ class SensitivityRules {
     required this.leadTimePreference,
     required this.minForecastConfidence,
     required this.approachingEventLeadTime,
+    this.cooldownMinutes = 90,
+    this.hysteresisAqi = 10,
   });
 
   /// Earliest CPCB category that triggers a "current" alert.
@@ -32,6 +34,13 @@ class SensitivityRules {
 
   /// Maximum lead time for an approaching-pollution event alert.
   final Duration approachingEventLeadTime;
+
+  /// Minutes to wait before re-alerting for the same dedupKey.
+  final int cooldownMinutes;
+
+  /// AQI must drop this far below a threshold before the situation is
+  /// considered "recovered" — prevents flapping at exact boundaries.
+  final int hysteresisAqi;
 
   /// Build rules for the given [profile].
   factory SensitivityRules.forProfile(UserSensitivityProfile profile) {
@@ -86,5 +95,6 @@ class SensitivityRules {
   @override
   String toString() =>
       'SensitivityRules(warn=${warningCategory.name}, '
-      'forecast=${forecastCategory.name}, rise=$rapidRiseAqiPerHour/hr)';
+      'forecast=${forecastCategory.name}, rise=$rapidRiseAqiPerHour/hr, '
+      'cooldown=${cooldownMinutes}m, hysteresis=$hysteresisAqi)';
 }

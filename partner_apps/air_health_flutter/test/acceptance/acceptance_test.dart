@@ -7,9 +7,6 @@ import 'package:air_health_flutter/domain/models/models.dart';
 
 /// H12 acceptance test — verifies the full data flow from provider
 /// through alert engine for the approachingPlume scenario.
-///
-/// This is not a widget test (those require a running app); it
-/// validates the domain logic end-to-end.
 void main() {
   final anchor = DateTime(2026, 9, 17, 10, 0);
   const location = LocationPoint(
@@ -31,7 +28,8 @@ void main() {
         anchor: anchor,
       );
       reading = await provider.getCurrentAirQuality(location);
-      forecast = await provider.getForecast(location, const Duration(hours: 12));
+      forecast =
+          await provider.getForecast(location, const Duration(hours: 12));
       events = await provider.getPollutionEvents(location);
       freshness = await provider.getDataFreshness();
     });
@@ -71,7 +69,7 @@ void main() {
       );
 
       const engine = AlertEngine();
-      final decisions = engine.evaluate(
+      final result = engine.evaluate(
         profile: profile,
         current: reading,
         forecast: forecast,
@@ -80,9 +78,8 @@ void main() {
         now: anchor,
       );
 
-      expect(decisions, isNotEmpty);
-      // Should have at least one alert (either current, forecast, or approaching)
-      expect(decisions.any((d) => d.shouldAlert), isTrue);
+      expect(result.decisions, isNotEmpty);
+      expect(result.decisions.any((d) => d.shouldAlert), isTrue);
     });
 
     test('standard profile generates fewer alerts than sensitive', () {
@@ -100,7 +97,7 @@ void main() {
 
       const engine = AlertEngine();
 
-      final sensitiveDecisions = engine.evaluate(
+      final sensitiveResult = engine.evaluate(
         profile: sensitiveProfile,
         current: reading,
         forecast: forecast,
@@ -109,7 +106,7 @@ void main() {
         now: anchor,
       );
 
-      final standardDecisions = engine.evaluate(
+      final standardResult = engine.evaluate(
         profile: standardProfile,
         current: reading,
         forecast: forecast,
@@ -118,8 +115,8 @@ void main() {
         now: anchor,
       );
 
-      // Sensitive should generate at least as many alerts as standard.
-      expect(sensitiveDecisions.length, greaterThanOrEqualTo(standardDecisions.length));
+      expect(sensitiveResult.decisions.length,
+          greaterThanOrEqualTo(standardResult.decisions.length));
     });
 
     test('all alert decisions have non-empty guidance', () {
@@ -130,7 +127,7 @@ void main() {
       );
 
       const engine = AlertEngine();
-      final decisions = engine.evaluate(
+      final result = engine.evaluate(
         profile: profile,
         current: reading,
         forecast: forecast,
@@ -139,7 +136,7 @@ void main() {
         now: anchor,
       );
 
-      for (final d in decisions) {
+      for (final d in result.decisions) {
         expect(d.guidance, isNotEmpty);
         expect(d.messageContext, isNotEmpty);
         expect(d.dedupKey, isNotEmpty);
@@ -154,7 +151,7 @@ void main() {
       );
 
       const engine = AlertEngine();
-      final decisions = engine.evaluate(
+      final result = engine.evaluate(
         profile: profile,
         current: reading,
         forecast: forecast,
@@ -176,7 +173,7 @@ void main() {
         'take your',
       ];
 
-      for (final d in decisions) {
+      for (final d in result.decisions) {
         final text = '${d.guidance} ${d.messageContext}'.toLowerCase();
         for (final word in banned) {
           expect(text, isNot(contains(word)));
