@@ -1,21 +1,20 @@
-// Forecast timeline slider (0–720 min, 15-min steps) with Play/Pause/
+// Forecast timeline slider (0–360 min, 15-min steps) with Play/Pause/
 // Restart controls. One canonical state: forecastMinutes in the shared
-// MapUiContext. A prefetch cache keeps a few upcoming frames warm so
-// playback doesn't stall on network.
+// MapUiContext. Upcoming keyframes are prefetched into the shared frame
+// store (lib/forecastFrames.ts) so playback never stalls on the network.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { fetchGridForecast } from '../lib/api'
+import { prefetchUpcoming } from '../lib/forecastFrames'
+import { INDIA_BBOX, lodKey } from '../lib/lod'
 import { useMapUi } from '../state/MapUiContext'
 import type { LodQuery } from '../lib/api'
-import type { Envelope, ForecastOut } from '../lib/types'
 
 // --- constants ---
 
 const STEP = 15
 const MAX_MINUTES = 360
-const KEYFRAMES = Array.from({ length: MAX_MINUTES / STEP + 1 }, (_, i) => i * STEP) // 0,15,…,720
+const KEYFRAMES = Array.from({ length: MAX_MINUTES / STEP + 1 }, (_, i) => i * STEP) // 0,15,…,360
 const PLAYBACK_INTERVAL_MS = 750
-const PREFETCH_AHEAD = 5 // prefetch this many frames ahead of current position
 
 // --- formatting ---
 
@@ -26,50 +25,6 @@ function formatHorizon(minutes: number): string {
   if (h === 0) return `+${m} MIN`
   if (m === 0) return `+${h} HR`
   return `+${h} HR ${m} MIN`
-}
-
-// --- prefetch cache ---
-
-// A simple Map<minutes, Envelope<ForecastOut[]>> keyed by `${minutes}:${queryKey}`.
-// Shared across instances via module scope (there's only one TimelineControl).
-const forecastCache = new Map<string, Envelope<ForecastOut[]>>()
-const inFlight = new Map<string, Promise<unknown>>()
-
-function cacheKey(minutes: number, queryKey: string): string {
-  return `${minutes}:${queryKey}`
-}
-
-function prefetchForecast(
-  minutes: number,
-  queryKey: string,
-  query: LodQuery,
-): void {
-  const key = cacheKey(minutes, queryKey)
-  if (forecastCache.has(key) || inFlight.has(key)) return
-  const promise = fetchGridForecast(minutes, query)
-    .then((data) => {
-      forecastCache.set(key, data)
-      inFlight.delete(key)
-    })
-    .catch(() => {
-      inFlight.delete(key)
-    })
-  inFlight.set(key, promise)
-}
-
-/** Prefetch the next N frames after `currentMinutes`. */
-function prefetchUpcoming(
-  currentMinutes: number,
-  queryKey: string,
-  query: LodQuery,
-): void {
-  const currentIdx = KEYFRAMES.indexOf(currentMinutes)
-  if (currentIdx < 0) return
-  for (let i = 1; i <= PREFETCH_AHEAD; i++) {
-    const idx = currentIdx + i
-    if (idx >= KEYFRAMES.length) break
-    prefetchForecast(KEYFRAMES[idx], queryKey, query)
-  }
 }
 
 // --- slider helpers ---
@@ -98,17 +53,19 @@ export function TimelineControl() {
     positionRef.current = forecastMinutes
   }, [forecastMinutes])
 
-  // Build the query for prefetching (matches MapPage's logic).
+  // Build the query for prefetching — must match MapPage's exactly
+  // (same bbox/resolution), so the shared cache key aligns and the
+  // prefetched frame is the same data MapPage would have fetched.
   const query: LodQuery = useMemo(
     () => ({
       resolution: lod.resolution,
-      bbox: lod.scopedToViewport ? (bbox ?? undefined) : undefined,
+      bbox: lod.scopedToViewport ? (bbox ?? undefined) : INDIA_BBOX,
     }),
     [lod.resolution, lod.scopedToViewport, bbox],
   )
   const queryKey = useMemo(
-    () => `${lod.resolution ?? 'default'}:${bbox ? 'vp' : 'nationwide'}`,
-    [lod.resolution, bbox],
+    () => lodKey(query),
+    [query],
   )
 
   // Prefetch upcoming frames whenever position changes.

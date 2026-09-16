@@ -10,6 +10,7 @@
 // fetches more than the current tier needs, at any zoom.
 
 import type { BoundingBox } from './types'
+import type { LodQuery } from './api'
 
 export type LodTier = 'country' | 'state' | 'local'
 
@@ -98,4 +99,17 @@ const COUNTRY_WEATHER_RESOLUTION = 2
 
 export function weatherResolutionForLod(lod: Lod): number {
   return lod.tier === 'country' ? COUNTRY_WEATHER_RESOLUTION : lod.resolution
+}
+
+/** A stable primitive key for a level-of-detail query — the cache key for
+ * forecast frames and the dependency key for data fetching. A fresh bbox
+ * object every render would never compare equal, and rounding to ~1km also
+ * means a sub-pixel pan doesn't retrigger a fetch on its own. Shared so
+ * TimelineControl's prefetch and MapPage's read use the exact same key
+ * (same bbox + resolution → same key → same cached frame). */
+export function lodKey(query: LodQuery): string {
+  if (!query.bbox) return `${query.resolution ?? 'default'}:nationwide`
+  const round = (n: number) => Math.round(n * 100) / 100
+  const { minLat, minLon, maxLat, maxLon } = query.bbox
+  return `${query.resolution ?? 'default'}:${round(minLat)},${round(minLon)},${round(maxLat)},${round(maxLon)}`
 }
