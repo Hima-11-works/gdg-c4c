@@ -1,0 +1,19 @@
+include: package:flutter_lints/flutter.yaml
+
+linter:
+  rules:
+    # Enforce the same conventions the repo follows.
+    prefer_const_constructors: true
+    prefer_const_declarations: true
+    avoid_print: true
+    prefer_single_quotes: true
+    sort_child_properties_last: true
+    use_build_context_synchronously: true
+    unnecessary_const: true
+
+analyzer:
+  exclude:
+    - "**/*.g.dart"
+    - "**/*.freezed.dart"
+    - build/**
+    - android/**
