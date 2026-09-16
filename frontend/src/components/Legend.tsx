@@ -1,4 +1,5 @@
 import { NO_DATA_COLOR, PDI_COLOR_SCALE, PM25_COLOR_SCALE } from '../lib/colorScales'
+import { BASEMAP, WIND } from '../lib/mapTheme'
 import { PDI_LABEL, PDI_TOOLTIP } from '../lib/format'
 import { useMapUi } from '../state/MapUiContext'
 
@@ -36,7 +37,19 @@ export function Legend() {
           No estimate
         </div>
         <div className="legend-row">
-          <span aria-hidden="true">↑</span> Wind direction (arrow points downwind)
+          <span className="swatch" style={{ backgroundColor: WIND.arrowColor }} />
+          Wind direction (arrow points downwind)
+        </div>
+      </section>
+
+      <section>
+        <div className="legend-row">
+          <span className="swatch" style={{ backgroundColor: BASEMAP.stateBorder }} />
+          State / UT boundary
+        </div>
+        <div className="legend-row">
+          <span className="swatch" style={{ backgroundColor: BASEMAP.intlBorder }} />
+          International boundary
         </div>
       </section>
 

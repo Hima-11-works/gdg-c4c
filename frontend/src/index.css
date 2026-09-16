@@ -1,5 +1,5 @@
 :root {
-  color-scheme: light dark;
+  color-scheme: dark;
   font-family:
     system-ui,
     -apple-system,
@@ -60,12 +60,13 @@ body,
 }
 
 .panel {
-  background: light-dark(rgba(255, 255, 255, 0.94), rgba(30, 30, 30, 0.92));
-  border: 1px solid light-dark(#d0d7de, #444);
+  background: rgba(18, 20, 26, 0.92);
+  border: 1px solid #2a2e36;
   border-radius: 8px;
   padding: 0.6rem 0.8rem;
   font-size: 0.85rem;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+  color: #e5e7eb;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
 }
 
 /* --- banners --- */
@@ -94,17 +95,18 @@ body,
 }
 
 .banner-info {
-  background: light-dark(#eef2f7, #2a2f36);
+  background: #1e2128;
+  color: #9ca3af;
 }
 
 .banner-error {
-  background: #fde2e1;
-  color: #7d1f1a;
+  background: #2d1215;
+  color: #fca5a5;
 }
 
 .banner-demo {
-  background: #fff6d8;
-  color: #6b5300;
+  background: #2d2412;
+  color: #fcd34d;
 }
 
 .spinner {
@@ -136,11 +138,12 @@ body,
 }
 
 .timeline-control button {
-  border: 1px solid light-dark(#d0d7de, #555);
-  background: transparent;
+  border: 1px solid #3a3f4a;
+  background: rgba(18, 20, 26, 0.8);
   border-radius: 6px;
   padding: 0.35rem 0.7rem;
   font-size: 0.85rem;
+  color: #9ca3af;
 }
 
 .timeline-control button.active {
@@ -157,6 +160,7 @@ body,
   gap: 0.4rem;
   font-size: 0.78rem;
   margin: 0.15rem 0;
+  color: #d1d5db;
 }
 
 .swatch {
@@ -165,6 +169,7 @@ body,
   border-radius: 2px;
   display: inline-block;
   flex-shrink: 0;
+  border: 1px solid #3a3f4a;
 }
 
 .legend-note {
@@ -175,10 +180,11 @@ body,
 /* --- alerts --- */
 
 .alerts-toggle {
-  border: 1px solid light-dark(#d0d7de, #555);
-  background: light-dark(#fff, #222);
+  border: 1px solid #3a3f4a;
+  background: rgba(18, 20, 26, 0.8);
   border-radius: 6px;
   padding: 0.4rem 0.7rem;
+  color: #d1d5db;
 }
 
 .alerts-list {
@@ -195,13 +201,14 @@ body,
   width: 100%;
   text-align: left;
   border: none;
-  border-left: 3px solid #999;
-  background: light-dark(#f6f6f6, #2a2a2a);
+  border-left: 3px solid #6b7280;
+  background: #1a1d23;
   border-radius: 4px;
   padding: 0.35rem 0.5rem;
   margin-bottom: 0.3rem;
   cursor: pointer;
   font-size: 0.8rem;
+  color: #d1d5db;
 }
 
 .alert-item.severity-watch {
@@ -249,12 +256,13 @@ body,
   border: none;
   background: transparent;
   font-size: 1rem;
+  color: #9ca3af;
 }
 
 .cell-detail-location {
   margin: 0.4rem 0 0;
   font-size: 0.8rem;
-  color: light-dark(#666, #aaa);
+  color: #9ca3af;
 }
 
 .cell-detail-grid {
@@ -267,10 +275,12 @@ body,
 
 .cell-detail-grid dt {
   font-weight: 600;
+  color: #d1d5db;
 }
 
 .cell-detail-grid dd {
   margin: 0;
+  color: #e5e7eb;
 }
 
 .cell-forecast-list {
@@ -278,6 +288,7 @@ body,
   padding: 0;
   margin: 0;
   font-size: 0.85rem;
+  color: #e5e7eb;
 }
 
 .cell-forecast-list li {
@@ -289,6 +300,7 @@ body,
   padding: 0;
   margin: 0;
   font-size: 0.85rem;
+  color: #e5e7eb;
 }
 
 .pdi-factor-list li {
@@ -305,17 +317,17 @@ body,
 .pdi-factor-bar {
   height: 0.4rem;
   border-radius: 0.2rem;
-  background: light-dark(#e5e5e5, #333);
+  background: #2a2e36;
   overflow: hidden;
 }
 
 .pdi-factor-bar-fill {
   height: 100%;
-  background: light-dark(#dd6b20, #f0973d);
+  background: #f59e0b;
 }
 
 .muted {
-  color: light-dark(#666, #aaa);
+  color: #6b7280;
   font-size: 0.8rem;
 }
 

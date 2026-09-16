@@ -16,13 +16,10 @@ import {
 } from '../lib/h3Geometry'
 import { INDIA_BBOX, PDI_MIN_ZOOM } from '../lib/lod'
 import { INDIA_OUTLINE_URL, STATE_BOUNDARIES_URL } from '../lib/stateBoundaries'
+import { BASE_STYLE_URL, OVERLAY, WIND, BASEMAP, patchBasemapStyle } from '../lib/mapTheme'
 import { useMapUi } from '../state/MapUiContext'
 import type { AsyncResource } from '../hooks/useApiResource'
 import type { BoundingBox, ForecastOut, GridStateOut, WeatherReadingOut } from '../lib/types'
-
-// A free, key-less MapLibre-maintained basemap — good enough for an MVP;
-// swap for a hosted style later without touching anything below.
-const MAP_STYLE = 'https://demotiles.maplibre.org/style.json'
 
 // The app is scoped to India: on load, fit the whole country in view
 // rather than centering on one city. Level of detail (which resolution
@@ -103,7 +100,7 @@ function thinBySpatialGrid<T extends { latitude: number; longitude: number }>(
 }
 
 /** A north-pointing arrow drawn on a canvas; the layer rotates it to the
- * downwind bearing. */
+ * downwind bearing. Subdued neutral colors for dark basemap. */
 function windArrowImage(): ImageData {
   const size = 32
   const canvas = document.createElement('canvas')
@@ -120,10 +117,10 @@ function windArrowImage(): ImageData {
   ctx.lineTo(5, 16)
   ctx.closePath()
   ctx.lineJoin = 'round'
-  ctx.lineWidth = 3
-  ctx.strokeStyle = '#ffffff'
+  ctx.lineWidth = 2
+  ctx.strokeStyle = WIND.arrowStroke
   ctx.stroke()
-  ctx.fillStyle = '#1d4ed8'
+  ctx.fillStyle = WIND.arrowColor
   ctx.fill()
   return ctx.getImageData(0, 0, size, size)
 }
@@ -157,168 +154,163 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
     lodResolutionRef.current = state.lod.resolution
   }, [state.lod.resolution])
 
-  // Create the map once.
+  // Create the map once: fetch the base style, patch it to a dark
+  // monochrome palette, then initialize MapLibre with the patched style.
   useEffect(() => {
     if (!containerRef.current) return
+    const container = containerRef.current
 
-    const map = new MapLibreMap({
-      container: containerRef.current,
-      style: MAP_STYLE,
-      bounds: INDIA_BOUNDS,
-      fitBoundsOptions: { padding: 20 },
-      maxBounds: MAX_PAN_BOUNDS,
-      renderWorldCopies: false,
-    })
-    mapRef.current = map
-    map.addControl(new NavigationControl({ showCompass: false }), 'bottom-right')
-
-    // Reports the current viewport (zoom + bounds) to MapUiContext, which
-    // derives the level-of-detail tier from it — see mapUiReducer's
-    // SET_VIEWPORT case. Registered outside 'load' so it also fires once
-    // for the initial India-wide placement above, not just later moves.
+    let cancelled = false
+    let map: MapLibreMap | null = null
     let debounceHandle: ReturnType<typeof setTimeout> | undefined
-    const reportViewport = () => {
-      clearTimeout(debounceHandle)
-      debounceHandle = setTimeout(() => {
-        const bounds = map.getBounds()
-        dispatch({
-          type: 'SET_VIEWPORT',
-          zoom: map.getZoom(),
-          bbox: {
-            minLat: bounds.getSouth(),
-            minLon: bounds.getWest(),
-            maxLat: bounds.getNorth(),
-            maxLon: bounds.getEast(),
-          },
+
+    fetch(BASE_STYLE_URL)
+      .then((r) => r.json())
+      .then((style) => {
+        if (cancelled) return
+        patchBasemapStyle(style)
+
+        map = new MapLibreMap({
+          container,
+          style,
+          bounds: INDIA_BOUNDS,
+          fitBoundsOptions: { padding: 20 },
+          maxBounds: MAX_PAN_BOUNDS,
+          renderWorldCopies: false,
         })
-      }, VIEWPORT_DEBOUNCE_MS)
-    }
-    map.on('moveend', reportViewport)
+        mapRef.current = map
+        map.addControl(new NavigationControl({ showCompass: false }), 'bottom-right')
 
-    map.on('load', () => {
-      // India country outline — a static GeoJSON derived from the same
-      // geoBoundaries ADM1 dataset used for state boundaries, dissolved
-      // into a single polygon. Renders as a subtle fill and a solid
-      // outer border, separated from the basemap so we control which
-      // India boundary dataset is displayed. The fill sits below all
-      // data layers; the outline sits above them.
-      map.addSource(SOURCE_INDIA_OUTLINE, { type: 'geojson', data: INDIA_OUTLINE_URL })
-      map.addLayer({
-        id: LAYER_INDIA_OUTLINE_FILL,
-        type: 'fill',
-        source: SOURCE_INDIA_OUTLINE,
-        paint: { 'fill-color': '#f0fdf4', 'fill-opacity': 0.4 },
-      })
-
-      // Cells at whatever resolution the current level-of-detail tier
-      // fetched — a coarse, sparse national grid at country zoom, a
-      // dense per-hex grid once zoomed into a city. No separate
-      // "overview" layer: the fetched data already matches the zoom.
-      map.addSource(SOURCE_PM25, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
-      map.addLayer({
-        id: LAYER_PM25_FILL,
-        type: 'fill',
-        source: SOURCE_PM25,
-        paint: {
-          'fill-color': colorScaleExpression(PM25_COLOR_SCALE, 'value'),
-          'fill-opacity': 0.65,
-        },
-      })
-      map.addLayer({
-        id: LAYER_PM25_OUTLINE,
-        type: 'line',
-        source: SOURCE_PM25,
-        paint: { 'line-color': '#00000040', 'line-width': 1 },
-      })
-
-      // PDI is state-tier-and-finer detail, not part of the bare country
-      // overview (see lib/lod.ts's PDI_MIN_ZOOM) — hidden below that zoom
-      // regardless of the toggle, same as it's hidden when toggled off.
-      map.addSource(SOURCE_PDI, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
-      map.addLayer({
-        id: LAYER_PDI_FILL,
-        type: 'fill',
-        source: SOURCE_PDI,
-        minzoom: PDI_MIN_ZOOM,
-        layout: { visibility: 'none' },
-        paint: {
-          'fill-color': colorScaleExpression(PDI_COLOR_SCALE, 'value'),
-          'fill-opacity': 0.55,
-        },
-      })
-
-      // State/UT borders, visible from the initial India-wide view — a
-      // static asset (see lib/stateBoundaries.ts), handed straight to
-      // MapLibre as a source URL so it fetches and renders it directly;
-      // the same file is fetched separately (and cached) by
-      // CellDetailPanel's point-in-polygon "which state is this" lookup.
-      map.addSource(SOURCE_STATE_BOUNDARIES, { type: 'geojson', data: STATE_BOUNDARIES_URL })
-      map.addLayer({
-        id: LAYER_STATE_BOUNDARIES,
-        type: 'line',
-        source: SOURCE_STATE_BOUNDARIES,
-        paint: {
-          'line-color': '#1f2937',
-          'line-width': 1.4,
-          'line-opacity': 0.85,
-          'line-dasharray': [3, 2],
-        },
-      })
-
-      // India outer boundary — solid line on top of all polygon layers,
-      // visually separating India from neighboring countries and the
-      // basemap. Uses the same dissolved outline source as the fill.
-      map.addLayer({
-        id: LAYER_INDIA_OUTLINE_LINE,
-        type: 'line',
-        source: SOURCE_INDIA_OUTLINE,
-        paint: {
-          'line-color': '#166534',
-          'line-width': 2,
-          'line-opacity': 0.9,
-        },
-      })
-
-      map.addSource(SOURCE_WIND, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
-      // An image icon rather than a '↑' text glyph: the basemap's glyph
-      // server has no arrow characters, so a text arrow silently renders
-      // nothing.
-      map.addImage(WIND_ARROW_IMAGE, windArrowImage())
-      map.addLayer({
-        id: LAYER_WIND,
-        type: 'symbol',
-        source: SOURCE_WIND,
-        layout: {
-          'icon-image': WIND_ARROW_IMAGE,
-          'icon-rotate': ['get', 'rotation'],
-          'icon-rotation-alignment': 'map',
-          'icon-allow-overlap': true,
-          'icon-ignore-placement': true,
-          'icon-size': ['interpolate', ['linear'], ['get', 'wind_speed'], 0, 0.5, 15, 1.1],
-        },
-      })
-
-      const clickableLayers = [LAYER_PM25_FILL, LAYER_PDI_FILL]
-      map.on('click', clickableLayers, (event) => {
-        const h3Cell = event.features?.[0]?.properties?.h3_cell
-        if (typeof h3Cell === 'string') {
-          dispatch({ type: 'SELECT_CELL', cell: h3Cell, resolution: lodResolutionRef.current })
+        // Reports the current viewport (zoom + bounds) to MapUiContext,
+        // which derives the level-of-detail tier from it.
+        const reportViewport = () => {
+          clearTimeout(debounceHandle)
+          debounceHandle = setTimeout(() => {
+            const bounds = map!.getBounds()
+            dispatch({
+              type: 'SET_VIEWPORT',
+              zoom: map!.getZoom(),
+              bbox: {
+                minLat: bounds.getSouth(),
+                minLon: bounds.getWest(),
+                maxLat: bounds.getNorth(),
+                maxLon: bounds.getEast(),
+              },
+            })
+          }, VIEWPORT_DEBOUNCE_MS)
         }
-      })
-      map.on('mouseenter', clickableLayers, () => {
-        map.getCanvas().style.cursor = 'pointer'
-      })
-      map.on('mouseleave', clickableLayers, () => {
-        map.getCanvas().style.cursor = ''
-      })
+        map.on('moveend', reportViewport)
 
-      setMapReady(true)
-    })
+        map.on('load', () => {
+          // India country outline — dissolved from geoBoundaries ADM1.
+          map!.addSource(SOURCE_INDIA_OUTLINE, { type: 'geojson', data: INDIA_OUTLINE_URL })
+          map!.addLayer({
+            id: LAYER_INDIA_OUTLINE_FILL,
+            type: 'fill',
+            source: SOURCE_INDIA_OUTLINE,
+            paint: { 'fill-color': OVERLAY.indiaFill, 'fill-opacity': 1 },
+          })
+
+          // PM2.5 cells — the primary pollution overlay.
+          map!.addSource(SOURCE_PM25, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+          map!.addLayer({
+            id: LAYER_PM25_FILL,
+            type: 'fill',
+            source: SOURCE_PM25,
+            paint: {
+              'fill-color': colorScaleExpression(PM25_COLOR_SCALE, 'value'),
+              'fill-opacity': 0.75,
+            },
+          })
+          map!.addLayer({
+            id: LAYER_PM25_OUTLINE,
+            type: 'line',
+            source: SOURCE_PM25,
+            paint: { 'line-color': OVERLAY.cellOutline, 'line-width': 1 },
+          })
+
+          // PDI — state-tier-and-finer, hidden below PDI_MIN_ZOOM.
+          map!.addSource(SOURCE_PDI, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+          map!.addLayer({
+            id: LAYER_PDI_FILL,
+            type: 'fill',
+            source: SOURCE_PDI,
+            minzoom: PDI_MIN_ZOOM,
+            layout: { visibility: 'none' },
+            paint: {
+              'fill-color': colorScaleExpression(PDI_COLOR_SCALE, 'value'),
+              'fill-opacity': 0.65,
+            },
+          })
+
+          // State/UT borders — subtle dashed lines.
+          map!.addSource(SOURCE_STATE_BOUNDARIES, { type: 'geojson', data: STATE_BOUNDARIES_URL })
+          map!.addLayer({
+            id: LAYER_STATE_BOUNDARIES,
+            type: 'line',
+            source: SOURCE_STATE_BOUNDARIES,
+            paint: {
+              'line-color': BASEMAP.stateBorder,
+              'line-width': 1,
+              'line-opacity': 0.7,
+              'line-dasharray': [3, 2],
+            },
+          })
+
+          // India outer boundary — solid line above all polygon layers.
+          map!.addLayer({
+            id: LAYER_INDIA_OUTLINE_LINE,
+            type: 'line',
+            source: SOURCE_INDIA_OUTLINE,
+            paint: {
+              'line-color': OVERLAY.indiaBorder,
+              'line-width': 1.5,
+              'line-opacity': 0.8,
+            },
+          })
+
+          // Wind arrows — subdued gray, never dominant.
+          map!.addSource(SOURCE_WIND, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+          map!.addImage(WIND_ARROW_IMAGE, windArrowImage())
+          map!.addLayer({
+            id: LAYER_WIND,
+            type: 'symbol',
+            source: SOURCE_WIND,
+            layout: {
+              'icon-image': WIND_ARROW_IMAGE,
+              'icon-rotate': ['get', 'rotation'],
+              'icon-rotation-alignment': 'map',
+              'icon-allow-overlap': true,
+              'icon-ignore-placement': true,
+              'icon-size': ['interpolate', ['linear'], ['get', 'wind_speed'], 0, 0.5, 15, 1.1],
+            },
+          })
+
+          const clickableLayers = [LAYER_PM25_FILL, LAYER_PDI_FILL]
+          map!.on('click', clickableLayers, (event) => {
+            const h3Cell = event.features?.[0]?.properties?.h3_cell
+            if (typeof h3Cell === 'string') {
+              dispatch({ type: 'SELECT_CELL', cell: h3Cell, resolution: lodResolutionRef.current })
+            }
+          })
+          map!.on('mouseenter', clickableLayers, () => {
+            map!.getCanvas().style.cursor = 'pointer'
+          })
+          map!.on('mouseleave', clickableLayers, () => {
+            map!.getCanvas().style.cursor = ''
+          })
+
+          setMapReady(true)
+        })
+      })
 
     return () => {
+      cancelled = true
       clearTimeout(debounceHandle)
-      map.remove()
-      mapRef.current = null
+      if (map) {
+        map.remove()
+        mapRef.current = null
+      }
       setMapReady(false)
     }
   }, [dispatch])
