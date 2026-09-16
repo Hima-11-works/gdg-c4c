@@ -30,4 +30,22 @@ class AirQualityReading {
       category == CpcbCategory.poor ||
       category == CpcbCategory.veryPoor ||
       category == CpcbCategory.severe;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AirQualityReading &&
+          aqiCpcb == other.aqiCpcb &&
+          pm25 == other.pm25 &&
+          primaryPollutant == other.primaryPollutant &&
+          category == other.category &&
+          recordedAt == other.recordedAt;
+
+  @override
+  int get hashCode =>
+      Object.hash(aqiCpcb, pm25, primaryPollutant, category, recordedAt);
+
+  @override
+  String toString() =>
+      'AirQualityReading(aqi=$aqiCpcb, cat=${category.label}, at=$recordedAt)';
 }

@@ -2,13 +2,13 @@
 ///
 /// The app never assigns a tier based on health context alone —
 /// the user must always confirm or override.
-enum SensitivityTier {
+enum AlertSensitivity {
   standard('Standard'),
   sensitive('Sensitive'),
   high('High sensitivity'),
   custom('Custom / clinician configured');
 
-  const SensitivityTier(this.label);
+  const AlertSensitivity(this.label);
   final String label;
 }
 
@@ -16,7 +16,7 @@ enum SensitivityTier {
 ///
 /// This is NOT a diagnosis. It only informs which sensitivity tier
 /// the app suggests — the user always has the final say.
-enum HealthContext {
+enum UserHealthContext {
   none('No known respiratory sensitivity'),
   asthma('Asthma'),
   copd('Chronic bronchitis / COPD'),
@@ -25,6 +25,6 @@ enum HealthContext {
   cardio('Cardiovascular sensitivity'),
   preferNotToSay('Prefer not to say');
 
-  const HealthContext(this.label);
+  const UserHealthContext(this.label);
   final String label;
 }

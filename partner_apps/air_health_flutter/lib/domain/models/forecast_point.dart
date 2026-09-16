@@ -23,4 +23,20 @@ class ForecastPoint {
 
   /// CPCB category for this forecast point.
   CpcbCategory get category => CpcbCategory.fromAqi(aqiCpcb);
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ForecastPoint &&
+          at == other.at &&
+          aqiCpcb == other.aqiCpcb &&
+          pm25 == other.pm25 &&
+          confidence == other.confidence;
+
+  @override
+  int get hashCode => Object.hash(at, aqiCpcb, pm25, confidence);
+
+  @override
+  String toString() =>
+      'ForecastPoint(at=$at, aqi=$aqiCpcb, conf=$confidence)';
 }

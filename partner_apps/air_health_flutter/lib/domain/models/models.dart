@@ -7,4 +7,6 @@ export 'location_point.dart';
 export 'nearby_area.dart';
 export 'pollution_event.dart';
 export 'sensitivity.dart';
+export 'user_alert_preferences.dart';
 export 'user_profile.dart';
+export 'user_sensitivity_profile.dart';

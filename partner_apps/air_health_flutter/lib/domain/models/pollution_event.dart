@@ -15,4 +15,32 @@ class PollutionEvent {
   final int peakAqiEstimate;
   final double confidence;
   final String description;
+
+  /// Time until the event arrives.
+  Duration get leadTime => expectedArrivalAt.difference(DateTime.now());
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PollutionEvent &&
+          id == other.id &&
+          sourceArea == other.sourceArea &&
+          expectedArrivalAt == other.expectedArrivalAt &&
+          peakAqiEstimate == other.peakAqiEstimate &&
+          confidence == other.confidence &&
+          description == other.description;
+
+  @override
+  int get hashCode => Object.hash(
+        id,
+        sourceArea,
+        expectedArrivalAt,
+        peakAqiEstimate,
+        confidence,
+        description,
+      );
+
+  @override
+  String toString() =>
+      'PollutionEvent($sourceArea, peak=$peakAqiEstimate, arrival=$expectedArrivalAt)';
 }

@@ -1,4 +1,8 @@
 import 'sensitivity.dart';
+import 'user_sensitivity_profile.dart';
+
+export 'sensitivity.dart';
+export 'user_sensitivity_profile.dart' show UserSensitivityProfile, CustomSensitivityRules;
 
 /// The user's on-device health profile.
 ///
@@ -6,39 +10,41 @@ import 'sensitivity.dart';
 /// never logged, never included in analytics.
 class UserProfile {
   const UserProfile({
-    this.healthContext = HealthContext.none,
-    this.sensitivityTier = SensitivityTier.standard,
+    this.healthContext = UserHealthContext.none,
+    this.sensitivity = AlertSensitivity.standard,
     this.customRules,
   });
 
-  final HealthContext healthContext;
-  final SensitivityTier sensitivityTier;
+  final UserHealthContext healthContext;
+  final AlertSensitivity sensitivity;
 
-  /// Only populated when [sensitivityTier] is [SensitivityTier.custom].
+  /// Only populated when [sensitivity] is [AlertSensitivity.custom].
   final CustomSensitivityRules? customRules;
 
   UserProfile copyWith({
-    HealthContext? healthContext,
-    SensitivityTier? sensitivityTier,
+    UserHealthContext? healthContext,
+    AlertSensitivity? sensitivity,
     CustomSensitivityRules? customRules,
   }) {
     return UserProfile(
       healthContext: healthContext ?? this.healthContext,
-      sensitivityTier: sensitivityTier ?? this.sensitivityTier,
+      sensitivity: sensitivity ?? this.sensitivity,
       customRules: customRules ?? this.customRules,
     );
   }
-}
 
-/// User-defined threshold overrides for the custom sensitivity tier.
-class CustomSensitivityRules {
-  const CustomSensitivityRules({
-    this.warningAqi = 101,
-    this.forecastWarningAqi = 151,
-    this.rapidRiseAqiPerHour = 30,
-  });
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is UserProfile &&
+          healthContext == other.healthContext &&
+          sensitivity == other.sensitivity &&
+          customRules == other.customRules;
 
-  final int warningAqi;
-  final int forecastWarningAqi;
-  final int rapidRiseAqiPerHour;
+  @override
+  int get hashCode => Object.hash(healthContext, sensitivity, customRules);
+
+  @override
+  String toString() =>
+      'UserProfile(context=${healthContext.name}, sensitivity=${sensitivity.name})';
 }

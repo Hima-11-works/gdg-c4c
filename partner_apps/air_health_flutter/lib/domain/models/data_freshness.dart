@@ -11,6 +11,24 @@ class DataFreshness {
   final DateTime? nextRefreshEta;
 
   bool get isStale => quality == DataQuality.stale;
+
+  /// How old the data is right now.
+  Duration get age => DateTime.now().difference(retrievedAt);
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DataFreshness &&
+          retrievedAt == other.retrievedAt &&
+          quality == other.quality &&
+          nextRefreshEta == other.nextRefreshEta;
+
+  @override
+  int get hashCode => Object.hash(retrievedAt, quality, nextRefreshEta);
+
+  @override
+  String toString() =>
+      'DataFreshness(quality=${quality.name}, age=$age)';
 }
 
 enum DataQuality {

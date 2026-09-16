@@ -21,7 +21,7 @@ class SecureProfileStore {
       key: _keyProfile,
       value: jsonEncode({
         'healthContext': profile.healthContext.name,
-        'sensitivityTier': profile.sensitivityTier.name,
+        'sensitivity': profile.sensitivity.name,
       }),
     );
   }
@@ -31,13 +31,13 @@ class SecureProfileStore {
     if (raw == null) return null;
     final map = jsonDecode(raw) as Map<String, dynamic>;
     return UserProfile(
-      healthContext: HealthContext.values.firstWhere(
+      healthContext: UserHealthContext.values.firstWhere(
         (e) => e.name == map['healthContext'],
-        orElse: () => HealthContext.none,
+        orElse: () => UserHealthContext.none,
       ),
-      sensitivityTier: SensitivityTier.values.firstWhere(
-        (e) => e.name == map['sensitivityTier'],
-        orElse: () => SensitivityTier.standard,
+      sensitivity: AlertSensitivity.values.firstWhere(
+        (e) => e.name == map['sensitivity'],
+        orElse: () => AlertSensitivity.standard,
       ),
     );
   }
