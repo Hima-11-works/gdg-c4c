@@ -1,24 +1,30 @@
-// India state/UT boundaries, used two ways: components/MapView.tsx hands
-// the same URL straight to a MapLibre GeoJSON source (it fetches and
-// renders the polygons itself), and findStateForPoint below does a plain
-// point-in-polygon test against the parsed features so
-// components/CellDetailPanel.tsx can label a clicked cell with the state
-// it falls in — the "location/state if available" part of a cell's
-// detail view.
+// India state/UT boundaries and country outline, used two ways:
+// components/MapView.tsx hands the same URLs straight to MapLibre GeoJSON
+// sources (it fetches and renders the polygons itself), and
+// findStateForPoint below does a plain point-in-polygon test against the
+// parsed features so components/CellDetailPanel.tsx can label a clicked
+// cell with the state it falls in — the "location/state if available"
+// part of a cell's detail view.
 //
-// public/data/india_states.geojson is a simplified (mapshaper -simplify
-// 3%), GADM-derived dataset — a demo-appropriate approximation, not a
-// survey-accurate or currently-official one: it predates the 2014 split
-// of Telangana out of Andhra Pradesh (still shown merged), and one very
-// small territory (Lakshadweep) was dropped by simplification. "Orissa"
-// and "Uttaranchal" were renamed to their current names (Odisha,
-// Uttarakhand) when this file was prepared; nothing else was corrected.
-// Fine for "which state is this, roughly" in an illustrative demo UI —
-// not a source of truth for anything else.
+// Data source: geoBoundaries ADM1 (Open Database License, ODC-ODbL),
+// https://www.geoboundaries.org — the geoBoundaries Global Database of
+// Political Administrative Boundaries, maintained by William & Mary's
+// geoLab. Simplified with mapshaper (10% keep-shapes) for web use, then
+// names normalized from diacritical forms (e.g. "Kashmīr" → "Kashmir")
+// to standard ASCII. Includes all 28 states and 8 union territories as
+// of the current administrative structure (post-2019 J&K/Ladakh
+// reorganization, post-2020 Dadra & Nagar Haveli / Daman & Diu merger).
+// The country outline (india_country.geojson) is dissolved from the
+// same state-level data with mapshaper -dissolve.
+//
+// License: ODC-ODbL (Open Database License)
+// https://opendatacommons.org/licenses/odbl/1-0/
+// Attribution: geoBoundaries, William & Mary geoLab
 
 import type { Feature, FeatureCollection, MultiPolygon, Polygon, Position } from 'geojson'
 
 export const STATE_BOUNDARIES_URL = '/data/india_states.geojson'
+export const INDIA_OUTLINE_URL = '/data/india_country.geojson'
 
 export type StateBoundaries = FeatureCollection<Polygon | MultiPolygon, { name: string }>
 

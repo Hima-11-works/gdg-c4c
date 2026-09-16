@@ -15,7 +15,7 @@ import {
   windToFeatureCollection,
 } from '../lib/h3Geometry'
 import { INDIA_BBOX, PDI_MIN_ZOOM } from '../lib/lod'
-import { STATE_BOUNDARIES_URL } from '../lib/stateBoundaries'
+import { INDIA_OUTLINE_URL, STATE_BOUNDARIES_URL } from '../lib/stateBoundaries'
 import { useMapUi } from '../state/MapUiContext'
 import type { AsyncResource } from '../hooks/useApiResource'
 import type { BoundingBox, ForecastOut, GridStateOut, WeatherReadingOut } from '../lib/types'
@@ -62,6 +62,9 @@ const SOURCE_PDI = 'cells-pdi'
 const LAYER_PDI_FILL = 'cells-pdi-fill'
 const SOURCE_STATE_BOUNDARIES = 'state-boundaries'
 const LAYER_STATE_BOUNDARIES = 'state-boundaries-line'
+const SOURCE_INDIA_OUTLINE = 'india-outline'
+const LAYER_INDIA_OUTLINE_FILL = 'india-outline-fill'
+const LAYER_INDIA_OUTLINE_LINE = 'india-outline-line'
 const SOURCE_WIND = 'wind-points'
 const LAYER_WIND = 'wind-arrows'
 const WIND_ARROW_IMAGE = 'wind-arrow'
@@ -193,6 +196,20 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
     map.on('moveend', reportViewport)
 
     map.on('load', () => {
+      // India country outline — a static GeoJSON derived from the same
+      // geoBoundaries ADM1 dataset used for state boundaries, dissolved
+      // into a single polygon. Renders as a subtle fill and a solid
+      // outer border, separated from the basemap so we control which
+      // India boundary dataset is displayed. The fill sits below all
+      // data layers; the outline sits above them.
+      map.addSource(SOURCE_INDIA_OUTLINE, { type: 'geojson', data: INDIA_OUTLINE_URL })
+      map.addLayer({
+        id: LAYER_INDIA_OUTLINE_FILL,
+        type: 'fill',
+        source: SOURCE_INDIA_OUTLINE,
+        paint: { 'fill-color': '#f0fdf4', 'fill-opacity': 0.4 },
+      })
+
       // Cells at whatever resolution the current level-of-detail tier
       // fetched — a coarse, sparse national grid at country zoom, a
       // dense per-hex grid once zoomed into a city. No separate
@@ -245,6 +262,20 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
           'line-width': 1.4,
           'line-opacity': 0.85,
           'line-dasharray': [3, 2],
+        },
+      })
+
+      // India outer boundary — solid line on top of all polygon layers,
+      // visually separating India from neighboring countries and the
+      // basemap. Uses the same dissolved outline source as the fill.
+      map.addLayer({
+        id: LAYER_INDIA_OUTLINE_LINE,
+        type: 'line',
+        source: SOURCE_INDIA_OUTLINE,
+        paint: {
+          'line-color': '#166534',
+          'line-width': 2,
+          'line-opacity': 0.9,
         },
       })
 

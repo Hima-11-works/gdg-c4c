@@ -61,6 +61,28 @@ Every step above is a manual trigger today (`python -m app.cli ...` or
 `python -m app.pipeline.run`) — there is no scheduler yet. See
 [MVP limitations](#mvp-limitations) and [Known limitations](#known-limitations).
 
+### India boundary data
+
+The map's India state/UT boundaries and country outline are sourced from
+the **geoBoundaries ADM1 dataset** (geoBoundaries Global Database of
+Political Administrative Boundaries, maintained by William & Mary's
+geoLab). The data is simplified with mapshaper (10% keep-shapes) for web
+use, with names normalized from diacritical forms to standard ASCII.
+
+- **Source:** https://www.geoboundaries.org
+- **License:** ODC-ODbL (Open Database License)
+- **Coverage:** All 28 states and 8 union territories (post-2019
+  J&K/Ladakh reorganization, post-2020 Dadra & Nagar Haveli / Daman &
+  Diu merger)
+- **Files:** `frontend/public/data/india_states.geojson` (state
+  boundaries), `frontend/public/data/india_country.geojson` (country
+  outline, dissolved from the same data)
+
+The boundary layers are rendered as separate MapLibre sources, independent
+of the basemap provider. See `frontend/src/lib/stateBoundaries.ts` for
+the data source documentation and `frontend/src/components/MapView.tsx`
+for the layer setup.
+
 ## Quick start: step by step
 
 The fastest way to see the whole thing running is **Demo Mode**: no API
@@ -356,6 +378,10 @@ which one ran.
 │  ├─ pyproject.toml            # dependency ranges
 │  └─ requirements.lock         # exact versions installed in Docker
 ├─ frontend/
+│  ├─ public/
+│  │  └─ data/                   # static GeoJSON assets for the map
+│  │     ├─ india_states.geojson #   India state/UT boundaries (geoBoundaries ADM1, ODC-ODbL)
+│  │     └─ india_country.geojson#   India country outline (dissolved from the same ADM1 data)
 │  └─ src/
 │     ├─ components/            # MapPage, MapView, AlertsPanel, CellDetailPanel, TimelineControl, ...
 │     ├─ lib/                    # api.ts (the only fetch caller), lod.ts (zoom -> resolution/bbox),
