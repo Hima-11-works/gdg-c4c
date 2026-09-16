@@ -46,20 +46,20 @@ void main() {
   });
 
   group('NearbyArea', () {
-    final area = NearbyArea(
-      location: const LocationPoint(latitude: 20.3, longitude: 85.8),
+    const area = NearbyArea(
+      location: LocationPoint(latitude: 20.3, longitude: 85.8),
       name: 'Cuttack',
       aqiNow: 95,
-      forecast: const [],
+      forecast: [],
       trend: AreaTrend.improving,
       distanceKm: 25.0,
       confidence: 0.9,
     );
-    final same = NearbyArea(
-      location: const LocationPoint(latitude: 20.3, longitude: 85.8),
+    const same = NearbyArea(
+      location: LocationPoint(latitude: 20.3, longitude: 85.8),
       name: 'Cuttack',
       aqiNow: 95,
-      forecast: const [],
+      forecast: [],
       trend: AreaTrend.improving,
       distanceKm: 25.0,
       confidence: 0.9,
