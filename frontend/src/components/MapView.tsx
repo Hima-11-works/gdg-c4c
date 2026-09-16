@@ -147,7 +147,7 @@ function windArrowImage(): ImageData {
 // using MapLibre paint-property expressions (no React state per frame).
 // ---------------------------------------------------------------------------
 
-type MergedCellFeature = Feature<Polygon, { h3_cell: string; oldValue: number | null; newValue: number | null }>
+type MergedCellFeature = Feature<Polygon, { h3_cell: string; oldValue: number | null; newValue: number | null; value: number | null }>
 
 /** Build a MapLibre expression that lerps between oldValue and newValue
  * at the given progress (0 = old, 1 = new). Progress is baked into the
@@ -208,12 +208,25 @@ function mergeFeatureCollections(
     const oldF = oldMap.get(key)
     const newF = newMap.get(key)
     const geometry = (newF ?? oldF)!.geometry
+    const newValue = newF?.properties?.value ?? null
+    const oldValue = oldF?.properties?.value ?? null
     merged.push({
       type: 'Feature',
       properties: {
         h3_cell: key,
-        oldValue: oldF?.properties?.value ?? null,
-        newValue: newF?.properties?.value ?? null,
+        oldValue,
+        newValue,
+        // `value` = the target (new) value, so the FINAL paint expression
+        // (colorScaleExpression reading `value`) is correct on merged data
+        // too — without it, the moment the expression swaps to read `value`
+        // while the merged features are still on the source (setData is
+        // async), every cell renders as NO_DATA (dark) for a frame: the
+        // "cells disappear then reappear" pop.
+        //
+        // A cell only in old (leaving) has no newValue -> `value` is null,
+        // so at the final expression swap it renders dark (matching the
+        // fade-out the transition already applied) until setData removes it.
+        value: newValue,
       },
       geometry,
     })
@@ -257,6 +270,12 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
   // Transition state — refs to avoid re-renders during animation.
   const oldGeojsonRef = useRef<FeatureCollection | null>(null)
   const transitionRafRef = useRef<number | null>(null)
+  // The exact data array (currentGrid.data / forecastGrid.data) whose
+  // FeatureCollection is currently painted on the source. Transitions are
+  // gated on this reference so a stale-while-revalidate frame (same array,
+  // new minute) is a no-op and a structural change (new array, same minute)
+  // snaps.
+  const paintedDataRef = useRef<unknown>(null)
 
   // Track which fill layer is currently visible for the PDI crossfade.
   const activeFillLayerRef = useRef<string>(LAYER_PM25_FILL)
@@ -502,35 +521,55 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
   }, [mapReady, state.showPdi])
 
   // PM2.5 / forecast layer data — switches source with the timeline.
-  // When the forecast keyframe changes, performs a color interpolation
-  // transition. When the structural data changes (zoom/viewport), snaps
-  // immediately.
+  // Transitions are gated on the *data reference* (the exact array the
+  // store/cache returned), not on the minute number:
+  //   - Same array as painted   -> no-op (a stale-while-revalidate frame,
+  //     or a poll tick returning the identical cached array — skip, the
+  //     map already shows this frame; also fixes the redundant re-paint
+  //     that made every keyframe swap the whole grid).
+  //   - Different array + minute changed -> smooth color transition.
+  //   - Different array + same minute    -> structural change (zoom/pan)
+  //     -> snap immediately.
   useEffect(() => {
     if (!mapReady || !mapRef.current) return
     const source = mapRef.current.getSource(SOURCE_PM25)
     if (!(source instanceof GeoJSONSource)) return
 
+    if (state.forecastMinutes === 0 && currentGrid.status !== 'success') return
+    if (state.forecastMinutes !== 0 && forecastGrid.status !== 'success') return
+
+    // Guards above guarantee the active resource is in 'success' state; a
+    // plain ternary on state.forecastMinutes can't be narrowed by TS, so
+    // grab the arrays via the success-only union members.
+    const cellsData =
+      state.forecastMinutes === 0
+        ? (currentGrid as Extract<typeof currentGrid, { status: 'success' }>).data
+        : (forecastGrid as Extract<typeof forecastGrid, { status: 'success' }>).data
+
+    // Same underlying data as what's already painted -> nothing to do.
+    if (cellsData === paintedDataRef.current) return
+
     let newData: FeatureCollection
     if (state.forecastMinutes === 0) {
-      if (currentGrid.status !== 'success') return
-      const cells = currentGrid.data.map((cell) => ({ h3Cell: cell.h3_cell, value: cell.pm25 }))
+      const cells = (currentGrid as Extract<typeof currentGrid, { status: 'success' }>).data.map(
+        (cell) => ({ h3Cell: cell.h3_cell, value: cell.pm25 }),
+      )
       newData = cellsToFeatureCollection(cells)
     } else {
-      if (forecastGrid.status !== 'success') return
-      const cells = forecastGrid.data.map((forecast) => ({
-        h3Cell: forecast.h3_cell,
-        value: forecast.predicted_pm25,
-      }))
+      const cells = (forecastGrid as Extract<typeof forecastGrid, { status: 'success' }>).data.map(
+        (forecast) => ({
+          h3Cell: forecast.h3_cell,
+          value: forecast.predicted_pm25,
+        }),
+      )
       newData = cellsToFeatureCollection(cells)
     }
 
-    const prevMinutes = displayedMinutesRef.current
-    const isKeyframeChange =
-      prevMinutes !== state.forecastMinutes &&
-      oldGeojsonRef.current !== null &&
-      !state.showPdi
+    const minuteChanged = displayedMinutesRef.current !== state.forecastMinutes
+    const isTransition =
+      minuteChanged && oldGeojsonRef.current !== null && !state.showPdi && !reducedMotion
 
-    if (isKeyframeChange && !reducedMotion) {
+    if (isTransition) {
       // Animate the color transition between keyframes using
       // setPaintProperty per frame (only updates the expression, not the
       // source data — much cheaper than setData for large cell counts).
@@ -541,6 +580,17 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
       if (transitionRafRef.current !== null) cancelAnimationFrame(transitionRafRef.current)
 
       source.setData(transitionData)
+
+      // Immediately pin the expression to progress=0 (old colors) so the
+      // merged features render the PREVIOUS frame's colors the instant they
+      // land on the source — otherwise they'd render the final `value`
+      // expression (still set from the last snap) for one frame, flashing
+      // the new colors before the animation starts.
+      mapRef.current.setPaintProperty(
+        LAYER_PM25_FILL,
+        'fill-color',
+        transitionColorExpression(PM25_COLOR_SCALE, 0),
+      )
 
       const map = mapRef.current!
       const duration = COLOR_TRANSITION_DURATION_MS
@@ -561,13 +611,16 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
           transitionRafRef.current = requestAnimationFrame(animate)
         } else {
           transitionRafRef.current = null
-          // Snap to final state with normal color expression.
-          source.setData(newData)
+          // Reset the expression FIRST, then swap in the clean final data.
+          // Merged features carry `value` (= newValue), so this order can't
+          // flash dark: even while the async setData is in flight, the
+          // merged features render the final expression correctly.
           map.setPaintProperty(
             LAYER_PM25_FILL,
             'fill-color',
             colorScaleExpression(PM25_COLOR_SCALE, 'value'),
           )
+          source.setData(newData)
           oldGeojsonRef.current = newData
         }
       }
@@ -584,6 +637,7 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
       oldGeojsonRef.current = newData
     }
 
+    paintedDataRef.current = cellsData
     displayedMinutesRef.current = state.forecastMinutes
   }, [mapReady, state.forecastMinutes, currentGrid, forecastGrid, state.showPdi, reducedMotion])
 
