@@ -1,19 +1,29 @@
 import '../../domain/models/models.dart';
 import '../pollution_data_provider.dart';
+import 'scenario_data.dart';
 
-/// Deterministic dummy data provider — the only implementation used
-/// until a real API is available. Returns hardcoded "moderate" data
-/// so the app compiles and renders. Scenarios will be added in H5.
+/// Deterministic dummy data provider.
+///
+/// Select a [Scenario] to get reproducible environmental data for that
+/// situation. All times are relative to [anchor] (defaults to
+/// `DateTime.now()`; pass a fixed value in tests).
+///
+/// Widgets and feature screens never instantiate this directly — they
+/// read it through the `pollutionDataProvider` Riverpod provider.
 class DummyPollutionDataProvider implements PollutionDataProvider {
+  DummyPollutionDataProvider({
+    this.scenario = Scenario.cleanStable,
+    DateTime? anchor,
+  }) : anchor = anchor ?? DateTime.now();
+
+  final Scenario scenario;
+  final DateTime anchor;
+
+  ScenarioData get _data => buildScenario(scenario, anchor);
+
   @override
   Future<AirQualityReading> getCurrentAirQuality(LocationPoint location) async {
-    return AirQualityReading(
-      aqiCpcb: 142,
-      pm25: 82.5,
-      primaryPollutant: 'PM2.5',
-      category: CpcbCategory.moderate,
-      recordedAt: DateTime.now(),
-    );
+    return _data.reading;
   }
 
   @override
@@ -21,32 +31,24 @@ class DummyPollutionDataProvider implements PollutionDataProvider {
     LocationPoint location,
     Duration horizon,
   ) async {
-    final now = DateTime.now();
-    return List.generate(12, (i) {
-      return ForecastPoint(
-        at: now.add(Duration(hours: i + 1)),
-        aqiCpcb: 140 + (i * 5),
-        pm25: 80.0 + (i * 3),
-        confidence: 0.85,
-      );
-    });
+    final maxHours = horizon.inHours;
+    return _data.forecast.where((f) {
+      return f.at.difference(anchor).inHours <= maxHours;
+    }).toList();
   }
 
   @override
   Future<List<NearbyArea>> getNearbyAreas(LocationPoint location) async {
-    return const [];
+    return _data.nearbyAreas;
   }
 
   @override
   Future<List<PollutionEvent>> getPollutionEvents(LocationPoint location) async {
-    return const [];
+    return _data.events;
   }
 
   @override
   Future<DataFreshness> getDataFreshness() async {
-    return DataFreshness(
-      retrievedAt: DateTime.now(),
-      quality: DataQuality.full,
-    );
+    return _data.freshness;
   }
 }
