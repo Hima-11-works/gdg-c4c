@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../../theme/tokens.dart';
+import '../../theme/app_spacing.dart';
 
 /// Alerts screen — placeholder. Will show alert history with
 /// "Why did I receive this?" explanations.
@@ -13,7 +13,7 @@ class AlertsScreen extends StatelessWidget {
       appBar: AppBar(title: const Text('Alerts')),
       body: const Center(
         child: Padding(
-          padding: EdgeInsets.all(Tokens.sp24),
+          padding: EdgeInsets.all(AppSpacing.xxl),
           child: Text(
             'Alerts — notification history with explanations goes here.',
             textAlign: TextAlign.center,

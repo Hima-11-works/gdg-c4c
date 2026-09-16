@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../../theme/tokens.dart';
+import '../../theme/app_spacing.dart';
 
 /// Profile / settings screen — placeholder. Will show health context,
 /// sensitivity tier editor, data management, and privacy controls.
@@ -13,7 +13,7 @@ class ProfileScreen extends StatelessWidget {
       appBar: AppBar(title: const Text('Profile & Settings')),
       body: const Center(
         child: Padding(
-          padding: EdgeInsets.all(Tokens.sp24),
+          padding: EdgeInsets.all(AppSpacing.xxl),
           child: Text(
             'Profile — health context, sensitivity, and data management go here.',
             textAlign: TextAlign.center,

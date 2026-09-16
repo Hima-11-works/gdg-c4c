@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../../theme/tokens.dart';
+import '../../theme/app_spacing.dart';
 
 /// Onboarding flow — placeholder. Will collect health context and
 /// alert sensitivity with explicit user confirmation.
@@ -13,7 +13,7 @@ class OnboardingScreen extends StatelessWidget {
       appBar: AppBar(title: const Text('Welcome')),
       body: const Center(
         child: Padding(
-          padding: EdgeInsets.all(Tokens.sp24),
+          padding: EdgeInsets.all(AppSpacing.xxl),
           child: Text(
             'Onboarding — health context and sensitivity selection go here.',
             textAlign: TextAlign.center,
