@@ -5,6 +5,7 @@ import '../domain/alert_message_service.dart';
 import '../domain/models/models.dart';
 import '../notifications/alert_notification_dispatcher.dart';
 import '../notifications/notification_service.dart';
+import 'alert_history_provider.dart';
 import 'home_providers.dart';
 import 'profile_providers.dart';
 
@@ -89,6 +90,16 @@ final alertEvaluationProvider =
       decisions: result.decisions,
       sensitivity: profile.sensitivity,
     );
+
+    // Feed alert history for the Alerts screen.
+    ref.read(alertHistoryProvider.notifier).addFromDecisions(result.decisions);
+
+    // Resolve any recovery decisions.
+    for (final d in result.decisions) {
+      if (d.trigger == AlertTrigger.recovery) {
+        ref.read(alertHistoryProvider.notifier).resolveByKey(d.dedupKey);
+      }
+    }
   }
 
   return result;
