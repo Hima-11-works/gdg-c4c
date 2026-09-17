@@ -35,6 +35,7 @@ void main() {
     'diagnosis', 'diagnose', 'asthma', 'copd',
     'safe for', 'take your', 'guarantee',
     'you are having', 'emergency',
+    'prescribed', 'treatments', 'seek medical',
   ];
 
   void expectNoBannedLanguage(AlertMessage msg) {

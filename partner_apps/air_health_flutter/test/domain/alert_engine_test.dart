@@ -579,7 +579,8 @@ void main() {
       const banned = [
         'attack', 'medication', 'medicine', 'prescription',
         'diagnosis', 'diagnose', 'asthma', 'copd',
-        'safe for', 'take your',
+        'safe for', 'take your', 'prescribed', 'treatments',
+        'seek medical',
       ];
 
       final result = engine.evaluate(

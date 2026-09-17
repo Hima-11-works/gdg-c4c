@@ -171,6 +171,9 @@ void main() {
         'copd',
         'safe for',
         'take your',
+        'prescribed',
+        'treatments',
+        'seek medical',
       ];
 
       for (final d in result.decisions) {
