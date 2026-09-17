@@ -60,6 +60,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     );
     await ref.read(userProfileProvider.notifier).updateProfile(profile);
     await ref.read(prefsStoreProvider).setOnboardingDone(true);
+    // Invalidate so the router redirect sees the updated onboarding state.
+    ref.invalidate(onboardingDoneProvider);
     if (mounted) context.go('/home');
   }
 
