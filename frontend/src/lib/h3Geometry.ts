@@ -4,7 +4,7 @@
 // (h3_cell, value) pairs already computed by the backend into GeoJSON for
 // MapLibre. No interpolation, estimation, or forecasting happens here.
 
-import { cellToBoundary, cellToLatLng } from 'h3-js'
+import { cellToBoundary, cellToLatLng, getHexagonEdgeLengthAvg } from 'h3-js'
 import type { Feature, FeatureCollection, Point, Polygon, Position } from 'geojson'
 
 export interface CellValue {
@@ -53,6 +53,14 @@ const boundaryCache = new Map<string, Position[]>()
  * rendering (the polygon boundary above is what's drawn). */
 export function cellCenter(h3Cell: string): [number, number] {
   return cellToLatLng(h3Cell) as [number, number]
+}
+
+/** Average H3 cell edge length at `resolution`, in km. Sizes the smoothing
+ *  kernel of the smooth (raster) view so the blur scales with the grid: a
+ *  coarse country-tier grid gets a wide kernel, a fine city-tier grid a
+ *  narrow one. */
+export function hexEdgeKm(resolution: number): number {
+  return getHexagonEdgeLengthAvg(resolution, 'km')
 }
 
 function boundaryFor(h3Cell: string): Position[] {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { GeoJSONSource, Map as MapLibreMap, NavigationControl, setWorkerUrl } from 'maplibre-gl'
+import { GeoJSONSource, ImageSource, Map as MapLibreMap, NavigationControl, setWorkerUrl } from 'maplibre-gl'
 import { cellToBoundary } from 'h3-js'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
@@ -11,10 +11,13 @@ import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&ur
 setWorkerUrl(maplibreWorkerUrl)
 import { colorScaleExpression, PDI_COLOR_SCALE, PM25_COLOR_SCALE } from '../lib/colorScales'
 import {
+  cellCenter,
   cellsToFeatureCollection,
   EMPTY_FEATURE_COLLECTION,
+  hexEdgeKm,
   windToFeatureCollection,
 } from '../lib/h3Geometry'
+import { renderSmoothField } from '../lib/smoothField'
 import { INDIA_BBOX, PDI_MIN_ZOOM } from '../lib/lod'
 import { INDIA_OUTLINE_URL, STATE_BOUNDARIES_URL } from '../lib/stateBoundaries'
 import { BASE_STYLE_URL, OVERLAY, WIND, BASEMAP, patchBasemapStyle } from '../lib/mapTheme'
@@ -30,9 +33,10 @@ import {
   SELECTED_CELL_BORDER_WIDTH,
 } from '../lib/visualConfig'
 import { useMapUi } from '../state/MapUiContext'
+import type { MapViewMode } from '../state/mapUiReducer'
 import type { AsyncResource } from '../hooks/useApiResource'
 import type { BoundingBox, ForecastOut, GridStateOut, WeatherReadingOut } from '../lib/types'
-import type { FeatureCollection, Position } from 'geojson'
+import type { Position } from 'geojson'
 
 // The app is scoped to India: on load, fit the whole country in view
 // rather than centering on one city. Level of detail (which resolution
@@ -83,6 +87,52 @@ const LAYER_PM25_OUTLINE: Record<Pm25Set, string> = {
   b: 'cells-pm25-outline-b',
 }
 const otherSet = (set: Pm25Set): Pm25Set => (set === 'a' ? 'b' : 'a')
+
+// The smooth view double-buffer: each set is a MapLibre `image` source (a
+// client-rendered raster of the smoothed field) with a raster layer. Raster
+// layers have no outline; the image itself carries the field.
+const SOURCE_PM25_RASTER: Record<Pm25Set, string> = {
+  a: 'cells-pm25-raster-a',
+  b: 'cells-pm25-raster-b',
+}
+const LAYER_PM25_RASTER: Record<Pm25Set, string> = {
+  a: 'cells-pm25-raster-fill-a',
+  b: 'cells-pm25-raster-fill-b',
+}
+
+// 1x1 transparent PNG — the image sources start empty; the first smooth frame
+// replaces it via updateImage.
+const TRANSPARENT_PIXEL =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+
+// Image-source corner order: top-left, top-right, bottom-right, bottom-left.
+type ImageCoords = [[number, number], [number, number], [number, number], [number, number]]
+const imageCoords = (bbox: BoundingBox): ImageCoords => [
+  [bbox.minLon, bbox.maxLat],
+  [bbox.maxLon, bbox.maxLat],
+  [bbox.maxLon, bbox.minLat],
+  [bbox.minLon, bbox.minLat],
+]
+const INDIA_IMAGE_COORDS = imageCoords(INDIA_BBOX)
+
+/** Layers that carry the PM2.5 value for a given view + buffer set, with the
+ *  opacity each sits at when fully shown. Drives both the frame dissolve and
+ *  the PDI mode fade. */
+interface Pm25PaintLayer {
+  layer: string
+  property: 'fill-opacity' | 'line-opacity' | 'raster-opacity'
+  base: number
+}
+
+function pm25PaintLayers(viewMode: MapViewMode, set: Pm25Set): Pm25PaintLayer[] {
+  if (viewMode === 'smooth') {
+    return [{ layer: LAYER_PM25_RASTER[set], property: 'raster-opacity', base: PM25_FILL_OPACITY }]
+  }
+  return [
+    { layer: LAYER_PM25_FILL[set], property: 'fill-opacity', base: PM25_FILL_OPACITY },
+    { layer: LAYER_PM25_OUTLINE[set], property: 'line-opacity', base: 1 },
+  ]
+}
 
 const SOURCE_PDI = 'cells-pdi'
 const LAYER_PDI_FILL = 'cells-pdi-fill'
@@ -196,7 +246,7 @@ function windStreakFrame(frame: number): ImageData {
 
 interface PaintStep {
   layer: string
-  property: 'fill-opacity' | 'line-opacity'
+  property: 'fill-opacity' | 'line-opacity' | 'raster-opacity'
   from: number
   to: number
 }
@@ -301,42 +351,31 @@ function animatePaintValues(
  * makes small frame-to-frame changes hard to read); compensating the outgoing
  * layer's opacity avoids that entirely.
  *
- * With fill base opacity `a`, keeping the composited coverage at `a` needs:
- *   incoming on top:    in = a·t, out = a·(1−t)/(1−a·t)
- *   incoming on bottom: out = a·(1−t), in = a·t/(1−a·(1−t))
- * Layer order is fill-a, outline-a, fill-b, outline-b, so 'b' is above 'a'.
- * Outlines follow the same normalized curve (their full value is 1).
+ * With base opacity `a` (the primary layer's), keeping the composited
+ * coverage at `a` needs these normalized curves:
+ *   incoming on top:    in = t,          out = (1−t)/(1−a·t)
+ *   incoming on bottom: out = 1−t,       in  = t/(1−a·(1−t))
+ * Each layer's own base then scales its curve (fills use a, outlines use 1,
+ * the smooth raster uses a). Buffer 'b' sits above 'a' in layer order.
  */
 function animatePm25Dissolve(
   map: MapLibreMap,
-  from: Pm25Set,
-  to: Pm25Set,
+  fromLayers: Pm25PaintLayer[],
+  toLayers: Pm25PaintLayer[],
+  incomingOnTop: boolean,
   duration: number,
   onDone: () => void,
 ): PaintAnimation {
   const a = PM25_FILL_OPACITY
-  const incomingOnTop = to === 'b'
 
-  // [outgoingFill, outgoingOutline, incomingFill, incomingOutline]
-  const values = (t: number): [number, number, number, number] => {
-    if (incomingOnTop) {
-      const inFill = a * t
-      const outFill = (a * (1 - t)) / (1 - a * t)
-      const outLine = (1 - t) / (1 - a * t)
-      return [outFill, outLine, inFill, t]
-    }
-    const outFill = a * (1 - t)
-    const inFill = (a * t) / (1 - a * (1 - t))
-    const inLine = t / (1 - a * (1 - t))
-    return [outFill, 1 - t, inFill, inLine]
+  const apply = (outNorm: number, inNorm: number) => {
+    for (const layer of fromLayers) map.setPaintProperty(layer.layer, layer.property, layer.base * outNorm)
+    for (const layer of toLayers) map.setPaintProperty(layer.layer, layer.property, layer.base * inNorm)
   }
 
-  const apply = (t: number) => {
-    const [outFill, outLine, inFill, inLine] = values(t)
-    map.setPaintProperty(LAYER_PM25_FILL[from], 'fill-opacity', outFill)
-    map.setPaintProperty(LAYER_PM25_OUTLINE[from], 'line-opacity', outLine)
-    map.setPaintProperty(LAYER_PM25_FILL[to], 'fill-opacity', inFill)
-    map.setPaintProperty(LAYER_PM25_OUTLINE[to], 'line-opacity', inLine)
+  const applyAt = (t: number) => {
+    if (incomingOnTop) apply((1 - t) / (1 - a * t), t)
+    else apply(1 - t, t / (1 - a * (1 - t)))
   }
 
   let raf = 0
@@ -345,7 +384,7 @@ function animatePm25Dissolve(
     if (finished) return
     finished = true
     cancelAnimationFrame(raf)
-    apply(1)
+    applyAt(1)
     onDone()
   }
   const cancel = () => {
@@ -363,7 +402,7 @@ function animatePm25Dissolve(
   const tick = (now: number) => {
     const t = Math.min(1, (now - start) / duration)
     const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2
-    apply(eased)
+    applyAt(eased)
     if (t < 1) raf = requestAnimationFrame(tick)
     else finish()
   }
@@ -511,6 +550,28 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
                 'line-color': CELL_BORDER_COLOR,
                 'line-width': CELL_BORDER_WIDTH,
                 'line-opacity': set === 'a' ? 1 : 0,
+              },
+            })
+          }
+
+          // Smooth view double buffer: client-rendered rasters of the same
+          // field, georeferenced to the current view bbox. Placed above the
+          // hex layers (only one view is ever visible). raster-fade-duration
+          // 0 disables MapLibre's own fade so our dissolve owns the blending.
+          for (const set of PM25_SETS) {
+            map!.addSource(SOURCE_PM25_RASTER[set], {
+              type: 'image',
+              url: TRANSPARENT_PIXEL,
+              coordinates: INDIA_IMAGE_COORDS,
+            })
+            map!.addLayer({
+              id: LAYER_PM25_RASTER[set],
+              type: 'raster',
+              source: SOURCE_PM25_RASTER[set],
+              paint: {
+                'raster-opacity': 0,
+                'raster-fade-duration': 0,
+                'raster-resampling': 'linear',
               },
             })
           }
@@ -700,19 +761,20 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
     const shown = visibleSetRef.current
     const hidden = otherSet(shown)
 
+    // Fade whichever PM2.5 layers the active view uses (hex fill+outline or
+    // the smooth raster) — plus force the inactive set to 0 — against PDI.
+    const shownLayers = pm25PaintLayers(state.viewMode, shown)
+    const hiddenLayers = pm25PaintLayers(state.viewMode, hidden)
+
     const steps: PaintStep[] = state.showPdi
       ? [
-          { layer: LAYER_PM25_FILL[shown], property: 'fill-opacity', from: PM25_FILL_OPACITY, to: 0 },
-          { layer: LAYER_PM25_OUTLINE[shown], property: 'line-opacity', from: 1, to: 0 },
-          { layer: LAYER_PM25_FILL[hidden], property: 'fill-opacity', from: 0, to: 0 },
-          { layer: LAYER_PM25_OUTLINE[hidden], property: 'line-opacity', from: 0, to: 0 },
+          ...shownLayers.map((l) => ({ layer: l.layer, property: l.property, from: l.base, to: 0 })),
+          ...hiddenLayers.map((l) => ({ layer: l.layer, property: l.property, from: 0, to: 0 })),
           { layer: LAYER_PDI_FILL, property: 'fill-opacity', from: 0, to: PDI_FILL_OPACITY },
         ]
       : [
-          { layer: LAYER_PM25_FILL[shown], property: 'fill-opacity', from: 0, to: PM25_FILL_OPACITY },
-          { layer: LAYER_PM25_OUTLINE[shown], property: 'line-opacity', from: 0, to: 1 },
-          { layer: LAYER_PM25_FILL[hidden], property: 'fill-opacity', from: 0, to: 0 },
-          { layer: LAYER_PM25_OUTLINE[hidden], property: 'line-opacity', from: 0, to: 0 },
+          ...shownLayers.map((l) => ({ layer: l.layer, property: l.property, from: 0, to: l.base })),
+          ...hiddenLayers.map((l) => ({ layer: l.layer, property: l.property, from: 0, to: 0 })),
           { layer: LAYER_PDI_FILL, property: 'fill-opacity', from: PDI_FILL_OPACITY, to: 0 },
         ]
 
@@ -730,7 +792,39 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
     } else {
       run()
     }
-  }, [mapReady, state.showPdi])
+    // viewMode included so the effect is re-created when the active view's
+    // layers change; the showPdi guard above makes that a no-op unless PDI
+    // actually toggled.
+  }, [mapReady, state.showPdi, state.viewMode])
+
+  // Switching between the hex and smooth views resets the double buffer to a
+  // known state (set 'a' shown, 'b' hidden, buffer roles reset) so the frame
+  // effect below repaints the current data into the newly-active layers.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    const map = mapRef.current
+
+    pendingDissolveRef.current?.cancel()
+    pendingDissolveRef.current = null
+    pendingPdiRef.current?.cancel()
+    pendingPdiRef.current = null
+    animationFinishRef.current?.finish()
+    animationFinishRef.current = null
+
+    visibleSetRef.current = 'a'
+    paintedDataRef.current = null
+
+    const showHex = state.viewMode === 'hex'
+    const pdiOn = showPdiRef.current
+    for (const set of PM25_SETS) {
+      const on = set === 'a' && !pdiOn
+      map.setPaintProperty(LAYER_PM25_FILL[set], 'fill-opacity', showHex && on ? PM25_FILL_OPACITY : 0)
+      map.setPaintProperty(LAYER_PM25_OUTLINE[set], 'line-opacity', showHex && on ? 1 : 0)
+      map.setPaintProperty(LAYER_PM25_RASTER[set], 'raster-opacity', !showHex && on ? PM25_FILL_OPACITY : 0)
+    }
+    // The frame effect keys off viewMode and paintedDataRef; resetting the
+    // ref is not a dep, so nudge it by depending on viewMode alone.
+  }, [mapReady, state.viewMode])
 
   // PM2.5 frames — double-buffered dissolve (see the PM25_SETS comment).
   //
@@ -739,6 +833,11 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
   // identical data. When the array does change, the new frame is written to
   // the hidden set and the two sets dissolve by opacity — the visible set is
   // never rewritten, so playback has no blank/re-tessellation frames.
+  //
+  // The SAME pipeline drives both views: the hidden buffer receives a hex
+  // FeatureCollection (hex view) or a freshly rasterized image (smooth view),
+  // and the dissolve is identical opacity math over whichever layers the
+  // active view uses.
   useEffect(() => {
     if (!mapReady || !mapRef.current) return
     const map = mapRef.current
@@ -756,22 +855,18 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
 
     if (cellsData === paintedDataRef.current) return
 
-    const newData: FeatureCollection =
+    // One source of truth for the frame's (cell, value) pairs, shared by both
+    // renderings.
+    const cellValues =
       state.forecastMinutes === 0
-        ? cellsToFeatureCollection(
-            (currentGrid as Extract<typeof currentGrid, { status: 'success' }>).data.map((cell) => ({
-              h3Cell: cell.h3_cell,
-              value: cell.pm25,
-            })),
-          )
-        : cellsToFeatureCollection(
-            (
-              forecastGrid as Extract<typeof forecastGrid, { status: 'success' }>
-            ).data.map((forecast) => ({
-              h3Cell: forecast.h3_cell,
-              value: forecast.predicted_pm25,
-            })),
-          )
+        ? (currentGrid as Extract<typeof currentGrid, { status: 'success' }>).data.map((cell) => ({
+            h3Cell: cell.h3_cell,
+            value: cell.pm25,
+          }))
+        : (forecastGrid as Extract<typeof forecastGrid, { status: 'success' }>).data.map((forecast) => ({
+            h3Cell: forecast.h3_cell,
+            value: forecast.predicted_pm25,
+          }))
 
     const hasPainted = paintedDataRef.current !== null
 
@@ -783,42 +878,93 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
     animationFinishRef.current?.finish()
     animationFinishRef.current = null
 
-    const snapLayer = LAYER_PM25_FILL[visibleSetRef.current]
-    const snapOutline = LAYER_PM25_OUTLINE[visibleSetRef.current]
+    const viewMode = state.viewMode
+    const from = visibleSetRef.current
+    const to = otherSet(from)
+
+    // Write this frame's data to a buffer set. The hex source is kept current
+    // in BOTH views: its layers are transparent in smooth mode, but they still
+    // back click-to-detail (the smooth raster carries no per-cell identity).
+    const writeFrame = (set: Pm25Set): boolean => {
+      const hexSource = map.getSource(SOURCE_PM25[set])
+      if (hexSource instanceof GeoJSONSource) {
+        hexSource.setData(cellsToFeatureCollection(cellValues))
+      }
+
+      if (viewMode === 'smooth') {
+        const rasterSource = map.getSource(SOURCE_PM25_RASTER[set])
+        if (!(rasterSource instanceof ImageSource)) return false
+        const bbox = state.lod.scopedToViewport ? (state.bbox ?? INDIA_BBOX) : INDIA_BBOX
+        const points = cellValues
+          .filter((cell) => cell.value !== null)
+          .map((cell) => {
+            const [latitude, longitude] = cellCenter(cell.h3Cell)
+            return { latitude, longitude, value: cell.value as number }
+          })
+        const image = renderSmoothField(points, bbox, PM25_COLOR_SCALE, hexEdgeKm(state.lod.resolution))
+        rasterSource.updateImage({ image, coordinates: imageCoords(bbox) })
+      }
+      return true
+    }
 
     if (!hasPainted || reducedMotion || state.showPdi) {
       // First paint, reduced motion, or PM2.5 hidden under PDI: write
       // straight to the visible set, no dissolve. When PDI is on the set is
       // transparent, so this is invisible anyway.
-      const source = map.getSource(SOURCE_PM25[visibleSetRef.current])
-      if (source instanceof GeoJSONSource) source.setData(newData)
+      if (!writeFrame(from)) return
       if (!hasPainted) {
         const full = !state.showPdi
-        map.setPaintProperty(snapLayer, 'fill-opacity', full ? PM25_FILL_OPACITY : 0)
-        map.setPaintProperty(snapOutline, 'line-opacity', full ? 1 : 0)
+        for (const layer of pm25PaintLayers(viewMode, from)) {
+          map.setPaintProperty(layer.layer, layer.property, full ? layer.base : 0)
+        }
       }
-    } else {
-      const from = visibleSetRef.current
-      const to = otherSet(from)
-      const target = map.getSource(SOURCE_PM25[to])
-      if (!(target instanceof GeoJSONSource)) return
-
-      // Write the new frame to the HIDDEN set (safe — it's at opacity 0),
-      // then dissolve once it has actually been processed. The visible set
-      // keeps rendering the previous frame untouched in the meantime.
-      target.setData(newData)
-
-      pendingDissolveRef.current = whenSourceLoaded(map, SOURCE_PM25[to], () => {
-        pendingDissolveRef.current = null
-        animationFinishRef.current = animatePm25Dissolve(map, from, to, PM25_DISSOLVE_DURATION_MS, () => {
+    } else if (viewMode === 'smooth') {
+      // Image sources swap synchronously (no worker tessellation), so the new
+      // raster is on the hidden layer the moment updateImage runs.
+      if (!writeFrame(to)) return
+      animationFinishRef.current = animatePm25Dissolve(
+        map,
+        pm25PaintLayers(viewMode, from),
+        pm25PaintLayers(viewMode, to),
+        to === 'b',
+        PM25_DISSOLVE_DURATION_MS,
+        () => {
           visibleSetRef.current = to
           animationFinishRef.current = null
-        })
+        },
+      )
+    } else {
+      // Hex: wait for the hidden GeoJSON source to finish tessellating before
+      // dissolving, so the fade never reveals an empty layer.
+      if (!writeFrame(to)) return
+      pendingDissolveRef.current = whenSourceLoaded(map, SOURCE_PM25[to], () => {
+        pendingDissolveRef.current = null
+        animationFinishRef.current = animatePm25Dissolve(
+          map,
+          pm25PaintLayers(viewMode, from),
+          pm25PaintLayers(viewMode, to),
+          to === 'b',
+          PM25_DISSOLVE_DURATION_MS,
+          () => {
+            visibleSetRef.current = to
+            animationFinishRef.current = null
+          },
+        )
       })
     }
 
     paintedDataRef.current = cellsData
-  }, [mapReady, state.forecastMinutes, currentGrid, forecastGrid, state.showPdi, reducedMotion])
+  }, [
+    mapReady,
+    state.forecastMinutes,
+    state.viewMode,
+    state.lod,
+    state.bbox,
+    currentGrid,
+    forecastGrid,
+    state.showPdi,
+    reducedMotion,
+  ])
 
   // Wind currents — thinned to at most one per cell of a fixed-size grid
   // over the current viewport (see thinBySpatialGrid), so "generalized

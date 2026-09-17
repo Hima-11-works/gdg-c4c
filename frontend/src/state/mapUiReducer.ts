@@ -10,12 +10,18 @@ import { lodForZoom } from '../lib/lod'
 import type { Lod } from '../lib/lod'
 import type { BoundingBox } from '../lib/types'
 
+/** How the pollution field is drawn: discrete H3 hexagons, or a smooth
+ *  continuous raster (Gaussian-smoothed value field). */
+export type MapViewMode = 'hex' | 'smooth'
+
 export interface MapUiState {
   /** Forecast horizon in minutes. 0 = current conditions ("Now"),
    *  15–720 = forecast at that many minutes ahead. Snaps to 15-min
    *  keyframes (0, 15, 30, …, 720). This is the single canonical
    *  timeline state — no separate button/slider/hour states. */
   forecastMinutes: number
+  /** Hexagon cells vs. smooth raster rendering of the same field. */
+  viewMode: MapViewMode
   /** A location the map should fly to, set by the search bar. A fresh
    *  object every dispatch (never mutated) so MapView's effect fires even
    *  when the same place is picked twice. */
@@ -40,6 +46,7 @@ export interface MapUiState {
 
 export type MapUiAction =
   | { type: 'SELECT_FORECAST'; minutes: number }
+  | { type: 'SET_VIEW_MODE'; mode: MapViewMode }
   | { type: 'FOCUS_LOCATION'; latitude: number; longitude: number; zoom: number }
   | { type: 'TOGGLE_PDI' }
   | { type: 'SELECT_CELL'; cell: string | null; resolution?: number }
@@ -50,6 +57,7 @@ export type MapUiAction =
 // guessing a zoom before the map has told us its real one.
 export const initialMapUiState: MapUiState = {
   forecastMinutes: 0,
+  viewMode: 'hex',
   focus: null,
   showPdi: false,
   selectedCell: null,
@@ -62,6 +70,8 @@ export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState
   switch (action.type) {
     case 'SELECT_FORECAST':
       return { ...state, forecastMinutes: action.minutes }
+    case 'SET_VIEW_MODE':
+      return { ...state, viewMode: action.mode }
     case 'FOCUS_LOCATION':
       // Always a fresh object, so re-selecting the same place re-flies.
       return {
