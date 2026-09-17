@@ -181,14 +181,14 @@ const WIND_STREAK_IMAGES = Array.from({ length: WIND_STREAK_FRAME_COUNT }, (_, i
 const SOURCE_SELECTED = 'selected-cell'
 const LAYER_SELECTED_OUTLINE = 'selected-cell-outline'
 
-// Wind arrows are supplementary/decorative ("generalized meteorological
+// Wind currents are supplementary/decorative ("generalized meteorological
 // information"), not the primary data layer the way the PM2.5/PDI cells
-// are — so rather than rendering one arrow per fetched weather point
+// are — so rather than rendering one streak per fetched weather point
 // (hundreds nationwide at the country tier, now that demo_data covers
 // all of India rather than ~19 cities), thinBySpatialGrid below keeps at
 // most one per grid cell of the current viewport, divided into a fixed
 // WIND_ARROW_GRID x WIND_ARROW_GRID grid. The grid is sized to the
-// viewport, not to zoom directly, so it naturally reveals more arrows as
+// viewport, not to zoom directly, so it naturally reveals more of them as
 // the user zooms into a smaller area — the same "progressively reveal
 // more detail" behavior as the PM2.5/PDI cells, without a second set of
 // zoom thresholds to keep in sync with lib/lod.ts's.

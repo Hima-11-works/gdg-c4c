@@ -31,11 +31,12 @@ focused on what exists and how to run it.
 15. [Running tests](#running-tests)
 16. [Demo mode](#demo-mode)
 17. [Level of detail](#level-of-detail)
-18. [API overview](#api-overview)
-19. [PDI: current definition and disclaimer](#pdi-current-definition-and-disclaimer)
-20. [Forecast model: current assumptions](#forecast-model-current-assumptions)
-21. [Known limitations](#known-limitations)
-22. [Future extension points](#future-extension-points)
+18. [Render modes](#render-modes)
+19. [API overview](#api-overview)
+20. [PDI: current definition and disclaimer](#pdi-current-definition-and-disclaimer)
+21. [Forecast model: current assumptions](#forecast-model-current-assumptions)
+22. [Known limitations](#known-limitations)
+23. [Future extension points](#future-extension-points)
 
 ## What this project does
 
@@ -408,7 +409,8 @@ which one ran.
 │     ├─ components/            # MapPage, MapView, SearchBar, AlertsPanel, CellDetailPanel, TimelineControl, ...
 │     ├─ lib/                    # api.ts (the only backend fetch caller), lod.ts (zoom -> resolution/bbox),
 │     │                          #   h3Geometry.ts, stateBoundaries.ts, locations.ts (place search),
-│     │                          #   forecastFrames.ts (frame cache), mapTheme.ts, colorScales.ts, format.ts, types.ts
+│     │                          #   forecastFrames.ts (frame cache), smoothField.ts (smooth view),
+│     │                          #   pm25Contours.ts (contrast mode), mapTheme.ts, colorScales.ts, format.ts, types.ts
 │     ├─ hooks/                  # useApiResource.ts (loading/success/error/poll/retry, no data-fetching
 │     │                          #   library), useStateBoundaries.ts
 │     └─ state/                  # small useReducer + Context for UI-only state
@@ -837,7 +839,7 @@ resolution would be wasted payload (measured: ~210KB → ~29KB).
 On load the map fits all of India (`INDIA_BOUNDS` in
 `frontend/src/components/MapView.tsx`) and shows the coarse country
 tier: a full nationwide PM2.5 choropleth (not sparse dots — see "Where
-the data comes from today" below) plus wind arrows — "generalized"
+the data comes from today" below) plus wind currents — "generalized"
 because the resolution itself is coarse, not because anything is
 hidden. Zoom into a region and the same hex/wind/PDI layers this README
 describes elsewhere start rendering denser, finer cells for just that
@@ -930,6 +932,37 @@ have zoomed again before the detail panel finishes loading).
   [Demo mode](#demo-mode). Nothing about this pipeline changed — it
   isn't what powers the level-of-detail reads above, and is a
   completely separate concept from `app/services/demo_data.py`.
+
+## Render modes
+
+The pollution field has two renderings, switchable from the **layer
+panel**; the selection is UI state (`viewMode` in
+`frontend/src/state/mapUiReducer.ts`), not a backend/API concern.
+
+- **Hex cells** (default) — the discrete H3 hexagons, one value per cell.
+- **Smooth** — the same per-cell values as a continuous raster
+  (`frontend/src/lib/smoothField.ts`): a compact weighted average over
+  nearby cell centers, bilinearly upsampled and georeferenced to the view
+  bbox. Rows are mapped in Web Mercator Y to stay aligned with the map.
+
+Both views use the **exact same color ramp** (`frontend/src/lib/colorScales.ts`),
+so the legend is valid in either. Bands run Very Good → Hazardous at
+**0 / 25 / 35 / 50 / 80 / 150 / 250 µg/m³** (the lowest being a deep green),
+and that one array also drives the smooth field's sampling and contrast
+mode's band boundaries.
+
+**Contrast mode** (a checkbox; hex view only) draws a dark line on the
+boundary between different PM2.5 bands (`frontend/src/lib/pm25Contours.ts`),
+outlining each same-range region topologically rather than tracing every
+hexagon.
+
+**Playback works identically in both views.** `components/MapView.tsx`
+double-buffers the field — two hex sources *and* two raster image sources
+— and the frame pipeline writes the new frame to the hidden buffer, then
+dissolves by opacity with a constant-coverage curve (so the grid never
+dims mid-transition; only the colors shift). The same path serves the
+timeline animation, manual jumps, the PDI toggle, and contrast-mode
+contours, which dissolve in step with the fills they describe.
 
 ## API overview
 
