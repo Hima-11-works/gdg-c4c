@@ -5,7 +5,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { prefetchUpcoming, useForecastWarming, warmForecastWindow } from '../lib/forecastFrames'
-import { INDIA_BBOX, lodKey } from '../lib/lod'
+import { lodKey, lodQueryFor } from '../lib/lod'
 import { useMapUi } from '../state/MapUiContext'
 import type { LodQuery } from '../lib/api'
 
@@ -53,20 +53,11 @@ export function TimelineControl() {
     positionRef.current = forecastMinutes
   }, [forecastMinutes])
 
-  // Build the query for prefetching — must match MapPage's exactly
-  // (same bbox/resolution), so the shared cache key aligns and the
-  // prefetched frame is the same data MapPage would have fetched.
-  const query: LodQuery = useMemo(
-    () => ({
-      resolution: lod.resolution,
-      bbox: lod.scopedToViewport ? (bbox ?? undefined) : INDIA_BBOX,
-    }),
-    [lod.resolution, lod.scopedToViewport, bbox],
-  )
-  const queryKey = useMemo(
-    () => lodKey(query),
-    [query],
-  )
+  // Build the query for prefetching — must match MapPage's exactly. Both go
+  // through lodQueryFor (same padded bbox/resolution), so the shared cache
+  // key aligns and the prefetched frame is the data MapPage would have read.
+  const query: LodQuery = useMemo(() => lodQueryFor(lod, bbox), [lod, bbox])
+  const queryKey = useMemo(() => lodKey(query), [query])
 
   // True while the current view's frames are being fetched into the cache
   // (a fresh map view, or a manual jump). Play/Restart are disabled until

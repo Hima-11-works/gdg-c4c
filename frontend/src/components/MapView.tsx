@@ -18,7 +18,7 @@ import {
   windToFeatureCollection,
 } from '../lib/h3Geometry'
 import { renderSmoothField } from '../lib/smoothField'
-import { INDIA_BBOX, MAX_ZOOM, PDI_MIN_ZOOM } from '../lib/lod'
+import { INDIA_BBOX, lodBbox, MAX_ZOOM, PDI_MIN_ZOOM } from '../lib/lod'
 import { INDIA_OUTLINE_URL, STATE_BOUNDARIES_URL } from '../lib/stateBoundaries'
 import { BASE_STYLE_URL, OVERLAY, WIND, BASEMAP, patchBasemapStyle } from '../lib/mapTheme'
 import {
@@ -895,7 +895,7 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
       if (viewMode === 'smooth') {
         const rasterSource = map.getSource(SOURCE_PM25_RASTER[set])
         if (!(rasterSource instanceof ImageSource)) return false
-        const bbox = state.lod.scopedToViewport ? (state.bbox ?? INDIA_BBOX) : INDIA_BBOX
+        const bbox = lodBbox(state.lod, state.bbox) ?? INDIA_BBOX
         const points = cellValues
           .filter((cell) => cell.value !== null)
           .map((cell) => {
@@ -981,7 +981,7 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
       windSpeed: reading.wind_speed,
       windDirection: reading.wind_direction,
     }))
-    const effectiveBbox = state.lod.scopedToViewport ? (state.bbox ?? INDIA_BBOX) : INDIA_BBOX
+    const effectiveBbox = lodBbox(state.lod, state.bbox) ?? INDIA_BBOX
     const thinned = thinBySpatialGrid(points, effectiveBbox)
     const source = mapRef.current.getSource(SOURCE_WIND)
     if (source instanceof GeoJSONSource) source.setData(windToFeatureCollection(thinned))

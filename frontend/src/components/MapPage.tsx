@@ -7,7 +7,7 @@ import {
   useForecastWarming,
   warmForecastWindow,
 } from '../lib/forecastFrames'
-import { INDIA_BBOX, lodKey, weatherResolutionForLod } from '../lib/lod'
+import { lodKey, lodQueryFor, weatherResolutionForLod } from '../lib/lod'
 import { useMapUi } from '../state/MapUiContext'
 import { AlertsPanel } from './AlertsPanel'
 import { CellDetailPanel } from './CellDetailPanel'
@@ -28,10 +28,9 @@ export function MapPage() {
   const { lod, bbox, forecastMinutes } = state
 
   const viewportReady = !lod.scopedToViewport || bbox !== null
-  const query: LodQuery = {
-    resolution: lod.resolution,
-    bbox: lod.scopedToViewport ? (bbox ?? undefined) : INDIA_BBOX,
-  }
+  // Padded by one cell radius (see lib/lod.ts's lodQueryFor) so cells that
+  // straddle the viewport edge render instead of dropping out.
+  const query: LodQuery = lodQueryFor(lod, bbox)
   const queryKey = lodKey(query)
 
   const currentGrid = useApiResource(() => fetchGridCurrent(query), [queryKey], {
