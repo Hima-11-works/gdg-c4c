@@ -813,27 +813,26 @@ worth stating plainly:
 
 The app is scoped to **India**, and never loads fine-resolution data for
 the whole country at once. What's on screen is driven entirely by the
-current **zoom level**, via `frontend/src/lib/lod.ts`'s `lodForZoom`:
+current **zoom level**, via `frontend/src/lib/lod.ts`'s `lodForZoom`.
+Detail is capped at **level 3**, counting the country-wide view as
+level 1:
 
-| Zoom | H3 resolution | ~Cell area | Scope of the request |
-|---|---|---|---|
-| < 6 (country) | 3 | ~12,400 km² | Always all of India (`INDIA_BBOX`) — always ~800 cells, too small to bother scoping to viewport |
-| 6 – 7 | 4 | ~1,770 km² | The current map viewport |
-| 7 – 8 | 5 | ~253 km² | The current map viewport |
-| 8 – 9 | 6 | ~36 km² | The current map viewport |
-| 9 – 10 | 7 | ~5.2 km² | The current map viewport |
-| ≥ 10 (local) | 8 | ~0.7 km² | The current map viewport |
+| Level | Zoom | H3 resolution | ~Cell area | Scope of the request |
+|---|---|---|---|---|
+| 1 (country) | < 6 | 3 | ~12,400 km² | Always all of India (`INDIA_BBOX`) — always ~800 cells, too small to bother scoping to viewport |
+| 2 (state) | 6 – 7 | 4 | ~1,770 km² | The current map viewport |
+| 3 (state) | ≥ 7 | 5 | ~253 km² | The current map viewport |
 
-Resolution steps up by exactly one H3 level roughly every zoom level in
-the 6–10 range rather than jumping straight from 3 to 8 in one bound —
-each H3 resolution step is already a ~7x jump in cell density on its
-own, so five smaller steps reveal detail progressively as you zoom
-instead of one abrupt jump. Weather (wind arrows) uses this same
-resolution at every tier *except* country, where it deliberately
-requests a coarser resolution (2, not 3) than the PM2.5 grid — the map
-only ever renders a thinned-down, sparse subset of wind points anyway,
-so fetching them at the grid's full country-tier resolution would be
-wasted payload (measured: ~210KB → ~29KB).
+Finer H3 resolutions (6–8) are deliberately **not** generated, so the
+map's zoom is capped at `MAX_ZOOM` (= 8, the zoom at which level 3 is
+reached) — zooming in further would only enlarge the same cells without
+revealing anything new. Resolution steps up by exactly one H3 level per
+tier (each step is already a ~7x jump in cell density). Weather (wind
+arrows) uses this same resolution at every tier *except* country, where
+it deliberately requests a coarser resolution (2, not 3) than the PM2.5
+grid — the map only ever renders a thinned-down, sparse subset of wind
+points anyway, so fetching them at the grid's full country-tier
+resolution would be wasted payload (measured: ~210KB → ~29KB).
 
 On load the map fits all of India (`INDIA_BOUNDS` in
 `frontend/src/components/MapView.tsx`) and shows the coarse country
@@ -842,12 +841,11 @@ the data comes from today" below) plus wind arrows — "generalized"
 because the resolution itself is coarse, not because anything is
 hidden. Zoom into a region and the same hex/wind/PDI layers this README
 describes elsewhere start rendering denser, finer cells for just that
-area; zoom into a city and they become the full per-hex grid. PDI is
-state-tier-and-finer only (`PDI_MIN_ZOOM` in `frontend/src/lib/lod.ts`,
-tied to the same zoom-6 breakpoint above) — not part of the bare
-country overview. Clicking any hex opens the same full detail panel
-(location, PM2.5, PDI + its factor breakdown, wind, weather, forecast,
-confidence) regardless of tier.
+area, up to level 3. PDI is level-2-and-finer only (`PDI_MIN_ZOOM` in
+`frontend/src/lib/lod.ts`, tied to the same zoom-6 breakpoint above) —
+not part of the bare country overview. Clicking any hex opens the same
+full detail panel (location, PM2.5, PDI + its factor breakdown, wind,
+weather, forecast, confidence) regardless of tier.
 
 **How the frontend decides what to fetch** — `frontend/src/lib/lod.ts`'s
 `lodForZoom(zoom)` maps the current zoom to `{ resolution, bbox? }`.
@@ -857,8 +855,9 @@ flick doesn't fire one request per tick); `components/MapPage.tsx` reads
 that state and passes `{ resolution, bbox }` into `fetchGridCurrent` /
 `fetchGridForecast` / `fetchWeather` (`frontend/src/lib/api.ts`), which
 send them as `resolution`/`min_lat`/`min_lon`/`max_lat`/`max_lon` query
-params. State/local tiers wait for a real viewport before fetching
-(never fall back to "no bbox" for a fine resolution — see below).
+params. Viewport-scoped tiers (levels 2 and 3) wait for a real viewport
+before fetching (never fall back to "no bbox" for a fine resolution — see
+below).
 
 **How the backend supports this** — every one of those three endpoints
 accepts an optional `resolution` and an optional bounding box

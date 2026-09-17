@@ -18,7 +18,7 @@ import {
   windToFeatureCollection,
 } from '../lib/h3Geometry'
 import { renderSmoothField } from '../lib/smoothField'
-import { INDIA_BBOX, PDI_MIN_ZOOM } from '../lib/lod'
+import { INDIA_BBOX, MAX_ZOOM, PDI_MIN_ZOOM } from '../lib/lod'
 import { INDIA_OUTLINE_URL, STATE_BOUNDARIES_URL } from '../lib/stateBoundaries'
 import { BASE_STYLE_URL, OVERLAY, WIND, BASEMAP, patchBasemapStyle } from '../lib/mapTheme'
 import {
@@ -493,6 +493,7 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
           bounds: INDIA_BOUNDS,
           fitBoundsOptions: { padding: 20 },
           maxBounds: MAX_PAN_BOUNDS,
+          maxZoom: MAX_ZOOM,
           renderWorldCopies: false,
         })
         mapRef.current = map

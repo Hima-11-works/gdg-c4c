@@ -12,6 +12,8 @@
 // Like lib/stateBoundaries.ts, this is a static asset fetched once and cached
 // per session; it is not backend data and has no is_demo concept.
 
+import { MAX_ZOOM } from './lod'
+
 export type LocationKind = 'state' | 'district' | 'city' | 'locality'
 
 export interface IndiaLocation {
@@ -27,14 +29,13 @@ export interface IndiaLocation {
 
 export const LOCATIONS_URL = '/data/india_locations.json'
 
-/** Zoom to fly to for each kind — roughly aligned with lib/lod.ts's tiers
- * (country < 6, state 6–9, local >= 10) so the map lands on a tier that
- * actually renders detail for the selection. */
+/** Zoom to fly to for each kind, clamped to lib/lod.ts's MAX_ZOOM (level 3
+ *  is the finest detail, so zooming past it reveals nothing new). */
 export const ZOOM_BY_KIND: Record<LocationKind, number> = {
   state: 6,
-  district: 8,
-  city: 10,
-  locality: 12,
+  district: 7,
+  city: MAX_ZOOM,
+  locality: MAX_ZOOM,
 }
 
 export const KIND_LABEL: Record<LocationKind, string> = {

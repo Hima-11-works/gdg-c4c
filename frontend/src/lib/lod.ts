@@ -12,7 +12,7 @@
 import type { BoundingBox } from './types'
 import type { LodQuery } from './api'
 
-export type LodTier = 'country' | 'state' | 'local'
+export type LodTier = 'country' | 'state'
 
 /** India's approximate extent — the one bbox the country tier always
  * requests explicitly (see MapPage.tsx). The backend only applies
@@ -35,49 +35,35 @@ export interface Lod {
   scopedToViewport: boolean
 }
 
-// Below zoom 6: whole-country view, one fixed nationwide fetch (see
-// demo_data's continuous field — this is now genuinely hundreds of
-// cells covering all of India, not a handful of city markers). From 6
-// up to LOCAL_MIN_ZOOM, resolution steps up by exactly one H3 level
-// roughly every zoom level (6->4, 7->5, 8->6, 9->7) instead of one flat
-// resolution across the whole range — each H3 resolution step is
-// already a ~7x jump in cell density on its own, so spreading four
-// smaller steps across the state-tier zoom range reveals detail
-// progressively instead of one abrupt jump straight to the finest
-// resolution. Verified live (see the table in the commit that
-// introduced this) against both a full-India and a single-city desktop
-// viewport: every step change lands well under GRID_QUERY_MAX_CELLS,
-// and each successive resolution's cell count at the zoom where it
-// takes over is a modest few-thousand-to-low-tens-of-thousands, not a
-// jump from hundreds to tens of thousands in one step like the old
-// flat 5->8 mapping. Tuned for an ordinary desktop viewport, same
-// caveat as before: a very large/ultra-wide monitor can still
-// occasionally exceed the cap at a tier's lowest zoom — the backend
-// rejects that request with a clear 422 rather than truncating it
-// silently, and StatusBanner already shows that as a normal, retryable
-// error rather than a crash, so this is a bounded, visible failure
-// mode, not silent data loss or a frozen map.
+// Level of detail is capped at "level 3", counting the country-wide view as
+// level 1:
+//   level 1 — H3 res 3, whole country (zoom < 6)
+//   level 2 — H3 res 4, viewport-scoped (zoom 6–7)
+//   level 3 — H3 res 5, viewport-scoped (zoom >= 7)   ← finest
+// Finer resolutions (res 6–8) are deliberately not generated, so the map's
+// zoom is capped at MAX_ZOOM to match: zooming in past level 3 would only
+// enlarge the same cells without revealing anything new. Each step is a H3
+// resolution step (~7x cell density), and every tier stays well under
+// GRID_QUERY_MAX_CELLS for an ordinary desktop viewport.
 const COUNTRY_MAX_ZOOM = 6
-const STATE_RESOLUTION_STEPS: ReadonlyArray<readonly [maxZoom: number, resolution: number]> = [
-  [7, 4],
-  [8, 5],
-  [9, 6],
-  [10, 7],
-]
-const LOCAL_MIN_ZOOM = 10
-const LOCAL_RESOLUTION = 8
+const LEVEL3_MIN_ZOOM = 7
+const COUNTRY_RESOLUTION = 3
+const LEVEL2_RESOLUTION = 4
+const MAX_RESOLUTION = 5
+
+/** Hard zoom ceiling on the map — the zoom at which level 3 (res 5) is
+ *  reached. Beyond it there is no finer detail to reveal. Consumed by
+ *  MapView's `maxZoom` and by the search bar's per-location zoom. */
+export const MAX_ZOOM = 8
 
 export function lodForZoom(zoom: number): Lod {
   if (zoom < COUNTRY_MAX_ZOOM) {
-    return { tier: 'country', resolution: 3, scopedToViewport: false }
+    return { tier: 'country', resolution: COUNTRY_RESOLUTION, scopedToViewport: false }
   }
-  if (zoom < LOCAL_MIN_ZOOM) {
-    // STATE_RESOLUTION_STEPS' last entry has maxZoom === LOCAL_MIN_ZOOM,
-    // so this is guaranteed to find a match given the guard above.
-    const resolution = STATE_RESOLUTION_STEPS.find(([maxZoom]) => zoom < maxZoom)![1]
-    return { tier: 'state', resolution, scopedToViewport: true }
+  if (zoom < LEVEL3_MIN_ZOOM) {
+    return { tier: 'state', resolution: LEVEL2_RESOLUTION, scopedToViewport: true }
   }
-  return { tier: 'local', resolution: LOCAL_RESOLUTION, scopedToViewport: true }
+  return { tier: 'state', resolution: MAX_RESOLUTION, scopedToViewport: true }
 }
 
 /** The zoom at which PDI (part of "medium"/state-tier detail and up, not
