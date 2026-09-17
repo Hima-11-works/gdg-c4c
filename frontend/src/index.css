@@ -57,6 +57,11 @@ body,
   bottom: 1rem;
   left: 50%;
   transform: translateX(-50%);
+  /* The timeline panel is wider than .overlay's default 20rem cap, so
+     without this the panel overflowed its centered box to the right and
+     read as off-center. Let the box size to the panel, and center it. */
+  max-width: none;
+  align-items: center;
 }
 
 .panel {
