@@ -21,7 +21,7 @@ import { BASE_STYLE_URL, OVERLAY, WIND, BASEMAP, patchBasemapStyle } from '../li
 import {
   CELL_BORDER_COLOR,
   CELL_BORDER_WIDTH,
-  COLOR_TRANSITION_DURATION_MS,
+  PM25_DISSOLVE_DURATION_MS,
   LAYER_CROSSFADE_DURATION_MS,
   PDI_FILL_OPACITY,
   PM25_FILL_OPACITY,
@@ -32,8 +32,7 @@ import {
 import { useMapUi } from '../state/MapUiContext'
 import type { AsyncResource } from '../hooks/useApiResource'
 import type { BoundingBox, ForecastOut, GridStateOut, WeatherReadingOut } from '../lib/types'
-import type { Feature, FeatureCollection, Polygon, Position } from 'geojson'
-import type { ExpressionSpecification } from '@maplibre/maplibre-gl-style-spec'
+import type { FeatureCollection, Position } from 'geojson'
 
 // The app is scoped to India: on load, fit the whole country in view
 // rather than centering on one city. Level of detail (which resolution
@@ -66,9 +65,25 @@ const MAX_PAN_BOUNDS: [[number, number], [number, number]] = [
 // re-fetch, not one per tick.
 const VIEWPORT_DEBOUNCE_MS = 300
 
-const SOURCE_PM25 = 'cells-pm25'
-const LAYER_PM25_FILL = 'cells-pm25-fill'
-const LAYER_PM25_OUTLINE = 'cells-pm25-outline'
+// The PM2.5 layer is DOUBLE-BUFFERED: two complete source+layer pairs (A and
+// B). A new frame is written to the hidden pair while the visible pair keeps
+// rendering the previous frame, then the two dissolve into each other by
+// opacity. This is what keeps playback smooth: MapLibre's setData re-
+// tessellates a layer asynchronously and can blank it mid-swap, so a visible
+// source must never be rewritten. A hidden source can be rewritten freely.
+type Pm25Set = 'a' | 'b'
+const PM25_SETS: Pm25Set[] = ['a', 'b']
+const SOURCE_PM25: Record<Pm25Set, string> = { a: 'cells-pm25-a', b: 'cells-pm25-b' }
+const LAYER_PM25_FILL: Record<Pm25Set, string> = {
+  a: 'cells-pm25-fill-a',
+  b: 'cells-pm25-fill-b',
+}
+const LAYER_PM25_OUTLINE: Record<Pm25Set, string> = {
+  a: 'cells-pm25-outline-a',
+  b: 'cells-pm25-outline-b',
+}
+const otherSet = (set: Pm25Set): Pm25Set => (set === 'a' ? 'b' : 'a')
+
 const SOURCE_PDI = 'cells-pdi'
 const LAYER_PDI_FILL = 'cells-pdi-fill'
 const SOURCE_STATE_BOUNDARIES = 'state-boundaries'
@@ -143,95 +158,108 @@ function windArrowImage(): ImageData {
 }
 
 // ---------------------------------------------------------------------------
-// Color transition helpers — interpolate between old and new cell values
-// using MapLibre paint-property expressions (no React state per frame).
+// Opacity animation — the ONLY per-frame work during a transition. No source
+// data is touched, so there is nothing to re-tessellate: the browser just
+// composites two already-loaded layers against each other.
 // ---------------------------------------------------------------------------
 
-type MergedCellFeature = Feature<Polygon, { h3_cell: string; oldValue: number | null; newValue: number | null; value: number | null }>
-
-/** Build a MapLibre expression that lerps between oldValue and newValue
- * at the given progress (0 = old, 1 = new). Progress is baked into the
- * expression so we only need setPaintProperty per frame, not setData. */
-function transitionColorExpression(
-  scale: typeof PM25_COLOR_SCALE | typeof PDI_COLOR_SCALE,
-  progress: number,
-): ExpressionSpecification {
-  const colorStops = scale.flatMap((s) => [s.value, s.color])
-  if (progress <= 0) {
-    return [
-      'case',
-      ['==', ['get', 'oldValue'], null],
-      '#2a2e36',
-      ['interpolate', ['linear'], ['get', 'oldValue'], ...colorStops],
-    ] as unknown as ExpressionSpecification
-  }
-  if (progress >= 1) {
-    return [
-      'case',
-      ['==', ['get', 'newValue'], null],
-      '#2a2e36',
-      ['interpolate', ['linear'], ['get', 'newValue'], ...colorStops],
-    ] as unknown as ExpressionSpecification
-  }
-  return [
-    'case',
-    ['all', ['==', ['get', 'oldValue'], null], ['==', ['get', 'newValue'], null]],
-    '#2a2e36',
-    [
-      'interpolate',
-      ['linear'],
-      ['+', ['*', ['coalesce', ['get', 'oldValue'], 0], 1 - progress], ['*', ['coalesce', ['get', 'newValue'], 0], progress]],
-      ...colorStops,
-    ],
-  ] as unknown as ExpressionSpecification
+interface PaintStep {
+  layer: string
+  property: 'fill-opacity' | 'line-opacity'
+  from: number
+  to: number
 }
 
-/** Merge old and new feature collections: every cell carries both
- * oldValue and newValue, so the transition expression can lerp between them. */
-function mergeFeatureCollections(
-  oldFc: FeatureCollection,
-  newFc: FeatureCollection,
-): MergedCellFeature[] {
-  const oldMap = new Map<string, Feature<Polygon, { h3_cell: string; value: number | null }>>()
-  for (const f of oldFc.features) {
-    if (f.properties) oldMap.set(f.properties.h3_cell, f as Feature<Polygon, { h3_cell: string; value: number | null }>)
+interface PaintAnimation {
+  /** Snap to the end state immediately and run onDone (cancels the raf). */
+  finish: () => void
+  /** Stop the raf without touching any paint property — for unmount, when
+   *  the map is about to be removed. */
+  cancel: () => void
+}
+
+/**
+ * Run `callback` once `sourceId` has actually finished processing its data.
+ * MapLibre applies GeoJSON `setData` on a worker thread, so a dissolve started
+ * immediately after `setData` would begin fading in a layer that is still
+ * empty/stale — exactly the "loading" artifact we're eliminating. Waiting for
+ * the source's `sourcedata`/`isSourceLoaded` signal means the new frame is
+ * fully tessellated before any of it becomes visible. The timeout is a safety
+ * net in case the event is missed.
+ */
+function whenSourceLoaded(
+  map: MapLibreMap,
+  sourceId: string,
+  callback: () => void,
+): { cancel: () => void } {
+  let done = false
+  const start = () => {
+    if (done) return
+    done = true
+    map.off('sourcedata', onSourceData)
+    clearTimeout(fallback)
+    callback()
+  }
+  const onSourceData = (event: { sourceId?: string; isSourceLoaded?: boolean }) => {
+    if (event.sourceId === sourceId && event.isSourceLoaded) start()
+  }
+  map.on('sourcedata', onSourceData)
+  const fallback = setTimeout(start, 250)
+  return {
+    cancel: () => {
+      done = true
+      map.off('sourcedata', onSourceData)
+      clearTimeout(fallback)
+    },
+  }
+}
+
+/**
+ * Animates a set of paint numbers over `duration` ms, eased. Returns a
+ * handle so a caller can finalize an in-flight animation before starting the
+ * next one (which keeps the double-buffer's layer roles consistent under
+ * rapid input) or cancel it on unmount.
+ */
+function animatePaintValues(
+  map: MapLibreMap,
+  steps: PaintStep[],
+  duration: number,
+  onDone?: () => void,
+): PaintAnimation {
+  let raf = 0
+  let finished = false
+
+  const finish = () => {
+    if (finished) return
+    finished = true
+    cancelAnimationFrame(raf)
+    for (const step of steps) map.setPaintProperty(step.layer, step.property, step.to)
+    onDone?.()
   }
 
-  const newMap = new Map<string, Feature<Polygon, { h3_cell: string; value: number | null }>>()
-  for (const f of newFc.features) {
-    if (f.properties) newMap.set(f.properties.h3_cell, f as Feature<Polygon, { h3_cell: string; value: number | null }>)
+  const cancel = () => {
+    if (finished) return
+    finished = true
+    cancelAnimationFrame(raf)
   }
 
-  const allKeys = new Set([...oldMap.keys(), ...newMap.keys()])
-  const merged: MergedCellFeature[] = []
-  for (const key of allKeys) {
-    const oldF = oldMap.get(key)
-    const newF = newMap.get(key)
-    const geometry = (newF ?? oldF)!.geometry
-    const newValue = newF?.properties?.value ?? null
-    const oldValue = oldF?.properties?.value ?? null
-    merged.push({
-      type: 'Feature',
-      properties: {
-        h3_cell: key,
-        oldValue,
-        newValue,
-        // `value` = the target (new) value, so the FINAL paint expression
-        // (colorScaleExpression reading `value`) is correct on merged data
-        // too — without it, the moment the expression swaps to read `value`
-        // while the merged features are still on the source (setData is
-        // async), every cell renders as NO_DATA (dark) for a frame: the
-        // "cells disappear then reappear" pop.
-        //
-        // A cell only in old (leaving) has no newValue -> `value` is null,
-        // so at the final expression swap it renders dark (matching the
-        // fade-out the transition already applied) until setData removes it.
-        value: newValue,
-      },
-      geometry,
-    })
+  if (duration <= 0 || prefersReducedMotion()) {
+    finish()
+    return { finish, cancel }
   }
-  return merged
+
+  const start = performance.now()
+  const tick = (now: number) => {
+    const t = Math.min(1, (now - start) / duration)
+    const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2
+    for (const step of steps) {
+      map.setPaintProperty(step.layer, step.property, step.from + (step.to - step.from) * eased)
+    }
+    if (t < 1) raf = requestAnimationFrame(tick)
+    else finish()
+  }
+  raf = requestAnimationFrame(tick)
+  return { finish, cancel }
 }
 
 interface MapViewProps {
@@ -263,29 +291,35 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
     lodResolutionRef.current = state.lod.resolution
   }, [state.lod.resolution])
 
-  // Track the displayed forecast minutes separately so we can detect
-  // keyframe transitions and animate the color change.
-  const displayedMinutesRef = useRef(0)
-
-  // Transition state — refs to avoid re-renders during animation.
-  const oldGeojsonRef = useRef<FeatureCollection | null>(null)
-  const transitionRafRef = useRef<number | null>(null)
-  // The exact data array (currentGrid.data / forecastGrid.data) whose
-  // FeatureCollection is currently painted on the source. Transitions are
-  // gated on this reference so a stale-while-revalidate frame (same array,
-  // new minute) is a no-op and a structural change (new array, same minute)
-  // snaps.
+  // Which double-buffer set is currently visible.
+  const visibleSetRef = useRef<Pm25Set>('a')
+  // The exact data array (currentGrid.data / forecastGrid.data) painted on
+  // the visible set — so a stale-while-revalidate frame (same array) is a
+  // no-op instead of a pointless dissolve.
   const paintedDataRef = useRef<unknown>(null)
-
-  // Track which fill layer is currently visible for the PDI crossfade.
-  const activeFillLayerRef = useRef<string>(LAYER_PM25_FILL)
+  // Handle of any in-flight layer animation (dissolve or PDI fade), so a new
+  // one can finalize the previous before it starts.
+  const animationFinishRef = useRef<PaintAnimation | null>(null)
+  // A dissolve waiting for its new source to finish loading. Cancelled if a
+  // newer frame supersedes it before it starts.
+  const pendingDissolveRef = useRef<{ cancel: () => void } | null>(null)
+  // Same, for the PDI fade-in waiting on the PDI source to load.
+  const pendingPdiRef = useRef<{ cancel: () => void } | null>(null)
+  // Last PDI toggle state acted on, so the toggle effect skips its mount run.
+  const showPdiRef = useRef(state.showPdi)
 
   const reducedMotion = prefersReducedMotion()
 
-  // Cancel any running transition on unmount.
+  // Stop any running animation on unmount without touching the map, which is
+  // removed by the map-creation effect's own cleanup.
   useEffect(() => {
     return () => {
-      if (transitionRafRef.current !== null) cancelAnimationFrame(transitionRafRef.current)
+      pendingDissolveRef.current?.cancel()
+      pendingDissolveRef.current = null
+      pendingPdiRef.current?.cancel()
+      pendingPdiRef.current = null
+      animationFinishRef.current?.cancel()
+      animationFinishRef.current = null
     }
   }, [])
 
@@ -346,38 +380,43 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
             paint: { 'fill-color': OVERLAY.indiaFill, 'fill-opacity': 1 },
           })
 
-          // PM2.5 cells — the primary pollution overlay.
-          map!.addSource(SOURCE_PM25, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
-          map!.addLayer({
-            id: LAYER_PM25_FILL,
-            type: 'fill',
-            source: SOURCE_PM25,
-            paint: {
-              'fill-color': colorScaleExpression(PM25_COLOR_SCALE, 'value'),
-              'fill-opacity': PM25_FILL_OPACITY,
-            },
-          })
-          map!.addLayer({
-            id: LAYER_PM25_OUTLINE,
-            type: 'line',
-            source: SOURCE_PM25,
-            paint: {
-              'line-color': CELL_BORDER_COLOR,
-              'line-width': CELL_BORDER_WIDTH,
-            },
-          })
+          // PM2.5 double buffer: set 'a' starts visible, 'b' starts empty and
+          // transparent. Each fill uses a CONSTANT color expression — the
+          // only thing that ever changes per frame is opacity.
+          for (const set of PM25_SETS) {
+            map!.addSource(SOURCE_PM25[set], { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+            map!.addLayer({
+              id: LAYER_PM25_FILL[set],
+              type: 'fill',
+              source: SOURCE_PM25[set],
+              paint: {
+                'fill-color': colorScaleExpression(PM25_COLOR_SCALE, 'value'),
+                'fill-opacity': set === 'a' ? PM25_FILL_OPACITY : 0,
+              },
+            })
+            map!.addLayer({
+              id: LAYER_PM25_OUTLINE[set],
+              type: 'line',
+              source: SOURCE_PM25[set],
+              paint: {
+                'line-color': CELL_BORDER_COLOR,
+                'line-width': CELL_BORDER_WIDTH,
+                'line-opacity': set === 'a' ? 1 : 0,
+              },
+            })
+          }
 
-          // PDI — state-tier-and-finer, hidden below PDI_MIN_ZOOM.
+          // PDI — state-tier-and-finer, hidden below PDI_MIN_ZOOM. Starts
+          // fully transparent; the toggle effect drives its opacity.
           map!.addSource(SOURCE_PDI, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
           map!.addLayer({
             id: LAYER_PDI_FILL,
             type: 'fill',
             source: SOURCE_PDI,
             minzoom: PDI_MIN_ZOOM,
-            layout: { visibility: 'none' },
             paint: {
               'fill-color': colorScaleExpression(PDI_COLOR_SCALE, 'value'),
-              'fill-opacity': PDI_FILL_OPACITY,
+              'fill-opacity': 0,
             },
           })
 
@@ -439,7 +478,7 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
             },
           })
 
-          const clickableLayers = [LAYER_PM25_FILL, LAYER_PDI_FILL]
+          const clickableLayers = [LAYER_PM25_FILL.a, LAYER_PM25_FILL.b, LAYER_PDI_FILL]
           map!.on('click', clickableLayers, (event) => {
             const h3Cell = event.features?.[0]?.properties?.h3_cell
             if (typeof h3Cell === 'string') {
@@ -515,41 +554,83 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
     }
   }, [mapReady, state.selectedCell])
 
-  // PDI layer visibility toggle — crossfade opacity between PM2.5 and
-  // PDI fill layers so switching modes never interpolates between
-  // unrelated color palettes. Uses MapLibre's setPaintProperty for the
-  // opacity crossfade (no React state updates per frame).
+  // PDI layer data — always from current state; there is no forecasted PDI.
+  // Declared BEFORE the toggle effect below so the source is populated before
+  // that effect waits on it to load. Skipped entirely while the layer is
+  // hidden (transparent by default, and below PDI_MIN_ZOOM regardless):
+  // building a ~800+ cell FeatureCollection on every poll tick for a layer
+  // nobody can see is pure waste.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current || !state.showPdi) return
+    if (currentGrid.status !== 'success') return
+    const cells = currentGrid.data.map((cell) => ({ h3Cell: cell.h3_cell, value: cell.pdi }))
+    const source = mapRef.current.getSource(SOURCE_PDI)
+    if (source instanceof GeoJSONSource) source.setData(cellsToFeatureCollection(cells))
+  }, [mapReady, currentGrid, state.showPdi])
+
+  // PDI toggle — fade the currently-visible PM2.5 set out and PDI in (or the
+  // reverse). Opacity only, so nothing re-tessellates. The inactive PM2.5 set
+  // stays at 0 throughout.
   useEffect(() => {
     if (!mapReady || !mapRef.current) return
+    // Only animate on an actual toggle — the layer opacities are already
+    // correct at creation, so a mount run would be a spurious fade.
+    if (showPdiRef.current === state.showPdi) return
+    showPdiRef.current = state.showPdi
+
     const map = mapRef.current
+    pendingDissolveRef.current?.cancel()
+    pendingDissolveRef.current = null
+    pendingPdiRef.current?.cancel()
+    pendingPdiRef.current = null
+    animationFinishRef.current?.finish()
+    animationFinishRef.current = null
+
+    const shown = visibleSetRef.current
+    const hidden = otherSet(shown)
+
+    const steps: PaintStep[] = state.showPdi
+      ? [
+          { layer: LAYER_PM25_FILL[shown], property: 'fill-opacity', from: PM25_FILL_OPACITY, to: 0 },
+          { layer: LAYER_PM25_OUTLINE[shown], property: 'line-opacity', from: 1, to: 0 },
+          { layer: LAYER_PM25_FILL[hidden], property: 'fill-opacity', from: 0, to: 0 },
+          { layer: LAYER_PM25_OUTLINE[hidden], property: 'line-opacity', from: 0, to: 0 },
+          { layer: LAYER_PDI_FILL, property: 'fill-opacity', from: 0, to: PDI_FILL_OPACITY },
+        ]
+      : [
+          { layer: LAYER_PM25_FILL[shown], property: 'fill-opacity', from: 0, to: PM25_FILL_OPACITY },
+          { layer: LAYER_PM25_OUTLINE[shown], property: 'line-opacity', from: 0, to: 1 },
+          { layer: LAYER_PM25_FILL[hidden], property: 'fill-opacity', from: 0, to: 0 },
+          { layer: LAYER_PM25_OUTLINE[hidden], property: 'line-opacity', from: 0, to: 0 },
+          { layer: LAYER_PDI_FILL, property: 'fill-opacity', from: PDI_FILL_OPACITY, to: 0 },
+        ]
+
+    const run = () => {
+      animationFinishRef.current = animatePaintValues(map, steps, LAYER_CROSSFADE_DURATION_MS)
+    }
 
     if (state.showPdi) {
-      // Show PDI, hide PM2.5 — crossfade.
-      map.setLayoutProperty(LAYER_PDI_FILL, 'visibility', 'visible')
-      animateOpacityCrossfade(map, LAYER_PM25_FILL, LAYER_PDI_FILL)
-      activeFillLayerRef.current = LAYER_PDI_FILL
+      // Fade PDI in only once its data is tessellated (see whenSourceLoaded),
+      // so the fade never reveals an empty layer.
+      pendingPdiRef.current = whenSourceLoaded(map, SOURCE_PDI, () => {
+        pendingPdiRef.current = null
+        run()
+      })
     } else {
-      // Show PM2.5, hide PDI — crossfade.
-      map.setLayoutProperty(LAYER_PM25_FILL, 'visibility', 'visible')
-      animateOpacityCrossfade(map, LAYER_PDI_FILL, LAYER_PM25_FILL)
-      activeFillLayerRef.current = LAYER_PM25_FILL
+      run()
     }
   }, [mapReady, state.showPdi])
 
-  // PM2.5 / forecast layer data — switches source with the timeline.
-  // Transitions are gated on the *data reference* (the exact array the
-  // store/cache returned), not on the minute number:
-  //   - Same array as painted   -> no-op (a stale-while-revalidate frame,
-  //     or a poll tick returning the identical cached array — skip, the
-  //     map already shows this frame; also fixes the redundant re-paint
-  //     that made every keyframe swap the whole grid).
-  //   - Different array + minute changed -> smooth color transition.
-  //   - Different array + same minute    -> structural change (zoom/pan)
-  //     -> snap immediately.
+  // PM2.5 frames — double-buffered dissolve (see the PM25_SETS comment).
+  //
+  // Gated on the underlying data array, not the minute number: a stale-while-
+  // revalidate frame (same array) is a no-op, so the map never dissolves to
+  // identical data. When the array does change, the new frame is written to
+  // the hidden set and the two sets dissolve by opacity — the visible set is
+  // never rewritten, so playback has no blank/re-tessellation frames.
   useEffect(() => {
     if (!mapReady || !mapRef.current) return
-    const source = mapRef.current.getSource(SOURCE_PM25)
-    if (!(source instanceof GeoJSONSource)) return
+    const map = mapRef.current
 
     if (state.forecastMinutes === 0 && currentGrid.status !== 'success') return
     if (state.forecastMinutes !== 0 && forecastGrid.status !== 'success') return
@@ -562,112 +643,81 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
         ? (currentGrid as Extract<typeof currentGrid, { status: 'success' }>).data
         : (forecastGrid as Extract<typeof forecastGrid, { status: 'success' }>).data
 
-    // Same underlying data as what's already painted -> nothing to do.
     if (cellsData === paintedDataRef.current) return
 
-    let newData: FeatureCollection
-    if (state.forecastMinutes === 0) {
-      const cells = (currentGrid as Extract<typeof currentGrid, { status: 'success' }>).data.map(
-        (cell) => ({ h3Cell: cell.h3_cell, value: cell.pm25 }),
-      )
-      newData = cellsToFeatureCollection(cells)
-    } else {
-      const cells = (forecastGrid as Extract<typeof forecastGrid, { status: 'success' }>).data.map(
-        (forecast) => ({
-          h3Cell: forecast.h3_cell,
-          value: forecast.predicted_pm25,
-        }),
-      )
-      newData = cellsToFeatureCollection(cells)
-    }
-
-    const minuteChanged = displayedMinutesRef.current !== state.forecastMinutes
-    const isTransition =
-      minuteChanged && oldGeojsonRef.current !== null && !state.showPdi && !reducedMotion
-
-    if (isTransition) {
-      // Animate the color transition between keyframes using
-      // setPaintProperty per frame (only updates the expression, not the
-      // source data — much cheaper than setData for large cell counts).
-      const merged = mergeFeatureCollections(oldGeojsonRef.current!, newData)
-      const transitionData: FeatureCollection = { type: 'FeatureCollection', features: merged }
-
-      // Cancel any in-progress transition.
-      if (transitionRafRef.current !== null) cancelAnimationFrame(transitionRafRef.current)
-
-      source.setData(transitionData)
-
-      // Immediately pin the expression to progress=0 (old colors) so the
-      // merged features render the PREVIOUS frame's colors the instant they
-      // land on the source — otherwise they'd render the final `value`
-      // expression (still set from the last snap) for one frame, flashing
-      // the new colors before the animation starts.
-      mapRef.current.setPaintProperty(
-        LAYER_PM25_FILL,
-        'fill-color',
-        transitionColorExpression(PM25_COLOR_SCALE, 0),
-      )
-
-      const map = mapRef.current!
-      const duration = COLOR_TRANSITION_DURATION_MS
-      const startTime = performance.now()
-
-      const animate = (now: number) => {
-        const elapsed = now - startTime
-        const progress = Math.min(1, elapsed / duration)
-        const eased = progress < 0.5 ? 2 * progress * progress : 1 - Math.pow(-2 * progress + 2, 2) / 2
-
-        map.setPaintProperty(
-          LAYER_PM25_FILL,
-          'fill-color',
-          transitionColorExpression(PM25_COLOR_SCALE, eased),
-        )
-
-        if (progress < 1) {
-          transitionRafRef.current = requestAnimationFrame(animate)
-        } else {
-          transitionRafRef.current = null
-          // Reset the expression FIRST, then swap in the clean final data.
-          // Merged features carry `value` (= newValue), so this order can't
-          // flash dark: even while the async setData is in flight, the
-          // merged features render the final expression correctly.
-          map.setPaintProperty(
-            LAYER_PM25_FILL,
-            'fill-color',
-            colorScaleExpression(PM25_COLOR_SCALE, 'value'),
+    const newData: FeatureCollection =
+      state.forecastMinutes === 0
+        ? cellsToFeatureCollection(
+            (currentGrid as Extract<typeof currentGrid, { status: 'success' }>).data.map((cell) => ({
+              h3Cell: cell.h3_cell,
+              value: cell.pm25,
+            })),
           )
-          source.setData(newData)
-          oldGeojsonRef.current = newData
-        }
-      }
+        : cellsToFeatureCollection(
+            (
+              forecastGrid as Extract<typeof forecastGrid, { status: 'success' }>
+            ).data.map((forecast) => ({
+              h3Cell: forecast.h3_cell,
+              value: forecast.predicted_pm25,
+            })),
+          )
 
-      transitionRafRef.current = requestAnimationFrame(animate)
+    const hasPainted = paintedDataRef.current !== null
+
+    // Finalize any in-flight dissolve/PDI fade and drop any dissolve still
+    // waiting on a source load, so buffer roles and opacities are at a known
+    // steady state before starting the next.
+    pendingDissolveRef.current?.cancel()
+    pendingDissolveRef.current = null
+    animationFinishRef.current?.finish()
+    animationFinishRef.current = null
+
+    const snapLayer = LAYER_PM25_FILL[visibleSetRef.current]
+    const snapOutline = LAYER_PM25_OUTLINE[visibleSetRef.current]
+
+    if (!hasPainted || reducedMotion || state.showPdi) {
+      // First paint, reduced motion, or PM2.5 hidden under PDI: write
+      // straight to the visible set, no dissolve. When PDI is on the set is
+      // transparent, so this is invisible anyway.
+      const source = map.getSource(SOURCE_PM25[visibleSetRef.current])
+      if (source instanceof GeoJSONSource) source.setData(newData)
+      if (!hasPainted) {
+        const full = !state.showPdi
+        map.setPaintProperty(snapLayer, 'fill-opacity', full ? PM25_FILL_OPACITY : 0)
+        map.setPaintProperty(snapOutline, 'line-opacity', full ? 1 : 0)
+      }
     } else {
-      // Snap immediately — either structural change, PDI active, or reduced motion.
-      source.setData(newData)
-      mapRef.current.setPaintProperty(
-        LAYER_PM25_FILL,
-        'fill-color',
-        colorScaleExpression(PM25_COLOR_SCALE, 'value'),
-      )
-      oldGeojsonRef.current = newData
+      const from = visibleSetRef.current
+      const to = otherSet(from)
+      const target = map.getSource(SOURCE_PM25[to])
+      if (!(target instanceof GeoJSONSource)) return
+
+      // Write the new frame to the HIDDEN set (safe — it's at opacity 0),
+      // then dissolve once it has actually been processed. The visible set
+      // keeps rendering the previous frame untouched in the meantime.
+      target.setData(newData)
+
+      pendingDissolveRef.current = whenSourceLoaded(map, SOURCE_PM25[to], () => {
+        pendingDissolveRef.current = null
+        animationFinishRef.current = animatePaintValues(
+          map,
+          [
+            { layer: LAYER_PM25_FILL[from], property: 'fill-opacity', from: PM25_FILL_OPACITY, to: 0 },
+            { layer: LAYER_PM25_OUTLINE[from], property: 'line-opacity', from: 1, to: 0 },
+            { layer: LAYER_PM25_FILL[to], property: 'fill-opacity', from: 0, to: PM25_FILL_OPACITY },
+            { layer: LAYER_PM25_OUTLINE[to], property: 'line-opacity', from: 0, to: 1 },
+          ],
+          PM25_DISSOLVE_DURATION_MS,
+          () => {
+            visibleSetRef.current = to
+            animationFinishRef.current = null
+          },
+        )
+      })
     }
 
     paintedDataRef.current = cellsData
-    displayedMinutesRef.current = state.forecastMinutes
   }, [mapReady, state.forecastMinutes, currentGrid, forecastGrid, state.showPdi, reducedMotion])
-
-  // PDI layer data — always from current state; there is no forecasted PDI.
-  // Skipped entirely while the layer is hidden (off by default, and below
-  // PDI_MIN_ZOOM regardless): building a ~800+ cell FeatureCollection on
-  // every poll tick for a layer nobody can see is pure waste.
-  useEffect(() => {
-    if (!mapReady || !mapRef.current || !state.showPdi) return
-    if (currentGrid.status !== 'success') return
-    const cells = currentGrid.data.map((cell) => ({ h3Cell: cell.h3_cell, value: cell.pdi }))
-    const source = mapRef.current.getSource(SOURCE_PDI)
-    if (source instanceof GeoJSONSource) source.setData(cellsToFeatureCollection(cells))
-  }, [mapReady, currentGrid, state.showPdi])
 
   // Wind arrows — thinned to at most one per cell of a fixed-size grid
   // over the current viewport (see thinBySpatialGrid), so "generalized
@@ -692,50 +742,6 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
   return <div ref={containerRef} className="map-canvas" />
 }
 
-// ---------------------------------------------------------------------------
-// Transition helpers — extracted to module scope so they don't close over
-// component refs and can be unit-tested independently.
-// ---------------------------------------------------------------------------
-
 function cellToBoundaryCoords(h3Cell: string): Position[] {
   return cellToBoundary(h3Cell, true) as unknown as Position[]
-}
-
-function animateOpacityCrossfade(
-  map: MapLibreMap,
-  fadeOutLayer: string,
-  fadeInLayer: string,
-): void {
-  if (prefersReducedMotion()) {
-    map.setPaintProperty(fadeOutLayer, 'fill-opacity', 0)
-    map.setLayoutProperty(fadeOutLayer, 'visibility', 'none')
-    map.setPaintProperty(
-      fadeInLayer,
-      'fill-opacity',
-      fadeInLayer === LAYER_PDI_FILL ? PDI_FILL_OPACITY : PM25_FILL_OPACITY,
-    )
-    return
-  }
-
-  const duration = LAYER_CROSSFADE_DURATION_MS
-  const targetOpacity = fadeInLayer === LAYER_PDI_FILL ? PDI_FILL_OPACITY : PM25_FILL_OPACITY
-  const startTime = performance.now()
-
-  const animate = (now: number) => {
-    const elapsed = now - startTime
-    const progress = Math.min(1, elapsed / duration)
-    const eased = progress < 0.5 ? 2 * progress * progress : 1 - Math.pow(-2 * progress + 2, 2) / 2
-
-    map.setPaintProperty(fadeOutLayer, 'fill-opacity', targetOpacity * (1 - eased))
-    map.setPaintProperty(fadeInLayer, 'fill-opacity', targetOpacity * eased)
-
-    if (progress < 1) {
-      requestAnimationFrame(animate)
-    } else {
-      map.setLayoutProperty(fadeOutLayer, 'visibility', 'none')
-      map.setPaintProperty(fadeOutLayer, 'fill-opacity', 0)
-    }
-  }
-
-  requestAnimationFrame(animate)
 }

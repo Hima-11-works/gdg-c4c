@@ -20,8 +20,10 @@ export const SELECTED_CELL_BORDER_WIDTH = 2
 /** Color of the selected cell's highlight border. */
 export const SELECTED_CELL_BORDER_COLOR = '#ffffffcc'
 
-/** Duration (ms) of color transitions between forecast keyframes. */
-export const COLOR_TRANSITION_DURATION_MS = 300
+/** Duration (ms) of the opacity dissolve between forecast frames. Long
+ *  enough to read as a continuous flow at the 750ms playback cadence (each
+ *  frame dissolves into the next), short enough to leave a moment of hold. */
+export const PM25_DISSOLVE_DURATION_MS = 550
 
 /** Duration (ms) of opacity crossfade when toggling PM2.5 / PDI layers. */
 export const LAYER_CROSSFADE_DURATION_MS = 250
