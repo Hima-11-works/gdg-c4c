@@ -262,6 +262,84 @@ function animatePaintValues(
   return { finish, cancel }
 }
 
+/**
+ * Dissolves between the two PM2.5 buffer sets while holding the grid's TOTAL
+ * opacity constant, so only the cell colors shift — an in-place interpolation
+ * rather than a fade. A plain crossfade lets both layers sit at partial
+ * opacity mid-transition, momentarily washing the grid out (a "pulse" that
+ * makes small frame-to-frame changes hard to read); compensating the outgoing
+ * layer's opacity avoids that entirely.
+ *
+ * With fill base opacity `a`, keeping the composited coverage at `a` needs:
+ *   incoming on top:    in = a·t, out = a·(1−t)/(1−a·t)
+ *   incoming on bottom: out = a·(1−t), in = a·t/(1−a·(1−t))
+ * Layer order is fill-a, outline-a, fill-b, outline-b, so 'b' is above 'a'.
+ * Outlines follow the same normalized curve (their full value is 1).
+ */
+function animatePm25Dissolve(
+  map: MapLibreMap,
+  from: Pm25Set,
+  to: Pm25Set,
+  duration: number,
+  onDone: () => void,
+): PaintAnimation {
+  const a = PM25_FILL_OPACITY
+  const incomingOnTop = to === 'b'
+
+  // [outgoingFill, outgoingOutline, incomingFill, incomingOutline]
+  const values = (t: number): [number, number, number, number] => {
+    if (incomingOnTop) {
+      const inFill = a * t
+      const outFill = (a * (1 - t)) / (1 - a * t)
+      const outLine = (1 - t) / (1 - a * t)
+      return [outFill, outLine, inFill, t]
+    }
+    const outFill = a * (1 - t)
+    const inFill = (a * t) / (1 - a * (1 - t))
+    const inLine = t / (1 - a * (1 - t))
+    return [outFill, 1 - t, inFill, inLine]
+  }
+
+  const apply = (t: number) => {
+    const [outFill, outLine, inFill, inLine] = values(t)
+    map.setPaintProperty(LAYER_PM25_FILL[from], 'fill-opacity', outFill)
+    map.setPaintProperty(LAYER_PM25_OUTLINE[from], 'line-opacity', outLine)
+    map.setPaintProperty(LAYER_PM25_FILL[to], 'fill-opacity', inFill)
+    map.setPaintProperty(LAYER_PM25_OUTLINE[to], 'line-opacity', inLine)
+  }
+
+  let raf = 0
+  let finished = false
+  const finish = () => {
+    if (finished) return
+    finished = true
+    cancelAnimationFrame(raf)
+    apply(1)
+    onDone()
+  }
+  const cancel = () => {
+    if (finished) return
+    finished = true
+    cancelAnimationFrame(raf)
+  }
+
+  if (duration <= 0 || prefersReducedMotion()) {
+    finish()
+    return { finish, cancel }
+  }
+
+  const start = performance.now()
+  const tick = (now: number) => {
+    const t = Math.min(1, (now - start) / duration)
+    const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2
+    apply(eased)
+    if (t < 1) raf = requestAnimationFrame(tick)
+    else finish()
+  }
+  raf = requestAnimationFrame(tick)
+  return { finish, cancel }
+}
+
 interface MapViewProps {
   currentGrid: AsyncResource<GridStateOut[]>
   forecastGrid: AsyncResource<ForecastOut[]>
@@ -699,20 +777,10 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
 
       pendingDissolveRef.current = whenSourceLoaded(map, SOURCE_PM25[to], () => {
         pendingDissolveRef.current = null
-        animationFinishRef.current = animatePaintValues(
-          map,
-          [
-            { layer: LAYER_PM25_FILL[from], property: 'fill-opacity', from: PM25_FILL_OPACITY, to: 0 },
-            { layer: LAYER_PM25_OUTLINE[from], property: 'line-opacity', from: 1, to: 0 },
-            { layer: LAYER_PM25_FILL[to], property: 'fill-opacity', from: 0, to: PM25_FILL_OPACITY },
-            { layer: LAYER_PM25_OUTLINE[to], property: 'line-opacity', from: 0, to: 1 },
-          ],
-          PM25_DISSOLVE_DURATION_MS,
-          () => {
-            visibleSetRef.current = to
-            animationFinishRef.current = null
-          },
-        )
+        animationFinishRef.current = animatePm25Dissolve(map, from, to, PM25_DISSOLVE_DURATION_MS, () => {
+          visibleSetRef.current = to
+          animationFinishRef.current = null
+        })
       })
     }
 
