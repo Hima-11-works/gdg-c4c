@@ -5,10 +5,8 @@ import 'package:go_router/go_router.dart';
 import '../../domain/models/models.dart';
 import '../../providers/prefs_providers.dart';
 import '../../providers/profile_providers.dart';
-import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
-import '../../theme/widgets/widgets.dart';
 
 /// Multi-step onboarding flow.
 ///
@@ -18,7 +16,7 @@ import '../../theme/widgets/widgets.dart';
 /// 3. Health context (optional)
 /// 4. Alert sensitivity
 /// 5. Notification permission
-/// 6. Complete → Home
+/// 6. Complete -> Home
 class OnboardingScreen extends ConsumerStatefulWidget {
   const OnboardingScreen({super.key});
 
@@ -30,7 +28,6 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   final _pageController = PageController();
   int _currentPage = 0;
 
-  // Selections made during onboarding.
   UserHealthContext _healthContext = UserHealthContext.none;
   AlertSensitivity _sensitivity = AlertSensitivity.standard;
 
@@ -74,6 +71,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
     return Scaffold(
       appBar: AppBar(
         leading: _currentPage > 0
@@ -89,7 +88,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
               child: Text(
                 'Skip',
                 style: AppTypography.labelLarge.copyWith(
-                  color: AppColors.onSurfaceMuted,
+                  color: cs.onSurfaceVariant,
                 ),
               ),
             ),
@@ -138,6 +137,29 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   }
 }
 
+// ── Continue button (bottom-right, FilledButton, clears dev toolbar) ───
+
+class _ContinueButton extends StatelessWidget {
+  const _ContinueButton({required this.label, required this.onNext});
+
+  final String label;
+  final VoidCallback onNext;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 48, right: AppSpacing.xl),
+      child: Align(
+        alignment: Alignment.bottomRight,
+        child: FilledButton(
+          onPressed: onNext,
+          child: Text(label),
+        ),
+      ),
+    );
+  }
+}
+
 // ── Step 1: Welcome ────────────────────────────────────────────────────
 
 class _WelcomeStep extends StatelessWidget {
@@ -147,16 +169,20 @@ class _WelcomeStep extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
     return Padding(
       padding: AppSpacing.allXxl,
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Icon(Icons.air, size: 64, color: AppColors.info),
+          Icon(Icons.air, size: 64, color: cs.primary),
           const SizedBox(height: AppSpacing.xxl),
-          const Text(
+          Text(
             'Air Health',
-            style: AppTypography.headlineLarge,
+            style: AppTypography.headlineLarge.copyWith(
+              color: cs.onSurface,
+            ),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: AppSpacing.lg),
@@ -166,12 +192,12 @@ class _WelcomeStep extends StatelessWidget {
             'and personalised alerts — so you can make informed decisions '
             'about outdoor exposure.',
             style: AppTypography.bodyLarge.copyWith(
-              color: AppColors.onSurfaceMuted,
+              color: cs.onSurfaceVariant,
             ),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: AppSpacing.xxxxl),
-          PrimaryButton(label: 'Get started', onPressed: onNext),
+          _ContinueButton(label: 'Get started', onNext: onNext),
         ],
       ),
     );
@@ -187,17 +213,18 @@ class _LocationStep extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
     return Padding(
       padding: AppSpacing.allXxl,
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Icon(Icons.location_on_outlined,
-              size: 64, color: AppColors.info),
+          Icon(Icons.location_on_outlined, size: 64, color: cs.primary),
           const SizedBox(height: AppSpacing.xxl),
-          const Text(
+          Text(
             'Your location',
-            style: AppTypography.headlineLarge,
+            style: AppTypography.headlineLarge.copyWith(color: cs.onSurface),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: AppSpacing.lg),
@@ -206,12 +233,12 @@ class _LocationStep extends StatelessWidget {
             'We use your approximate location to show nearby pollution '
             'data. Your exact coordinates are never stored or transmitted.',
             style: AppTypography.bodyLarge.copyWith(
-              color: AppColors.onSurfaceMuted,
+              color: cs.onSurfaceVariant,
             ),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: AppSpacing.xxxxl),
-          PrimaryButton(label: 'Continue', onPressed: onNext),
+          _ContinueButton(label: 'Continue', onNext: onNext),
         ],
       ),
     );
@@ -233,42 +260,48 @@ class _HealthContextStep extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SizedBox(height: AppSpacing.xxl),
-          const Text('Health context', style: AppTypography.headlineLarge),
-          const SizedBox(height: AppSpacing.md),
-          Text(
+    final cs = Theme.of(context).colorScheme;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: AppSpacing.xxl),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
+          child: Text('Health context',
+              style: AppTypography.headlineLarge.copyWith(
+                color: cs.onSurface,
+              )),
+        ),
+        const SizedBox(height: AppSpacing.md),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
+          child: Text(
             'This helps us suggest an appropriate alert sensitivity. '
             'It is NOT a diagnosis and stays on your device only.',
             style: AppTypography.bodyMedium.copyWith(
-              color: AppColors.onSurfaceMuted,
+              color: cs.onSurfaceVariant,
             ),
           ),
-          const SizedBox(height: AppSpacing.xxl),
-          Expanded(
-            child: ListView(
-              children: UserHealthContext.values.map((ctx) {
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-                  child: _SelectableTile(
-                    label: ctx.label,
-                    selected: selected == ctx,
-                    onTap: () => onChanged(ctx),
-                  ),
-                );
-              }).toList(),
-            ),
+        ),
+        const SizedBox(height: AppSpacing.xxl),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
+            children: UserHealthContext.values.map((ctx) {
+              return Padding(
+                padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                child: _SelectableTile(
+                  label: ctx.label,
+                  selected: selected == ctx,
+                  onTap: () => onChanged(ctx),
+                ),
+              );
+            }).toList(),
           ),
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: AppSpacing.xl),
-            child: PrimaryButton(label: 'Continue', onPressed: onNext),
-          ),
-        ],
-      ),
+        ),
+        _ContinueButton(label: 'Continue', onNext: onNext),
+      ],
     );
   }
 }
@@ -298,54 +331,62 @@ class _SensitivityStep extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     final suggested = _suggestSensitive.contains(healthContext)
         ? AlertSensitivity.sensitive
         : AlertSensitivity.standard;
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SizedBox(height: AppSpacing.xxl),
-          const Text('Alert sensitivity', style: AppTypography.headlineLarge),
-          const SizedBox(height: AppSpacing.md),
-          Text(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: AppSpacing.xxl),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
+          child: Text('Alert sensitivity',
+              style: AppTypography.headlineLarge.copyWith(
+                color: cs.onSurface,
+              )),
+        ),
+        const SizedBox(height: AppSpacing.md),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
+          child: Text(
             'Choose how early you want to be notified about '
             'changing air quality.',
             style: AppTypography.bodyMedium.copyWith(
-              color: AppColors.onSurfaceMuted,
+              color: cs.onSurfaceVariant,
             ),
           ),
-          const SizedBox(height: AppSpacing.xl),
-          if (suggested != AlertSensitivity.standard) ...[
-            _SuggestionBanner(
+        ),
+        const SizedBox(height: AppSpacing.xl),
+        if (suggested != AlertSensitivity.standard) ...[
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
+            child: _SuggestionBanner(
               suggested: suggested,
               onAccept: () => onChanged(suggested),
             ),
-            const SizedBox(height: AppSpacing.xl),
-          ],
-          Expanded(
-            child: ListView(
-              children: AlertSensitivity.values.map((s) {
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-                  child: _SelectableTile(
-                    label: s.label,
-                    subtitle: _subtitleFor(s),
-                    selected: selected == s,
-                    onTap: () => onChanged(s),
-                  ),
-                );
-              }).toList(),
-            ),
           ),
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: AppSpacing.xl),
-            child: PrimaryButton(label: 'Continue', onPressed: onNext),
-          ),
+          const SizedBox(height: AppSpacing.xl),
         ],
-      ),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
+            children: AlertSensitivity.values.map((s) {
+              return Padding(
+                padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                child: _SelectableTile(
+                  label: s.label,
+                  subtitle: _subtitleFor(s),
+                  selected: selected == s,
+                  onTap: () => onChanged(s),
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+        _ContinueButton(label: 'Continue', onNext: onNext),
+      ],
     );
   }
 
@@ -368,17 +409,18 @@ class _NotificationStep extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
     return Padding(
       padding: AppSpacing.allXxl,
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Icon(Icons.notifications_outlined,
-              size: 64, color: AppColors.info),
+          Icon(Icons.notifications_outlined, size: 64, color: cs.primary),
           const SizedBox(height: AppSpacing.xxl),
-          const Text(
+          Text(
             'Notifications',
-            style: AppTypography.headlineLarge,
+            style: AppTypography.headlineLarge.copyWith(color: cs.onSurface),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: AppSpacing.lg),
@@ -387,12 +429,12 @@ class _NotificationStep extends StatelessWidget {
             'significantly — based on your sensitivity settings.\n\n'
             'You can adjust notification preferences later in Settings.',
             style: AppTypography.bodyLarge.copyWith(
-              color: AppColors.onSurfaceMuted,
+              color: cs.onSurfaceVariant,
             ),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: AppSpacing.xxxxl),
-          PrimaryButton(label: 'Finish setup', onPressed: onNext),
+          _ContinueButton(label: 'Finish setup', onNext: onNext),
         ],
       ),
     );
@@ -416,8 +458,8 @@ class _SelectableTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final borderColor =
-        selected ? AppColors.info : AppColors.outlineVariant;
+    final cs = Theme.of(context).colorScheme;
+    final borderColor = selected ? cs.primary : cs.outlineVariant;
 
     return Semantics(
       button: true,
@@ -429,8 +471,8 @@ class _SelectableTile extends StatelessWidget {
           padding: const EdgeInsets.all(AppSpacing.xl),
           decoration: BoxDecoration(
             color: selected
-                ? AppColors.info.withValues(alpha: 0.06)
-                : AppColors.surfaceContainer,
+                ? cs.primary.withValues(alpha: 0.08)
+                : cs.surfaceContainerHighest,
             borderRadius: BorderRadius.circular(10),
             border: Border.all(color: borderColor, width: selected ? 1.5 : 0.5),
           ),
@@ -440,13 +482,18 @@ class _SelectableTile extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(label, style: AppTypography.titleMedium),
+                    Text(
+                      label,
+                      style: AppTypography.titleMedium.copyWith(
+                        color: cs.onSurface,
+                      ),
+                    ),
                     if (subtitle != null) ...[
                       const SizedBox(height: AppSpacing.xs),
                       Text(
                         subtitle!,
                         style: AppTypography.bodySmall.copyWith(
-                          color: AppColors.onSurfaceMuted,
+                          color: cs.onSurfaceVariant,
                         ),
                       ),
                     ],
@@ -454,7 +501,7 @@ class _SelectableTile extends StatelessWidget {
                 ),
               ),
               if (selected)
-                const Icon(Icons.check_circle, color: AppColors.info, size: 22),
+                Icon(Icons.check_circle, color: cs.primary, size: 22),
             ],
           ),
         ),
@@ -474,13 +521,15 @@ class _SuggestionBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
     return Container(
       padding: const EdgeInsets.all(AppSpacing.xl),
       decoration: BoxDecoration(
-        color: AppColors.info.withValues(alpha: 0.08),
+        color: cs.primaryContainer.withValues(alpha: 0.4),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
-          color: AppColors.info.withValues(alpha: 0.25),
+          color: cs.primary.withValues(alpha: 0.25),
           width: 0.5,
         ),
       ),
@@ -489,14 +538,14 @@ class _SuggestionBanner extends StatelessWidget {
         children: [
           Text(
             'Based on your health context, we suggest ${suggested.label} alerts.',
-            style: AppTypography.bodyMedium,
+            style: AppTypography.bodyMedium.copyWith(color: cs.onSurface),
           ),
           const SizedBox(height: AppSpacing.md),
           Row(
             children: [
-              PrimaryButton(
-                label: 'Use ${suggested.label}',
+              FilledButton(
                 onPressed: onAccept,
+                child: Text('Use ${suggested.label}'),
               ),
             ],
           ),

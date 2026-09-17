@@ -1,12 +1,11 @@
 import 'package:flutter/material.dart';
 
-import '../app_colors.dart';
 import '../app_radius.dart';
 import '../app_spacing.dart';
 
 /// Standard content card — flat surface with a thin border.
 ///
-/// No gradient, no heavy shadow, no glassmorphism. Keeps the UI calm.
+/// Colors come from Theme.of(context) so dark mode works automatically.
 class AppCard extends StatelessWidget {
   const AppCard({
     super.key,
@@ -23,13 +22,15 @@ class AppCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
     final card = Container(
       margin: margin,
       padding: padding,
       decoration: BoxDecoration(
-        color: AppColors.surfaceContainer,
+        color: cs.surfaceContainerHighest,
         borderRadius: AppRadius.mdAll,
-        border: Border.all(color: AppColors.outlineVariant, width: 0.5),
+        border: Border.all(color: cs.outlineVariant, width: 0.5),
       ),
       child: child,
     );

@@ -19,10 +19,6 @@ enum _SortMode {
 }
 
 /// Nearby screen — shows nearby areas with lower expected pollution.
-///
-/// Sortable by cleaner-now, cleaner-soon, or nearest.
-/// Each area shows name, distance, current AQI, category, forecast,
-/// trend, and confidence.
 class NearbyScreen extends ConsumerStatefulWidget {
   const NearbyScreen({super.key});
 
@@ -36,6 +32,7 @@ class _NearbyScreenState extends ConsumerState<NearbyScreen> {
   @override
   Widget build(BuildContext context) {
     final areas = ref.watch(nearbyAreasProvider);
+    final cs = Theme.of(context).colorScheme;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Nearby Areas')),
@@ -61,7 +58,6 @@ class _NearbyScreenState extends ConsumerState<NearbyScreen> {
           return ListView(
             padding: const EdgeInsets.only(bottom: AppSpacing.xxxxl),
             children: [
-              // ── Heading ──────────────────────────────────────────
               const SectionHeader(
                 title: 'Nearby areas with lower expected pollution',
                 subtitle:
@@ -69,7 +65,7 @@ class _NearbyScreenState extends ConsumerState<NearbyScreen> {
                     'informational — not a recommendation to relocate.',
               ),
 
-              // ── Sort selector ────────────────────────────────────
+              // Sort selector.
               Padding(
                 padding: const EdgeInsets.symmetric(
                   horizontal: AppSpacing.xl,
@@ -91,13 +87,13 @@ class _NearbyScreenState extends ConsumerState<NearbyScreen> {
                             ),
                             decoration: BoxDecoration(
                               color: isSelected
-                                  ? AppColors.info.withValues(alpha: 0.15)
-                                  : AppColors.surfaceContainer,
+                                  ? cs.primary.withValues(alpha: 0.12)
+                                  : cs.surfaceContainerHighest,
                               borderRadius: BorderRadius.circular(8),
                               border: Border.all(
                                 color: isSelected
-                                    ? AppColors.info
-                                    : AppColors.outlineVariant,
+                                    ? cs.primary
+                                    : cs.outlineVariant,
                                 width: 0.5,
                               ),
                             ),
@@ -105,8 +101,8 @@ class _NearbyScreenState extends ConsumerState<NearbyScreen> {
                               mode.label,
                               style: AppTypography.labelMedium.copyWith(
                                 color: isSelected
-                                    ? AppColors.info
-                                    : AppColors.onSurfaceMuted,
+                                    ? cs.primary
+                                    : cs.onSurfaceVariant,
                               ),
                             ),
                           ),
@@ -117,7 +113,6 @@ class _NearbyScreenState extends ConsumerState<NearbyScreen> {
                 ),
               ),
 
-              // ── Area list ────────────────────────────────────────
               ...sorted.map((area) => _NearbyAreaCard(area: area)),
             ],
           );
@@ -151,8 +146,6 @@ class _NearbyScreenState extends ConsumerState<NearbyScreen> {
   }
 }
 
-// ── Area card ──────────────────────────────────────────────────────────
-
 class _NearbyAreaCard extends StatelessWidget {
   const _NearbyAreaCard({required this.area});
 
@@ -160,15 +153,15 @@ class _NearbyAreaCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     final cat = CpcbCategory.fromAqi(area.aqiNow);
-    final color = AppColors.forCategory(cat);
+    final catColor = AppColors.forCategory(cat);
     final trendChip = switch (area.trend) {
       AreaTrend.improving => const TrendChip.improving(),
       AreaTrend.stable => const TrendChip.stable(),
       AreaTrend.worsening => const TrendChip.worsening(),
     };
 
-    // Best forecast AQI in the next 3 hours.
     final forecastPoints = area.forecast.take(3).toList();
     final avgForecast = forecastPoints.isEmpty
         ? null
@@ -184,10 +177,8 @@ class _NearbyAreaCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ── Header: AQI badge + name + distance + trend ─────────
           Row(
             children: [
-              // AQI badge.
               Semantics(
                 label: 'AQI ${area.aqiNow}, ${cat.label}',
                 child: Container(
@@ -195,12 +186,13 @@ class _NearbyAreaCard extends StatelessWidget {
                   height: 52,
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
-                    color: color.withValues(alpha: 0.12),
+                    color: catColor.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Text(
                     '${area.aqiNow}',
-                    style: AppTypography.headlineSmall.copyWith(color: color),
+                    style:
+                        AppTypography.headlineSmall.copyWith(color: catColor),
                   ),
                 ),
               ),
@@ -209,13 +201,14 @@ class _NearbyAreaCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(area.name, style: AppTypography.titleMedium),
+                    Text(area.name,
+                        style: AppTypography.titleMedium
+                            .copyWith(color: cs.onSurface)),
                     const SizedBox(height: AppSpacing.xs),
                     Text(
                       Formatters.distance(area.distanceKm),
-                      style: AppTypography.bodySmall.copyWith(
-                        color: AppColors.onSurfaceMuted,
-                      ),
+                      style: AppTypography.bodySmall
+                          .copyWith(color: cs.onSurfaceVariant),
                     ),
                   ],
                 ),
@@ -223,14 +216,11 @@ class _NearbyAreaCard extends StatelessWidget {
               trendChip,
             ],
           ),
-
           const SizedBox(height: AppSpacing.lg),
-
-          // ── Detail row ──────────────────────────────────────────
           Container(
             padding: const EdgeInsets.all(AppSpacing.md),
             decoration: BoxDecoration(
-              color: AppColors.surfaceDim,
+              color: cs.surfaceContainerHighest,
               borderRadius: BorderRadius.circular(8),
             ),
             child: Row(
@@ -238,10 +228,10 @@ class _NearbyAreaCard extends StatelessWidget {
                 _DetailColumn(
                   label: 'Category',
                   value: cat.label,
-                  color: color,
+                  color: catColor,
                 ),
                 if (avgForecast != null) ...[
-                  const _Divider(),
+                  _Divider(),
                   _DetailColumn(
                     label: 'Forecast avg',
                     value: '$avgForecast',
@@ -249,7 +239,7 @@ class _NearbyAreaCard extends StatelessWidget {
                         CpcbCategory.fromAqi(avgForecast)),
                   ),
                 ],
-                const _Divider(),
+                _Divider(),
                 _DetailColumn(
                   label: 'Confidence',
                   value: '${(area.confidence * 100).round()}%',
@@ -276,21 +266,19 @@ class _DetailColumn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Expanded(
       child: Column(
         children: [
-          Text(
-            label,
-            style: AppTypography.labelSmall.copyWith(
-              color: AppColors.onSurfaceMuted,
-            ),
-          ),
+          Text(label,
+              style: AppTypography.labelSmall
+                  .copyWith(color: cs.onSurfaceVariant)),
           const SizedBox(height: AppSpacing.xs),
           Text(
             value,
             style: AppTypography.bodyMedium.copyWith(
               fontWeight: FontWeight.w600,
-              color: color,
+              color: color ?? cs.onSurface,
             ),
             textAlign: TextAlign.center,
           ),
@@ -301,14 +289,13 @@ class _DetailColumn extends StatelessWidget {
 }
 
 class _Divider extends StatelessWidget {
-  const _Divider();
-
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Container(
       width: 1,
       height: 28,
-      color: AppColors.outlineVariant,
+      color: cs.outlineVariant,
       margin: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
     );
   }
