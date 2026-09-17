@@ -7,9 +7,8 @@ import '../app_typography.dart';
 
 /// A small chip that pairs a color with a text label.
 ///
-/// Used for trend indicators (Improving / Stable / Worsening) and
-/// data-freshness states. Never relies on color alone — text is always
-/// present.
+/// Background tint only — no border. Text is always present so
+/// color is never the sole carrier of meaning.
 class StatusChip extends StatelessWidget {
   const StatusChip({
     super.key,
@@ -34,7 +33,6 @@ class StatusChip extends StatelessWidget {
         decoration: BoxDecoration(
           color: color.withValues(alpha: 0.10),
           borderRadius: AppRadius.smAll,
-          border: Border.all(color: color.withValues(alpha: 0.25), width: 0.5),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,

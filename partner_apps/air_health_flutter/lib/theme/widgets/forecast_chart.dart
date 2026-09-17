@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import '../../core/formatters.dart';
 import '../../domain/models/models.dart';
 import '../app_colors.dart';
-import '../app_radius.dart';
 import '../app_spacing.dart';
 import '../app_typography.dart';
 
@@ -316,30 +315,16 @@ class _WorseningSummary extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.lg,
-        vertical: AppSpacing.md,
-      ),
-      decoration: BoxDecoration(
-        color: AppColors.warning.withValues(alpha: 0.08),
-        borderRadius: AppRadius.smAll,
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.trending_up, size: 16, color: AppColors.warning),
-          const SizedBox(width: AppSpacing.md),
-          Expanded(
-            child: Text(
-              'Expected to reach ${point.category.label} '
-              'around ${Formatters.time(point.at)}',
-              style: AppTypography.bodySmall.copyWith(
-                color: AppColors.warning,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ),
-        ],
+    final cs = Theme.of(context).colorScheme;
+
+    return Padding(
+      padding: const EdgeInsets.only(top: AppSpacing.md),
+      child: Text(
+        'Expected to reach ${point.category.label} '
+        'around ${Formatters.time(point.at)}',
+        style: AppTypography.bodySmall.copyWith(
+          color: cs.onSurfaceVariant,
+        ),
       ),
     );
   }
@@ -352,30 +337,15 @@ class _EmptyForecast extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     final cat = CpcbCategory.fromAqi(currentAqi);
+
     return Padding(
-      padding: AppSpacing.horizontalXl,
-      child: Container(
-        padding: AppSpacing.allXl,
-        decoration: BoxDecoration(
-          color: AppColors.surfaceDim,
-          borderRadius: AppRadius.smAll,
-        ),
-        child: Column(
-          children: [
-            Text(
-              'Current AQI: $currentAqi (${cat.label})',
-              style: AppTypography.titleMedium,
-            ),
-            const SizedBox(height: AppSpacing.md),
-            Text(
-              'Forecast data is not available for this location right now.',
-              style: AppTypography.bodySmall.copyWith(
-                color: AppColors.onSurfaceMuted,
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ],
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
+      child: Text(
+        'Forecast not available · Current AQI $currentAqi (${cat.label})',
+        style: AppTypography.bodySmall.copyWith(
+          color: cs.onSurfaceVariant,
         ),
       ),
     );

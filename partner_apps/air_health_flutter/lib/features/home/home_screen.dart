@@ -14,15 +14,15 @@ import '../../theme/widgets/widgets.dart';
 /// Home screen — the primary view.
 ///
 /// Information hierarchy:
-/// 1. Current location
-/// 2. Current AQI (hero)
-/// 3. CPCB category
+/// 1. Location
+/// 2. Current AQI (hero — largest element)
+/// 3. Category label
 /// 4. Trend
-/// 5. Personalized alert if active
+/// 5. Sensitivity note (if non-standard)
 /// 6. Expected AQI change
-/// 7. 12-hour forecast
-/// 8. Nearby pollution event
-/// 9. Data freshness
+/// 7. 12-hour forecast chart
+/// 8. Pollution events (if any)
+/// 9. Data freshness (footer)
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
 
@@ -36,6 +36,7 @@ class HomeScreen extends ConsumerWidget {
     final trend = ref.watch(trendProvider);
     final crossing = ref.watch(nextCategoryCrossingProvider);
     final profile = ref.watch(userProfileProvider);
+    final cs = Theme.of(context).colorScheme;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Air Health')),
@@ -60,23 +61,17 @@ class HomeScreen extends ConsumerWidget {
                 // ── Location ────────────────────────────────────────
                 Padding(
                   padding: const EdgeInsets.fromLTRB(
-                    AppSpacing.xl,
-                    AppSpacing.xl,
-                    AppSpacing.xl,
-                    AppSpacing.sm,
+                    AppSpacing.xl, AppSpacing.xl, AppSpacing.xl, AppSpacing.sm,
                   ),
                   child: Row(
                     children: [
-                      const Icon(
-                        Icons.location_on_outlined,
-                        size: 18,
-                        color: AppColors.onSurfaceMuted,
-                      ),
+                      const Icon(Icons.location_on_outlined,
+                          size: 16, color: AppColors.onSurfaceMuted),
                       const SizedBox(width: AppSpacing.sm),
                       Text(
                         location.label ?? 'Current location',
-                        style: AppTypography.bodyLarge.copyWith(
-                          color: AppColors.onSurfaceMuted,
+                        style: AppTypography.bodyMedium.copyWith(
+                          color: cs.onSurfaceVariant,
                         ),
                       ),
                     ],
@@ -85,9 +80,7 @@ class HomeScreen extends ConsumerWidget {
 
                 // ── AQI hero ───────────────────────────────────────
                 Padding(
-                  padding: const EdgeInsets.symmetric(
-                    vertical: AppSpacing.xxl,
-                  ),
+                  padding: const EdgeInsets.symmetric(vertical: AppSpacing.xxl),
                   child: AqiBadge(
                     aqi: reading.aqiCpcb,
                     category: reading.category,
@@ -109,21 +102,17 @@ class HomeScreen extends ConsumerWidget {
                   ),
                 ),
 
-                // ── Personalized sensitivity note ──────────────────
+                // ── Sensitivity note ───────────────────────────────
                 profile.when(
                   loading: () => const SizedBox.shrink(),
                   error: (_, _) => const SizedBox.shrink(),
                   data: (p) {
-                    if (p == null ||
-                        p.sensitivity == AlertSensitivity.standard) {
+                    if (p == null || p.sensitivity == AlertSensitivity.standard) {
                       return const SizedBox.shrink();
                     }
                     return Padding(
                       padding: const EdgeInsets.fromLTRB(
-                        AppSpacing.xl,
-                        AppSpacing.lg,
-                        AppSpacing.xl,
-                        0,
+                        AppSpacing.xl, AppSpacing.lg, AppSpacing.xl, 0,
                       ),
                       child: StatusChip(
                         label: '${p.sensitivity.label} alerts enabled',
@@ -147,7 +136,7 @@ class HomeScreen extends ConsumerWidget {
                   },
                 ),
 
-                // ── 12-hour forecast chart ───────────────────────────
+                // ── 12-hour forecast chart ─────────────────────────
                 const SectionHeader(title: '12-Hour Forecast'),
                 forecast.when(
                   loading: () => const Padding(
@@ -159,20 +148,15 @@ class HomeScreen extends ConsumerWidget {
                     child: Text(
                       'Forecast unavailable',
                       style: AppTypography.bodyMedium.copyWith(
-                        color: AppColors.onSurfaceMuted,
+                        color: cs.onSurfaceVariant,
                       ),
                     ),
                   ),
                   data: (points) {
                     if (points.isEmpty) {
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: AppSpacing.xl,
-                        ),
-                        child: ForecastChart(
-                          currentAqi: reading.aqiCpcb,
-                          forecast: const [],
-                        ),
+                      return ForecastChart(
+                        currentAqi: reading.aqiCpcb,
+                        forecast: const [],
                       );
                     }
                     final evts = events.valueOrNull ?? const [];
@@ -193,11 +177,7 @@ class HomeScreen extends ConsumerWidget {
                     return Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const SectionHeader(
-                          title: 'Nearby Pollution Events',
-                          subtitle:
-                              'Environmental information — not a recommendation to relocate.',
-                        ),
+                        const SectionHeader(title: 'Approaching Pollution'),
                         ...evts.map((evt) => _PollutionEventCard(event: evt)),
                       ],
                     );
@@ -231,6 +211,7 @@ class _PollutionEventCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     final lead = event.expectedArrivalAt.difference(DateTime.now());
 
     return AppCard(
@@ -243,12 +224,10 @@ class _PollutionEventCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Icon(Icons.air, size: 18, color: AppColors.warning),
-              const SizedBox(width: AppSpacing.md),
               Expanded(
                 child: Text(
                   event.sourceArea,
-                  style: AppTypography.titleMedium,
+                  style: AppTypography.titleMedium.copyWith(color: cs.onSurface),
                 ),
               ),
               StatusChip(
@@ -257,14 +236,10 @@ class _PollutionEventCard extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: AppSpacing.md),
-          Text(event.description, style: AppTypography.bodyMedium),
           const SizedBox(height: AppSpacing.sm),
           Text(
-            'Estimated peak AQI: ${event.peakAqiEstimate}',
-            style: AppTypography.labelMedium.copyWith(
-              color: AppColors.onSurfaceMuted,
-            ),
+            'Peak AQI ~${event.peakAqiEstimate} · ${event.description}',
+            style: AppTypography.bodySmall.copyWith(color: cs.onSurfaceVariant),
           ),
         ],
       ),
@@ -281,9 +256,10 @@ class _FreshnessBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     final quality = freshness.quality;
     final color = switch (quality) {
-      DataQuality.full => AppColors.onSurfaceMuted,
+      DataQuality.full => cs.onSurfaceVariant,
       DataQuality.partial => AppColors.warning,
       DataQuality.forecastUnavailable => AppColors.warning,
       DataQuality.stale => AppColors.error,
@@ -301,9 +277,12 @@ class _FreshnessBanner extends StatelessWidget {
         children: [
           Icon(icon, size: 14, color: color),
           const SizedBox(width: AppSpacing.sm),
-          Text(
-            '${quality.label} · Updated ${Formatters.relativeDuration(freshness.age)}',
-            style: AppTypography.labelSmall.copyWith(color: color),
+          Expanded(
+            child: Text(
+              '${quality.label} · Updated ${Formatters.relativeDuration(freshness.age)}',
+              style: AppTypography.labelSmall.copyWith(color: color),
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
         ],
       ),
