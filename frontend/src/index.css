@@ -178,13 +178,18 @@ body,
   color: #fff;
 }
 
-.layer-toggle-pdi {
+.layer-toggle-option {
   display: flex;
   align-items: center;
   gap: 0.4rem;
   font-size: 0.82rem;
   color: #d1d5db;
   cursor: pointer;
+}
+
+.layer-toggle-option.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 /* Header: horizon (left), play/pause (vertically+horizontally centered),

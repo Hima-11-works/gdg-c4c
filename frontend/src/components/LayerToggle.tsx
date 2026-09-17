@@ -27,7 +27,20 @@ export function LayerToggle() {
         ))}
       </div>
 
-      <label className="layer-toggle-pdi" title={PDI_TOOLTIP}>
+      <label
+        className={`layer-toggle-option ${state.viewMode === 'smooth' ? 'disabled' : ''}`}
+        title="Draw a border on the boundary between PM2.5 ranges (hex view)"
+      >
+        <input
+          type="checkbox"
+          checked={state.contrast}
+          disabled={state.viewMode === 'smooth'}
+          onChange={() => dispatch({ type: 'TOGGLE_CONTRAST' })}
+        />
+        Contrast ranges
+      </label>
+
+      <label className="layer-toggle-option" title={PDI_TOOLTIP}>
         <input
           type="checkbox"
           checked={state.showPdi}

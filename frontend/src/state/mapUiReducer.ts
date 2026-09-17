@@ -22,6 +22,9 @@ export interface MapUiState {
   forecastMinutes: number
   /** Hexagon cells vs. smooth raster rendering of the same field. */
   viewMode: MapViewMode
+  /** Contrast mode: draw a border on the boundary between PM2.5 bands so
+   *  same-range regions read as separated blocks (hex view only). */
+  contrast: boolean
   /** A location the map should fly to, set by the search bar. A fresh
    *  object every dispatch (never mutated) so MapView's effect fires even
    *  when the same place is picked twice. */
@@ -47,6 +50,7 @@ export interface MapUiState {
 export type MapUiAction =
   | { type: 'SELECT_FORECAST'; minutes: number }
   | { type: 'SET_VIEW_MODE'; mode: MapViewMode }
+  | { type: 'TOGGLE_CONTRAST' }
   | { type: 'FOCUS_LOCATION'; latitude: number; longitude: number; zoom: number }
   | { type: 'TOGGLE_PDI' }
   | { type: 'SELECT_CELL'; cell: string | null; resolution?: number }
@@ -58,6 +62,7 @@ export type MapUiAction =
 export const initialMapUiState: MapUiState = {
   forecastMinutes: 0,
   viewMode: 'hex',
+  contrast: false,
   focus: null,
   showPdi: false,
   selectedCell: null,
@@ -72,6 +77,8 @@ export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState
       return { ...state, forecastMinutes: action.minutes }
     case 'SET_VIEW_MODE':
       return { ...state, viewMode: action.mode }
+    case 'TOGGLE_CONTRAST':
+      return { ...state, contrast: !state.contrast }
     case 'FOCUS_LOCATION':
       // Always a fresh object, so re-selecting the same place re-flies.
       return {

@@ -18,15 +18,19 @@ import {
   windToFeatureCollection,
 } from '../lib/h3Geometry'
 import { renderSmoothField } from '../lib/smoothField'
+import { buildRangeContours } from '../lib/pm25Contours'
 import { INDIA_BBOX, lodBbox, MAX_ZOOM, PDI_MIN_ZOOM } from '../lib/lod'
 import { INDIA_OUTLINE_URL, STATE_BOUNDARIES_URL } from '../lib/stateBoundaries'
 import { BASE_STYLE_URL, OVERLAY, WIND, BASEMAP, patchBasemapStyle } from '../lib/mapTheme'
 import {
   CELL_BORDER_COLOR,
   CELL_BORDER_WIDTH,
-  PM25_DISSOLVE_DURATION_MS,
+  CONTRAST_LINE_COLOR,
+  CONTRAST_LINE_OPACITY,
+  CONTRAST_LINE_WIDTH,
   LAYER_CROSSFADE_DURATION_MS,
   PDI_FILL_OPACITY,
+  PM25_DISSOLVE_DURATION_MS,
   PM25_FILL_OPACITY,
   prefersReducedMotion,
   SELECTED_CELL_BORDER_COLOR,
@@ -100,6 +104,17 @@ const LAYER_PM25_RASTER: Record<Pm25Set, string> = {
   b: 'cells-pm25-raster-fill-b',
 }
 
+// Contrast-mode range contours — double-buffered like the fills so they
+// dissolve in step with the frame they describe.
+const SOURCE_PM25_CONTOUR: Record<Pm25Set, string> = {
+  a: 'cells-pm25-contour-a',
+  b: 'cells-pm25-contour-b',
+}
+const LAYER_PM25_CONTOUR: Record<Pm25Set, string> = {
+  a: 'cells-pm25-contour-line-a',
+  b: 'cells-pm25-contour-line-b',
+}
+
 // 1x1 transparent PNG — the image sources start empty; the first smooth frame
 // replaces it via updateImage.
 const TRANSPARENT_PIXEL =
@@ -124,14 +139,20 @@ interface Pm25PaintLayer {
   base: number
 }
 
-function pm25PaintLayers(viewMode: MapViewMode, set: Pm25Set): Pm25PaintLayer[] {
+function pm25PaintLayers(viewMode: MapViewMode, contrast: boolean, set: Pm25Set): Pm25PaintLayer[] {
   if (viewMode === 'smooth') {
     return [{ layer: LAYER_PM25_RASTER[set], property: 'raster-opacity', base: PM25_FILL_OPACITY }]
   }
-  return [
+  const layers: Pm25PaintLayer[] = [
     { layer: LAYER_PM25_FILL[set], property: 'fill-opacity', base: PM25_FILL_OPACITY },
     { layer: LAYER_PM25_OUTLINE[set], property: 'line-opacity', base: 1 },
   ]
+  // Contrast mode adds the range-boundary contour as part of this set, so it
+  // dissolves with the fills rather than popping between frames.
+  if (contrast) {
+    layers.push({ layer: LAYER_PM25_CONTOUR[set], property: 'line-opacity', base: CONTRAST_LINE_OPACITY })
+  }
+  return layers
 }
 
 const SOURCE_PDI = 'cells-pdi'
@@ -577,6 +598,22 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
             })
           }
 
+          // Contrast-mode contours: boundaries between PM2.5 bands, drawn
+          // above the fills. Same double buffer as the fills.
+          for (const set of PM25_SETS) {
+            map!.addSource(SOURCE_PM25_CONTOUR[set], { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+            map!.addLayer({
+              id: LAYER_PM25_CONTOUR[set],
+              type: 'line',
+              source: SOURCE_PM25_CONTOUR[set],
+              paint: {
+                'line-color': CONTRAST_LINE_COLOR,
+                'line-width': CONTRAST_LINE_WIDTH,
+                'line-opacity': 0,
+              },
+            })
+          }
+
           // PDI — state-tier-and-finer, hidden below PDI_MIN_ZOOM. Starts
           // fully transparent; the toggle effect drives its opacity.
           map!.addSource(SOURCE_PDI, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
@@ -764,8 +801,8 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
 
     // Fade whichever PM2.5 layers the active view uses (hex fill+outline or
     // the smooth raster) — plus force the inactive set to 0 — against PDI.
-    const shownLayers = pm25PaintLayers(state.viewMode, shown)
-    const hiddenLayers = pm25PaintLayers(state.viewMode, hidden)
+    const shownLayers = pm25PaintLayers(state.viewMode, state.contrast, shown)
+    const hiddenLayers = pm25PaintLayers(state.viewMode, state.contrast, hidden)
 
     const steps: PaintStep[] = state.showPdi
       ? [
@@ -793,14 +830,14 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
     } else {
       run()
     }
-    // viewMode included so the effect is re-created when the active view's
-    // layers change; the showPdi guard above makes that a no-op unless PDI
-    // actually toggled.
-  }, [mapReady, state.showPdi, state.viewMode])
+    // viewMode/contrast included so the effect is re-created when the active
+    // view's layers change; the showPdi guard above makes that a no-op unless
+    // PDI actually toggled.
+  }, [mapReady, state.showPdi, state.viewMode, state.contrast])
 
-  // Switching between the hex and smooth views resets the double buffer to a
-  // known state (set 'a' shown, 'b' hidden, buffer roles reset) so the frame
-  // effect below repaints the current data into the newly-active layers.
+  // Switching the render mode (or toggling contrast) resets the double buffer
+  // to a known state (set 'a' shown, 'b' hidden, buffer roles reset) so the
+  // frame effect below repaints the current data into the active layers.
   useEffect(() => {
     if (!mapReady || !mapRef.current) return
     const map = mapRef.current
@@ -822,10 +859,13 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
       map.setPaintProperty(LAYER_PM25_FILL[set], 'fill-opacity', showHex && on ? PM25_FILL_OPACITY : 0)
       map.setPaintProperty(LAYER_PM25_OUTLINE[set], 'line-opacity', showHex && on ? 1 : 0)
       map.setPaintProperty(LAYER_PM25_RASTER[set], 'raster-opacity', !showHex && on ? PM25_FILL_OPACITY : 0)
+      map.setPaintProperty(
+        LAYER_PM25_CONTOUR[set],
+        'line-opacity',
+        showHex && state.contrast && on ? CONTRAST_LINE_OPACITY : 0,
+      )
     }
-    // The frame effect keys off viewMode and paintedDataRef; resetting the
-    // ref is not a dep, so nudge it by depending on viewMode alone.
-  }, [mapReady, state.viewMode])
+  }, [mapReady, state.viewMode, state.contrast])
 
   // PM2.5 frames — double-buffered dissolve (see the PM25_SETS comment).
   //
@@ -880,6 +920,7 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
     animationFinishRef.current = null
 
     const viewMode = state.viewMode
+    const contrast = state.contrast
     const from = visibleSetRef.current
     const to = otherSet(from)
 
@@ -905,6 +946,19 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
         const image = renderSmoothField(points, bbox, PM25_COLOR_SCALE, hexEdgeKm(state.lod.resolution))
         rasterSource.updateImage({ image, coordinates: imageCoords(bbox) })
       }
+
+      // Range contours (contrast mode) are only meaningful for the hex view.
+      if (viewMode === 'hex' && contrast) {
+        const contourSource = map.getSource(SOURCE_PM25_CONTOUR[set])
+        if (contourSource instanceof GeoJSONSource) {
+          const contours = buildRangeContours(cellValues, PM25_COLOR_SCALE)
+          contourSource.setData(
+            contours
+              ? { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: contours }] }
+              : EMPTY_FEATURE_COLLECTION,
+          )
+        }
+      }
       return true
     }
 
@@ -915,7 +969,7 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
       if (!writeFrame(from)) return
       if (!hasPainted) {
         const full = !state.showPdi
-        for (const layer of pm25PaintLayers(viewMode, from)) {
+        for (const layer of pm25PaintLayers(viewMode, contrast, from)) {
           map.setPaintProperty(layer.layer, layer.property, full ? layer.base : 0)
         }
       }
@@ -925,8 +979,8 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
       if (!writeFrame(to)) return
       animationFinishRef.current = animatePm25Dissolve(
         map,
-        pm25PaintLayers(viewMode, from),
-        pm25PaintLayers(viewMode, to),
+        pm25PaintLayers(viewMode, contrast, from),
+        pm25PaintLayers(viewMode, contrast, to),
         to === 'b',
         PM25_DISSOLVE_DURATION_MS,
         () => {
@@ -942,8 +996,8 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
         pendingDissolveRef.current = null
         animationFinishRef.current = animatePm25Dissolve(
           map,
-          pm25PaintLayers(viewMode, from),
-          pm25PaintLayers(viewMode, to),
+          pm25PaintLayers(viewMode, contrast, from),
+          pm25PaintLayers(viewMode, contrast, to),
           to === 'b',
           PM25_DISSOLVE_DURATION_MS,
           () => {
@@ -959,6 +1013,7 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
     mapReady,
     state.forecastMinutes,
     state.viewMode,
+    state.contrast,
     state.lod,
     state.bbox,
     currentGrid,
