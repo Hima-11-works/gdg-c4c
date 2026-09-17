@@ -6,9 +6,9 @@ import '../../domain/models/models.dart';
 import '../../providers/home_providers.dart';
 import '../../providers/profile_providers.dart';
 import '../../theme/app_colors.dart';
-import '../../theme/app_radius.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
+import '../../theme/widgets/forecast_chart.dart';
 import '../../theme/widgets/widgets.dart';
 
 /// Home screen — the primary view.
@@ -147,7 +147,7 @@ class HomeScreen extends ConsumerWidget {
                   },
                 ),
 
-                // ── 12-hour forecast ───────────────────────────────
+                // ── 12-hour forecast chart ───────────────────────────
                 const SectionHeader(title: '12-Hour Forecast'),
                 forecast.when(
                   loading: () => const Padding(
@@ -165,17 +165,22 @@ class HomeScreen extends ConsumerWidget {
                   ),
                   data: (points) {
                     if (points.isEmpty) {
-                      return const Padding(
-                        padding: EdgeInsets.symmetric(
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(
                           horizontal: AppSpacing.xl,
                         ),
-                        child: Text(
-                          'No forecast data available for this location.',
-                          style: AppTypography.bodyMedium,
+                        child: ForecastChart(
+                          currentAqi: reading.aqiCpcb,
+                          forecast: const [],
                         ),
                       );
                     }
-                    return _ForecastList(points: points);
+                    final evts = events.valueOrNull ?? const [];
+                    return ForecastChart(
+                      currentAqi: reading.aqiCpcb,
+                      forecast: points,
+                      event: evts.isNotEmpty ? evts.first : null,
+                    );
                   },
                 ),
 
@@ -212,82 +217,6 @@ class HomeScreen extends ConsumerWidget {
             ),
           );
         },
-      ),
-    );
-  }
-}
-
-// ── Forecast list ──────────────────────────────────────────────────────
-
-class _ForecastList extends StatelessWidget {
-  const _ForecastList({required this.points});
-
-  final List<ForecastPoint> points;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 120,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
-        itemCount: points.length,
-        separatorBuilder: (_, _) => const SizedBox(width: AppSpacing.sm),
-        itemBuilder: (_, i) => _ForecastChip(point: points[i]),
-      ),
-    );
-  }
-}
-
-class _ForecastChip extends StatelessWidget {
-  const _ForecastChip({required this.point});
-
-  final ForecastPoint point;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = AppColors.forCategory(point.category);
-    final hourLabel = '+${point.at.difference(DateTime.now()).inHours}h';
-
-    return Semantics(
-      label: '$hourLabel: AQI ${point.aqiCpcb}, ${point.category.label}',
-      child: Container(
-        width: 72,
-        padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.md,
-          vertical: AppSpacing.md,
-        ),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.08),
-          borderRadius: AppRadius.mdAll,
-          border: Border.all(color: color.withValues(alpha: 0.20)),
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              hourLabel,
-              style: AppTypography.labelSmall.copyWith(
-                color: AppColors.onSurfaceMuted,
-              ),
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            Text(
-              '${point.aqiCpcb}',
-              style: AppTypography.headlineSmall.copyWith(color: color),
-            ),
-            const SizedBox(height: AppSpacing.xs),
-            Text(
-              point.category.label,
-              style: AppTypography.labelSmall.copyWith(
-                color: AppColors.onSurfaceMuted,
-              ),
-              textAlign: TextAlign.center,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
-        ),
       ),
     );
   }
