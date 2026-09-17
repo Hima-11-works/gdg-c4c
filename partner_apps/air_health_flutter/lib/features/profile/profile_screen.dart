@@ -176,11 +176,11 @@ class ProfileScreen extends ConsumerWidget {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      builder: (_) => _SensitivityPicker(
+      builder: (BuildContext sheetContext) => _SensitivityPicker(
         current: profile.sensitivity,
         onSelected: (s) {
           ref.read(userProfileProvider.notifier).updateFields(sensitivity: s);
-          Navigator.pop(context);
+          Navigator.pop(sheetContext);
         },
       ),
     );
@@ -197,11 +197,11 @@ class ProfileScreen extends ConsumerWidget {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      builder: (_) => _HealthContextPicker(
+      builder: (BuildContext sheetContext) => _HealthContextPicker(
         current: profile.healthContext,
         onSelected: (h) {
           ref.read(userProfileProvider.notifier).updateFields(healthContext: h);
-          Navigator.pop(context);
+          Navigator.pop(sheetContext);
         },
       ),
     );
@@ -220,7 +220,7 @@ class ProfileScreen extends ConsumerWidget {
   void _showPrivacyInfo(BuildContext context) {
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (BuildContext dialogContext) => AlertDialog(
         title: const Text('Data & Privacy'),
         content: const Text(
           'Your health profile and alert preferences are stored '
@@ -231,7 +231,7 @@ class ProfileScreen extends ConsumerWidget {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(dialogContext),
             child: const Text('OK'),
           ),
         ],
@@ -244,7 +244,7 @@ class ProfileScreen extends ConsumerWidget {
   void _confirmDeleteProfile(BuildContext context, WidgetRef ref) {
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (BuildContext dialogContext) => AlertDialog(
         title: const Text('Delete health profile?'),
         content: const Text(
           'This removes your health context and sensitivity '
@@ -252,13 +252,13 @@ class ProfileScreen extends ConsumerWidget {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(dialogContext),
             child: const Text('Cancel'),
           ),
           TextButton(
             onPressed: () {
               ref.read(userProfileProvider.notifier).deleteProfile();
-              Navigator.pop(context);
+              Navigator.pop(dialogContext);
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('Health profile deleted')),
               );
@@ -275,7 +275,7 @@ class ProfileScreen extends ConsumerWidget {
   void _confirmReset(BuildContext context, WidgetRef ref) {
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (BuildContext dialogContext) => AlertDialog(
         title: const Text('Reset app?'),
         content: const Text(
           'This clears all data and settings, including your '
@@ -284,7 +284,7 @@ class ProfileScreen extends ConsumerWidget {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(dialogContext),
             child: const Text('Cancel'),
           ),
           TextButton(
@@ -292,7 +292,7 @@ class ProfileScreen extends ConsumerWidget {
               await ref.read(prefsStoreProvider).resetAll();
               await ref.read(userProfileProvider.notifier).resetProfile();
               if (context.mounted) {
-                Navigator.pop(context);
+                Navigator.pop(dialogContext);
                 context.go('/onboarding');
               }
             },
@@ -308,7 +308,7 @@ class ProfileScreen extends ConsumerWidget {
   void _showAbout(BuildContext context) {
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (BuildContext dialogContext) => AlertDialog(
         title: const Text('About Air Health'),
         content: const Text(
           'Personal air-quality awareness app.\n\n'
@@ -320,7 +320,7 @@ class ProfileScreen extends ConsumerWidget {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(dialogContext),
             child: const Text('OK'),
           ),
         ],
