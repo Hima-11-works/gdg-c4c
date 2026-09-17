@@ -40,12 +40,7 @@ GoRouter createRouter(ProviderContainer container) {
     routes: [
       GoRoute(
         path: '/onboarding',
-        builder: (context, state) => Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 430),
-            child: const OnboardingScreen(),
-          ),
-        ),
+        builder: (context, state) => const OnboardingScreen(),
       ),
       StatefulShellRoute.indexedStack(
         builder: (context, state, shell) => ScaffoldWithNav(shell: shell),
@@ -90,8 +85,6 @@ GoRouter createRouter(ProviderContainer container) {
 }
 
 /// Shell scaffold with a bottom navigation bar.
-/// Wrapped in Center + ConstrainedBox so the UI looks like a mobile app
-/// even when run on Flutter Web desktop.
 class ScaffoldWithNav extends StatelessWidget {
   const ScaffoldWithNav({super.key, required this.shell});
 
@@ -99,39 +92,34 @@ class ScaffoldWithNav extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 430),
-        child: Scaffold(
-          body: shell,
-          bottomNavigationBar: NavigationBar(
-            selectedIndex: shell.currentIndex,
-            onDestinationSelected: (index) =>
-                shell.goBranch(index, initialLocation: index == shell.currentIndex),
-            destinations: const [
-              NavigationDestination(
-                icon: Icon(Icons.home_outlined),
-                selectedIcon: Icon(Icons.home),
-                label: 'Home',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.location_on_outlined),
-                selectedIcon: Icon(Icons.location_on),
-                label: 'Nearby',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.notifications_outlined),
-                selectedIcon: Icon(Icons.notifications),
-                label: 'Alerts',
-              ),
-              NavigationDestination(
-                icon: Icon(Icons.person_outline),
-                selectedIcon: Icon(Icons.person),
-                label: 'Profile',
-              ),
-            ],
+    return Scaffold(
+      body: shell,
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: shell.currentIndex,
+        onDestinationSelected: (index) =>
+            shell.goBranch(index, initialLocation: index == shell.currentIndex),
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.home_outlined),
+            selectedIcon: Icon(Icons.home),
+            label: 'Home',
           ),
-        ),
+          NavigationDestination(
+            icon: Icon(Icons.location_on_outlined),
+            selectedIcon: Icon(Icons.location_on),
+            label: 'Nearby',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.notifications_outlined),
+            selectedIcon: Icon(Icons.notifications),
+            label: 'Alerts',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.person_outline),
+            selectedIcon: Icon(Icons.person),
+            label: 'Profile',
+          ),
+        ],
       ),
     );
   }
