@@ -3,44 +3,34 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/formatters.dart';
 import '../domain/models/models.dart';
 import 'data_providers.dart';
+import 'location_providers.dart';
 
-// ── Location ───────────────────────────────────────────────────────────
-
-/// The user's current location — hardcoded for the dummy provider.
-/// Will be replaced by a real geolocation provider later.
-const _defaultLocation = LocationPoint(
-  latitude: 20.2961,
-  longitude: 85.8245,
-  label: 'Bhubaneswar',
-);
-
-final currentLocationProvider = Provider<LocationPoint>((ref) {
-  return _defaultLocation;
-});
+// Re-export so existing consumers don't break.
+export 'location_providers.dart' show currentLocationProvider, resolvedLocationProvider;
 
 // ── Air quality ────────────────────────────────────────────────────────
 
-final currentAirQualityProvider = FutureProvider<AirQualityReading>((ref) {
+final currentAirQualityProvider = FutureProvider<AirQualityReading>((ref) async {
   final provider = ref.read(pollutionDataProvider);
-  final location = ref.read(currentLocationProvider);
+  final location = await ref.watch(currentLocationProvider.future);
   return provider.getCurrentAirQuality(location);
 });
 
-final forecastProvider = FutureProvider<List<ForecastPoint>>((ref) {
+final forecastProvider = FutureProvider<List<ForecastPoint>>((ref) async {
   final provider = ref.read(pollutionDataProvider);
-  final location = ref.read(currentLocationProvider);
+  final location = await ref.watch(currentLocationProvider.future);
   return provider.getForecast(location, const Duration(hours: 12));
 });
 
-final nearbyAreasProvider = FutureProvider<List<NearbyArea>>((ref) {
+final nearbyAreasProvider = FutureProvider<List<NearbyArea>>((ref) async {
   final provider = ref.read(pollutionDataProvider);
-  final location = ref.read(currentLocationProvider);
+  final location = await ref.watch(currentLocationProvider.future);
   return provider.getNearbyAreas(location);
 });
 
-final pollutionEventsProvider = FutureProvider<List<PollutionEvent>>((ref) {
+final pollutionEventsProvider = FutureProvider<List<PollutionEvent>>((ref) async {
   final provider = ref.read(pollutionDataProvider);
-  final location = ref.read(currentLocationProvider);
+  final location = await ref.watch(currentLocationProvider.future);
   return provider.getPollutionEvents(location);
 });
 

@@ -28,7 +28,7 @@ class HomeScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final location = ref.watch(currentLocationProvider);
+    final location = ref.watch(resolvedLocationProvider);
     final airQuality = ref.watch(currentAirQualityProvider);
     final forecast = ref.watch(forecastProvider);
     final events = ref.watch(pollutionEventsProvider);
