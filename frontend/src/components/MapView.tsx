@@ -16,16 +16,15 @@ import {
   windToFeatureCollection,
 } from '../lib/h3Geometry'
 import { INDIA_BBOX, PDI_MIN_ZOOM } from '../lib/lod'
-import { INDIA_OUTLINE_URL, INDIA_MASK_URL, STATE_BOUNDARIES_URL } from '../lib/stateBoundaries'
+import { INDIA_OUTLINE_URL, STATE_BOUNDARIES_URL } from '../lib/stateBoundaries'
 import { BASE_STYLE_URL, OVERLAY, WIND, BASEMAP, patchBasemapStyle } from '../lib/mapTheme'
 import {
   CELL_BORDER_COLOR,
   CELL_BORDER_WIDTH,
-  INDIA_MASK_OPACITY,
+  PM25_DISSOLVE_DURATION_MS,
   LAYER_CROSSFADE_DURATION_MS,
   PDI_FILL_OPACITY,
   PM25_FILL_OPACITY,
-  PM25_DISSOLVE_DURATION_MS,
   prefersReducedMotion,
   SELECTED_CELL_BORDER_COLOR,
   SELECTED_CELL_BORDER_WIDTH,
@@ -94,16 +93,22 @@ const LAYER_INDIA_OUTLINE_FILL = 'india-outline-fill'
 const LAYER_INDIA_OUTLINE_LINE = 'india-outline-line'
 const SOURCE_WIND = 'wind-points'
 const LAYER_WIND = 'wind-arrows'
-const WIND_ARROW_IMAGE = 'wind-arrow'
+
+// Wind currents are drawn as a symbol layer whose icon cycles through a few
+// pre-rendered frames of a "streak": a short line pointing downwind with a
+// bright pulse that travels from tail to head. Cycling the frames on a timer
+// makes the streaks flow — the animated-current look — and it's just one
+// layout-property swap per animation frame over ~100 thinned symbols.
+const WIND_STREAK_FRAME_COUNT = 8
+const WIND_STREAK_FRAME_MS = 110
+const WIND_STREAK_IMAGE_PREFIX = 'wind-streak'
+const windStreakImageName = (frame: number): string => `${WIND_STREAK_IMAGE_PREFIX}-${frame}`
+const WIND_STREAK_IMAGES = Array.from({ length: WIND_STREAK_FRAME_COUNT }, (_, i) =>
+  windStreakImageName(i),
+)
 
 const SOURCE_SELECTED = 'selected-cell'
 const LAYER_SELECTED_OUTLINE = 'selected-cell-outline'
-
-// Covers everything beyond India's border + a short buffer, so the H3 grid
-// (generated for a rectangular bbox/viewport) only shows over India and a
-// little outside it. Precomputed — see public/data/india_mask.geojson.
-const SOURCE_INDIA_MASK = 'india-mask'
-const LAYER_INDIA_MASK = 'india-mask-fill'
 
 // Wind arrows are supplementary/decorative ("generalized meteorological
 // information"), not the primary data layer the way the PM2.5/PDI cells
@@ -138,29 +143,48 @@ function thinBySpatialGrid<T extends { latitude: number; longitude: number }>(
   return kept
 }
 
-/** A north-pointing arrow drawn on a canvas; the layer rotates it to the
- * downwind bearing. Subdued neutral colors for dark basemap. */
-function windArrowImage(): ImageData {
+/** One frame of the wind-streak icon, north-up: a dim line along the wind
+ * with a bright pulse at position `frame / WIND_STREAK_FRAME_COUNT`, so
+ * cycling the frames animates a pulse flowing from tail to head. */
+function windStreakFrame(frame: number): ImageData {
   const size = 32
   const canvas = document.createElement('canvas')
   canvas.width = size
   canvas.height = size
   const ctx = canvas.getContext('2d')!
-  ctx.beginPath()
-  ctx.moveTo(16, 2)
-  ctx.lineTo(27, 16)
-  ctx.lineTo(20, 16)
-  ctx.lineTo(20, 30)
-  ctx.lineTo(12, 30)
-  ctx.lineTo(12, 16)
-  ctx.lineTo(5, 16)
-  ctx.closePath()
-  ctx.lineJoin = 'round'
+  const x = size / 2
+  const headY = 4
+  const tailY = 28
+  const span = tailY - headY
+  ctx.lineCap = 'round'
+
+  // Dim base so each sample still reads as a current between pulses.
+  ctx.globalAlpha = 0.35
+  ctx.strokeStyle = WIND.arrowColor
   ctx.lineWidth = 2
-  ctx.strokeStyle = WIND.arrowStroke
+  ctx.beginPath()
+  ctx.moveTo(x, tailY)
+  ctx.lineTo(x, headY)
   ctx.stroke()
-  ctx.fillStyle = WIND.arrowColor
-  ctx.fill()
+  ctx.globalAlpha = 1
+
+  // Travelling pulse: a gradient segment, transparent at its tail and bright
+  // at its head, whose position sweeps from the tail (frame 0) to past the
+  // head (last frame), then wraps — the repeating flow.
+  const t = frame / WIND_STREAK_FRAME_COUNT
+  const pulseLen = span * 0.6
+  const headPos = tailY - span * (t * 1.2)
+  const tailPos = headPos + pulseLen
+  const gradient = ctx.createLinearGradient(0, tailPos, 0, headPos)
+  gradient.addColorStop(0, 'rgba(229, 231, 235, 0)')
+  gradient.addColorStop(1, WIND.pulse)
+  ctx.strokeStyle = gradient
+  ctx.lineWidth = 2.4
+  ctx.beginPath()
+  ctx.moveTo(x, tailPos)
+  ctx.lineTo(x, headPos)
+  ctx.stroke()
+
   return ctx.getImageData(0, 0, size, size)
 }
 
@@ -546,35 +570,23 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
             },
           })
 
-          // Wind arrows — subdued gray, never dominant.
+          // Wind currents — animated streaks, subdued gray, never dominant.
           map!.addSource(SOURCE_WIND, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
-          map!.addImage(WIND_ARROW_IMAGE, windArrowImage())
+          for (let frame = 0; frame < WIND_STREAK_FRAME_COUNT; frame++) {
+            map!.addImage(windStreakImageName(frame), windStreakFrame(frame))
+          }
           map!.addLayer({
             id: LAYER_WIND,
             type: 'symbol',
             source: SOURCE_WIND,
             layout: {
-              'icon-image': WIND_ARROW_IMAGE,
+              'icon-image': WIND_STREAK_IMAGES[0],
               'icon-rotate': ['get', 'rotation'],
               'icon-rotation-alignment': 'map',
               'icon-allow-overlap': true,
               'icon-ignore-placement': true,
               'icon-size': ['interpolate', ['linear'], ['get', 'wind_speed'], 0, 0.5, 15, 1.1],
             },
-          })
-
-          // Mask — hides everything beyond India's border plus a ~30 km
-          // buffer, so the H3 grid (generated for a rectangular bbox or the
-          // viewport) only appears over India and a little outside it. Added
-          // last, so it sits above the data and wind layers; its hole is
-          // larger than India, so the state borders, outer boundary and
-          // selected-cell highlight are never covered.
-          map!.addSource(SOURCE_INDIA_MASK, { type: 'geojson', data: INDIA_MASK_URL })
-          map!.addLayer({
-            id: LAYER_INDIA_MASK,
-            type: 'fill',
-            source: SOURCE_INDIA_MASK,
-            paint: { 'fill-color': OVERLAY.maskFill, 'fill-opacity': INDIA_MASK_OPACITY },
           })
 
           const clickableLayers = [LAYER_PM25_FILL.a, LAYER_PM25_FILL.b, LAYER_PDI_FILL]
@@ -808,10 +820,10 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
     paintedDataRef.current = cellsData
   }, [mapReady, state.forecastMinutes, currentGrid, forecastGrid, state.showPdi, reducedMotion])
 
-  // Wind arrows — thinned to at most one per cell of a fixed-size grid
+  // Wind currents — thinned to at most one per cell of a fixed-size grid
   // over the current viewport (see thinBySpatialGrid), so "generalized
   // meteorological information" at the country tier reads as a sparse,
-  // legible set of arrows rather than one per fetched point.
+  // legible set of streaks rather than one per fetched point.
   useEffect(() => {
     if (!mapReady || !mapRef.current) return
     if (weather.status !== 'success') return
@@ -827,6 +839,35 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
     const source = mapRef.current.getSource(SOURCE_WIND)
     if (source instanceof GeoJSONSource) source.setData(windToFeatureCollection(thinned))
   }, [mapReady, weather, state.lod, state.bbox])
+
+  // Animate the wind currents by cycling the streak icon frames. Only swaps
+  // the layer's `icon-image` (a layout property) when the frame index
+  // actually changes, and only while the tab is visible. Static under
+  // prefers-reduced-motion.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    const map = mapRef.current
+
+    if (reducedMotion) {
+      map.setLayoutProperty(LAYER_WIND, 'icon-image', WIND_STREAK_IMAGES[0])
+      return
+    }
+
+    let raf = 0
+    let lastFrame = -1
+    const tick = (now: number) => {
+      if (document.visibilityState === 'visible') {
+        const frame = Math.floor(now / WIND_STREAK_FRAME_MS) % WIND_STREAK_FRAME_COUNT
+        if (frame !== lastFrame) {
+          lastFrame = frame
+          map.setLayoutProperty(LAYER_WIND, 'icon-image', WIND_STREAK_IMAGES[frame])
+        }
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [mapReady, reducedMotion])
 
   return <div ref={containerRef} className="map-canvas" />
 }
