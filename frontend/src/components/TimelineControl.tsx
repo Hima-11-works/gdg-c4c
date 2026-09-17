@@ -152,41 +152,47 @@ export function TimelineControl() {
     warmForecastWindow(queryKey, query, 0)
   }, [dispatch, queryKey, query])
 
-  // --- pointer interaction ---
+  // --- pointer interaction (draggable slider) ---
 
-  const commitPct = useCallback(
-    (pct: number) => {
-      const next = pctToMinutes(pct)
-      if (next !== forecastMinutes) {
-        selectManually(next)
-      }
-    },
-    [forecastMinutes, selectManually],
-  )
+  // The commit handler is kept in a ref so the pointer handlers never close
+  // over a stale forecastMinutes (they're attached for the whole drag).
+  const commitRef = useRef<(minutes: number) => void>(() => {})
+  useEffect(() => {
+    commitRef.current = (minutes: number) => {
+      if (minutes !== positionRef.current) selectManually(minutes)
+    }
+  })
 
-  const handlePointerDown = useCallback(
-    (e: React.PointerEvent<HTMLDivElement>) => {
-      const track = trackRef.current
-      if (!track) return
-      track.setPointerCapture(e.pointerId)
+  const draggingRef = useRef(false)
 
-      const pctFromEvent = (ev: { clientX: number }) => {
-        const rect = track.getBoundingClientRect()
-        return Math.max(0, Math.min(100, ((ev.clientX - rect.left) / rect.width) * 100))
-      }
+  const commitFromClientX = (clientX: number) => {
+    const track = trackRef.current
+    if (!track) return
+    const rect = track.getBoundingClientRect()
+    const pct = Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100))
+    commitRef.current(pctToMinutes(pct))
+  }
 
-      commitPct(pctFromEvent(e))
+  const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    draggingRef.current = true
+    e.currentTarget.setPointerCapture(e.pointerId)
+    commitFromClientX(e.clientX)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
-      const onMove = (ev: PointerEvent) => commitPct(pctFromEvent(ev))
-      const onUp = () => {
-        track.removeEventListener('pointermove', onMove)
-        track.removeEventListener('pointerup', onUp)
-      }
-      track.addEventListener('pointermove', onMove)
-      track.addEventListener('pointerup', onUp)
-    },
-    [commitPct],
-  )
+  const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!draggingRef.current) return
+    commitFromClientX(e.clientX)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const handlePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!draggingRef.current) return
+    draggingRef.current = false
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    }
+  }, [])
 
   // --- keyboard ---
 
@@ -227,40 +233,58 @@ export function TimelineControl() {
 
   return (
     <div className="panel timeline-control" role="group" aria-label="Forecast timeline">
-      {/* Playback controls + horizon display */}
+      {/* Header: horizon on the left, play/pause centered, reset on the right */}
       <div className="timeline-header">
-        <div className="timeline-buttons">
-          <button
-            type="button"
-            className="timeline-btn"
-            onClick={handleRestart}
-            disabled={warming}
-            aria-label="Restart timeline to Now"
-            title={warming ? 'Caching frames…' : 'Restart'}
-          >
-            ↺
-          </button>
-          <button
-            type="button"
-            className="timeline-btn timeline-btn-play"
-            onClick={handlePlayPause}
-            disabled={warming}
-            aria-label={
-              warming
-                ? 'Playback disabled while frames are cached'
-                : playing
-                  ? 'Pause playback'
-                  : 'Play forecast animation'
-            }
-            aria-pressed={playing}
-            title={warming ? 'Caching frames…' : playing ? 'Pause' : 'Play'}
-          >
-            {playing ? '❚❚' : '▶'}
-          </button>
-        </div>
         <div className="timeline-horizon" aria-live="polite" aria-atomic="true">
           {formatHorizon(forecastMinutes)}
         </div>
+
+        <button
+          type="button"
+          className="timeline-playbtn"
+          onClick={handlePlayPause}
+          disabled={warming}
+          aria-label={
+            warming
+              ? 'Playback disabled while frames are cached'
+              : playing
+                ? 'Pause playback'
+                : 'Play forecast animation'
+          }
+          aria-pressed={playing}
+          title={warming ? 'Caching frames…' : playing ? 'Pause' : 'Play'}
+        >
+          {playing ? (
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor" />
+              <rect x="14" y="5" width="4" height="14" rx="1" fill="currentColor" />
+            </svg>
+          ) : (
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8 5.5v13l11-6.5z" fill="currentColor" />
+            </svg>
+          )}
+        </button>
+
+        <button
+          type="button"
+          className="timeline-resetbtn"
+          onClick={handleRestart}
+          disabled={warming}
+          aria-label="Restart timeline to Now"
+          title={warming ? 'Caching frames…' : 'Restart'}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M12 5a7 7 0 1 1-6.3 3.9"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+            />
+            <path d="M5 3v4h4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
       </div>
 
       {/* Major tick labels (every 1h) */}
@@ -279,7 +303,7 @@ export function TimelineControl() {
         ))}
       </div>
 
-      {/* Slider track */}
+      {/* Draggable slider */}
       <div
         ref={trackRef}
         className="timeline-track"
@@ -292,10 +316,18 @@ export function TimelineControl() {
         aria-valuetext={formatHorizon(forecastMinutes)}
         aria-keyshortcuts="ArrowLeft ArrowRight Home End"
         onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        onLostPointerCapture={() => {
+          draggingRef.current = false
+        }}
         onKeyDown={handleKeyDown}
       >
-        {/* Filled portion */}
-        <div className="timeline-track-fill" style={{ width: `${currentPct}%` }} />
+        <div className="timeline-track-rail">
+          <div className="timeline-track-fill" style={{ width: `${currentPct}%` }} />
+        </div>
+
         {/* Minor ticks (every 15 min) */}
         {KEYFRAMES.map((m) => (
           <div
@@ -304,7 +336,8 @@ export function TimelineControl() {
             style={{ left: `${minutesToPct(m)}%` }}
           />
         ))}
-        {/* Handle */}
+
+        {/* Draggable handle */}
         <div className="timeline-handle" style={{ left: `${currentPct}%` }} />
       </div>
     </div>
