@@ -288,7 +288,7 @@ class _DetailGrid extends StatelessWidget {
           if (record.predictedAqi != null)
             _detailRow('Expected AQI', '${record.predictedAqi}'),
           if (record.leadTime != null)
-            _detailRow('Arriving in', _formatLead(record.leadTime!)),
+            _detailRow('Arriving in', Formatters.leadTime(record.leadTime!)),
           _detailRow('Confidence', '${(record.confidence * 100).round()}%'),
           _detailRow('Reason', _triggerLabel(record.trigger)),
         ],
@@ -314,13 +314,6 @@ class _DetailGrid extends StatelessWidget {
         ],
       ),
     );
-  }
-
-  static String _formatLead(Duration d) {
-    if (d.inMinutes < 60) return '${d.inMinutes} minutes';
-    if (d.inMinutes == 60) return '1 hour';
-    if (d.inMinutes % 60 == 0) return '${d.inHours} hours';
-    return '${d.inHours}h ${d.inMinutes % 60}m';
   }
 
   static String _triggerLabel(AlertTrigger t) {

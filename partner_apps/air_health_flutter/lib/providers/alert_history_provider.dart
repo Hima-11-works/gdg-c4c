@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/formatters.dart';
 import '../domain/alert_record.dart';
 import '../domain/models/models.dart';
 import 'alert_providers.dart';
@@ -92,16 +93,15 @@ class AlertHistoryNotifier extends AsyncNotifier<List<AlertRecord>> {
     state = const AsyncData([]);
   }
 
-  /// Build a plain-language explanation for "Why did I receive this?"
   static String _buildExplanation(AlertDecision d) {
     return switch (d.trigger) {
       AlertTrigger.currentThreshold =>
-        'Air quality near you reached ${_catLabel(d.currentAqi)} '
+        'Air quality near you reached ${Formatters.categoryLabel(d.currentAqi)} '
         '(AQI ${d.currentAqi}), which exceeds the alert threshold '
         'for your sensitivity setting.',
       AlertTrigger.forecastThreshold =>
-        'Air quality is expected to reach ${_catLabel(d.predictedAqi ?? d.currentAqi)} '
-        '${d.leadTime != null ? "in approximately ${_formatLead(d.leadTime!)}" : "soon"}. '
+        'Air quality is expected to reach ${Formatters.categoryLabel(d.predictedAqi ?? d.currentAqi)} '
+        '${d.leadTime != null ? "in approximately ${Formatters.leadTime(d.leadTime!)}" : "soon"}. '
         'This triggered an early warning based on your sensitivity setting.',
       AlertTrigger.rapidRise =>
         'Air quality is rising quickly — current AQI ${d.currentAqi} '
@@ -110,29 +110,10 @@ class AlertHistoryNotifier extends AsyncNotifier<List<AlertRecord>> {
       AlertTrigger.approachingPollution =>
         'Pollution from a nearby area (estimated peak AQI '
         '${d.predictedAqi ?? "?"}) is expected to reach your area '
-        '${d.leadTime != null ? "in approximately ${_formatLead(d.leadTime!)}" : "soon"}.',
+        '${d.leadTime != null ? "in approximately ${Formatters.leadTime(d.leadTime!)}" : "soon"}.',
       AlertTrigger.recovery =>
-        'Air quality has improved to ${_catLabel(d.currentAqi)} '
+        'Air quality has improved to ${Formatters.categoryLabel(d.currentAqi)} '
         '(AQI ${d.currentAqi}), below the previous alert threshold.',
     };
-  }
-
-  static String _catLabel(int? aqi) {
-    if (aqi == null) return 'elevated levels';
-    return switch (aqi) {
-      <= 50 => 'Good',
-      <= 100 => 'Satisfactory',
-      <= 200 => 'Moderately Polluted',
-      <= 300 => 'Poor',
-      <= 400 => 'Very Poor',
-      _ => 'Severe',
-    };
-  }
-
-  static String _formatLead(Duration d) {
-    if (d.inMinutes < 60) return '${d.inMinutes} minutes';
-    if (d.inMinutes == 60) return '1 hour';
-    if (d.inMinutes % 60 == 0) return '${d.inHours} hours';
-    return '${d.inHours} hours ${d.inMinutes % 60} minutes';
   }
 }

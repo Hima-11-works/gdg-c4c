@@ -1,3 +1,4 @@
+import '../core/formatters.dart';
 import 'models/models.dart';
 
 /// User-facing alert message — the complete text for a notification
@@ -60,7 +61,7 @@ class AlertMessageService {
     AlertDecision d,
     AlertSensitivity sensitivity,
   ) {
-    final catLabel = _categoryLabelForAqi(d.currentAqi);
+    final catLabel = Formatters.categoryLabel(d.currentAqi);
     final title = 'Air quality: $catLabel';
 
     final body = StringBuffer()
@@ -85,8 +86,8 @@ class AlertMessageService {
     AlertDecision d,
     AlertSensitivity sensitivity,
   ) {
-    final catLabel = _categoryLabelForAqi(d.predictedAqi ?? d.currentAqi);
-    final timeStr = _formatLeadTime(d.leadTime);
+    final catLabel = Formatters.categoryLabel(d.predictedAqi ?? d.currentAqi);
+    final timeStr = Formatters.leadTime(d.leadTime);
     final title = 'Air quality expected to worsen';
 
     final body = StringBuffer()
@@ -112,8 +113,8 @@ class AlertMessageService {
     AlertDecision d,
     AlertSensitivity sensitivity,
   ) {
-    final catLabel = _categoryLabelForAqi(d.predictedAqi ?? d.currentAqi);
-    final timeStr = _formatLeadTime(d.leadTime);
+    final catLabel = Formatters.categoryLabel(d.predictedAqi ?? d.currentAqi);
+    final timeStr = Formatters.leadTime(d.leadTime);
     final title = 'Air quality rising rapidly';
 
     final body = StringBuffer()
@@ -143,7 +144,7 @@ class AlertMessageService {
     AlertDecision d,
     AlertSensitivity sensitivity,
   ) {
-    final timeStr = _formatLeadTime(d.leadTime);
+    final timeStr = Formatters.leadTime(d.leadTime);
     final title = 'Pollution approaching your area';
 
     final body = StringBuffer()
@@ -173,7 +174,7 @@ class AlertMessageService {
     AlertDecision d,
     AlertSensitivity sensitivity,
   ) {
-    final catLabel = _categoryLabelForAqi(d.currentAqi);
+    final catLabel = Formatters.categoryLabel(d.currentAqi);
     final title = 'Air quality improving';
 
     final body =
@@ -225,27 +226,4 @@ class AlertMessageService {
     };
   }
 
-  /// Approximate CPCB category label from an AQI value.
-  static String _categoryLabelForAqi(int? aqi) {
-    if (aqi == null) return 'elevated levels';
-    return switch (aqi) {
-      <= 50 => 'Good',
-      <= 100 => 'Satisfactory',
-      <= 200 => 'Moderately Polluted',
-      <= 300 => 'Poor',
-      <= 400 => 'Very Poor',
-      _ => 'Severe',
-    };
-  }
-
-  /// "90 minutes", "2 hours", etc. Empty string if no lead time.
-  static String _formatLeadTime(Duration? lead) {
-    if (lead == null || lead.isNegative) return '';
-    if (lead.inMinutes < 60) return '${lead.inMinutes} minutes';
-    if (lead.inMinutes == 60) return '1 hour';
-    if (lead.inMinutes % 60 == 0) return '${lead.inHours} hours';
-    final h = lead.inHours;
-    final m = lead.inMinutes % 60;
-    return '$h hours $m minutes';
-  }
 }

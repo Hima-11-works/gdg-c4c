@@ -26,4 +26,26 @@ abstract final class Formatters {
     if (km < 1) return '${(km * 1000).round()} m';
     return '${km.toStringAsFixed(1)} km';
   }
+
+  /// Approximate CPCB category label from an AQI value.
+  static String categoryLabel(int? aqi) {
+    if (aqi == null) return 'elevated levels';
+    return switch (aqi) {
+      <= 50 => 'Good',
+      <= 100 => 'Satisfactory',
+      <= 200 => 'Moderately Polluted',
+      <= 300 => 'Poor',
+      <= 400 => 'Very Poor',
+      _ => 'Severe',
+    };
+  }
+
+  /// Format a lead time duration: "90 minutes", "2 hours", etc.
+  static String leadTime(Duration? d) {
+    if (d == null || d.isNegative) return '';
+    if (d.inMinutes < 60) return '${d.inMinutes} minutes';
+    if (d.inMinutes == 60) return '1 hour';
+    if (d.inMinutes % 60 == 0) return '${d.inHours} hours';
+    return '${d.inHours} hours ${d.inMinutes % 60} minutes';
+  }
 }
