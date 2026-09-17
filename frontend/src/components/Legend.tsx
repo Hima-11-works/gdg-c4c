@@ -1,10 +1,5 @@
-import {
-  NO_DATA_COLOR,
-  PDI_COLOR_SCALE,
-  PM25_COLOR_SCALE,
-  WIND_SPEED_SCALE,
-} from '../lib/colorScales'
-import { BASEMAP } from '../lib/mapTheme'
+import { NO_DATA_COLOR, PDI_COLOR_SCALE, PM25_COLOR_SCALE } from '../lib/colorScales'
+import { BASEMAP, WIND } from '../lib/mapTheme'
 import { PDI_LABEL, PDI_TOOLTIP } from '../lib/format'
 import { useMapUi } from '../state/MapUiContext'
 
@@ -42,13 +37,8 @@ export function Legend() {
           No estimate
         </div>
         <div className="legend-row">
-          <span
-            className="swatch"
-            style={{
-              background: `linear-gradient(90deg, ${WIND_SPEED_SCALE.map((s) => s.color).join(', ')})`,
-            }}
-          />
-          Wind flow (colour = speed)
+          <span className="swatch" style={{ backgroundColor: WIND.pulse }} />
+          Wind current (flows downwind)
         </div>
       </section>
 

@@ -25,24 +25,9 @@ body,
 /* Scoped under .map-page so it outranks maplibre-gl.css's
    `.maplibregl-map { position: relative }`, which otherwise collapses the
    map container to 0px height and renders a blank page. */
-.map-page .map-view {
-  position: absolute;
-  inset: 0;
-}
-
 .map-page .map-canvas {
   position: absolute;
   inset: 0;
-}
-
-/* Animated wind-flow particle overlay, drawn above the map canvas but below
-   the floating UI (which has z-index 1+ and is a sibling of .map-view).
-   pointer-events: none so it never intercepts map drags or clicks. */
-.map-page .wind-canvas {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  pointer-events: none;
 }
 
 /* --- floating overlay panels --- */

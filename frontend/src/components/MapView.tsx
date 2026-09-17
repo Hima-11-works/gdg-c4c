@@ -10,11 +10,14 @@ import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&ur
 // bundle the worker (with its shared chunk) and hand back a real URL.
 setWorkerUrl(maplibreWorkerUrl)
 import { colorScaleExpression, PDI_COLOR_SCALE, PM25_COLOR_SCALE } from '../lib/colorScales'
-import { cellsToFeatureCollection, EMPTY_FEATURE_COLLECTION } from '../lib/h3Geometry'
+import {
+  cellsToFeatureCollection,
+  EMPTY_FEATURE_COLLECTION,
+  windToFeatureCollection,
+} from '../lib/h3Geometry'
 import { INDIA_BBOX, PDI_MIN_ZOOM } from '../lib/lod'
 import { INDIA_OUTLINE_URL, STATE_BOUNDARIES_URL } from '../lib/stateBoundaries'
-import { WindFlowLayer } from '../lib/windFlow'
-import { BASE_STYLE_URL, OVERLAY, BASEMAP, patchBasemapStyle } from '../lib/mapTheme'
+import { BASE_STYLE_URL, OVERLAY, WIND, BASEMAP, patchBasemapStyle } from '../lib/mapTheme'
 import {
   CELL_BORDER_COLOR,
   CELL_BORDER_WIDTH,
@@ -28,7 +31,7 @@ import {
 } from '../lib/visualConfig'
 import { useMapUi } from '../state/MapUiContext'
 import type { AsyncResource } from '../hooks/useApiResource'
-import type { ForecastOut, GridStateOut, WeatherReadingOut } from '../lib/types'
+import type { BoundingBox, ForecastOut, GridStateOut, WeatherReadingOut } from '../lib/types'
 import type { FeatureCollection, Position } from 'geojson'
 
 // The app is scoped to India: on load, fit the whole country in view
@@ -88,12 +91,102 @@ const LAYER_STATE_BOUNDARIES = 'state-boundaries-line'
 const SOURCE_INDIA_OUTLINE = 'india-outline'
 const LAYER_INDIA_OUTLINE_FILL = 'india-outline-fill'
 const LAYER_INDIA_OUTLINE_LINE = 'india-outline-line'
+const SOURCE_WIND = 'wind-points'
+const LAYER_WIND = 'wind-arrows'
 
-// Wind is drawn by a canvas particle overlay (see lib/windFlow.ts), not a
-// MapLibre layer — so it has no source/layer ids here.
+// Wind currents are drawn as a symbol layer whose icon cycles through a few
+// pre-rendered frames of a "streak": a short line pointing downwind with a
+// bright pulse that travels from tail to head. Cycling the frames on a timer
+// makes the streaks flow — the animated-current look — and it's just one
+// layout-property swap per animation frame over ~100 thinned symbols.
+const WIND_STREAK_FRAME_COUNT = 8
+const WIND_STREAK_FRAME_MS = 110
+const WIND_STREAK_IMAGE_PREFIX = 'wind-streak'
+const windStreakImageName = (frame: number): string => `${WIND_STREAK_IMAGE_PREFIX}-${frame}`
+const WIND_STREAK_IMAGES = Array.from({ length: WIND_STREAK_FRAME_COUNT }, (_, i) =>
+  windStreakImageName(i),
+)
 
 const SOURCE_SELECTED = 'selected-cell'
 const LAYER_SELECTED_OUTLINE = 'selected-cell-outline'
+
+// Wind arrows are supplementary/decorative ("generalized meteorological
+// information"), not the primary data layer the way the PM2.5/PDI cells
+// are — so rather than rendering one arrow per fetched weather point
+// (hundreds nationwide at the country tier, now that demo_data covers
+// all of India rather than ~19 cities), thinBySpatialGrid below keeps at
+// most one per grid cell of the current viewport, divided into a fixed
+// WIND_ARROW_GRID x WIND_ARROW_GRID grid. The grid is sized to the
+// viewport, not to zoom directly, so it naturally reveals more arrows as
+// the user zooms into a smaller area — the same "progressively reveal
+// more detail" behavior as the PM2.5/PDI cells, without a second set of
+// zoom thresholds to keep in sync with lib/lod.ts's.
+const WIND_ARROW_GRID = 10
+
+function thinBySpatialGrid<T extends { latitude: number; longitude: number }>(
+  points: T[],
+  bbox: BoundingBox,
+): T[] {
+  const latSpan = bbox.maxLat - bbox.minLat || 1
+  const lonSpan = bbox.maxLon - bbox.minLon || 1
+  const seen = new Set<string>()
+  const kept: T[] = []
+  for (const point of points) {
+    const row = Math.floor(((point.latitude - bbox.minLat) / latSpan) * WIND_ARROW_GRID)
+    const col = Math.floor(((point.longitude - bbox.minLon) / lonSpan) * WIND_ARROW_GRID)
+    const key = `${row}:${col}`
+    if (!seen.has(key)) {
+      seen.add(key)
+      kept.push(point)
+    }
+  }
+  return kept
+}
+
+/** One frame of the wind-streak icon, north-up: a dim line along the wind
+ * with a bright pulse at position `frame / WIND_STREAK_FRAME_COUNT`, so
+ * cycling the frames animates a pulse flowing from tail to head. */
+function windStreakFrame(frame: number): ImageData {
+  const size = 32
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const ctx = canvas.getContext('2d')!
+  const x = size / 2
+  const headY = 4
+  const tailY = 28
+  const span = tailY - headY
+  ctx.lineCap = 'round'
+
+  // Dim base so each sample still reads as a current between pulses.
+  ctx.globalAlpha = 0.35
+  ctx.strokeStyle = WIND.arrowColor
+  ctx.lineWidth = 2
+  ctx.beginPath()
+  ctx.moveTo(x, tailY)
+  ctx.lineTo(x, headY)
+  ctx.stroke()
+  ctx.globalAlpha = 1
+
+  // Travelling pulse: a gradient segment, transparent at its tail and bright
+  // at its head, whose position sweeps from the tail (frame 0) to past the
+  // head (last frame), then wraps — the repeating flow.
+  const t = frame / WIND_STREAK_FRAME_COUNT
+  const pulseLen = span * 0.6
+  const headPos = tailY - span * (t * 1.2)
+  const tailPos = headPos + pulseLen
+  const gradient = ctx.createLinearGradient(0, tailPos, 0, headPos)
+  gradient.addColorStop(0, 'rgba(229, 231, 235, 0)')
+  gradient.addColorStop(1, WIND.pulse)
+  ctx.strokeStyle = gradient
+  ctx.lineWidth = 2.4
+  ctx.beginPath()
+  ctx.moveTo(x, tailPos)
+  ctx.lineTo(x, headPos)
+  ctx.stroke()
+
+  return ctx.getImageData(0, 0, size, size)
+}
 
 // ---------------------------------------------------------------------------
 // Opacity animation — the ONLY per-frame work during a transition. No source
@@ -295,8 +388,6 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
   const { state, dispatch } = useMapUi()
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
-  const windCanvasRef = useRef<HTMLCanvasElement | null>(null)
-  const windFlowRef = useRef<WindFlowLayer | null>(null)
   const [mapReady, setMapReady] = useState(false)
 
   // The map-creation effect below runs once (on mount) and registers the
@@ -476,6 +567,25 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
             paint: {
               'line-color': SELECTED_CELL_BORDER_COLOR,
               'line-width': SELECTED_CELL_BORDER_WIDTH,
+            },
+          })
+
+          // Wind currents — animated streaks, subdued gray, never dominant.
+          map!.addSource(SOURCE_WIND, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+          for (let frame = 0; frame < WIND_STREAK_FRAME_COUNT; frame++) {
+            map!.addImage(windStreakImageName(frame), windStreakFrame(frame))
+          }
+          map!.addLayer({
+            id: LAYER_WIND,
+            type: 'symbol',
+            source: SOURCE_WIND,
+            layout: {
+              'icon-image': WIND_STREAK_IMAGES[0],
+              'icon-rotate': ['get', 'rotation'],
+              'icon-rotation-alignment': 'map',
+              'icon-allow-overlap': true,
+              'icon-ignore-placement': true,
+              'icon-size': ['interpolate', ['linear'], ['get', 'wind_speed'], 0, 0.5, 15, 1.1],
             },
           })
 
@@ -710,38 +820,56 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
     paintedDataRef.current = cellsData
   }, [mapReady, state.forecastMinutes, currentGrid, forecastGrid, state.showPdi, reducedMotion])
 
-  // Wind flow overlay — a canvas particle layer above the map (see
-  // lib/windFlow.ts). Created once the map is ready; its wind field is
-  // refreshed whenever the weather data changes. Skipped entirely under
-  // prefers-reduced-motion (no ambient animation).
+  // Wind currents — thinned to at most one per cell of a fixed-size grid
+  // over the current viewport (see thinBySpatialGrid), so "generalized
+  // meteorological information" at the country tier reads as a sparse,
+  // legible set of streaks rather than one per fetched point.
   useEffect(() => {
-    if (!mapReady || !mapRef.current || !windCanvasRef.current) return
-    if (reducedMotion) return
+    if (!mapReady || !mapRef.current) return
+    if (weather.status !== 'success') return
+    const points = weather.data.map((reading) => ({
+      h3Cell: reading.h3_cell,
+      latitude: reading.latitude,
+      longitude: reading.longitude,
+      windSpeed: reading.wind_speed,
+      windDirection: reading.wind_direction,
+    }))
+    const effectiveBbox = state.lod.scopedToViewport ? (state.bbox ?? INDIA_BBOX) : INDIA_BBOX
+    const thinned = thinBySpatialGrid(points, effectiveBbox)
+    const source = mapRef.current.getSource(SOURCE_WIND)
+    if (source instanceof GeoJSONSource) source.setData(windToFeatureCollection(thinned))
+  }, [mapReady, weather, state.lod, state.bbox])
 
-    const layer = new WindFlowLayer(windCanvasRef.current, mapRef.current)
-    windFlowRef.current = layer
-    layer.start()
+  // Animate the wind currents by cycling the streak icon frames. Only swaps
+  // the layer's `icon-image` (a layout property) when the frame index
+  // actually changes, and only while the tab is visible. Static under
+  // prefers-reduced-motion.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    const map = mapRef.current
 
-    return () => {
-      layer.destroy()
-      windFlowRef.current = null
+    if (reducedMotion) {
+      map.setLayoutProperty(LAYER_WIND, 'icon-image', WIND_STREAK_IMAGES[0])
+      return
     }
+
+    let raf = 0
+    let lastFrame = -1
+    const tick = (now: number) => {
+      if (document.visibilityState === 'visible') {
+        const frame = Math.floor(now / WIND_STREAK_FRAME_MS) % WIND_STREAK_FRAME_COUNT
+        if (frame !== lastFrame) {
+          lastFrame = frame
+          map.setLayoutProperty(LAYER_WIND, 'icon-image', WIND_STREAK_IMAGES[frame])
+        }
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
   }, [mapReady, reducedMotion])
 
-  // Feed the current weather readings into the flow layer.
-  useEffect(() => {
-    const layer = windFlowRef.current
-    if (!layer) return
-    if (weather.status !== 'success') return
-    layer.setData(weather.data)
-  }, [weather])
-
-  return (
-    <div className="map-view">
-      <div ref={containerRef} className="map-canvas" />
-      <canvas ref={windCanvasRef} className="wind-canvas" aria-hidden="true" />
-    </div>
-  )
+  return <div ref={containerRef} className="map-canvas" />
 }
 
 function cellToBoundaryCoords(h3Cell: string): Position[] {

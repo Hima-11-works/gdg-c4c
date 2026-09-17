@@ -32,6 +32,16 @@ export const OVERLAY = {
 } as const
 
 // ---------------------------------------------------------------------------
+// Wind currents — subdued neutral, never dominant over the pollution colors.
+// ---------------------------------------------------------------------------
+
+export const WIND = {
+  arrowColor: '#9ca3af',     // light gray — the static streak line
+  arrowStroke: '#0e1117',    // near-black outline for contrast
+  pulse: '#e5e7eb',          // the bright pulse travelling along the streak
+} as const
+
+// ---------------------------------------------------------------------------
 // Style URL — the demotiles style is fetched, then patched to a dark
 // monochrome palette by patchBasemapStyle(). We load the real style JSON
 // (with its proven vector source + glyph config) and rewrite its colors
