@@ -83,14 +83,6 @@ of the basemap provider. See `frontend/src/lib/stateBoundaries.ts` for
 the data source documentation and `frontend/src/components/MapView.tsx`
 for the layer setup.
 
-`frontend/public/data/india_mask.geojson` is a companion mask: the map's
-pannable area minus India buffered outward by ~30 km (precomputed with
-Shapely from the same country outline). An opaque-ish fill layer draws it
-above the data layers so the H3 grid — which is generated for a
-rectangular bbox or the current viewport — only appears over India and a
-short distance outside it, instead of spilling across the whole rectangle.
-The buffer keeps border-adjacent, foreign-influenced cells visible.
-
 ### Location search data
 
 The top-right search bar searches states/UTs, districts, cities, and
