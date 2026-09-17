@@ -4,7 +4,7 @@
 // store (lib/forecastFrames.ts) so playback never stalls on the network.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { prefetchUpcoming } from '../lib/forecastFrames'
+import { prefetchUpcoming, useForecastWarming, warmForecastWindow } from '../lib/forecastFrames'
 import { INDIA_BBOX, lodKey } from '../lib/lod'
 import { useMapUi } from '../state/MapUiContext'
 import type { LodQuery } from '../lib/api'
@@ -68,6 +68,24 @@ export function TimelineControl() {
     [query],
   )
 
+  // True while the current view's frames are being fetched into the cache
+  // (a fresh map view, or a manual jump). Play/Restart are disabled until
+  // it clears, so playback never starts on a cold cache and stutters.
+  const warming = useForecastWarming(queryKey)
+
+  // Manual selection (slider drag, keyboard, tick click): pause playback and
+  // warm the new position's window so a subsequent Play is smooth. Playback's
+  // own auto-advance deliberately does NOT warm — it keeps the moving
+  // prefetch buffer instead, so Play stays enabled once a view is warm.
+  const selectManually = useCallback(
+    (minutes: number) => {
+      setPlaying(false)
+      dispatch({ type: 'SELECT_FORECAST', minutes })
+      warmForecastWindow(queryKey, query, minutes)
+    },
+    [dispatch, queryKey, query],
+  )
+
   // Prefetch upcoming frames whenever position changes.
   useEffect(() => {
     if (forecastMinutes > 0) {
@@ -76,6 +94,15 @@ export function TimelineControl() {
   }, [forecastMinutes, queryKey, query])
 
   // --- playback ---
+
+  // A view change while playing starts a warm-up; stop playback so it can't
+  // advance onto uncached frames (the pause button is disabled meanwhile, so
+  // leaving it running would just stutter with no way to stop it). This is a
+  // legitimate sync-with-external-state effect: it clears the interval timer.
+  useEffect(() => {
+    // eslint-disable-next-line react/set-state-in-effect
+    if (warming) setPlaying(false)
+  }, [warming])
 
   const stopPlayback = useCallback(() => {
     if (timerRef.current !== null) {
@@ -121,7 +148,9 @@ export function TimelineControl() {
     setPlaying(false)
     positionRef.current = 0
     dispatch({ type: 'SELECT_FORECAST', minutes: 0 })
-  }, [dispatch])
+    // Warm the frames a Play from Now would advance through.
+    warmForecastWindow(queryKey, query, 0)
+  }, [dispatch, queryKey, query])
 
   // --- pointer interaction ---
 
@@ -129,12 +158,10 @@ export function TimelineControl() {
     (pct: number) => {
       const next = pctToMinutes(pct)
       if (next !== forecastMinutes) {
-        // Pause on manual interaction.
-        setPlaying(false)
-        dispatch({ type: 'SELECT_FORECAST', minutes: next })
+        selectManually(next)
       }
     },
-    [forecastMinutes, dispatch],
+    [forecastMinutes, selectManually],
   )
 
   const handlePointerDown = useCallback(
@@ -183,11 +210,10 @@ export function TimelineControl() {
 
       e.preventDefault()
       if (nextIdx !== idx) {
-        setPlaying(false)
-        dispatch({ type: 'SELECT_FORECAST', minutes: KEYFRAMES[nextIdx] })
+        selectManually(KEYFRAMES[nextIdx])
       }
     },
-    [forecastMinutes, dispatch],
+    [forecastMinutes, selectManually],
   )
 
   // Cleanup on unmount.
@@ -208,8 +234,9 @@ export function TimelineControl() {
             type="button"
             className="timeline-btn"
             onClick={handleRestart}
+            disabled={warming}
             aria-label="Restart timeline to Now"
-            title="Restart"
+            title={warming ? 'Caching frames…' : 'Restart'}
           >
             ↺
           </button>
@@ -217,9 +244,16 @@ export function TimelineControl() {
             type="button"
             className="timeline-btn timeline-btn-play"
             onClick={handlePlayPause}
-            aria-label={playing ? 'Pause playback' : 'Play forecast animation'}
+            disabled={warming}
+            aria-label={
+              warming
+                ? 'Playback disabled while frames are cached'
+                : playing
+                  ? 'Pause playback'
+                  : 'Play forecast animation'
+            }
             aria-pressed={playing}
-            title={playing ? 'Pause' : 'Play'}
+            title={warming ? 'Caching frames…' : playing ? 'Pause' : 'Play'}
           >
             {playing ? '❚❚' : '▶'}
           </button>
@@ -237,10 +271,7 @@ export function TimelineControl() {
             type="button"
             className={`timeline-tick ${m === forecastMinutes ? 'active' : ''}`}
             style={{ left: `${minutesToPct(m)}%` }}
-            onClick={() => {
-              setPlaying(false)
-              dispatch({ type: 'SELECT_FORECAST', minutes: m })
-            }}
+            onClick={() => selectManually(m)}
             aria-label={m === 0 ? 'Current conditions' : `Forecast +${m} minutes`}
           >
             {m === 0 ? 'Now' : `+${m / 60}h`}

@@ -166,6 +166,16 @@ body,
   border-color: #6b7280;
 }
 
+.timeline-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.timeline-btn:disabled:hover {
+  color: #9ca3af;
+  border-color: #3a3f4a;
+}
+
 .timeline-btn-play {
   font-size: 0.7rem;
   min-width: 1.8rem;

@@ -1,6 +1,12 @@
+import { useEffect, useRef } from 'react'
 import { fetchGridCurrent, fetchWeather } from '../lib/api'
 import { useApiResource } from '../hooks/useApiResource'
-import { ensureForecastFrame, useForecastFrame } from '../lib/forecastFrames'
+import {
+  ensureForecastFrame,
+  useForecastFrame,
+  useForecastWarming,
+  warmForecastWindow,
+} from '../lib/forecastFrames'
 import { INDIA_BBOX, lodKey, weatherResolutionForLod } from '../lib/lod'
 import { useMapUi } from '../state/MapUiContext'
 import { AlertsPanel } from './AlertsPanel'
@@ -57,6 +63,27 @@ export function MapPage() {
     enabled: viewportReady,
   })
 
+  // A view change (new queryKey) invalidates the forecast cache for this
+  // view: warm the current position plus the next WARM_WINDOW keyframes so
+  // playback is smooth from the moment it starts. The warm-up is an explicit
+  // operation (see lib/forecastFrames.ts) — it reports `warming` to the
+  // banner and the timeline's play/restart buttons, and clears once every
+  // frame in the window is cached.
+  const queryRef = useRef(query)
+  const minutesRef = useRef(forecastMinutes)
+  useEffect(() => {
+    queryRef.current = query
+    minutesRef.current = forecastMinutes
+  })
+  useEffect(() => {
+    if (!viewportReady) return
+    warmForecastWindow(queryKey, queryRef.current, minutesRef.current)
+    // Only re-warm on a view change (queryKey), not on every playback tick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queryKey, viewportReady])
+
+  const warming = useForecastWarming(queryKey)
+
   const activeBaseLayer = isNow ? currentGrid : forecastGrid
   const activeLabel = isNow
     ? 'current conditions'
@@ -69,6 +96,7 @@ export function MapPage() {
           label={activeLabel}
           resource={activeBaseLayer.resource}
           onRetry={activeBaseLayer.refetch}
+          warming={warming}
         />
       </div>
 
