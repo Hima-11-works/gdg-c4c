@@ -356,7 +356,7 @@ def _advect(
         return _AdvectedHotspot(latitude, longitude, amplitude0, industrial_bump0, sigma0_km)
 
     _, _, _, wind_speed, _, _, _ = _idw_background(latitude, longitude)
-    downwind_bearing = (_wind_direction(latitude) + 180.0) % 360.0
+    downwind_bearing = (_wind_direction(latitude, longitude) + 180.0) % 360.0
     distance_km = wind_speed * 3.6 * hours
     moved = Coordinate(latitude, longitude).destination_point(downwind_bearing, distance_km)
 
@@ -435,16 +435,28 @@ def _hotspot_bumps_at(latitude: float, longitude: float, hours: float) -> tuple[
 
 # --- wind direction: a smooth geographic gradient, not one constant ---
 
-# A wintertime-northwesterly-ish pattern that eases as latitude drops
-# toward the coast — a believable "varies geographically" shape without
-# claiming to model real synoptic wind. Per-cell jitter is layered on
+# A wintertime-northwesterly-ish base that eases as latitude drops toward the
+# coast, plus a slow two-axis synoptic wave on top. The wave matters visually:
+# without it the field is almost uniformly westerly, so streamlines render as
+# dead-parallel straight lines (a wind tunnel); with it the flow curves and
+# converges/diverges like real synoptic wind. Per-cell jitter is layered on
 # top (see _field_at) so neighbors don't share an identical value.
 _WIND_DIRECTION_BASE_DEG = 280.0
-_WIND_DIRECTION_LAT_SLOPE = 0.6  # degrees per degree of latitude above 15N
+_WIND_DIRECTION_LAT_SLOPE = 0.5  # degrees per degree of latitude above 15N
+_WIND_DIRECTION_WAVE_LON_DEG = 26.0
+_WIND_DIRECTION_WAVE_LON_SCALE = 7.5  # degrees of longitude per radian
+_WIND_DIRECTION_WAVE_LAT_DEG = 12.0
+_WIND_DIRECTION_WAVE_LAT_SCALE = 5.0
 
 
-def _wind_direction(latitude: float) -> float:
-    return (_WIND_DIRECTION_BASE_DEG - _WIND_DIRECTION_LAT_SLOPE * (latitude - 15.0)) % 360.0
+def _wind_direction(latitude: float, longitude: float) -> float:
+    base = _WIND_DIRECTION_BASE_DEG - _WIND_DIRECTION_LAT_SLOPE * (latitude - 15.0)
+    wave = _WIND_DIRECTION_WAVE_LON_DEG * math.sin(
+        (longitude - 72.0) / _WIND_DIRECTION_WAVE_LON_SCALE
+    ) + _WIND_DIRECTION_WAVE_LAT_DEG * math.cos(
+        (latitude - 20.0) / _WIND_DIRECTION_WAVE_LAT_SCALE
+    )
+    return (base + wave) % 360.0
 
 
 # --- the field itself ---
@@ -544,7 +556,7 @@ def _field_at(latitude: float, longitude: float, seed_key: str) -> _Field:
     )
     pm25_bump, industrial_bump, nearest_city_km = _hotspot_bumps_at(latitude, longitude, hours=0)
     pm25 = background_pm25 + pm25_bump
-    wind_direction = _wind_direction(latitude)
+    wind_direction = _wind_direction(latitude, longitude)
 
     rng = _rng(seed_key)
     pm25 *= 1 + rng.uniform(-0.06, 0.06)

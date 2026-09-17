@@ -13,8 +13,8 @@ import { colorScaleExpression, PDI_COLOR_SCALE, PM25_COLOR_SCALE } from '../lib/
 import { cellsToFeatureCollection, EMPTY_FEATURE_COLLECTION } from '../lib/h3Geometry'
 import { INDIA_BBOX, PDI_MIN_ZOOM } from '../lib/lod'
 import { INDIA_OUTLINE_URL, STATE_BOUNDARIES_URL } from '../lib/stateBoundaries'
-import { buildWindStreamlines } from '../lib/windStreamlines'
-import { BASE_STYLE_URL, OVERLAY, WIND, BASEMAP, patchBasemapStyle } from '../lib/mapTheme'
+import { WindFlowLayer } from '../lib/windFlow'
+import { BASE_STYLE_URL, OVERLAY, BASEMAP, patchBasemapStyle } from '../lib/mapTheme'
 import {
   CELL_BORDER_COLOR,
   CELL_BORDER_WIDTH,
@@ -30,7 +30,6 @@ import { useMapUi } from '../state/MapUiContext'
 import type { AsyncResource } from '../hooks/useApiResource'
 import type { ForecastOut, GridStateOut, WeatherReadingOut } from '../lib/types'
 import type { FeatureCollection, Position } from 'geojson'
-import type { ExpressionSpecification } from '@maplibre/maplibre-gl-style-spec'
 
 // The app is scoped to India: on load, fit the whole country in view
 // rather than centering on one city. Level of detail (which resolution
@@ -89,42 +88,9 @@ const LAYER_STATE_BOUNDARIES = 'state-boundaries-line'
 const SOURCE_INDIA_OUTLINE = 'india-outline'
 const LAYER_INDIA_OUTLINE_FILL = 'india-outline-fill'
 const LAYER_INDIA_OUTLINE_LINE = 'india-outline-line'
-const SOURCE_WIND = 'wind-lines'
-const LAYER_WIND_BASE = 'wind-lines-base'
-const LAYER_WIND_FLOW = 'wind-lines-flow'
 
-// Streamlines cross the whole viewport (see lib/windStreamlines.ts). Flow is
-// animated by sweeping bands along each line with `line-gradient` +
-// `line-progress` — a paint-only update per frame, no geometry re-tessellation.
-const WIND_FLOW_PERIOD_MS = 2600
-const WIND_FLOW_BAND_HALF = 0.09
-const WIND_FLOW_CLEAR = 'rgba(229, 231, 235, 0)'
-
-/** Two bright bands (half a period apart) sweeping 0→1 along every
- *  streamline, so flow reads continuously rather than as one pulse. */
-function windFlowGradient(phase: number): ExpressionSpecification {
-  const centers = [phase % 1, (phase + 0.5) % 1].sort((a, b) => a - b)
-  const stops: number[] = [0]
-  const colors: string[] = [WIND_FLOW_CLEAR]
-  const push = (pos: number, color: string) => {
-    const clamped = Math.max(0, Math.min(1, pos))
-    if (clamped <= stops[stops.length - 1]) return
-    stops.push(clamped)
-    colors.push(color)
-  }
-  for (const center of centers) {
-    push(center - WIND_FLOW_BAND_HALF, WIND_FLOW_CLEAR)
-    push(center, WIND.pulse)
-    push(center + WIND_FLOW_BAND_HALF, WIND_FLOW_CLEAR)
-  }
-  push(1, WIND_FLOW_CLEAR)
-
-  const expression: unknown[] = ['interpolate', ['linear'], ['line-progress']]
-  for (let i = 0; i < stops.length; i++) {
-    expression.push(stops[i], colors[i])
-  }
-  return expression as unknown as ExpressionSpecification
-}
+// Wind is drawn by a canvas particle overlay (see lib/windFlow.ts), not a
+// MapLibre layer — so it has no source/layer ids here.
 
 const SOURCE_SELECTED = 'selected-cell'
 const LAYER_SELECTED_OUTLINE = 'selected-cell-outline'
@@ -329,6 +295,8 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
   const { state, dispatch } = useMapUi()
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
+  const windCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const windFlowRef = useRef<WindFlowLayer | null>(null)
   const [mapReady, setMapReady] = useState(false)
 
   // The map-creation effect below runs once (on mount) and registers the
@@ -508,35 +476,6 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
             paint: {
               'line-color': SELECTED_CELL_BORDER_COLOR,
               'line-width': SELECTED_CELL_BORDER_WIDTH,
-            },
-          })
-
-          // Wind currents — streamlines crossing the viewport, subdued gray.
-          // `lineMetrics` is required for the `line-gradient` flow animation.
-          map!.addSource(SOURCE_WIND, {
-            type: 'geojson',
-            data: EMPTY_FEATURE_COLLECTION,
-            lineMetrics: true,
-          })
-          map!.addLayer({
-            id: LAYER_WIND_BASE,
-            type: 'line',
-            source: SOURCE_WIND,
-            layout: { 'line-cap': 'round', 'line-join': 'round' },
-            paint: {
-              'line-color': WIND.arrowColor,
-              'line-width': ['interpolate', ['linear'], ['get', 'speed'], 0, 0.5, 15, 1.4],
-              'line-opacity': 0.3,
-            },
-          })
-          map!.addLayer({
-            id: LAYER_WIND_FLOW,
-            type: 'line',
-            source: SOURCE_WIND,
-            layout: { 'line-cap': 'round', 'line-join': 'round' },
-            paint: {
-              'line-width': ['interpolate', ['linear'], ['get', 'speed'], 0, 0.6, 15, 1.8],
-              'line-gradient': windFlowGradient(0),
             },
           })
 
@@ -771,47 +710,38 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
     paintedDataRef.current = cellsData
   }, [mapReady, state.forecastMinutes, currentGrid, forecastGrid, state.showPdi, reducedMotion])
 
-  // Wind currents — integrate the wind field into streamlines that cross the
-  // viewport, rather than drawing a separate tick per sample. Recomputed only
-  // when the weather data or the viewport changes.
+  // Wind flow overlay — a canvas particle layer above the map (see
+  // lib/windFlow.ts). Created once the map is ready; its wind field is
+  // refreshed whenever the weather data changes. Skipped entirely under
+  // prefers-reduced-motion (no ambient animation).
   useEffect(() => {
-    if (!mapReady || !mapRef.current) return
-    if (weather.status !== 'success') return
-    const effectiveBbox = state.lod.scopedToViewport ? (state.bbox ?? INDIA_BBOX) : INDIA_BBOX
-    const streamlines = buildWindStreamlines(weather.data, effectiveBbox)
-    const source = mapRef.current.getSource(SOURCE_WIND)
-    if (source instanceof GeoJSONSource) source.setData(streamlines)
-  }, [mapReady, weather, state.lod, state.bbox])
+    if (!mapReady || !mapRef.current || !windCanvasRef.current) return
+    if (reducedMotion) return
 
-  // Animate the flow by sweeping a `line-gradient` band along the lines. This
-  // is a paint-property update — no geometry change, nothing to re-tessellate.
-  // Skipped while the tab is hidden, and static under prefers-reduced-motion.
-  useEffect(() => {
-    if (!mapReady || !mapRef.current) return
-    const map = mapRef.current
+    const layer = new WindFlowLayer(windCanvasRef.current, mapRef.current)
+    windFlowRef.current = layer
+    layer.start()
 
-    if (reducedMotion) {
-      map.setPaintProperty(LAYER_WIND_FLOW, 'line-gradient', windFlowGradient(0))
-      return
+    return () => {
+      layer.destroy()
+      windFlowRef.current = null
     }
-
-    let raf = 0
-    let lastPhase = -1
-    const tick = (now: number) => {
-      if (document.visibilityState === 'visible') {
-        const phase = (now % WIND_FLOW_PERIOD_MS) / WIND_FLOW_PERIOD_MS
-        if (Math.abs(phase - lastPhase) > 0.01) {
-          lastPhase = phase
-          map.setPaintProperty(LAYER_WIND_FLOW, 'line-gradient', windFlowGradient(phase))
-        }
-      }
-      raf = requestAnimationFrame(tick)
-    }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
   }, [mapReady, reducedMotion])
 
-  return <div ref={containerRef} className="map-canvas" />
+  // Feed the current weather readings into the flow layer.
+  useEffect(() => {
+    const layer = windFlowRef.current
+    if (!layer) return
+    if (weather.status !== 'success') return
+    layer.setData(weather.data)
+  }, [weather])
+
+  return (
+    <div className="map-view">
+      <div ref={containerRef} className="map-canvas" />
+      <canvas ref={windCanvasRef} className="wind-canvas" aria-hidden="true" />
+    </div>
+  )
 }
 
 function cellToBoundaryCoords(h3Cell: string): Position[] {
