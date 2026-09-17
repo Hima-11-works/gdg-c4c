@@ -8,6 +8,7 @@ import { CellDetailPanel } from './CellDetailPanel'
 import { Legend } from './Legend'
 import { LayerToggle } from './LayerToggle'
 import { MapView } from './MapView'
+import { SearchBar } from './SearchBar'
 import { StatusBanner } from './StatusBanner'
 import { TimelineControl } from './TimelineControl'
 import type { AsyncResource } from '../hooks/useApiResource'
@@ -83,6 +84,7 @@ export function MapPage() {
       </div>
 
       <div className="overlay overlay-top-right">
+        <SearchBar />
         <AlertsPanel />
       </div>
 

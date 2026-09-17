@@ -83,6 +83,27 @@ of the basemap provider. See `frontend/src/lib/stateBoundaries.ts` for
 the data source documentation and `frontend/src/components/MapView.tsx`
 for the layer setup.
 
+### Location search data
+
+The top-right search bar searches states/UTs, districts, cities, and
+localities. Its dataset is built from the **GeoNames India dump**,
+filtered to administrative level 1 (states) and 2 (districts), populated
+places (cities), sections of populated places (localities), and
+additionally **populated places within 10 km of a major city** — small
+neighbourhoods like Koramangala or Andheri are filed by GeoNames as plain
+low-population places, so a population-only filter would miss exactly the
+localities a user searches for.
+
+- **Source:** https://download.geonames.org/export/dump/ (`IN.zip`)
+- **License:** CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/)
+- **File:** `frontend/public/data/india_locations.json` — lazy-loaded on
+  first search focus (not part of the initial page load)
+- **Categories:** `state` (36), `district` (758), `city` (~2.9k),
+  `locality` (~6.6k)
+
+Selecting a result flies the map to that coordinate at a zoom tier
+appropriate to the kind (see `ZOOM_BY_KIND` in `frontend/src/lib/locations.ts`).
+
 ## Quick start: step by step
 
 The fastest way to see the whole thing running is **Demo Mode**: no API
@@ -379,13 +400,15 @@ which one ran.
 │  └─ requirements.lock         # exact versions installed in Docker
 ├─ frontend/
 │  ├─ public/
-│  │  └─ data/                   # static GeoJSON assets for the map
+│  │  └─ data/                   # static map assets
 │  │     ├─ india_states.geojson #   India state/UT boundaries (geoBoundaries ADM1, ODC-ODbL)
-│  │     └─ india_country.geojson#   India country outline (dissolved from the same ADM1 data)
+│  │     ├─ india_country.geojson#   India country outline (dissolved from the same ADM1 data)
+│  │     └─ india_locations.json #   searchable states/districts/cities/localities (GeoNames, CC BY 4.0)
 │  └─ src/
-│     ├─ components/            # MapPage, MapView, AlertsPanel, CellDetailPanel, TimelineControl, ...
-│     ├─ lib/                    # api.ts (the only fetch caller), lod.ts (zoom -> resolution/bbox),
-│     │                          #   h3Geometry.ts, stateBoundaries.ts, colorScales.ts, format.ts, types.ts
+│     ├─ components/            # MapPage, MapView, SearchBar, AlertsPanel, CellDetailPanel, TimelineControl, ...
+│     ├─ lib/                    # api.ts (the only backend fetch caller), lod.ts (zoom -> resolution/bbox),
+│     │                          #   h3Geometry.ts, stateBoundaries.ts, locations.ts (place search),
+│     │                          #   forecastFrames.ts (frame cache), mapTheme.ts, colorScales.ts, format.ts, types.ts
 │     ├─ hooks/                  # useApiResource.ts (loading/success/error/poll/retry, no data-fetching
 │     │                          #   library), useStateBoundaries.ts
 │     └─ state/                  # small useReducer + Context for UI-only state

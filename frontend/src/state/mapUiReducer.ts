@@ -16,6 +16,10 @@ export interface MapUiState {
    *  keyframes (0, 15, 30, …, 720). This is the single canonical
    *  timeline state — no separate button/slider/hour states. */
   forecastMinutes: number
+  /** A location the map should fly to, set by the search bar. A fresh
+   *  object every dispatch (never mutated) so MapView's effect fires even
+   *  when the same place is picked twice. */
+  focus: { latitude: number; longitude: number; zoom: number } | null
   showPdi: boolean
   selectedCell: string | null
   /** The H3 resolution `selectedCell` was fetched at, captured at click
@@ -36,6 +40,7 @@ export interface MapUiState {
 
 export type MapUiAction =
   | { type: 'SELECT_FORECAST'; minutes: number }
+  | { type: 'FOCUS_LOCATION'; latitude: number; longitude: number; zoom: number }
   | { type: 'TOGGLE_PDI' }
   | { type: 'SELECT_CELL'; cell: string | null; resolution?: number }
   | { type: 'SET_VIEWPORT'; zoom: number; bbox: BoundingBox }
@@ -45,6 +50,7 @@ export type MapUiAction =
 // guessing a zoom before the map has told us its real one.
 export const initialMapUiState: MapUiState = {
   forecastMinutes: 0,
+  focus: null,
   showPdi: false,
   selectedCell: null,
   selectedCellResolution: null,
@@ -56,6 +62,12 @@ export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState
   switch (action.type) {
     case 'SELECT_FORECAST':
       return { ...state, forecastMinutes: action.minutes }
+    case 'FOCUS_LOCATION':
+      // Always a fresh object, so re-selecting the same place re-flies.
+      return {
+        ...state,
+        focus: { latitude: action.latitude, longitude: action.longitude, zoom: action.zoom },
+      }
     case 'TOGGLE_PDI':
       return { ...state, showPdi: !state.showPdi }
     case 'SELECT_CELL':

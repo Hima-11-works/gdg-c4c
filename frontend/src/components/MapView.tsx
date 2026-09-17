@@ -468,6 +468,22 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
     }
   }, [dispatch])
 
+  // Fly to a location selected from the search bar. `focus` is always a
+  // fresh object per dispatch, so picking the same place twice re-flies.
+  // `moveend` then reports the new viewport, which drives level-of-detail
+  // fetching exactly as a manual zoom would.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    const focus = state.focus
+    if (focus === null) return
+    mapRef.current.flyTo({
+      center: [focus.longitude, focus.latitude],
+      zoom: focus.zoom,
+      duration: reducedMotion ? 0 : 1400,
+      essential: true,
+    })
+  }, [mapReady, state.focus, reducedMotion])
+
   // Selected cell highlight — updates independently of the data layers
   // so it stays stable during timeline transitions. The outline is drawn
   // on a separate source/layer above the fill; clicking a cell updates

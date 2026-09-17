@@ -43,8 +43,30 @@ export function AlertsPanel() {
 
   return (
     <div className="panel alerts-panel">
-      <button type="button" className="alerts-toggle" onClick={() => setOpen((value) => !value)}>
-        Alerts {count > 0 ? `(${count})` : ''}
+      <button
+        type="button"
+        className="alerts-toggle"
+        onClick={() => setOpen((value) => !value)}
+        aria-label={count > 0 ? `Alerts, ${count} active` : 'Alerts, none active'}
+        aria-expanded={open}
+      >
+        <svg className="bell-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            d="M12 2a6 6 0 0 0-6 6v3.5L4.3 15a1 1 0 0 0 .9 1.5h13.6a1 1 0 0 0 .9-1.5L18 11.5V8a6 6 0 0 0-6-6Z"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M9.5 19a2.5 2.5 0 0 0 5 0"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+          />
+        </svg>
+        {count > 0 && <span className="alert-badge">{count > 99 ? '99+' : count}</span>}
       </button>
 
       {open && (
