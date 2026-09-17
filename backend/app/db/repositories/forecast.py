@@ -42,11 +42,19 @@ def _insert_stmt(forecast: Forecast) -> Insert:
 
 
 def _insert_many_stmt(forecasts: list[Forecast]) -> Insert:
-    """One multi-row INSERT for the whole batch, instead of one round trip
-    (and one transaction commit) per forecast — see
+    """One multi-row INSERT for a chunk of forecasts, instead of one round
+    trip (and one commit) per forecast — see
     ForecastRepository.add_many's docstring for why that matters here.
+    Callers must chunk (see _INSERT_CHUNK_ROWS) to stay under
+    PostgreSQL's 65,535 bound-parameter limit per statement.
     """
     return forecast_table.insert().values([_values(f) for f in forecasts]).returning(forecast_table)
+
+
+# _values() binds 6 parameters per row (id is server-generated); 65535 // 6
+# = 10,922 rows max per statement. 5,000 leaves headroom for any future
+# column additions without revisiting the math.
+_INSERT_CHUNK_ROWS = 5_000
 
 
 def _list_for_cell_stmt(h3_cell: str, generated_after: datetime | None) -> Select:
@@ -137,7 +145,18 @@ class SqlForecastRepository:
         resolution = get_settings().h3_resolution
         for forecast in forecasts:
             assert_valid_cell(forecast.h3_cell, resolution=resolution)
-        rows = self._session.execute(_insert_many_stmt(forecasts)).all()
+
+        # PostgreSQL's wire protocol caps a single statement at 65,535
+        # bound parameters. The 24 quarter-hourly horizons of the current
+        # pipeline (~120k rows at ~5k cells) blow far past that in one
+        # INSERT (6 params/row), so chunk into executemany-sized
+        # statements. Chunk boundaries stay within one uncommitted
+        # transaction — the single commit() below keeps the batch
+        # all-or-nothing, same as before.
+        rows = []
+        for chunk_start in range(0, len(forecasts), _INSERT_CHUNK_ROWS):
+            chunk = forecasts[chunk_start : chunk_start + _INSERT_CHUNK_ROWS]
+            rows.extend(self._session.execute(_insert_many_stmt(chunk)).all())
         self._session.commit()
         return [_row_to_domain(row) for row in rows]
 
