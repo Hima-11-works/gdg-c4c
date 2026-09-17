@@ -1,38 +1,36 @@
-import { fetchGridCurrent, fetchGridForecast, fetchWeather } from '../lib/api'
+import { useEffect, useRef } from 'react'
+import { fetchGridCurrent, fetchWeather } from '../lib/api'
 import { useApiResource } from '../hooks/useApiResource'
-import { INDIA_BBOX, weatherResolutionForLod } from '../lib/lod'
+import {
+  ensureForecastFrame,
+  useForecastFrame,
+  useForecastWarming,
+  warmForecastWindow,
+} from '../lib/forecastFrames'
+import { lodKey, lodQueryFor, weatherResolutionForLod } from '../lib/lod'
 import { useMapUi } from '../state/MapUiContext'
 import { AlertsPanel } from './AlertsPanel'
 import { CellDetailPanel } from './CellDetailPanel'
 import { Legend } from './Legend'
 import { LayerToggle } from './LayerToggle'
 import { MapView } from './MapView'
+import { SearchBar } from './SearchBar'
 import { StatusBanner } from './StatusBanner'
 import { TimelineControl } from './TimelineControl'
+import type { AsyncResource } from '../hooks/useApiResource'
 import type { LodQuery } from '../lib/api'
+import type { ForecastOut } from '../lib/types'
 
 const POLL_INTERVAL_MS = 60_000
-
-// A stable primitive key for useApiResource's dependency array — a fresh
-// bbox object every render would never compare equal, and rounding to
-// ~1km also means a sub-pixel pan doesn't retrigger a fetch on its own
-// (MapView's own debounce already limits how often this can even change).
-function lodKey(query: LodQuery): string {
-  if (!query.bbox) return `${query.resolution ?? 'default'}:nationwide`
-  const round = (n: number) => Math.round(n * 100) / 100
-  const { minLat, minLon, maxLat, maxLon } = query.bbox
-  return `${query.resolution ?? 'default'}:${round(minLat)},${round(minLon)},${round(maxLat)},${round(maxLon)}`
-}
 
 export function MapPage() {
   const { state } = useMapUi()
   const { lod, bbox, forecastMinutes } = state
 
   const viewportReady = !lod.scopedToViewport || bbox !== null
-  const query: LodQuery = {
-    resolution: lod.resolution,
-    bbox: lod.scopedToViewport ? (bbox ?? undefined) : INDIA_BBOX,
-  }
+  // Padded by one cell radius (see lib/lod.ts's lodQueryFor) so cells that
+  // straddle the viewport edge render instead of dropping out.
+  const query: LodQuery = lodQueryFor(lod, bbox)
   const queryKey = lodKey(query)
 
   const currentGrid = useApiResource(() => fetchGridCurrent(query), [queryKey], {
@@ -41,17 +39,49 @@ export function MapPage() {
   })
 
   const isNow = forecastMinutes === 0
-  const forecastGrid = useApiResource(
-    () => fetchGridForecast(forecastMinutes, query),
-    [forecastMinutes, queryKey],
-    { pollIntervalMs: POLL_INTERVAL_MS, enabled: viewportReady && !isNow },
-  )
+
+  // Forecast frames come from the shared store: TimelineControl prefetches
+  // upcoming keyframes, and this read is served straight from cache during
+  // playback — no loading flip, no re-fetch, no jitter. Polling is NOT
+  // enabled here (the store handles freshness via prefetch; a 60s poll
+  // during playback would churn every cached frame).
+  const frame = useForecastFrame(forecastMinutes, queryKey, query, viewportReady && !isNow)
+  const forecastGrid = {
+    resource: {
+      status: frame.status,
+      data: frame.data,
+      isDemo: frame.isDemo,
+      message: frame.message,
+    } as AsyncResource<ForecastOut[]>,
+    refetch: () => ensureForecastFrame(forecastMinutes, queryKey, query),
+  }
 
   const weatherQuery: LodQuery = { ...query, resolution: weatherResolutionForLod(lod) }
   const weather = useApiResource(() => fetchWeather(weatherQuery), [lodKey(weatherQuery)], {
     pollIntervalMs: POLL_INTERVAL_MS,
     enabled: viewportReady,
   })
+
+  // A view change (new queryKey) invalidates the forecast cache for this
+  // view: warm the current position plus the next WARM_WINDOW keyframes so
+  // playback is smooth from the moment it starts. The warm-up is an explicit
+  // operation (see lib/forecastFrames.ts) — it reports `warming` to the
+  // banner and the timeline's play/restart buttons, and clears once every
+  // frame in the window is cached.
+  const queryRef = useRef(query)
+  const minutesRef = useRef(forecastMinutes)
+  useEffect(() => {
+    queryRef.current = query
+    minutesRef.current = forecastMinutes
+  })
+  useEffect(() => {
+    if (!viewportReady) return
+    warmForecastWindow(queryKey, queryRef.current, minutesRef.current)
+    // Only re-warm on a view change (queryKey), not on every playback tick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queryKey, viewportReady])
+
+  const warming = useForecastWarming(queryKey)
 
   const activeBaseLayer = isNow ? currentGrid : forecastGrid
   const activeLabel = isNow
@@ -65,6 +95,7 @@ export function MapPage() {
           label={activeLabel}
           resource={activeBaseLayer.resource}
           onRetry={activeBaseLayer.refetch}
+          warming={warming}
         />
       </div>
 
@@ -80,6 +111,7 @@ export function MapPage() {
       </div>
 
       <div className="overlay overlay-top-right">
+        <SearchBar />
         <AlertsPanel />
       </div>
 

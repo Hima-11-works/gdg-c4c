@@ -4,6 +4,10 @@ interface StatusBannerProps {
   label: string
   resource: AsyncResource<unknown[]>
   onRetry: () => void
+  /** True while the current map view's forecast frames are being fetched
+   *  into the cache (see lib/forecastFrames.ts's warmForecastWindow). Takes
+   *  priority over the other states — it's an active, short-lived operation. */
+  warming?: boolean
 }
 
 /** Surfaces the loading / error / empty-data / demo-data state of the
@@ -11,7 +15,16 @@ interface StatusBannerProps {
  * Other resources (weather, alerts, cell detail) show their own inline
  * status next to where they're displayed instead of fighting for this
  * one banner. */
-export function StatusBanner({ label, resource, onRetry }: StatusBannerProps) {
+export function StatusBanner({ label, resource, onRetry, warming = false }: StatusBannerProps) {
+  if (warming) {
+    return (
+      <div className="banner banner-info" role="status" aria-live="polite">
+        <span className="spinner" aria-hidden="true" />
+        Fetching and caching local results
+      </div>
+    )
+  }
+
   if (resource.status === 'idle' || resource.status === 'loading') {
     return (
       <div className="banner banner-info" role="status">

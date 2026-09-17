@@ -32,12 +32,13 @@ export const OVERLAY = {
 } as const
 
 // ---------------------------------------------------------------------------
-// Wind arrow — subdued neutral, never dominant.
+// Wind currents — subdued neutral, never dominant over the pollution colors.
 // ---------------------------------------------------------------------------
 
 export const WIND = {
-  arrowColor: '#9ca3af',     // light gray — visible but not prominent
+  arrowColor: '#9ca3af',     // light gray — the static streak line
   arrowStroke: '#0e1117',    // near-black outline for contrast
+  pulse: '#e5e7eb',          // the bright pulse travelling along the streak
 } as const
 
 // ---------------------------------------------------------------------------

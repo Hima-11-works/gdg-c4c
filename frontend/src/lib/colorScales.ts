@@ -1,12 +1,17 @@
 // Shared color ramps for the map layers and the Legend, so the two never
-// drift apart. PM2.5's breakpoints follow the commonly used US EPA AQI
-// bands (µg/m3); PDI's are a plain, unrelated sequential ramp — using a
-// visually distinct scale (not the AQI colors) is deliberate, so a PDI
-// layer is never mistaken for a second pollution measurement.
+// drift apart. PM2.5's bands run Very Good → Hazardous at 0 / 25 / 35 / 50 /
+// 80 / 150 / 250 µg/m³; PDI's are a plain, unrelated sequential ramp — using
+// a visually distinct scale (not the pollution colors) is deliberate, so a
+// PDI layer is never mistaken for a second pollution measurement.
 //
 // Colors are tuned for readability against the dark monochrome basemap
-// (see lib/mapTheme.ts). Low-end greens are kept saturated enough to
-// stand out on near-black; high-end reds/purples remain vivid.
+// (see lib/mapTheme.ts). The lowest band is a deep green (it sits on
+// near-black, so it needs to be distinctly green yet clearly "calm"); the
+// ramp then steps green → yellow → orange → red → purple.
+//
+// This single array drives everything color-related: the hex fill
+// expression, the smooth view's `sampleColor`, contrast mode's band
+// boundaries (`bandIndex`), and the Legend.
 
 import type { ExpressionSpecification } from '@maplibre/maplibre-gl-style-spec'
 
@@ -17,10 +22,11 @@ export interface ColorStop {
 }
 
 export const PM25_COLOR_SCALE: ColorStop[] = [
-  { value: 0, color: '#22c55e', label: 'Good (0)' },
-  { value: 12, color: '#eab308', label: 'Moderate (12)' },
-  { value: 35, color: '#f97316', label: 'Unhealthy for sensitive groups (35)' },
-  { value: 55, color: '#ef4444', label: 'Unhealthy (55)' },
+  { value: 0, color: '#166534', label: 'Very Good (0)' },
+  { value: 25, color: '#22c55e', label: 'Good (25)' },
+  { value: 35, color: '#eab308', label: 'Moderate (35)' },
+  { value: 50, color: '#f97316', label: 'Unhealthy for sensitive groups (50)' },
+  { value: 80, color: '#ef4444', label: 'Unhealthy (80)' },
   { value: 150, color: '#a855f7', label: 'Very unhealthy (150)' },
   { value: 250, color: '#7c3aed', label: 'Hazardous (250+)' },
 ]

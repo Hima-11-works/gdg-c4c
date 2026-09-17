@@ -37,8 +37,8 @@ export function Legend() {
           No estimate
         </div>
         <div className="legend-row">
-          <span className="swatch" style={{ backgroundColor: WIND.arrowColor }} />
-          Wind direction (arrow points downwind)
+          <span className="swatch" style={{ backgroundColor: WIND.pulse }} />
+          Wind current (flows downwind)
         </div>
       </section>
 

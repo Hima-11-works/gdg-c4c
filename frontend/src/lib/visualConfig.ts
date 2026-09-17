@@ -20,8 +20,17 @@ export const SELECTED_CELL_BORDER_WIDTH = 2
 /** Color of the selected cell's highlight border. */
 export const SELECTED_CELL_BORDER_COLOR = '#ffffffcc'
 
-/** Duration (ms) of color transitions between forecast keyframes. */
-export const COLOR_TRANSITION_DURATION_MS = 300
+/** Contrast mode: line drawn on the boundary between PM2.5 bands. Dark and
+ *  crisp so same-range regions read as separated blocks regardless of the
+ *  cell colors underneath. */
+export const CONTRAST_LINE_COLOR = '#05080c'
+export const CONTRAST_LINE_WIDTH = 1.6
+export const CONTRAST_LINE_OPACITY = 0.85
+
+/** Duration (ms) of the opacity dissolve between forecast frames. Long
+ *  enough to read as a continuous flow at the 750ms playback cadence (each
+ *  frame dissolves into the next), short enough to leave a moment of hold. */
+export const PM25_DISSOLVE_DURATION_MS = 550
 
 /** Duration (ms) of opacity crossfade when toggling PM2.5 / PDI layers. */
 export const LAYER_CROSSFADE_DURATION_MS = 250

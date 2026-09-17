@@ -31,11 +31,12 @@ focused on what exists and how to run it.
 15. [Running tests](#running-tests)
 16. [Demo mode](#demo-mode)
 17. [Level of detail](#level-of-detail)
-18. [API overview](#api-overview)
-19. [PDI: current definition and disclaimer](#pdi-current-definition-and-disclaimer)
-20. [Forecast model: current assumptions](#forecast-model-current-assumptions)
-21. [Known limitations](#known-limitations)
-22. [Future extension points](#future-extension-points)
+18. [Render modes](#render-modes)
+19. [API overview](#api-overview)
+20. [PDI: current definition and disclaimer](#pdi-current-definition-and-disclaimer)
+21. [Forecast model: current assumptions](#forecast-model-current-assumptions)
+22. [Known limitations](#known-limitations)
+23. [Future extension points](#future-extension-points)
 
 ## What this project does
 
@@ -82,6 +83,27 @@ The boundary layers are rendered as separate MapLibre sources, independent
 of the basemap provider. See `frontend/src/lib/stateBoundaries.ts` for
 the data source documentation and `frontend/src/components/MapView.tsx`
 for the layer setup.
+
+### Location search data
+
+The top-right search bar searches states/UTs, districts, cities, and
+localities. Its dataset is built from the **GeoNames India dump**,
+filtered to administrative level 1 (states) and 2 (districts), populated
+places (cities), sections of populated places (localities), and
+additionally **populated places within 10 km of a major city** — small
+neighbourhoods like Koramangala or Andheri are filed by GeoNames as plain
+low-population places, so a population-only filter would miss exactly the
+localities a user searches for.
+
+- **Source:** https://download.geonames.org/export/dump/ (`IN.zip`)
+- **License:** CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/)
+- **File:** `frontend/public/data/india_locations.json` — lazy-loaded on
+  first search focus (not part of the initial page load)
+- **Categories:** `state` (36), `district` (758), `city` (~2.9k),
+  `locality` (~6.6k)
+
+Selecting a result flies the map to that coordinate at a zoom tier
+appropriate to the kind (see `ZOOM_BY_KIND` in `frontend/src/lib/locations.ts`).
 
 ## Quick start: step by step
 
@@ -379,13 +401,16 @@ which one ran.
 │  └─ requirements.lock         # exact versions installed in Docker
 ├─ frontend/
 │  ├─ public/
-│  │  └─ data/                   # static GeoJSON assets for the map
+│  │  └─ data/                   # static map assets
 │  │     ├─ india_states.geojson #   India state/UT boundaries (geoBoundaries ADM1, ODC-ODbL)
-│  │     └─ india_country.geojson#   India country outline (dissolved from the same ADM1 data)
+│  │     ├─ india_country.geojson#   India country outline (dissolved from the same ADM1 data)
+│  │     └─ india_locations.json #   searchable states/districts/cities/localities (GeoNames, CC BY 4.0)
 │  └─ src/
-│     ├─ components/            # MapPage, MapView, AlertsPanel, CellDetailPanel, TimelineControl, ...
-│     ├─ lib/                    # api.ts (the only fetch caller), lod.ts (zoom -> resolution/bbox),
-│     │                          #   h3Geometry.ts, stateBoundaries.ts, colorScales.ts, format.ts, types.ts
+│     ├─ components/            # MapPage, MapView, SearchBar, AlertsPanel, CellDetailPanel, TimelineControl, ...
+│     ├─ lib/                    # api.ts (the only backend fetch caller), lod.ts (zoom -> resolution/bbox),
+│     │                          #   h3Geometry.ts, stateBoundaries.ts, locations.ts (place search),
+│     │                          #   forecastFrames.ts (frame cache), smoothField.ts (smooth view),
+│     │                          #   pm25Contours.ts (contrast mode), mapTheme.ts, colorScales.ts, format.ts, types.ts
 │     ├─ hooks/                  # useApiResource.ts (loading/success/error/poll/retry, no data-fetching
 │     │                          #   library), useStateBoundaries.ts
 │     └─ state/                  # small useReducer + Context for UI-only state
@@ -496,7 +521,7 @@ separate and only holds `VITE_API_BASE_URL`.
 | `DISPERSION_MAX_TRANSPORT_FRACTION`, `DISPERSION_WIND_TRANSPORT_REFERENCE_MS`, `DISPERSION_CALM_WIND_THRESHOLD_MS` | dispersion | How much PM2.5 wind can move per hour, and at what speeds (defaults 0.6, 8 m/s, 0.5 m/s) |
 | `DISPERSION_WIND_CONE_HALF_ANGLE_DEG` | dispersion | Half-angle (default 50°) of the downwind neighbor-selection cone |
 | `DISPERSION_CONFIDENCE_DECAY_PER_HOUR`, `DISPERSION_MISSING_WEATHER_CONFIDENCE_PENALTY` | dispersion | Per-hour confidence discount, and an extra one for a cell with no weather reading (defaults 0.9, 0.5) |
-| `ALERT_WARNING_THRESHOLD_UGM3`, `ALERT_CRITICAL_THRESHOLD_UGM3` | alerts | PM2.5 at/above which a cell alerts WARNING/CRITICAL now, or WATCH if only a forecast reaches it (defaults 55, 150) |
+| `ALERT_WARNING_THRESHOLD_UGM3`, `ALERT_CRITICAL_THRESHOLD_UGM3` | alerts | PM2.5 at/above which a cell alerts WARNING/CRITICAL now, or WATCH if only a forecast reaches it (defaults 80, 150 — matching the map's PM2.5 color-band boundaries) |
 | `ALERT_SHARP_INCREASE_THRESHOLD_UGM3` | alerts | Current-to-forecast jump (µg/m³) counted as a "sharp increase" alert (default 25) |
 | `ALERT_PDI_HIGH_THRESHOLD`, `ALERT_PDI_WORSENING_MIN_INCREASE_UGM3` | alerts | PDI considered "high pressure", and the smaller PM2.5 increase counted as "worsening" alongside it (defaults 60, 5) |
 | `ALERT_ACTIVE_LOOKBACK_HOURS` | alerts | A cell with an alert created within this many hours is skipped on the next run, and is what `/api/v1/alerts` considers "active" (default 24) |
@@ -790,41 +815,39 @@ worth stating plainly:
 
 The app is scoped to **India**, and never loads fine-resolution data for
 the whole country at once. What's on screen is driven entirely by the
-current **zoom level**, via `frontend/src/lib/lod.ts`'s `lodForZoom`:
+current **zoom level**, via `frontend/src/lib/lod.ts`'s `lodForZoom`.
+Detail is capped at **level 3**, counting the country-wide view as
+level 1:
 
-| Zoom | H3 resolution | ~Cell area | Scope of the request |
-|---|---|---|---|
-| < 6 (country) | 3 | ~12,400 km² | Always all of India (`INDIA_BBOX`) — always ~800 cells, too small to bother scoping to viewport |
-| 6 – 7 | 4 | ~1,770 km² | The current map viewport |
-| 7 – 8 | 5 | ~253 km² | The current map viewport |
-| 8 – 9 | 6 | ~36 km² | The current map viewport |
-| 9 – 10 | 7 | ~5.2 km² | The current map viewport |
-| ≥ 10 (local) | 8 | ~0.7 km² | The current map viewport |
+| Level | Zoom | H3 resolution | ~Cell area | Scope of the request |
+|---|---|---|---|---|
+| 1 (country) | < 6 | 3 | ~12,400 km² | Always all of India (`INDIA_BBOX`) — always ~800 cells, too small to bother scoping to viewport |
+| 2 (state) | 6 – 7 | 4 | ~1,770 km² | The current map viewport |
+| 3 (state) | ≥ 7 | 5 | ~253 km² | The current map viewport |
 
-Resolution steps up by exactly one H3 level roughly every zoom level in
-the 6–10 range rather than jumping straight from 3 to 8 in one bound —
-each H3 resolution step is already a ~7x jump in cell density on its
-own, so five smaller steps reveal detail progressively as you zoom
-instead of one abrupt jump. Weather (wind arrows) uses this same
-resolution at every tier *except* country, where it deliberately
-requests a coarser resolution (2, not 3) than the PM2.5 grid — the map
-only ever renders a thinned-down, sparse subset of wind points anyway,
-so fetching them at the grid's full country-tier resolution would be
-wasted payload (measured: ~210KB → ~29KB).
+Finer H3 resolutions (6–8) are deliberately **not** generated, so the
+map's zoom is capped at `MAX_ZOOM` (= 8, the zoom at which level 3 is
+reached) — zooming in further would only enlarge the same cells without
+revealing anything new. Resolution steps up by exactly one H3 level per
+tier (each step is already a ~7x jump in cell density). Weather (wind
+arrows) uses this same resolution at every tier *except* country, where
+it deliberately requests a coarser resolution (2, not 3) than the PM2.5
+grid — the map only ever renders a thinned-down, sparse subset of wind
+points anyway, so fetching them at the grid's full country-tier
+resolution would be wasted payload (measured: ~210KB → ~29KB).
 
 On load the map fits all of India (`INDIA_BOUNDS` in
 `frontend/src/components/MapView.tsx`) and shows the coarse country
 tier: a full nationwide PM2.5 choropleth (not sparse dots — see "Where
-the data comes from today" below) plus wind arrows — "generalized"
+the data comes from today" below) plus wind currents — "generalized"
 because the resolution itself is coarse, not because anything is
 hidden. Zoom into a region and the same hex/wind/PDI layers this README
 describes elsewhere start rendering denser, finer cells for just that
-area; zoom into a city and they become the full per-hex grid. PDI is
-state-tier-and-finer only (`PDI_MIN_ZOOM` in `frontend/src/lib/lod.ts`,
-tied to the same zoom-6 breakpoint above) — not part of the bare
-country overview. Clicking any hex opens the same full detail panel
-(location, PM2.5, PDI + its factor breakdown, wind, weather, forecast,
-confidence) regardless of tier.
+area, up to level 3. PDI is level-2-and-finer only (`PDI_MIN_ZOOM` in
+`frontend/src/lib/lod.ts`, tied to the same zoom-6 breakpoint above) —
+not part of the bare country overview. Clicking any hex opens the same
+full detail panel (location, PM2.5, PDI + its factor breakdown, wind,
+weather, forecast, confidence) regardless of tier.
 
 **How the frontend decides what to fetch** — `frontend/src/lib/lod.ts`'s
 `lodForZoom(zoom)` maps the current zoom to `{ resolution, bbox? }`.
@@ -834,8 +857,9 @@ flick doesn't fire one request per tick); `components/MapPage.tsx` reads
 that state and passes `{ resolution, bbox }` into `fetchGridCurrent` /
 `fetchGridForecast` / `fetchWeather` (`frontend/src/lib/api.ts`), which
 send them as `resolution`/`min_lat`/`min_lon`/`max_lat`/`max_lon` query
-params. State/local tiers wait for a real viewport before fetching
-(never fall back to "no bbox" for a fine resolution — see below).
+params. Viewport-scoped tiers (levels 2 and 3) wait for a real viewport
+before fetching (never fall back to "no bbox" for a fine resolution — see
+below).
 
 **How the backend supports this** — every one of those three endpoints
 accepts an optional `resolution` and an optional bounding box
@@ -908,6 +932,37 @@ have zoomed again before the detail panel finishes loading).
   [Demo mode](#demo-mode). Nothing about this pipeline changed — it
   isn't what powers the level-of-detail reads above, and is a
   completely separate concept from `app/services/demo_data.py`.
+
+## Render modes
+
+The pollution field has two renderings, switchable from the **layer
+panel**; the selection is UI state (`viewMode` in
+`frontend/src/state/mapUiReducer.ts`), not a backend/API concern.
+
+- **Hex cells** (default) — the discrete H3 hexagons, one value per cell.
+- **Smooth** — the same per-cell values as a continuous raster
+  (`frontend/src/lib/smoothField.ts`): a compact weighted average over
+  nearby cell centers, bilinearly upsampled and georeferenced to the view
+  bbox. Rows are mapped in Web Mercator Y to stay aligned with the map.
+
+Both views use the **exact same color ramp** (`frontend/src/lib/colorScales.ts`),
+so the legend is valid in either. Bands run Very Good → Hazardous at
+**0 / 25 / 35 / 50 / 80 / 150 / 250 µg/m³** (the lowest being a deep green),
+and that one array also drives the smooth field's sampling and contrast
+mode's band boundaries.
+
+**Contrast mode** (a checkbox; hex view only) draws a dark line on the
+boundary between different PM2.5 bands (`frontend/src/lib/pm25Contours.ts`),
+outlining each same-range region topologically rather than tracing every
+hexagon.
+
+**Playback works identically in both views.** `components/MapView.tsx`
+double-buffers the field — two hex sources *and* two raster image sources
+— and the frame pipeline writes the new frame to the hidden buffer, then
+dissolves by opacity with a constant-coverage curve (so the grid never
+dims mid-transition; only the colors shift). The same path serves the
+timeline animation, manual jumps, the PDI toggle, and contrast-mode
+contours, which dissolve in step with the fills they describe.
 
 ## API overview
 
