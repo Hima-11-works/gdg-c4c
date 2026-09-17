@@ -29,6 +29,7 @@ export const OVERLAY = {
   indiaBorder: '#4a5060',    // solid outer border of India
   noData: '#2a2e36',         // dark — cells with no estimate
   cellOutline: '#00000030',  // faint — hex cell borders
+  maskFill: '#0e1117',       // covers everything outside the buffered border
 } as const
 
 // ---------------------------------------------------------------------------

@@ -16,15 +16,16 @@ import {
   windToFeatureCollection,
 } from '../lib/h3Geometry'
 import { INDIA_BBOX, PDI_MIN_ZOOM } from '../lib/lod'
-import { INDIA_OUTLINE_URL, STATE_BOUNDARIES_URL } from '../lib/stateBoundaries'
+import { INDIA_OUTLINE_URL, INDIA_MASK_URL, STATE_BOUNDARIES_URL } from '../lib/stateBoundaries'
 import { BASE_STYLE_URL, OVERLAY, WIND, BASEMAP, patchBasemapStyle } from '../lib/mapTheme'
 import {
   CELL_BORDER_COLOR,
   CELL_BORDER_WIDTH,
-  PM25_DISSOLVE_DURATION_MS,
+  INDIA_MASK_OPACITY,
   LAYER_CROSSFADE_DURATION_MS,
   PDI_FILL_OPACITY,
   PM25_FILL_OPACITY,
+  PM25_DISSOLVE_DURATION_MS,
   prefersReducedMotion,
   SELECTED_CELL_BORDER_COLOR,
   SELECTED_CELL_BORDER_WIDTH,
@@ -97,6 +98,12 @@ const WIND_ARROW_IMAGE = 'wind-arrow'
 
 const SOURCE_SELECTED = 'selected-cell'
 const LAYER_SELECTED_OUTLINE = 'selected-cell-outline'
+
+// Covers everything beyond India's border + a short buffer, so the H3 grid
+// (generated for a rectangular bbox/viewport) only shows over India and a
+// little outside it. Precomputed — see public/data/india_mask.geojson.
+const SOURCE_INDIA_MASK = 'india-mask'
+const LAYER_INDIA_MASK = 'india-mask-fill'
 
 // Wind arrows are supplementary/decorative ("generalized meteorological
 // information"), not the primary data layer the way the PM2.5/PDI cells
@@ -554,6 +561,20 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
               'icon-ignore-placement': true,
               'icon-size': ['interpolate', ['linear'], ['get', 'wind_speed'], 0, 0.5, 15, 1.1],
             },
+          })
+
+          // Mask — hides everything beyond India's border plus a ~30 km
+          // buffer, so the H3 grid (generated for a rectangular bbox or the
+          // viewport) only appears over India and a little outside it. Added
+          // last, so it sits above the data and wind layers; its hole is
+          // larger than India, so the state borders, outer boundary and
+          // selected-cell highlight are never covered.
+          map!.addSource(SOURCE_INDIA_MASK, { type: 'geojson', data: INDIA_MASK_URL })
+          map!.addLayer({
+            id: LAYER_INDIA_MASK,
+            type: 'fill',
+            source: SOURCE_INDIA_MASK,
+            paint: { 'fill-color': OVERLAY.maskFill, 'fill-opacity': INDIA_MASK_OPACITY },
           })
 
           const clickableLayers = [LAYER_PM25_FILL.a, LAYER_PM25_FILL.b, LAYER_PDI_FILL]

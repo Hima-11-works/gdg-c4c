@@ -8,6 +8,11 @@ export const PM25_FILL_OPACITY = 0.62
 /** Fill opacity for the PDI hex grid layer. */
 export const PDI_FILL_OPACITY = 0.6
 
+/** Opacity of the outside-India mask (see public/data/india_mask.geojson):
+ *  high enough that the H3 grid and basemap beyond the buffered border read
+ *  as hidden, low enough that a hint of the surrounding geography remains. */
+export const INDIA_MASK_OPACITY = 0.92
+
 /** Width of unselected hex cell borders (subtle, quiet). */
 export const CELL_BORDER_WIDTH = 0.5
 

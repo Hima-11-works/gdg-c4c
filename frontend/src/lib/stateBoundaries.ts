@@ -25,6 +25,7 @@ import type { Feature, FeatureCollection, MultiPolygon, Polygon, Position } from
 
 export const STATE_BOUNDARIES_URL = '/data/india_states.geojson'
 export const INDIA_OUTLINE_URL = '/data/india_country.geojson'
+export const INDIA_MASK_URL = '/data/india_mask.geojson'
 
 export type StateBoundaries = FeatureCollection<Polygon | MultiPolygon, { name: string }>
 
