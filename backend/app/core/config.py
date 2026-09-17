@@ -185,15 +185,16 @@ class Settings(BaseSettings):
     # --- Alerts (app.services.alert_generation.AlertGenerationService) ---
     # PM2.5 (µg/m3) at or above which a cell gets a WARNING alert if it's
     # happening now, or a WATCH alert if only a forecast horizon reaches
-    # it. Default follows the commonly used AQI "Unhealthy" breakpoint —
-    # a normalization/triage choice, not a regulatory claim.
-    alert_warning_threshold_ugm3: float = Field(default=55.0, gt=0)
+    # it. Default matches the "Unhealthy" boundary of the map's PM2.5 color
+    # bands (frontend/src/lib/colorScales.ts) — a normalization/triage
+    # choice, not a regulatory claim.
+    alert_warning_threshold_ugm3: float = Field(default=80.0, gt=0)
     # PM2.5 at or above which a cell gets a CRITICAL alert if happening
     # now (still only WATCH if just a forecast horizon reaches it — see
     # AlertGenerationService's docstring for why severity encodes
     # "happening now" vs "advance warning" rather than just magnitude).
-    # Default follows the AQI "Unhealthy" upper range / "Very Unhealthy"
-    # start.
+    # Default matches the "Very unhealthy" boundary of the map's PM2.5
+    # color bands.
     alert_critical_threshold_ugm3: float = Field(default=150.0, gt=0)
     # A cell with an alert already created within this many hours is
     # skipped on the next pipeline run, so a persistent condition doesn't
