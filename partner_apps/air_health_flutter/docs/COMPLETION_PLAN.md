@@ -91,7 +91,7 @@ tested. All gaps below are wiring/integration, not half-written domain logic.
 |---|---|---|
 | 1 | Preferences plumbing (`UserProfile.preferences`, persistence, notifier, engine) + wire Settings toggles (P0-5) | **done** |
 | 2 | Alert coordinator + refresh cadence + `prune()` (P0-1, P0-2) | **done** |
-| 3 | Permissions in onboarding/Settings (P0-3) | pending |
+| 3 | Permissions in onboarding/Settings (P0-3) | **done** |
 | 4 | Fix simulator time model (P0-4) | pending |
 | 5 | Quiet hours + custom rules + lead time (P1-6/7/8) | pending |
 | 6 | Backend integration decision + adapter (P1-9) | pending |
@@ -113,3 +113,17 @@ incl. `test/acceptance/acceptance_test.dart`). Add tests for each new piece
 - Test: `test/providers/alert_coordinator_test.dart` covers the no-profile
   guard (returns null, no side effects). A full evaluate-and-dispatch test
   still needs mock data providers (follow-up).
+
+### Step 3 notes
+
+- Onboarding: the Location step now has an **Allow location** button
+  (`LocationService.requestAndLocate()`, with a result message and
+  `currentLocationProvider` invalidation on success); the Notifications step
+  has an **Enable notifications** button
+  (`NotificationService.requestPermissions()`). Both steps stay skippable.
+- Settings: the **Location permission** tile now checks status and either
+  requests, opens app settings (permanently denied) or opens location
+  services (disabled); the **Notification permission** tile requests
+  notifications permission. The **Current location** tile shows the resolved
+  location label instead of a hardcoded one.
+- Remaining no-op tile: **Forecast warning lead time** (P1-8, deferred).

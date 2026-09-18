@@ -3,8 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../domain/models/models.dart';
+import '../../notifications/notification_service.dart';
+import '../../providers/alert_providers.dart';
+import '../../providers/location_providers.dart';
 import '../../providers/prefs_providers.dart';
 import '../../providers/profile_providers.dart';
+import '../../services/location_service.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
 
@@ -29,6 +33,7 @@ class ProfileScreen extends ConsumerWidget {
         ),
         data: (profile) {
           final prefs = profile?.preferences ?? const UserAlertPreferences();
+          final location = ref.watch(resolvedLocationProvider);
           return ListView(
             padding: const EdgeInsets.only(bottom: AppSpacing.xxxxl),
             children: [
@@ -37,14 +42,14 @@ class ProfileScreen extends ConsumerWidget {
               _SettingsTile(
                 icon: Icons.location_on_outlined,
                 title: 'Current location',
-                subtitle: 'Bhubaneswar',
-                onTap: () {},
+                subtitle: location.label ?? 'Current position',
+                onTap: () => _manageLocationPermission(context, ref),
               ),
               _SettingsTile(
                 icon: Icons.location_searching,
                 title: 'Location permission',
                 subtitle: 'Approximate location — used for nearby data',
-                onTap: () {},
+                onTap: () => _manageLocationPermission(context, ref),
               ),
 
               // ── Notifications ─────────────────────────────────────
@@ -62,7 +67,7 @@ class ProfileScreen extends ConsumerWidget {
                 icon: Icons.notifications_active_outlined,
                 title: 'Notification permission',
                 subtitle: 'Manage system notification access',
-                onTap: () {},
+                onTap: () => _manageNotificationPermission(context, ref),
               ),
               _TimeRangeTile(
                 icon: Icons.do_not_disturb_on_outlined,
@@ -209,6 +214,69 @@ class ProfileScreen extends ConsumerWidget {
           Navigator.pop(sheetContext);
         },
       ),
+    );
+  }
+
+  // ── Location permission ──────────────────────────────────────────────
+
+  Future<void> _manageLocationPermission(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final service = ref.read(locationServiceProvider);
+    final status = await service.checkPermission();
+    if (!context.mounted) return;
+
+    if (status == LocationPermissionStatus.permanentlyDenied) {
+      await service.openAppSettings();
+      return;
+    }
+    if (status == LocationPermissionStatus.serviceDisabled) {
+      await service.openLocationSettings();
+      return;
+    }
+    if (status == LocationPermissionStatus.granted) {
+      _showMessage(context, 'Location permission is already granted');
+      return;
+    }
+
+    // Denied (not yet determined): request it.
+    final result = await service.requestAndLocate();
+    if (!context.mounted) return;
+    if (result is LocationSuccess) {
+      ref.invalidate(currentLocationProvider);
+      _showMessage(context, 'Location enabled');
+    } else if (result is LocationPermanentlyDenied) {
+      _showMessage(context, 'Location is blocked — enable it in system settings');
+    } else {
+      _showMessage(context, 'Location permission not granted');
+    }
+  }
+
+  // ── Notification permission ──────────────────────────────────────────
+
+  Future<void> _manageNotificationPermission(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final result =
+        await ref.read(notificationServiceProvider).requestPermissions();
+    if (!context.mounted) return;
+    _showMessage(
+      context,
+      switch (result) {
+        NotificationPermissionResult.granted => 'Notifications enabled',
+        NotificationPermissionResult.denied =>
+          'Notification permission not granted',
+        NotificationPermissionResult.permanentlyDenied =>
+          'Notifications are blocked in system settings',
+      },
+    );
+  }
+
+  static void _showMessage(BuildContext context, String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
     );
   }
 
