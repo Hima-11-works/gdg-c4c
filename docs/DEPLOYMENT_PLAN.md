@@ -176,14 +176,43 @@ a **fresh, empty** database with a managed-style `DATABASE_URL` (see
 ## Phase 4 — Flutter app → backend
 
 The adapter already exists (`GridApiPollutionDataProvider`, app-side mapping
-of `/api/v1/...`). Only configuration remains:
+of `/api/v1/...`) — no code change is needed, only configuration. The base
+URL is the API **origin**; the client appends `/api/v1/...` itself.
 
-1. `flutter build apk --release --dart-define=POLLUTION_API_BASE_URL=https://<backend>.vercel.app`
-2. HTTPS → no Android cleartext exception; `INTERNET` permission is already
-   present. Debug builds still use the scenario simulator; unset → dummy data.
-3. Re-check against live data: the adapter joins `/weather` + `/grid/current`
-   on `h3_cell` to locate a point, requests forecasts hourly (6 h cap), and
-   derives AQI from PM2.5.
+1. Run against the deployed API (debug):
+   ```bash
+   flutter run --dart-define=POLLUTION_API_BASE_URL=https://<backend>.vercel.app
+   ```
+2. Release build:
+   ```bash
+   flutter build apk --release \
+     --dart-define=POLLUTION_API_BASE_URL=https://<backend>.vercel.app
+   ```
+3. HTTPS → no Android cleartext exception; `INTERNET` permission is already
+   present. Debug builds still use the scenario simulator; if the define is
+   omitted the app falls back to the bundled dummy data. CORS is irrelevant
+   to the native app (no browser origin).
+4. Re-check against live data: the adapter joins `/weather` (coordinates)
+   with `/grid/current` (PM2.5) on `h3_cell`, requests hourly
+   `/grid/forecast` up to the API's **6 h cap** (the app's 12 h horizon
+   yields ~6 points), derives AQI from PM2.5, and takes events from
+   `/alerts` for the user's cell.
+
+### Phase 4 contract check (run locally, 2026-09-18)
+
+Replayed the adapter's exact requests against the real backend for
+Bhubaneswar (20.2961, 85.8245) at `resolution=8`, a ±0.06° box:
+
+- `grid/current`, `weather` and `grid/forecast?minutes=60` each returned the
+  same **203 cells** (all `is_demo`, since no rows are persisted outside
+  Delhi NCR).
+- The `h3_cell` join produced 203 cells with both PM2.5 and coordinates; the
+  nearest cell was **0.1 km** away (pm25 47.5) and had a +60 min forecast
+  (47.1).
+
+This confirms the adapter's data path against the real API, not just its
+in-memory fake. The only unverified piece is the Dart build/run itself —
+there is no Flutter/Dart SDK in this environment.
 
 ## Phase 5 — (Optional) real data + scheduling
 
