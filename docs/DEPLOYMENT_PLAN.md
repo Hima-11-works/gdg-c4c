@@ -214,13 +214,42 @@ This confirms the adapter's data path against the real API, not just its
 in-memory fake. The only unverified piece is the Dart build/run itself —
 there is no Flutter/Dart SDK in this environment.
 
-## Phase 5 — (Optional) real data + scheduling
+## Phase 5 — Scheduled real data (optional)
 
-- GitHub Actions cron with the `DATABASE_URL` secret running
-  `python -m app.pipeline.run` (DEMO_MODE=true for deterministic, or set
-  `OPENAQ_API_KEY` for live data). Avoids serverless time limits.
-- Only if Vercel Cron is required: add a secret-protected pipeline endpoint
-  and a `crons` entry, accepting the duration risk.
+The web MVP works without this (country-wide demo fallback). This adds the
+real, persisted Delhi-NCR pipeline data on a schedule.
+
+Implemented: `.github/workflows/pipeline.yml` runs hourly (and on manual
+dispatch):
+
+1. `pip install -r backend/requirements.lock`
+2. `alembic upgrade head`
+3. `python -m app.pipeline.run`
+
+GitHub Actions rather than Vercel Cron on purpose: a pipeline run is
+~30–60 s and would exceed Hobby function budgets, and Vercel Cron only
+invokes HTTP endpoints (the pipeline is CLI-only).
+
+Configure in the GitHub repo (Settings → Secrets and variables → Actions):
+
+| Kind | Name | Value |
+|---|---|---|
+| Secret | `DATABASE_URL` | the **direct** (non-pooler) Neon string |
+| Variable | `PIPELINE_DEMO_MODE` | `true` (default) deterministic, or `false` for live |
+| Secret | `OPENAQ_API_KEY` | only when `PIPELINE_DEMO_MODE=false` |
+
+Notes:
+
+- Use the **direct** URL: Alembic builds its own engine (not via
+  `app/db/session.py`), so it doesn't get the pooler-safe
+  `prepare_threshold=None` — the pooled `-pooler` host can break its
+  prepared statements.
+- Scheduled workflows only run on the default branch (`main` after the PR)
+  and pause after ~60 days of repo inactivity.
+- `workflow_dispatch` lets you run it on demand with the "Run workflow"
+  button (and, with `DEMO_MODE=false`, produce a live OpenAQ/Open-Meteo run).
+- Vercel Cron remains an option only if a secret-protected pipeline HTTP
+  endpoint is added; not implemented.
 
 ## Risks / decisions
 

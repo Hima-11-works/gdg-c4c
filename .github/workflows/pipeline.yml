@@ -1,0 +1,65 @@
+name: Pollution pipeline
+
+# Runs the full ingestion -> grid -> forecast -> alerts pipeline against the
+# hosted database. The app itself has no scheduler (see README "MVP
+# limitations"); this workflow is that scheduler.
+#
+# Repository configuration:
+#   secret   DATABASE_URL         direct (non-pooler) Neon connection string
+#   variable PIPELINE_DEMO_MODE   optional; "true" (default) or "false"
+#   secret   OPENAQ_API_KEY       only needed when PIPELINE_DEMO_MODE=false
+#
+# GitHub only runs scheduled workflows on the default branch, and pauses a
+# schedule after ~60 days without repository activity.
+#
+# See docs/DEPLOYMENT_PLAN.md.
+
+on:
+  schedule:
+    # Hourly on the hour, UTC. Scheduled runs can be delayed under load.
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pollution-pipeline
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: backend
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DEMO_MODE: ${{ vars.PIPELINE_DEMO_MODE || 'true' }}
+      OPENAQ_API_KEY: ${{ secrets.OPENAQ_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check DATABASE_URL is configured
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::Set the DATABASE_URL repository secret (a direct Neon connection string)."
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.lock
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.lock
+
+      - name: Apply migrations
+        run: alembic upgrade head
+
+      - name: Run pipeline
+        run: python -m app.pipeline.run
