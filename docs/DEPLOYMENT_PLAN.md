@@ -151,11 +151,27 @@ a **fresh, empty** database with a managed-style `DATABASE_URL` (see
 
 ## Phase 3 — Frontend on Vercel
 
-1. New Vercel project, root `frontend/`, preset Vite, build `npm run build`,
-   output `dist`.
-2. Env `VITE_API_BASE_URL=https://<backend>.vercel.app` (inlined at build
-   time — set it before deploying).
-3. Single page, no router → no SPA fallback rewrite needed.
+1. New Vercel project, **root directory `frontend/`** (this is a monorepo —
+   leaving the root at the repo root finds no `package.json` and fails).
+   `frontend/vercel.json` pins the rest explicitly:
+   framework `vite`, `npm ci`, `npm run build`, output `dist`.
+2. Env `VITE_API_BASE_URL=https://<backend>.vercel.app` (Vite inlines it at
+   **build** time — set it before deploying; changing it needs a redeploy).
+3. Add the frontend origin to the backend's `CORS_ORIGINS`
+   (comma-separated). No SPA fallback rewrite is needed — the app is a single
+   page with no router.
+
+### Phase 3 rehearsal (run locally, 2026-09-18)
+
+- `npm ci` — clean lockfile install, 0 vulnerabilities.
+- `npm run lint` (`oxlint`) — 0 errors, 1 pre-existing warning
+  (spread in a hook's dependency array, `hooks/useApiResource.ts`).
+- `VITE_API_BASE_URL=https://air-health-api.vercel.app npm run build` —
+  `tsc -b` type-check + `vite build` succeed; the URL is present in the
+  emitted `dist/assets/*.js`, confirming it is inlined.
+- Output: `dist/` with `index.html`, hashed `assets/*.js|css`, the MapLibre
+  worker, and `data/*.geojson`/`data/india_locations.json`. Main JS ~1.45 MB
+  (~420 KB gzip); the >500 KB chunk-size message is advisory only.
 
 ## Phase 4 — Flutter app → backend
 
