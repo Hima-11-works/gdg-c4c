@@ -18,17 +18,26 @@ class SecureProfileStore {
 
   Future<void> save(UserProfile profile) async {
     final prefs = profile.preferences;
+    final custom = profile.customRules;
     await _storage.write(
       key: _keyProfile,
       value: jsonEncode({
         'healthContext': profile.healthContext.name,
         'sensitivity': profile.sensitivity.name,
+        'customRules': custom == null
+            ? null
+            : {
+                'warningAqi': custom.warningAqi,
+                'forecastWarningAqi': custom.forecastWarningAqi,
+                'rapidRiseAqiPerHour': custom.rapidRiseAqiPerHour,
+              },
         'preferences': {
           'alertsEnabled': prefs.alertsEnabled,
           'recoveryAlertsEnabled': prefs.recoveryAlertsEnabled,
           'minimumSeverity': prefs.minimumSeverity.name,
           'quietHoursStart': prefs.quietHoursStart?.toIso8601String(),
           'quietHoursEnd': prefs.quietHoursEnd?.toIso8601String(),
+          'leadTimeMinutes': prefs.leadTime?.inMinutes,
         },
       }),
     );
@@ -47,7 +56,21 @@ class SecureProfileStore {
         (e) => e.name == map['sensitivity'],
         orElse: () => AlertSensitivity.standard,
       ),
+      customRules: _readCustomRules(map['customRules']),
       preferences: _readPreferences(map['preferences']),
+    );
+  }
+
+  /// Read stored custom sensitivity rules, or null if the profile never had
+  /// any (or the value is malformed).
+  static CustomSensitivityRules? _readCustomRules(Object? raw) {
+    if (raw is! Map) return null;
+    final map = raw.cast<String, dynamic>();
+    return CustomSensitivityRules(
+      warningAqi: (map['warningAqi'] as num?)?.toInt() ?? 101,
+      forecastWarningAqi: (map['forecastWarningAqi'] as num?)?.toInt() ?? 151,
+      rapidRiseAqiPerHour:
+          (map['rapidRiseAqiPerHour'] as num?)?.toInt() ?? 30,
     );
   }
 
@@ -65,11 +88,15 @@ class SecureProfileStore {
       ),
       quietHoursStart: _parseDate(map['quietHoursStart']),
       quietHoursEnd: _parseDate(map['quietHoursEnd']),
+      leadTime: _parseDuration(map['leadTimeMinutes']),
     );
   }
 
   static DateTime? _parseDate(Object? value) =>
       value is String ? DateTime.tryParse(value) : null;
+
+  static Duration? _parseDuration(Object? value) =>
+      value is num ? Duration(minutes: value.toInt()) : null;
 
   Future<void> delete() async {
     await _storage.delete(key: _keyProfile);

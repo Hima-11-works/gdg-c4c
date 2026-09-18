@@ -93,7 +93,7 @@ tested. All gaps below are wiring/integration, not half-written domain logic.
 | 2 | Alert coordinator + refresh cadence + `prune()` (P0-1, P0-2) | **done** |
 | 3 | Permissions in onboarding/Settings (P0-3) | **done** |
 | 4 | Fix simulator time model (P0-4) | **done** |
-| 5 | Quiet hours + custom rules + lead time (P1-6/7/8) | pending |
+| 5 | Quiet hours + custom rules + lead time (P1-6/7/8) | **done** |
 | 6 | Backend integration decision + adapter (P1-9) | pending |
 | 7 | iOS platform (P1-10, if in scope) | pending |
 | 8 | P2/P3 cleanup | pending |
@@ -158,3 +158,34 @@ incl. `test/acceptance/acceptance_test.dart`). Add tests for each new piece
 - NOTE: no Flutter/Dart SDK here — changes are statically verified only
   (brace/paren balance, call-site grep). Run `flutter analyze && flutter test`
   on a Flutter machine before relying on them.
+
+### Step 5 notes
+
+- **Quiet hours (P1-6):** the `_TimeRangeTile` is now wired to
+  `UserAlertPreferences.quietHoursStart/End`; tapping it opens
+  `_QuietHoursSheet` (enable switch + from/to `showTimePicker`s, Save).
+  `UserAlertPreferences.isWithinQuietHours(time)` compares time-of-day and
+  handles windows that wrap past midnight. `copyWith(clearQuietHours: true)`
+  turns them off.
+  - *Semantics:* quiet hours suppress non-urgent alerts only — `urgent`
+    (Very Poor / Severe) air quality still gets through. The tile subtitle
+    says so.
+  - Suppression is applied to candidates **before** dedup, so a suppressed
+    alert is not recorded as sent and can fire once the window closes.
+- **Minimum severity:** the previously-unused `minimumSeverity` preference is
+  now enforced by the engine (same pre-dedup filter).
+- **Custom sensitivity (P1-7):** choosing *Custom* in the sensitivity sheet
+  now opens `_CustomRulesSheet` — sliders for current-AQI warning,
+  forecast-AQI warning and rapid-rise, each previewing its CPCB category —
+  and saves `CustomSensitivityRules` alongside `sensitivity: custom`.
+  `SecureProfileStore` now actually persists `customRules` (it previously
+  dropped them).
+- **Lead time (P1-8):** `UserAlertPreferences.leadTime` (nullable) overrides
+  `SensitivityRules.leadTimePreference`; the Settings tile shows the effective
+  value and opens `_LeadTimePicker` (1/2/3/6/12 h). Persisted as
+  `leadTimeMinutes`.
+- Tests: `profile_models_test.dart` (quiet-hours windows, clears, lead time),
+  `alert_engine_test.dart` (quiet-hours suppression incl. urgent pass-through
+  and no-record, minimum severity, lead-time override), and new
+  `test/storage/secure_profile_store_test.dart` (round-trip + legacy payload).
+- Same static-verification caveat as step 4 (no SDK here).

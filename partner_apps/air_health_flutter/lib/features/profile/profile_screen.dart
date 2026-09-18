@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../domain/models/models.dart';
+import '../../domain/sensitivity_rules.dart';
 import '../../notifications/notification_service.dart';
 import '../../providers/alert_providers.dart';
 import '../../providers/location_providers.dart';
@@ -72,10 +73,12 @@ class ProfileScreen extends ConsumerWidget {
               _TimeRangeTile(
                 icon: Icons.do_not_disturb_on_outlined,
                 title: 'Quiet hours',
-                subtitle: 'No notifications during this time',
-                startHour: null,
-                endHour: null,
-                onTap: () => _pickQuietHours(context),
+                subtitle: prefs.hasQuietHours
+                    ? 'Urgent alerts still come through'
+                    : 'No notifications during this time',
+                startHour: prefs.quietHoursStart?.hour,
+                endHour: prefs.quietHoursEnd?.hour,
+                onTap: () => _pickQuietHours(context, ref, prefs),
               ),
 
               // ── Alert Sensitivity ─────────────────────────────────
@@ -89,8 +92,8 @@ class ProfileScreen extends ConsumerWidget {
               _SettingsTile(
                 icon: Icons.access_time,
                 title: 'Forecast warning lead time',
-                subtitle: 'How far ahead to warn',
-                onTap: () {},
+                subtitle: _leadTimeLabel(profile),
+                onTap: () => _pickLeadTime(context, ref, profile),
               ),
               _SwitchTile(
                 icon: Icons.trending_down,
@@ -191,9 +194,95 @@ class ProfileScreen extends ConsumerWidget {
         onSelected: (s) {
           ref.read(userProfileProvider.notifier).updateFields(sensitivity: s);
           Navigator.pop(sheetContext);
+          if (s == AlertSensitivity.custom) {
+            _editCustomRules(context, ref, profile);
+          }
         },
       ),
     );
+  }
+
+  // ── Edit custom sensitivity rules ────────────────────────────────────
+
+  void _editCustomRules(
+    BuildContext context,
+    WidgetRef ref,
+    UserProfile? profile,
+  ) {
+    final initial = profile?.customRules ?? const CustomSensitivityRules();
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (BuildContext sheetContext) => _CustomRulesSheet(
+        initial: initial,
+        onSave: (rules) {
+          ref.read(userProfileProvider.notifier).updateFields(
+                sensitivity: AlertSensitivity.custom,
+                customRules: rules,
+              );
+          Navigator.pop(sheetContext);
+        },
+      ),
+    );
+  }
+
+  // ── Quiet hours ──────────────────────────────────────────────────────
+
+  void _pickQuietHours(
+    BuildContext context,
+    WidgetRef ref,
+    UserAlertPreferences prefs,
+  ) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (BuildContext sheetContext) => _QuietHoursSheet(
+        initial: prefs,
+        onSave: (updated) {
+          ref
+              .read(userProfileProvider.notifier)
+              .updateFields(preferences: updated);
+          Navigator.pop(sheetContext);
+        },
+      ),
+    );
+  }
+
+  // ── Forecast warning lead time ───────────────────────────────────────
+
+  void _pickLeadTime(
+    BuildContext context,
+    WidgetRef ref,
+    UserProfile? profile,
+  ) {
+    final prefs = profile?.preferences ?? const UserAlertPreferences();
+    final effective = prefs.leadTime ??
+        SensitivityRules.forProfile(profile ?? const UserProfile())
+            .leadTimePreference;
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (BuildContext sheetContext) => _LeadTimePicker(
+        current: effective,
+        onSelected: (d) {
+          ref
+              .read(userProfileProvider.notifier)
+              .updateFields(preferences: prefs.copyWith(leadTime: d));
+          Navigator.pop(sheetContext);
+        },
+      ),
+    );
+  }
+
+  /// The lead time currently in effect: the user's override, else the
+  /// sensitivity tier's default.
+  static String _leadTimeLabel(UserProfile? profile) {
+    final prefs = profile?.preferences ?? const UserAlertPreferences();
+    final effective = prefs.leadTime ??
+        SensitivityRules.forProfile(profile ?? const UserProfile())
+            .leadTimePreference;
+    return effective.inHours == 1
+        ? '1 hour ahead'
+        : '${effective.inHours} hours ahead';
   }
 
   // ── Edit health context ──────────────────────────────────────────────
@@ -277,14 +366,6 @@ class ProfileScreen extends ConsumerWidget {
   static void _showMessage(BuildContext context, String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message)),
-    );
-  }
-
-  // ── Quiet hours picker (stub) ────────────────────────────────────────
-
-  void _pickQuietHours(BuildContext context) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Quiet hours picker — coming soon')),
     );
   }
 
@@ -691,6 +772,329 @@ class _PickerOption extends StatelessWidget {
               ),
             ),
             if (selected) Icon(Icons.check_circle, color: cs.primary, size: 22),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Quiet hours sheet ─────────────────────────────────────────────────
+
+class _QuietHoursSheet extends StatefulWidget {
+  const _QuietHoursSheet({required this.initial, required this.onSave});
+
+  final UserAlertPreferences initial;
+  final ValueChanged<UserAlertPreferences> onSave;
+
+  @override
+  State<_QuietHoursSheet> createState() => _QuietHoursSheetState();
+}
+
+class _QuietHoursSheetState extends State<_QuietHoursSheet> {
+  late bool _enabled = widget.initial.hasQuietHours;
+  late TimeOfDay _start =
+      _timeOf(widget.initial.quietHoursStart) ??
+          const TimeOfDay(hour: 22, minute: 0);
+  late TimeOfDay _end =
+      _timeOf(widget.initial.quietHoursEnd) ??
+          const TimeOfDay(hour: 7, minute: 0);
+
+  static TimeOfDay? _timeOf(DateTime? dt) =>
+      dt == null ? null : TimeOfDay(hour: dt.hour, minute: dt.minute);
+
+  static DateTime _asDateTime(TimeOfDay t) =>
+      DateTime(2000, 1, 1, t.hour, t.minute);
+
+  Future<void> _pick(bool isStart) async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: isStart ? _start : _end,
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      if (isStart) {
+        _start = picked;
+      } else {
+        _end = picked;
+      }
+    });
+  }
+
+  void _save() {
+    widget.onSave(
+      _enabled
+          ? widget.initial.copyWith(
+              quietHoursStart: _asDateTime(_start),
+              quietHoursEnd: _asDateTime(_end),
+            )
+          : widget.initial.copyWith(clearQuietHours: true),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+            AppSpacing.xl, AppSpacing.xxl, AppSpacing.xl, AppSpacing.xxxxl),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Quiet hours',
+                style: AppTypography.headlineSmall.copyWith(color: cs.onSurface)),
+            const SizedBox(height: AppSpacing.md),
+            Text(
+              'Silence non-urgent alerts during a window you choose. Urgent '
+              'air-quality warnings still come through.',
+              style: AppTypography.bodyMedium.copyWith(color: cs.onSurfaceVariant),
+            ),
+            const SizedBox(height: AppSpacing.lg),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text('Enable quiet hours',
+                  style: AppTypography.titleMedium.copyWith(color: cs.onSurface)),
+              value: _enabled,
+              onChanged: (v) => setState(() => _enabled = v),
+            ),
+            if (_enabled) ...[
+              _TimeRow(
+                label: 'From',
+                time: _start,
+                onTap: () => _pick(true),
+              ),
+              _TimeRow(
+                label: 'To',
+                time: _end,
+                onTap: () => _pick(false),
+              ),
+            ],
+            const SizedBox(height: AppSpacing.xl),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(onPressed: _save, child: const Text('Save')),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TimeRow extends StatelessWidget {
+  const _TimeRow({
+    required this.label,
+    required this.time,
+    required this.onTap,
+  });
+
+  final String label;
+  final TimeOfDay time;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      title: Text(label,
+          style: AppTypography.titleMedium.copyWith(color: cs.onSurface)),
+      trailing: Text(
+        time.format(context),
+        style: AppTypography.titleMedium.copyWith(color: cs.primary),
+      ),
+      onTap: onTap,
+    );
+  }
+}
+
+// ── Custom sensitivity sheet ──────────────────────────────────────────
+
+class _CustomRulesSheet extends StatefulWidget {
+  const _CustomRulesSheet({required this.initial, required this.onSave});
+
+  final CustomSensitivityRules initial;
+  final ValueChanged<CustomSensitivityRules> onSave;
+
+  @override
+  State<_CustomRulesSheet> createState() => _CustomRulesSheetState();
+}
+
+class _CustomRulesSheetState extends State<_CustomRulesSheet> {
+  late double _warning = widget.initial.warningAqi.toDouble();
+  late double _forecast = widget.initial.forecastWarningAqi.toDouble();
+  late double _rise = widget.initial.rapidRiseAqiPerHour.toDouble();
+
+  void _save() {
+    widget.onSave(CustomSensitivityRules(
+      warningAqi: _warning.round(),
+      forecastWarningAqi: _forecast.round(),
+      rapidRiseAqiPerHour: _rise.round(),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+            AppSpacing.xl, AppSpacing.xxl, AppSpacing.xl, AppSpacing.xxxxl),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Custom sensitivity',
+                style: AppTypography.headlineSmall.copyWith(color: cs.onSurface)),
+            const SizedBox(height: AppSpacing.md),
+            Text(
+              'Set your own thresholds. Alerts trigger at or above these AQI '
+              'values.',
+              style: AppTypography.bodyMedium.copyWith(color: cs.onSurfaceVariant),
+            ),
+            const SizedBox(height: AppSpacing.lg),
+            _SliderRow(
+              label: 'Current AQI warning',
+              value: _warning,
+              min: 50,
+              max: 300,
+              divisions: 25,
+              display: _aqiDisplay(_warning),
+              onChanged: (v) => setState(() => _warning = v),
+            ),
+            _SliderRow(
+              label: 'Forecast AQI warning',
+              value: _forecast,
+              min: 50,
+              max: 300,
+              divisions: 25,
+              display: _aqiDisplay(_forecast),
+              onChanged: (v) => setState(() => _forecast = v),
+            ),
+            _SliderRow(
+              label: 'Rapid rise',
+              value: _rise,
+              min: 10,
+              max: 60,
+              divisions: 10,
+              display: '${_rise.round()} AQI/hour',
+              onChanged: (v) => setState(() => _rise = v),
+            ),
+            const SizedBox(height: AppSpacing.xl),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(onPressed: _save, child: const Text('Save')),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static String _aqiDisplay(double value) {
+    final aqi = value.round();
+    return '$aqi (${CpcbCategory.fromAqi(aqi).label})';
+  }
+}
+
+class _SliderRow extends StatelessWidget {
+  const _SliderRow({
+    required this.label,
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.divisions,
+    required this.display,
+    required this.onChanged,
+  });
+
+  final String label;
+  final double value;
+  final double min;
+  final double max;
+  final int divisions;
+  final String display;
+  final ValueChanged<double> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(label,
+                  style: AppTypography.titleMedium.copyWith(color: cs.onSurface)),
+            ),
+            Text(display,
+                style: AppTypography.bodyMedium.copyWith(color: cs.primary)),
+          ],
+        ),
+        Slider(
+          value: value,
+          min: min,
+          max: max,
+          divisions: divisions,
+          label: display,
+          onChanged: onChanged,
+        ),
+      ],
+    );
+  }
+}
+
+// ── Lead time picker ──────────────────────────────────────────────────
+
+class _LeadTimePicker extends StatelessWidget {
+  const _LeadTimePicker({required this.current, required this.onSelected});
+
+  final Duration current;
+  final ValueChanged<Duration> onSelected;
+
+  static const _options = <Duration>[
+    Duration(hours: 1),
+    Duration(hours: 2),
+    Duration(hours: 3),
+    Duration(hours: 6),
+    Duration(hours: 12),
+  ];
+
+  static String _labelFor(Duration d) =>
+      d.inHours == 1 ? '1 hour ahead' : '${d.inHours} hours ahead';
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+            AppSpacing.xl, AppSpacing.xxl, AppSpacing.xl, AppSpacing.xxxxl),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Forecast warning lead time',
+                style: AppTypography.headlineSmall.copyWith(color: cs.onSurface)),
+            const SizedBox(height: AppSpacing.md),
+            Text(
+              'How far ahead a forecast alert may look.',
+              style: AppTypography.bodyMedium.copyWith(color: cs.onSurfaceVariant),
+            ),
+            const SizedBox(height: AppSpacing.xxl),
+            ..._options.map((d) {
+              return Padding(
+                padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                child: _PickerOption(
+                  label: _labelFor(d),
+                  selected: d == current,
+                  onTap: () => onSelected(d),
+                ),
+              );
+            }),
           ],
         ),
       ),

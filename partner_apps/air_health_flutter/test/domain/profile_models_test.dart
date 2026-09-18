@@ -85,6 +85,56 @@ void main() {
       expect(updated.recoveryAlertsEnabled, isFalse);
       expect(updated.alertsEnabled, isTrue); // unchanged
     });
+
+    test('lead time defaults to null and round-trips', () {
+      const prefs = UserAlertPreferences(leadTime: Duration(hours: 6));
+      expect(prefs.leadTime, const Duration(hours: 6));
+      expect(const UserAlertPreferences().leadTime, isNull);
+      expect(prefs.copyWith(clearLeadTime: true).leadTime, isNull);
+    });
+
+    test('equality includes lead time', () {
+      const a = UserAlertPreferences(leadTime: Duration(hours: 3));
+      const b = UserAlertPreferences(leadTime: Duration(hours: 3));
+      const c = UserAlertPreferences();
+      expect(a, equals(b));
+      expect(a, isNot(equals(c)));
+    });
+  });
+
+  group('UserAlertPreferences quiet hours', () {
+    final wrapping = UserAlertPreferences(
+      quietHoursStart: DateTime(2000, 1, 1, 22, 0),
+      quietHoursEnd: DateTime(2000, 1, 1, 7, 0),
+    );
+
+    test('detects a window that wraps past midnight', () {
+      expect(wrapping.hasQuietHours, isTrue);
+      expect(wrapping.isWithinQuietHours(DateTime(2026, 9, 17, 23, 0)), isTrue);
+      expect(wrapping.isWithinQuietHours(DateTime(2026, 9, 17, 6, 59)), isTrue);
+      expect(wrapping.isWithinQuietHours(DateTime(2026, 9, 17, 7, 0)), isFalse);
+      expect(wrapping.isWithinQuietHours(DateTime(2026, 9, 17, 12, 0)), isFalse);
+    });
+
+    test('detects a same-day window', () {
+      final day = UserAlertPreferences(
+        quietHoursStart: DateTime(2000, 1, 1, 9, 0),
+        quietHoursEnd: DateTime(2000, 1, 1, 17, 30),
+      );
+      expect(day.isWithinQuietHours(DateTime(2026, 9, 17, 10, 0)), isTrue);
+      expect(day.isWithinQuietHours(DateTime(2026, 9, 17, 8, 59)), isFalse);
+      expect(day.isWithinQuietHours(DateTime(2026, 9, 17, 17, 30)), isFalse);
+    });
+
+    test('is inactive when unset', () {
+      const prefs = UserAlertPreferences();
+      expect(prefs.hasQuietHours, isFalse);
+      expect(prefs.isWithinQuietHours(DateTime(2026, 9, 17, 23, 0)), isFalse);
+    });
+
+    test('copyWith can clear quiet hours', () {
+      expect(wrapping.copyWith(clearQuietHours: true).hasQuietHours, isFalse);
+    });
   });
 
   group('UserSensitivityProfile', () {

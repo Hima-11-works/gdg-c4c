@@ -604,4 +604,155 @@ void main() {
       }
     });
   });
+
+  // ── Quiet hours ─────────────────────────────────────────────────────
+
+  group('AlertEngine — quiet hours', () {
+    UserSensitivityProfile quietProfile() => UserSensitivityProfile(
+          healthContext: UserHealthContext.none,
+          sensitivity: AlertSensitivity.standard,
+          preferences: UserAlertPreferences(
+            quietHoursStart: DateTime(2000, 1, 1, 22, 0),
+            quietHoursEnd: DateTime(2000, 1, 1, 7, 0),
+          ),
+        );
+
+    test('suppresses a non-urgent alert inside the window', () {
+      // 23:00 is inside 22:00–07:00; Poor is only a warning.
+      final result = engine.evaluate(
+        profile: quietProfile(),
+        current: makeReading(250, CpcbCategory.poor),
+        forecast: const [],
+        events: const [],
+        freshness: makeFresh(),
+        now: DateTime(2026, 9, 17, 23, 0),
+      );
+      expect(result.decisions, isEmpty);
+    });
+
+    test('lets urgent alerts through the window', () {
+      final result = engine.evaluate(
+        profile: quietProfile(),
+        current: makeReading(350, CpcbCategory.veryPoor),
+        forecast: const [],
+        events: const [],
+        freshness: makeFresh(),
+        now: DateTime(2026, 9, 17, 23, 0),
+      );
+      expect(result.decisions, isNotEmpty);
+      expect(result.decisions.first.severity, AlertSeverity.urgent);
+    });
+
+    test('does not suppress outside the window', () {
+      final result = engine.evaluate(
+        profile: quietProfile(),
+        current: makeReading(250, CpcbCategory.poor),
+        forecast: const [],
+        events: const [],
+        freshness: makeFresh(),
+        now: now, // 10:00, outside the window
+      );
+      expect(result.decisions, isNotEmpty);
+    });
+
+    test('suppressed alerts are not recorded, so they can fire later', () {
+      final suppressed = engine.evaluate(
+        profile: quietProfile(),
+        current: makeReading(250, CpcbCategory.poor),
+        forecast: const [],
+        events: const [],
+        freshness: makeFresh(),
+        now: DateTime(2026, 9, 17, 23, 0),
+      );
+      expect(suppressed.dedupState, isEmpty);
+
+      // The same situation after the window closes now fires.
+      final after = engine.evaluate(
+        profile: quietProfile(),
+        current: makeReading(250, CpcbCategory.poor),
+        forecast: const [],
+        events: const [],
+        freshness: makeFresh(),
+        priorAlerts: suppressed.dedupState,
+        now: DateTime(2026, 9, 18, 8, 0),
+      );
+      expect(after.decisions, isNotEmpty);
+    });
+  });
+
+  // ── Minimum severity ────────────────────────────────────────────────
+
+  group('AlertEngine — minimum severity', () {
+    test('drops alerts below the configured floor', () {
+      const profile = UserSensitivityProfile(
+        healthContext: UserHealthContext.none,
+        sensitivity: AlertSensitivity.sensitive,
+        preferences:
+            UserAlertPreferences(minimumSeverity: AlertSeverity.warning),
+      );
+      final result = engine.evaluate(
+        profile: profile,
+        current: makeReading(142, CpcbCategory.moderate), // advisory only
+        forecast: const [],
+        events: const [],
+        freshness: makeFresh(),
+        now: now,
+      );
+      expect(result.decisions, isEmpty);
+    });
+
+    test('keeps alerts at or above the floor', () {
+      const profile = UserSensitivityProfile(
+        healthContext: UserHealthContext.none,
+        sensitivity: AlertSensitivity.sensitive,
+        preferences:
+            UserAlertPreferences(minimumSeverity: AlertSeverity.warning),
+      );
+      final result = engine.evaluate(
+        profile: profile,
+        current: makeReading(250, CpcbCategory.poor), // warning
+        forecast: const [],
+        events: const [],
+        freshness: makeFresh(),
+        now: now,
+      );
+      expect(result.decisions, isNotEmpty);
+    });
+  });
+
+  // ── Lead time override ──────────────────────────────────────────────
+
+  group('AlertEngine — lead time override', () {
+    test('preferences.leadTime overrides the tier default', () {
+      const profile = UserSensitivityProfile(
+        healthContext: UserHealthContext.none,
+        sensitivity: AlertSensitivity.standard,
+        preferences: UserAlertPreferences(leadTime: Duration(hours: 8)),
+      );
+      expect(
+        SensitivityRules.forProfile(profile).leadTimePreference,
+        const Duration(hours: 8),
+      );
+    });
+
+    test('a longer lead time widens the forecast window', () {
+      const profile = UserSensitivityProfile(
+        healthContext: UserHealthContext.none,
+        sensitivity: AlertSensitivity.standard,
+        preferences: UserAlertPreferences(leadTime: Duration(hours: 6)),
+      );
+      final result = engine.evaluate(
+        profile: profile,
+        current: makeReading(100, CpcbCategory.moderate),
+        // The crossing point is +3h; the standard default lead is 2h.
+        forecast: makeForecast([120, 140, 250]),
+        events: const [],
+        freshness: makeFresh(),
+        now: now,
+      );
+      final forecastAlerts = result.decisions
+          .where((d) => d.trigger == AlertTrigger.forecastThreshold);
+      expect(forecastAlerts, isNotEmpty);
+    });
+  });
 }
