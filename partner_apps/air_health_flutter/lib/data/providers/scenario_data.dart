@@ -69,6 +69,16 @@ ScenarioData _cleanStable(DateTime anchor) {
       confidence: 0.95,
     );
   });
+  // Cuttack has its own (very similar) trajectory — the nearby list must not
+  // reuse the local forecast, or its "now" and forecast disagree.
+  final cuttackForecast = List.generate(12, (i) {
+    return ForecastPoint(
+      at: anchor.add(Duration(hours: i + 1)),
+      aqiCpcb: 38 + (i % 2),
+      pm25: 16.0 + (i % 2),
+      confidence: 0.92,
+    );
+  });
   return ScenarioData(
     reading: reading,
     forecast: forecast,
@@ -77,7 +87,7 @@ ScenarioData _cleanStable(DateTime anchor) {
         location: const LocationPoint(latitude: 20.27, longitude: 85.82, label: 'Cuttack'),
         name: 'Cuttack',
         aqiNow: 38,
-        forecast: forecast,
+        forecast: cuttackForecast,
         trend: AreaTrend.stable,
         distanceKm: 25,
         confidence: 0.92,
@@ -92,7 +102,8 @@ ScenarioData _cleanStable(DateTime anchor) {
 }
 
 ScenarioData _gradualRise(DateTime anchor) {
-  // AQI rises from 52 → ~178 over 12 hours, crossing "Moderate" at ~2h.
+  // AQI rises from 52 → ~170 over 12 hours, crossing "Moderately
+  // Polluted" (AQI 101+) at ~6h.
   final reading = AirQualityReading(
     aqiCpcb: 52,
     pm25: 30.0,
@@ -180,6 +191,18 @@ ScenarioData _approachingPlume(DateTime anchor) {
       confidence: hour <= 2 ? 0.9 : 0.75,
     );
   });
+  // Industrial Belt is the source: already severe and rising slowly. It has
+  // its own forecast — sharing the local one made its "now" (340) contradict
+  // its forecast (220/310/...).
+  final areaForecast = List.generate(12, (i) {
+    final aqi = (340 + (i * 5)).clamp(50, 500);
+    return ForecastPoint(
+      at: anchor.add(Duration(hours: i + 1)),
+      aqiCpcb: aqi,
+      pm25: (aqi * 0.55).clamp(10, 500),
+      confidence: 0.88,
+    );
+  });
   return ScenarioData(
     reading: reading,
     forecast: forecast,
@@ -188,7 +211,7 @@ ScenarioData _approachingPlume(DateTime anchor) {
         location: const LocationPoint(latitude: 20.15, longitude: 85.60, label: 'Industrial Belt'),
         name: 'Industrial Belt',
         aqiNow: 340,
-        forecast: forecast,
+        forecast: areaForecast,
         trend: AreaTrend.worsening,
         distanceKm: 8,
         confidence: 0.88,

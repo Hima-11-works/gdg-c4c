@@ -35,9 +35,3 @@ final pollutionDataProvider = Provider<PollutionDataProvider>((ref) {
   }
   return DummyPollutionDataProvider(scenario: Scenario.cleanStable);
 });
-
-/// The currently active scenario — only meaningful with the dummy provider.
-/// Feature screens can watch this to display scenario info in debug mode.
-final activeScenarioProvider = StateProvider<Scenario>((ref) {
-  return Scenario.cleanStable;
-});

@@ -23,11 +23,17 @@ class ForecastChart extends StatelessWidget {
     required this.currentAqi,
     required this.forecast,
     this.event,
+    this.now,
   });
 
   final int currentAqi;
   final List<ForecastPoint> forecast;
   final PollutionEvent? event;
+
+  /// Reference time for [event]'s arrival offset. Defaults to the wall clock;
+  /// callers should pass the current reading's `recordedAt` so the marker is
+  /// correct under the dev simulator's shifted clock.
+  final DateTime? now;
 
   @override
   Widget build(BuildContext context) {
@@ -55,8 +61,9 @@ class ForecastChart extends StatelessWidget {
     // Find approaching event time index.
     int? eventIndex;
     if (event != null) {
+      final reference = now ?? DateTime.now();
       final eventHour = event!.expectedArrivalAt
-          .difference(DateTime.now())
+          .difference(reference)
           .inHours
           .clamp(0, forecast.length);
       if (eventHour > 0 && eventHour <= forecast.length) {

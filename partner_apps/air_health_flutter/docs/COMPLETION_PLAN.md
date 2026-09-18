@@ -96,7 +96,7 @@ tested. All gaps below are wiring/integration, not half-written domain logic.
 | 5 | Quiet hours + custom rules + lead time (P1-6/7/8) | **done** |
 | 6 | Backend integration decision + adapter (P1-9) | **done** |
 | 7 | iOS platform (P1-10, if in scope) | pending |
-| 8 | P2/P3 cleanup | pending |
+| 8 | P2/P3 cleanup | **done** |
 
 **Verification per step:** `flutter analyze` + `flutter test` (15 test files,
 incl. `test/acceptance/acceptance_test.dart`). Add tests for each new piece
@@ -217,3 +217,28 @@ incl. `test/acceptance/acceptance_test.dart`). Add tests for each new piece
   but no live-backend round-trip was run.
 - Note: `RemotePollutionDataProvider` + `lib/data/dto/dto.dart` now have no
   callers (the old bespoke contract) — candidate for P3 removal.
+
+### Step 8 notes
+
+P2:
+- Nearby areas no longer reuse the local forecast: `cleanStable` (Cuttack) and
+  `approachingPlume` (Industrial Belt) each build their own series consistent
+  with their `aqiNow`.
+- Alerts screen bucket gap closed: `AlertRecord.isStale` (unresolved, >24h)
+  plus an "Older" section, so those records no longer disappear.
+- `gradualRise` comment corrected (52 → ~170, crossing Moderate at ~6h).
+- The forecast chart's event marker (and the event card's lead-time chip) now
+  take a `now` reference — the current reading's `recordedAt` — instead of
+  the wall clock, so they stay correct under the simulator.
+
+P3:
+- Removed dead `activeScenarioProvider` and `simulatorAutoAdvanceProvider`.
+- `prune()` is NOT dead — it's called by `AlertCoordinator`; left in place.
+- Removed unused codegen deps (`riverpod_annotation`, `riverpod_generator`,
+  `build_runner`); there are no `.g.dart` files.
+- Onboarding doc comment now lists 5 steps (matching `_totalSteps`).
+- Removed the unused `PrefsStore` UI-pref accessors (units/dark mode/reduced
+  motion); `resetAll()` still clears those legacy keys defensively.
+- Tests updated/added: `prefs_store_test.dart`, `alert_record_test.dart`,
+  `dummy_scenarios_test.dart` (nearby-forecast regression).
+- Same static-verification caveat (no SDK here).

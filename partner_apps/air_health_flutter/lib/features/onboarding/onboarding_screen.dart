@@ -20,7 +20,8 @@ import '../../theme/app_typography.dart';
 /// 3. Health context (optional)
 /// 4. Alert sensitivity
 /// 5. Notification permission
-/// 6. Complete -> Home
+///
+/// Completing step 5 finishes onboarding and routes to Home.
 class OnboardingScreen extends ConsumerStatefulWidget {
   const OnboardingScreen({super.key});
 

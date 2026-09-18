@@ -54,6 +54,8 @@ class AlertsScreen extends ConsumerWidget {
               records.where((r) => r.isActive).toList();
           final recent =
               records.where((r) => r.isRecent).toList();
+          final stale =
+              records.where((r) => r.isStale).toList();
           final resolved =
               records.where((r) => r.isResolvedSection).toList();
 
@@ -83,6 +85,13 @@ class AlertsScreen extends ConsumerWidget {
                   subtitle: 'From the past 24 hours.',
                 ),
                 ...recent.map((r) => _AlertCard(record: r)),
+              ],
+              if (stale.isNotEmpty) ...[
+                const SectionHeader(
+                  title: 'Older',
+                  subtitle: 'More than 24 hours ago.',
+                ),
+                ...stale.map((r) => _AlertCard(record: r)),
               ],
               if (resolved.isNotEmpty) ...[
                 const SectionHeader(

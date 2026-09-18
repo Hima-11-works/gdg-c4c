@@ -37,6 +37,21 @@ void main() {
         expect(areas, isNotEmpty);
       });
 
+      test('nearby area has its own forecast, not the local one', () async {
+        final provider = makeProvider(Scenario.cleanStable);
+        final areas = await provider.getNearbyAreas(location);
+        final localForecast =
+            await provider.getForecast(location, const Duration(hours: 12));
+
+        expect(areas.first.forecast, isNot(equals(localForecast)));
+        // Its forecast must agree with its own "now" (previously it reused
+        // the local forecast, so aqiNow and the first point disagreed).
+        expect(
+          (areas.first.forecast.first.aqiCpcb - areas.first.aqiNow).abs(),
+          lessThanOrEqualTo(1),
+        );
+      });
+
       test('no pollution events', () async {
         final events = await makeProvider(Scenario.cleanStable)
             .getPollutionEvents(location);

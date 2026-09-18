@@ -112,21 +112,3 @@ final alertDedupResetProvider = Provider<void Function()>((ref) {
     // the provider override in dev_providers.dart.
   };
 });
-
-/// Auto-advance timer — steps the simulator every 750ms when playing.
-final simulatorAutoAdvanceProvider = Provider<void>((ref) {
-  if (!kDebugMode) return;
-
-  ref.listen<bool>(simulatorPlayingProvider, (prev, playing) {
-    if (playing) {
-      Future.doWhile(() async {
-        await Future.delayed(const Duration(milliseconds: 750));
-        if (!ref.exists(simulatorPlayingProvider)) return false;
-        if (!ref.read(simulatorPlayingProvider)) return false;
-        ref.read(simulatorTimeOffsetProvider.notifier).state +=
-            const Duration(minutes: 15);
-        return true;
-      });
-    }
-  });
-});
