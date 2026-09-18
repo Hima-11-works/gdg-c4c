@@ -34,6 +34,27 @@ def _run_offline_upgrade(capsys) -> str:
     return capsys.readouterr().out
 
 
+def test_offline_upgrade_handles_percent_encoded_password(capsys, monkeypatch) -> None:
+    """A managed DATABASE_URL whose password contains a percent-encoded
+    character (e.g. "@" as "%40") must not trip Alembic's ConfigParser
+    interpolation — env.py escapes "%" for exactly this case. Regression
+    guard: without it, `alembic upgrade head` fails on such a URL before
+    ever connecting."""
+    from app.core import config as config_module
+
+    monkeypatch.setattr(
+        config_module,
+        "get_settings",
+        lambda: config_module.Settings(
+            database_url_override="postgresql://u:pa%40ss@managed.example/db"
+        ),
+    )
+
+    output = _run_offline_upgrade(capsys)
+
+    assert "CREATE TABLE sensor_reading" in output
+
+
 def _table_bodies(ddl: str) -> dict[str, set[str]]:
     """Maps table name -> the set of its column/constraint clauses, one
     per line in both alembic's `--sql` output and SQLAlchemy's own

@@ -108,16 +108,46 @@ Deferred from Phase 1 (deliberately):
 
 ## Phase 2 — Database (Neon, or Vercel Postgres)
 
+Requires your cloud account; the steps below were rehearsed locally against
+a **fresh, empty** database with a managed-style `DATABASE_URL` (see
+"Phase 2 rehearsal" below).
+
 1. Create a Neon project and **confirm PostGIS is available on the plan**
-   (`CREATE EXTENSION postgis`); Supabase is a drop-in fallback (PostGIS
-   preinstalled).
-2. Put the connection string in the Vercel project env as `DATABASE_URL`
-   (Neon's pooled `-pooler` host is fine now that prepared statements are
-   disabled).
-3. Apply the schema once, from a machine or CI with `DATABASE_URL` set:
-   `cd backend && alembic upgrade head`.
-4. Leave it empty for the MVP — the country-wide demo fallback covers India
-   (verified 802 cells / 0.11 s). Seed Delhi NCR later if desired.
+   (Neon supports it; Supabase is a drop-in fallback with PostGIS
+   preinstalled). Alembic's `0001` migration runs
+   `CREATE EXTENSION IF NOT EXISTS postgis`, so the connecting role needs
+   permission to create extensions.
+2. Put the connection string in the Vercel project env as `DATABASE_URL`.
+   Use Neon's **pooled** host for the serverless function (prepared
+   statements are already disabled in Phase 1). Keep a direct (non-pooled)
+   URL for running migrations. Example:
+   `postgresql://user:pass@ep-xxx-pooler.region.aws.neon.tech/db?sslmode=require`
+3. Apply the schema once, from your machine or CI, with `DATABASE_URL` set
+   (the app's own config is the single source of truth — `alembic.ini`'s URL
+   is ignored):
+   ```bash
+   cd backend
+   DATABASE_URL="postgresql://...direct..." alembic upgrade head
+   ```
+4. Leave the schema empty for the MVP — the country-wide demo fallback covers
+   India (verified 802 cells / 0.11 s) and needs no data. Seed Delhi NCR later
+   if desired (`python -m app.pipeline.run`, see Phase 5).
+
+### Phase 2 rehearsal (run locally, 2026-09-18)
+
+- Created a fresh `pollution_fresh` database and ran
+  `alembic upgrade head` with `DATABASE_URL=postgresql://…?sslmode=disable`:
+  all three migrations applied; 7 tables present
+  (`alembic_version`, `sensor_reading`, `weather_reading`, `grid_state`,
+  `forecast`, `alert`, plus PostGIS's `spatial_ref_sys`); PostGIS 3.4.3.
+- API against that empty schema: `/health/ready` 200; `/api/v1/grid/current`
+  (country tier) 802 cells `is_demo=true`; `/api/v1/alerts` 1 `is_demo=true`
+  — i.e. the v1 deploy is fully functional with no data.
+- **Found and fixed:** `alembic` passed the URL through a `ConfigParser`,
+  so a percent-encoded password (`pa%40ss`) failed with
+  `ValueError: invalid interpolation syntax` before connecting. `alembic/env.py`
+  now escapes `%`; re-verified that `alembic upgrade head` succeeds with such
+  a password, with a regression test in `tests/test_migrations_offline.py`.
 
 ## Phase 3 — Frontend on Vercel
 
