@@ -15,8 +15,8 @@ Dio createPollutionDio(ApiConfig config) {
       connectTimeout: const Duration(seconds: 10),
       receiveTimeout: const Duration(seconds: 15),
       headers: {
-        'Authorization': 'Bearer ${config.apiKey}',
         'Accept': 'application/json',
+        if (config.apiKey != null) 'Authorization': 'Bearer ${config.apiKey}',
       },
     ),
   );

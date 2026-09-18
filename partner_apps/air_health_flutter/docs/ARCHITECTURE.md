@@ -121,6 +121,27 @@ in scenario definitions):
 7. `dataUnavailable` — current OK, empty forecast
 8. `partialData` — null PM2.5, 6h forecast
 
+## Backend integration
+
+`GridApiPollutionDataProvider` (`lib/data/providers/`) is the app-side
+adapter for the platform's grid API. It is selected automatically when
+`POLLUTION_API_BASE_URL` is set, with the dummy provider as the fallback
+otherwise; debug builds override both with the scenario simulator. The API
+is unauthenticated and the adapter maps:
+
+- `/api/v1/grid/current` + `/api/v1/weather`, joined on `h3_cell` (grid
+  cells carry no coordinates; weather is the coordinate source), → the
+  nearest cell's reading
+- `/api/v1/grid/forecast?minutes=` — one horizon per call, requested hourly
+  up to the API's 6-hour cap — → `ForecastPoint`s
+- `/api/v1/alerts` for the user's cell → `PollutionEvent`s
+- the response `generated_at` → `DataFreshness`
+
+PM2.5 is converted to a CPCB AQI with the PM2.5 sub-index
+(`lib/domain/pm25_aqi.dart`) — an approximation, since the API reports PM2.5
+only. See `test/data/grid_api_provider_test.dart` (in-memory fake client, no
+network) for the mapping tests.
+
 ## Testing
 
 ```

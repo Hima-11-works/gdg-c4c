@@ -94,7 +94,7 @@ tested. All gaps below are wiring/integration, not half-written domain logic.
 | 3 | Permissions in onboarding/Settings (P0-3) | **done** |
 | 4 | Fix simulator time model (P0-4) | **done** |
 | 5 | Quiet hours + custom rules + lead time (P1-6/7/8) | **done** |
-| 6 | Backend integration decision + adapter (P1-9) | pending |
+| 6 | Backend integration decision + adapter (P1-9) | **done** |
 | 7 | iOS platform (P1-10, if in scope) | pending |
 | 8 | P2/P3 cleanup | pending |
 
@@ -189,3 +189,31 @@ incl. `test/acceptance/acceptance_test.dart`). Add tests for each new piece
   and no-record, minimum severity, lead-time override), and new
   `test/storage/secure_profile_store_test.dart` (round-trip + legacy payload).
 - Same static-verification caveat as step 4 (no SDK here).
+
+### Step 6 notes
+
+- **Decision:** app-side adapter, unauthenticated (chosen over a backend
+  partner endpoint). The merged backend is untouched.
+- `lib/data/grid/grid_api.dart`: DTOs + `GridApiClient` interface +
+  `DioGridApiClient` for `/api/v1/grid/current`, `/grid/forecast`,
+  `/weather`, `/alerts`, plus `GeoBounds`.
+- `lib/domain/pm25_aqi.dart`: PM2.5 → CPCB AQI via the CPCB PM2.5
+  sub-index (piecewise-linear, clamped to 0–500). Approximation only.
+- `lib/data/providers/grid_api_pollution_data_provider.dart`: implements
+  `PollutionDataProvider`. Grid cells have no coordinates, so it joins
+  `/weather` (lat/lon) with `/grid/current` (PM2.5) on `h3_cell` and takes
+  the nearest cell; forecast series are assembled from hourly
+  `/grid/forecast` calls (one horizon per call, capped at 360 min); nearby
+  areas are the nearest other cells in a larger box; events are `/alerts`
+  for the user's cell; freshness comes from `generated_at`.
+- `lib/providers/data_providers.dart`: `pollutionDataProvider` uses the
+  adapter when `POLLUTION_API_BASE_URL` is set, else the dummy provider;
+  debug's `devProviderOverrides` still swaps in the simulator. `ApiConfig`
+  no longer requires an API key; `createPollutionDio` omits the
+  Authorization header when none is set.
+- Tests: `test/domain/pm25_aqi_test.dart`, `test/data/grid_api_provider_test.dart`
+  (in-memory fake client — no network).
+- Same static-verification caveat (no SDK here); the mapping is unit-tested
+  but no live-backend round-trip was run.
+- Note: `RemotePollutionDataProvider` + `lib/data/dto/dto.dart` now have no
+  callers (the old bespoke contract) — candidate for P3 removal.
