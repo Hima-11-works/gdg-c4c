@@ -28,6 +28,7 @@ class ProfileScreen extends ConsumerWidget {
           child: Text('Could not load settings: $e'),
         ),
         data: (profile) {
+          final prefs = profile?.preferences ?? const UserAlertPreferences();
           return ListView(
             padding: const EdgeInsets.only(bottom: AppSpacing.xxxxl),
             children: [
@@ -52,8 +53,10 @@ class ProfileScreen extends ConsumerWidget {
                 icon: Icons.notifications_outlined,
                 title: 'Alert notifications',
                 subtitle: 'Receive alerts when air quality changes',
-                value: true,
-                onChanged: (v) {},
+                value: prefs.alertsEnabled,
+                onChanged: (v) => ref
+                    .read(userProfileProvider.notifier)
+                    .updateFields(preferences: prefs.copyWith(alertsEnabled: v)),
               ),
               _SettingsTile(
                 icon: Icons.notifications_active_outlined,
@@ -88,8 +91,10 @@ class ProfileScreen extends ConsumerWidget {
                 icon: Icons.trending_down,
                 title: 'Recovery alerts',
                 subtitle: 'Notify when air quality improves',
-                value: true,
-                onChanged: (v) {},
+                value: prefs.recoveryAlertsEnabled,
+                onChanged: (v) => ref
+                    .read(userProfileProvider.notifier)
+                    .updateFields(preferences: prefs.copyWith(recoveryAlertsEnabled: v)),
               ),
 
               // ── Health Profile ────────────────────────────────────

@@ -32,6 +32,32 @@ void main() {
       expect(updated.healthContext, UserHealthContext.asthma);
       expect(updated.sensitivity, AlertSensitivity.sensitive);
     });
+
+    test('defaults preferences to UserAlertPreferences()', () {
+      const profile = UserProfile();
+      expect(profile.preferences, const UserAlertPreferences());
+    });
+
+    test('copyWith carries preferences', () {
+      const original = UserProfile();
+      final updated = original.copyWith(
+        preferences: const UserAlertPreferences(alertsEnabled: false),
+      );
+      expect(updated.preferences.alertsEnabled, isFalse);
+      expect(original.preferences.alertsEnabled, isTrue); // unchanged
+    });
+
+    test('equality includes preferences', () {
+      const a = UserProfile(
+        preferences: UserAlertPreferences(alertsEnabled: false),
+      );
+      const b = UserProfile(
+        preferences: UserAlertPreferences(alertsEnabled: false),
+      );
+      const c = UserProfile();
+      expect(a, equals(b));
+      expect(a, isNot(equals(c)));
+    });
   });
 
   group('UserAlertPreferences', () {

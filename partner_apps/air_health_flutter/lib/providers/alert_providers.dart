@@ -61,11 +61,14 @@ final alertEvaluationProvider =
   if (current == null || forecast == null || freshness == null) return null;
   final effectiveEvents = events ?? const <PollutionEvent>[];
 
-  // Build the sensitivity profile for the engine.
+  // Build the sensitivity profile for the engine, carrying the user's
+  // persisted alert preferences (master switch, quiet hours, severity floor,
+  // recovery alerts) rather than defaults.
   final sensitivityProfile = UserSensitivityProfile(
     healthContext: profile.healthContext,
     sensitivity: profile.sensitivity,
-    preferences: const UserAlertPreferences(),
+    customRules: profile.customRules,
+    preferences: profile.preferences,
   );
 
   final engine = ref.read(alertEngineProvider);

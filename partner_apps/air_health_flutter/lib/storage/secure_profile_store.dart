@@ -17,11 +17,19 @@ class SecureProfileStore {
   static const _keyProfile = 'user_profile';
 
   Future<void> save(UserProfile profile) async {
+    final prefs = profile.preferences;
     await _storage.write(
       key: _keyProfile,
       value: jsonEncode({
         'healthContext': profile.healthContext.name,
         'sensitivity': profile.sensitivity.name,
+        'preferences': {
+          'alertsEnabled': prefs.alertsEnabled,
+          'recoveryAlertsEnabled': prefs.recoveryAlertsEnabled,
+          'minimumSeverity': prefs.minimumSeverity.name,
+          'quietHoursStart': prefs.quietHoursStart?.toIso8601String(),
+          'quietHoursEnd': prefs.quietHoursEnd?.toIso8601String(),
+        },
       }),
     );
   }
@@ -39,8 +47,29 @@ class SecureProfileStore {
         (e) => e.name == map['sensitivity'],
         orElse: () => AlertSensitivity.standard,
       ),
+      preferences: _readPreferences(map['preferences']),
     );
   }
+
+  /// Read the stored preferences defensively — profiles written before this
+  /// field existed (or with a malformed value) fall back to defaults.
+  static UserAlertPreferences _readPreferences(Object? raw) {
+    if (raw is! Map) return const UserAlertPreferences();
+    final map = raw.cast<String, dynamic>();
+    return UserAlertPreferences(
+      alertsEnabled: map['alertsEnabled'] as bool? ?? true,
+      recoveryAlertsEnabled: map['recoveryAlertsEnabled'] as bool? ?? true,
+      minimumSeverity: AlertSeverity.values.firstWhere(
+        (e) => e.name == map['minimumSeverity'],
+        orElse: () => AlertSeverity.info,
+      ),
+      quietHoursStart: _parseDate(map['quietHoursStart']),
+      quietHoursEnd: _parseDate(map['quietHoursEnd']),
+    );
+  }
+
+  static DateTime? _parseDate(Object? value) =>
+      value is String ? DateTime.tryParse(value) : null;
 
   Future<void> delete() async {
     await _storage.delete(key: _keyProfile);
