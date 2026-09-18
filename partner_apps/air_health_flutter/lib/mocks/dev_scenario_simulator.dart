@@ -16,21 +16,31 @@ final simulatorScenarioProvider =
 /// Whether the simulator is auto-advancing time.
 final simulatorPlayingProvider = StateProvider<bool>((ref) => false);
 
-/// The simulated "now" — anchor + offset.
-final simulatorNowProvider = Provider<DateTime>((ref) {
-  return DateTime(2026, 9, 17, 10, 0).add(
-    ref.watch(simulatorTimeOffsetProvider),
-  );
+/// Fixed start time for every simulator scenario. The scenario advances by
+/// moving [simulatorNowProvider] (the offset), NOT by moving this anchor —
+/// moving the anchor would just relabel the same curve.
+final simulatorAnchorProvider = Provider<DateTime>((ref) {
+  return DateTime(2026, 9, 17, 10, 0);
 });
 
-/// A [DummyPollutionDataProvider] that uses the simulator's time.
+/// The simulated "now" — fixed anchor + the time offset.
+final simulatorNowProvider = Provider<DateTime>((ref) {
+  return ref.watch(simulatorAnchorProvider).add(
+        ref.watch(simulatorTimeOffsetProvider),
+      );
+});
+
+/// A [DummyPollutionDataProvider] read at the simulator's clock, so stepping
+/// time advances the scenario (current reading moves along the timeline, the
+/// forecast window shifts forward) rather than returning the same snapshot.
 ///
 /// Only available in debug mode — production builds use the standard
 /// `pollutionDataProvider` binding.
 final simulatorDataProvider = Provider<DummyPollutionDataProvider>((ref) {
   final scenario = ref.watch(simulatorScenarioProvider);
+  final anchor = ref.watch(simulatorAnchorProvider);
   final now = ref.watch(simulatorNowProvider);
-  return DummyPollutionDataProvider(scenario: scenario, anchor: now);
+  return DummyPollutionDataProvider(scenario: scenario, anchor: anchor, now: now);
 });
 
 /// Controller for the scenario simulator.

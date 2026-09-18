@@ -92,7 +92,7 @@ tested. All gaps below are wiring/integration, not half-written domain logic.
 | 1 | Preferences plumbing (`UserProfile.preferences`, persistence, notifier, engine) + wire Settings toggles (P0-5) | **done** |
 | 2 | Alert coordinator + refresh cadence + `prune()` (P0-1, P0-2) | **done** |
 | 3 | Permissions in onboarding/Settings (P0-3) | **done** |
-| 4 | Fix simulator time model (P0-4) | pending |
+| 4 | Fix simulator time model (P0-4) | **done** |
 | 5 | Quiet hours + custom rules + lead time (P1-6/7/8) | pending |
 | 6 | Backend integration decision + adapter (P1-9) | pending |
 | 7 | iOS platform (P1-10, if in scope) | pending |
@@ -127,3 +127,34 @@ incl. `test/acceptance/acceptance_test.dart`). Add tests for each new piece
   notifications permission. The **Current location** tile shows the resolved
   location label instead of a hardcoded one.
 - Remaining no-op tile: **Forecast warning lead time** (P1-8, deferred).
+
+### Step 4 notes
+
+- Root cause: `simulatorDataProvider` set the scenario's `anchor` to the
+  simulated clock, so every scenario was always read "as of t0" and time
+  never advanced the situation. Separately, the data providers used
+  `ref.read(pollutionDataProvider)`, so a scenario/time change never
+  invalidated them.
+- `scenario_data.dart`: added `buildScenarioSnapshot(scenario, anchor, now)`
+  + `_ScenarioTimeline`. A scenario's reading is treated as t0 and its hourly
+  forecast as the timeline; the current reading is sampled at `now` and the
+  forecast is re-anchored to `now`. Values interpolate (pm25/confidence too)
+  and clamp past the last authored hour; `now == anchor` returns
+  `buildScenario` unchanged (so existing tests keep authored values).
+- `dummy_pollution_data_provider.dart`: new optional `now` (defaults to
+  `anchor`, then `DateTime.now()`); builds its `ScenarioData` from
+  `buildScenarioSnapshot`, and filters the forecast by `f.at - now <= horizon`.
+- `dev_scenario_simulator.dart`: new fixed `simulatorAnchorProvider`
+  (`2026-09-17 10:00`); `simulatorNowProvider` = anchor + offset;
+  `simulatorDataProvider` passes both.
+- `home_providers.dart`: all five providers now `ref.watch` the data provider
+  (were `ref.read`), so sim changes refetch.
+- `dev_simulator_panel.dart`: the demo-sequence button now sets the playing
+  flag so the play/pause icon is accurate.
+- Tests: `test/data/dummy_scenarios_test.dart` gains a `time-shifted snapshot`
+  group (advances the reading along the timeline; `now == anchor` is
+  unchanged; provider reports the advanced value). Existing dummy-provider
+  tests pass `anchor` without `now`, so they keep authored values.
+- NOTE: no Flutter/Dart SDK here — changes are statically verified only
+  (brace/paren balance, call-site grep). Run `flutter analyze && flutter test`
+  on a Flutter machine before relying on them.

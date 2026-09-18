@@ -203,4 +203,39 @@ void main() {
       });
     });
   });
+
+  group('time-shifted snapshot', () {
+    test('advancing now moves the current reading along the timeline', () {
+      final base = buildScenario(Scenario.approachingPlume, anchor);
+      final later = buildScenarioSnapshot(
+        Scenario.approachingPlume,
+        anchor,
+        anchor.add(const Duration(hours: 1)),
+      );
+
+      // t0 local AQI is moderate (120); an hour in, the plume has arrived.
+      expect(base.reading.aqiCpcb, 120);
+      expect(later.reading.aqiCpcb, greaterThan(base.reading.aqiCpcb));
+      // Forecast is re-anchored to `now` (now+1h), not the scenario anchor.
+      expect(later.forecast.first.at, anchor.add(const Duration(hours: 2)));
+    });
+
+    test('now == anchor returns the authored snapshot unchanged', () {
+      final authored = buildScenario(Scenario.rapidSpike, anchor);
+      final snapshot =
+          buildScenarioSnapshot(Scenario.rapidSpike, anchor, anchor);
+      expect(snapshot.reading, authored.reading);
+      expect(snapshot.forecast, authored.forecast);
+    });
+
+    test('provider read at a later now reports the advanced reading', () async {
+      final provider = DummyPollutionDataProvider(
+        scenario: Scenario.approachingPlume,
+        anchor: anchor,
+        now: anchor.add(const Duration(hours: 2)),
+      );
+      final reading = await provider.getCurrentAirQuality(location);
+      expect(reading.aqiCpcb, greaterThan(200));
+    });
+  });
 }
