@@ -38,72 +38,88 @@ final alertDedupStateProvider = StateProvider<List<DedupEntry>>((ref) {
   return const [];
 });
 
-/// Runs the alert engine and dispatches notifications.
+/// Orchestrates one refresh + alert-evaluation cycle.
 ///
-/// Call this after data refresh (e.g. on a timer or after pipeline run).
-/// Returns the engine result for UI display.
-final alertEvaluationProvider =
-    FutureProvider<AlertEngineResult?>((ref) async {
-  final profileAsync = ref.watch(userProfileProvider);
-  final profile = profileAsync.valueOrNull;
-  if (profile == null) return null;
+/// This replaces the previous side-effecting `alertEvaluationProvider`: a
+/// provider build must be pure, and nothing consumed it anyway, so the engine
+/// (and therefore notifications and alert history) never ran. The coordinator
+/// is invoked by the app shell on a timer, on app resume, and once at startup.
+class AlertCoordinator {
+  AlertCoordinator(this._ref);
 
-  final currentAsync = ref.watch(currentAirQualityProvider);
-  final forecastAsync = ref.watch(forecastProvider);
-  final eventsAsync = ref.watch(pollutionEventsProvider);
-  final freshnessAsync = ref.watch(dataFreshnessProvider);
+  final Ref _ref;
 
-  final current = currentAsync.valueOrNull;
-  final forecast = forecastAsync.valueOrNull;
-  final events = eventsAsync.valueOrNull;
-  final freshness = freshnessAsync.valueOrNull;
+  /// Refresh the data the engine depends on, then run the engine and act on
+  /// its decisions. Returns the engine result, or null when there is no
+  /// profile yet (e.g. before onboarding) or nothing to evaluate.
+  Future<AlertEngineResult?> refreshAndEvaluate() async {
+    // Force fresh reads so a periodic tick actually pulls new data. Riverpod
+    // keeps the previous value visible during the refresh, so screens don't
+    // flash a loading state.
+    _ref.invalidate(currentAirQualityProvider);
+    _ref.invalidate(forecastProvider);
+    _ref.invalidate(pollutionEventsProvider);
+    _ref.invalidate(dataFreshnessProvider);
+    _ref.invalidate(nearbyAreasProvider);
 
-  if (current == null || forecast == null || freshness == null) return null;
-  final effectiveEvents = events ?? const <PollutionEvent>[];
+    final profile = await _ref.read(userProfileProvider.future);
+    if (profile == null) return null;
 
-  // Build the sensitivity profile for the engine, carrying the user's
-  // persisted alert preferences (master switch, quiet hours, severity floor,
-  // recovery alerts) rather than defaults.
-  final sensitivityProfile = UserSensitivityProfile(
-    healthContext: profile.healthContext,
-    sensitivity: profile.sensitivity,
-    customRules: profile.customRules,
-    preferences: profile.preferences,
-  );
+    final current = await _ref.read(currentAirQualityProvider.future);
+    final forecast = await _ref.read(forecastProvider.future);
+    final events = await _ref.read(pollutionEventsProvider.future);
+    final freshness = await _ref.read(dataFreshnessProvider.future);
 
-  final engine = ref.read(alertEngineProvider);
-  final priorAlerts = ref.read(alertDedupStateProvider);
-
-  final result = engine.evaluate(
-    profile: sensitivityProfile,
-    current: current,
-    forecast: forecast,
-    events: effectiveEvents,
-    freshness: freshness,
-    priorAlerts: priorAlerts,
-  );
-
-  // Update dedup state.
-  ref.read(alertDedupStateProvider.notifier).state = result.dedupState;
-
-  // Dispatch notifications for new decisions.
-  if (result.decisions.isNotEmpty) {
-    final dispatcher = ref.read(alertNotificationDispatcherProvider);
-    await dispatcher.dispatch(
-      decisions: result.decisions,
+    // Build the sensitivity profile for the engine, carrying the user's
+    // persisted alert preferences (master switch, quiet hours, severity floor,
+    // recovery alerts) rather than defaults.
+    final sensitivityProfile = UserSensitivityProfile(
+      healthContext: profile.healthContext,
       sensitivity: profile.sensitivity,
+      customRules: profile.customRules,
+      preferences: profile.preferences,
     );
 
-    // Feed alert history for the Alerts screen.
-    ref.read(alertHistoryProvider.notifier).addFromDecisions(result.decisions);
+    final engine = _ref.read(alertEngineProvider);
+    final priorAlerts = _ref.read(alertDedupStateProvider);
 
-    // Resolve any recovery decisions.
-    for (final d in result.decisions) {
-      if (d.trigger == AlertTrigger.recovery) {
-        ref.read(alertHistoryProvider.notifier).resolveByKey(d.dedupKey);
+    final result = engine.evaluate(
+      profile: sensitivityProfile,
+      current: current,
+      forecast: forecast,
+      events: events,
+      freshness: freshness,
+      priorAlerts: priorAlerts,
+    );
+
+    // Persist dedup state for the next run.
+    _ref.read(alertDedupStateProvider.notifier).state = result.dedupState;
+
+    if (result.decisions.isNotEmpty) {
+      // Dispatch notifications (lock-screen-safe messages only).
+      await _ref.read(alertNotificationDispatcherProvider).dispatch(
+            decisions: result.decisions,
+            sensitivity: profile.sensitivity,
+          );
+
+      // Record for the Alerts screen, and resolve any recovery decisions.
+      final history = _ref.read(alertHistoryProvider.notifier);
+      history.addFromDecisions(result.decisions);
+      for (final decision in result.decisions) {
+        if (decision.trigger == AlertTrigger.recovery) {
+          history.resolveByKey(decision.dedupKey);
+        }
       }
     }
-  }
 
-  return result;
+    // Drop stale resolved/old records regardless of new decisions.
+    _ref.read(alertHistoryProvider.notifier).prune();
+
+    return result;
+  }
+}
+
+/// App-wide refresh + alert coordinator.
+final alertCoordinatorProvider = Provider<AlertCoordinator>((ref) {
+  return AlertCoordinator(ref);
 });

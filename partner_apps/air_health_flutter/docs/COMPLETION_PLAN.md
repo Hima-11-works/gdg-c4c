@@ -90,7 +90,7 @@ tested. All gaps below are wiring/integration, not half-written domain logic.
 | # | Step | Status |
 |---|---|---|
 | 1 | Preferences plumbing (`UserProfile.preferences`, persistence, notifier, engine) + wire Settings toggles (P0-5) | **done** |
-| 2 | Alert coordinator + refresh cadence + `prune()` (P0-1, P0-2) | pending |
+| 2 | Alert coordinator + refresh cadence + `prune()` (P0-1, P0-2) | **done** |
 | 3 | Permissions in onboarding/Settings (P0-3) | pending |
 | 4 | Fix simulator time model (P0-4) | pending |
 | 5 | Quiet hours + custom rules + lead time (P1-6/7/8) | pending |
@@ -101,3 +101,15 @@ tested. All gaps below are wiring/integration, not half-written domain logic.
 **Verification per step:** `flutter analyze` + `flutter test` (15 test files,
 incl. `test/acceptance/acceptance_test.dart`). Add tests for each new piece
 (coordinator, preference persistence, quiet-hours suppression).
+
+### Step 2 notes
+
+- `AlertCoordinator` (`lib/providers/alert_providers.dart`) refreshes the data
+  providers, runs the engine, dispatches notifications, updates alert history,
+  and calls `prune()`.
+- `AirHealthApp` (`lib/app/app.dart`) is now stateful and drives the cadence:
+  once at startup, on app resume, and every `alertRefreshInterval` (15 min).
+- The old side-effecting, unconsumed `alertEvaluationProvider` was removed.
+- Test: `test/providers/alert_coordinator_test.dart` covers the no-profile
+  guard (returns null, no side effects). A full evaluate-and-dispatch test
+  still needs mock data providers (follow-up).
