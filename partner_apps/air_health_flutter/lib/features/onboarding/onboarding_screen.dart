@@ -3,8 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../domain/models/models.dart';
+import '../../notifications/notification_service.dart';
+import '../../providers/alert_providers.dart';
+import '../../providers/location_providers.dart';
 import '../../providers/prefs_providers.dart';
 import '../../providers/profile_providers.dart';
+import '../../services/location_service.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
 
@@ -16,7 +20,8 @@ import '../../theme/app_typography.dart';
 /// 3. Health context (optional)
 /// 4. Alert sensitivity
 /// 5. Notification permission
-/// 6. Complete -> Home
+///
+/// Completing step 5 finishes onboarding and routes to Home.
 class OnboardingScreen extends ConsumerStatefulWidget {
   const OnboardingScreen({super.key});
 
@@ -208,10 +213,39 @@ class _WelcomeStep extends StatelessWidget {
 
 // ── Step 2: Location ───────────────────────────────────────────────────
 
-class _LocationStep extends StatelessWidget {
+class _LocationStep extends ConsumerStatefulWidget {
   const _LocationStep({required this.onNext});
 
   final VoidCallback onNext;
+
+  @override
+  ConsumerState<_LocationStep> createState() => _LocationStepState();
+}
+
+class _LocationStepState extends ConsumerState<_LocationStep> {
+  String? _status;
+
+  Future<void> _requestLocation() async {
+    final result = await ref.read(locationServiceProvider).requestAndLocate();
+    if (!mounted) return;
+
+    final message = switch (result) {
+      LocationSuccess() =>
+        'Location enabled — nearby data will use your position.',
+      LocationDenied() =>
+        'Permission denied. You can enable it later in Settings.',
+      LocationPermanentlyDenied() =>
+        'Location is blocked. Enable it in system settings.',
+      LocationUnavailable() =>
+        'Location unavailable right now — try again later.',
+    };
+    setState(() => _status = message);
+
+    if (result is LocationSuccess) {
+      // Re-resolve so the rest of the app uses the real position.
+      ref.invalidate(currentLocationProvider);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -239,8 +273,24 @@ class _LocationStep extends StatelessWidget {
             ),
             textAlign: TextAlign.center,
           ),
-          const SizedBox(height: AppSpacing.xxxxl),
-          _ContinueButton(label: 'Continue', onNext: onNext),
+          const SizedBox(height: AppSpacing.xl),
+          FilledButton.tonalIcon(
+            onPressed: _requestLocation,
+            icon: const Icon(Icons.my_location),
+            label: const Text('Allow location'),
+          ),
+          if (_status != null) ...[
+            const SizedBox(height: AppSpacing.md),
+            Text(
+              _status!,
+              style: AppTypography.bodySmall.copyWith(
+                color: cs.onSurfaceVariant,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+          const SizedBox(height: AppSpacing.xl),
+          _ContinueButton(label: 'Continue', onNext: widget.onNext),
         ],
       ),
     );
@@ -404,10 +454,32 @@ class _SensitivityStep extends StatelessWidget {
 
 // ── Step 5: Notifications ──────────────────────────────────────────────
 
-class _NotificationStep extends StatelessWidget {
+class _NotificationStep extends ConsumerStatefulWidget {
   const _NotificationStep({required this.onNext});
 
   final VoidCallback onNext;
+
+  @override
+  ConsumerState<_NotificationStep> createState() => _NotificationStepState();
+}
+
+class _NotificationStepState extends ConsumerState<_NotificationStep> {
+  String? _status;
+
+  Future<void> _requestNotifications() async {
+    final result =
+        await ref.read(notificationServiceProvider).requestPermissions();
+    if (!mounted) return;
+
+    final message = switch (result) {
+      NotificationPermissionResult.granted => 'Notifications enabled.',
+      NotificationPermissionResult.denied =>
+        'Not enabled. You can turn notifications on later in Settings.',
+      NotificationPermissionResult.permanentlyDenied =>
+        'Notifications are blocked. Enable them in system settings.',
+    };
+    setState(() => _status = message);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -435,8 +507,24 @@ class _NotificationStep extends StatelessWidget {
             ),
             textAlign: TextAlign.center,
           ),
-          const SizedBox(height: AppSpacing.xxxxl),
-          _ContinueButton(label: 'Finish setup', onNext: onNext),
+          const SizedBox(height: AppSpacing.xl),
+          FilledButton.tonalIcon(
+            onPressed: _requestNotifications,
+            icon: const Icon(Icons.notifications_active_outlined),
+            label: const Text('Enable notifications'),
+          ),
+          if (_status != null) ...[
+            const SizedBox(height: AppSpacing.md),
+            Text(
+              _status!,
+              style: AppTypography.bodySmall.copyWith(
+                color: cs.onSurfaceVariant,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+          const SizedBox(height: AppSpacing.xl),
+          _ContinueButton(label: 'Finish setup', onNext: widget.onNext),
         ],
       ),
     );

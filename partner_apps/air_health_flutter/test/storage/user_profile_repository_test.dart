@@ -99,6 +99,33 @@ void main() {
         expect(result.healthContext, UserHealthContext.copd);
         expect(result.sensitivity, AlertSensitivity.high);
       });
+
+      test('updates and returns preferences', () async {
+        const existing = UserProfile();
+        when(() => mockStore.read()).thenAnswer((_) async => existing);
+        when(() => mockStore.save(any())).thenAnswer((_) async {});
+
+        final result = await repo.updateProfile(
+          preferences: const UserAlertPreferences(alertsEnabled: false),
+        );
+
+        expect(result.preferences.alertsEnabled, isFalse);
+        verify(() => mockStore.save(any())).called(1);
+      });
+
+      test('preserves preferences when updating other fields', () async {
+        const existing = UserProfile(
+          preferences: UserAlertPreferences(recoveryAlertsEnabled: false),
+        );
+        when(() => mockStore.read()).thenAnswer((_) async => existing);
+        when(() => mockStore.save(any())).thenAnswer((_) async {});
+
+        final result = await repo.updateProfile(
+          healthContext: UserHealthContext.asthma,
+        );
+
+        expect(result.preferences.recoveryAlertsEnabled, isFalse);
+      });
     });
 
     group('deleteProfile', () {

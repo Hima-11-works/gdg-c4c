@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../mocks/dev_simulator_panel.dart';
+import '../providers/alert_providers.dart';
 import '../routing/app_router.dart';
 import '../theme/app_theme.dart';
 import '../theme/app_colors.dart';
@@ -14,16 +17,63 @@ final routerProvider = Provider<GoRouter>((ref) {
   return createRouter(ref.container);
 });
 
+/// How often the app refreshes data and re-runs the alert engine while it is
+/// running. (The engine de-duplicates, so a shorter interval is safe; 15 min
+/// matches a reasonable air-quality refresh cadence.)
+const alertRefreshInterval = Duration(minutes: 15);
+
 /// Root widget — configures MaterialApp.router with go_router and theme.
 ///
+/// Also owns the app-wide refresh/alert cadence: it refreshes the data used by
+/// the alert engine on [alertRefreshInterval], on app resume, and once at
+/// startup, so alerts fire without the user having to pull-to-refresh.
 /// In debug mode, overlays the dev scenario simulator panel.
 /// The entire tree is wrapped in a dark Container so the empty space
 /// on left/right of the 430px mobile frame matches the dark theme.
-class AirHealthApp extends ConsumerWidget {
+class AirHealthApp extends ConsumerStatefulWidget {
   const AirHealthApp({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<AirHealthApp> createState() => _AirHealthAppState();
+}
+
+class _AirHealthAppState extends ConsumerState<AirHealthApp>
+    with WidgetsBindingObserver {
+  Timer? _refreshTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // Evaluate once after the first frame. The profile loads asynchronously,
+    // so the coordinator simply no-ops until one exists.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _refresh());
+    _refreshTimer = Timer.periodic(alertRefreshInterval, (_) => _refresh());
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _refresh();
+  }
+
+  Future<void> _refresh() async {
+    try {
+      await ref.read(alertCoordinatorProvider).refreshAndEvaluate();
+    } catch (_) {
+      // Non-fatal: keep the last known data. The next tick retries, and each
+      // screen already surfaces its own error state.
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final router = ref.watch(routerProvider);
 
     return MaterialApp.router(

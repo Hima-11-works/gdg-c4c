@@ -22,7 +22,13 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 config.set_main_option(
-    "sqlalchemy.url", get_settings().database_url.render_as_string(hide_password=False)
+    "sqlalchemy.url",
+    # The URL is stored as a ConfigParser value, where a bare "%" — e.g. a
+    # percent-encoded character in a managed-Postgres password ("pa%40ss") —
+    # is rejected as invalid interpolation syntax. Double it here;
+    # ConfigParser's get() turns "%%" back into "%" before the URL is used.
+    # Without this, `alembic upgrade head` fails on such a DATABASE_URL.
+    get_settings().database_url.render_as_string(hide_password=False).replace("%", "%%"),
 )
 
 target_metadata = metadata

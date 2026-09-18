@@ -39,6 +39,12 @@ class AlertRecord {
       !isResolved &&
       DateTime.now().difference(createdAt).inHours < 24;
 
+  /// Older: unresolved and more than 24 hours old. Without this bucket such
+  /// records would match none of Active/Recent/Resolved and silently
+  /// disappear from the alerts screen.
+  bool get isStale =>
+      !isResolved && DateTime.now().difference(createdAt).inHours >= 24;
+
   /// Resolved: explicitly marked resolved.
   bool get isResolvedSection => isResolved;
 

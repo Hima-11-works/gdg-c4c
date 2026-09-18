@@ -69,6 +69,16 @@ ScenarioData _cleanStable(DateTime anchor) {
       confidence: 0.95,
     );
   });
+  // Cuttack has its own (very similar) trajectory — the nearby list must not
+  // reuse the local forecast, or its "now" and forecast disagree.
+  final cuttackForecast = List.generate(12, (i) {
+    return ForecastPoint(
+      at: anchor.add(Duration(hours: i + 1)),
+      aqiCpcb: 38 + (i % 2),
+      pm25: 16.0 + (i % 2),
+      confidence: 0.92,
+    );
+  });
   return ScenarioData(
     reading: reading,
     forecast: forecast,
@@ -77,7 +87,7 @@ ScenarioData _cleanStable(DateTime anchor) {
         location: const LocationPoint(latitude: 20.27, longitude: 85.82, label: 'Cuttack'),
         name: 'Cuttack',
         aqiNow: 38,
-        forecast: forecast,
+        forecast: cuttackForecast,
         trend: AreaTrend.stable,
         distanceKm: 25,
         confidence: 0.92,
@@ -92,7 +102,8 @@ ScenarioData _cleanStable(DateTime anchor) {
 }
 
 ScenarioData _gradualRise(DateTime anchor) {
-  // AQI rises from 52 → ~178 over 12 hours, crossing "Moderate" at ~2h.
+  // AQI rises from 52 → ~170 over 12 hours, crossing "Moderately
+  // Polluted" (AQI 101+) at ~6h.
   final reading = AirQualityReading(
     aqiCpcb: 52,
     pm25: 30.0,
@@ -180,6 +191,18 @@ ScenarioData _approachingPlume(DateTime anchor) {
       confidence: hour <= 2 ? 0.9 : 0.75,
     );
   });
+  // Industrial Belt is the source: already severe and rising slowly. It has
+  // its own forecast — sharing the local one made its "now" (340) contradict
+  // its forecast (220/310/...).
+  final areaForecast = List.generate(12, (i) {
+    final aqi = (340 + (i * 5)).clamp(50, 500);
+    return ForecastPoint(
+      at: anchor.add(Duration(hours: i + 1)),
+      aqiCpcb: aqi,
+      pm25: (aqi * 0.55).clamp(10, 500),
+      confidence: 0.88,
+    );
+  });
   return ScenarioData(
     reading: reading,
     forecast: forecast,
@@ -188,7 +211,7 @@ ScenarioData _approachingPlume(DateTime anchor) {
         location: const LocationPoint(latitude: 20.15, longitude: 85.60, label: 'Industrial Belt'),
         name: 'Industrial Belt',
         aqiNow: 340,
-        forecast: forecast,
+        forecast: areaForecast,
         trend: AreaTrend.worsening,
         distanceKm: 8,
         confidence: 0.88,
@@ -341,4 +364,128 @@ ScenarioData _partialData(DateTime anchor) {
       quality: DataQuality.partial,
     ),
   );
+}
+
+// ── Time-shifted snapshot (dev simulator) ──────────────────────────────
+
+/// Builds the scenario as seen from [now], with [anchor] the scenario's fixed
+/// start.
+///
+/// [buildScenario] always returns data "as of" its anchor. The dev simulator
+/// needs the scenario to advance with a simulated clock, so this treats the
+/// scenario's timeline — its `reading` at t0 plus its hourly `forecast` — as
+/// continuous: the current reading is sampled at `now`, and the forecast is
+/// sampled forward from `now`. With `now == anchor` it returns
+/// [buildScenario] unchanged, so callers (and tests) that don't shift time
+/// keep the exact authored values.
+ScenarioData buildScenarioSnapshot(
+  Scenario scenario,
+  DateTime anchor,
+  DateTime now,
+) {
+  final base = buildScenario(scenario, anchor);
+  final elapsed = now.difference(anchor);
+  if (elapsed.inSeconds <= 0) return base;
+
+  final timeline = _ScenarioTimeline(base.reading, base.forecast);
+  return ScenarioData(
+    reading: timeline.readingAt(now, elapsed),
+    forecast: [
+      for (var h = 1; h <= base.forecast.length; h++)
+        timeline.forecastAt(now, elapsed + Duration(hours: h), h),
+    ],
+    // Nearby areas and events are authored as single snapshots, so their
+    // values are left as-is. An event's absolute `expectedArrivalAt` still
+    // passes as the clock advances, which is exactly what the approaching-
+    // pollution alert rule keys off.
+    nearbyAreas: base.nearbyAreas,
+    events: base.events,
+    freshness: DataFreshness(
+      retrievedAt: now,
+      quality: base.freshness.quality,
+      nextRefreshEta: base.freshness.nextRefreshEta,
+    ),
+  );
+}
+
+/// A scenario's reading + hourly forecast treated as a continuous timeline, so
+/// AQI/pm25/confidence can be sampled at any elapsed time, not just whole
+/// hours. Sampling past the last authored hour clamps to that last value.
+class _ScenarioTimeline {
+  _ScenarioTimeline(AirQualityReading reading, List<ForecastPoint> forecast)
+      : _primaryPollutant = reading.primaryPollutant,
+        _aqi = [reading.aqiCpcb, ...forecast.map((f) => f.aqiCpcb)],
+        _pm25 = [reading.pm25, ...forecast.map((f) => f.pm25)],
+        _confidence = [
+          // The current reading carries no confidence; use the first forecast
+          // point's as the best available stand-in for the t0 sample.
+          forecast.isNotEmpty ? forecast.first.confidence : 1.0,
+          ...forecast.map((f) => f.confidence),
+        ];
+
+  final String? _primaryPollutant;
+  final List<int> _aqi;
+  final List<double?> _pm25;
+  final List<double> _confidence;
+
+  int get _lastIndex => _aqi.length - 1;
+
+  /// Fractional index into the timeline for [elapsed] since the anchor,
+  /// clamped to `[0, lastIndex]`.
+  double _indexAt(Duration elapsed) {
+    final hours = elapsed.inMinutes / 60.0;
+    if (hours <= 0) return 0;
+    if (hours >= _lastIndex) return _lastIndex.toDouble();
+    return hours;
+  }
+
+  AirQualityReading readingAt(DateTime now, Duration elapsed) {
+    final i = _indexAt(elapsed);
+    final aqi = _lerpAqi(i);
+    return AirQualityReading(
+      aqiCpcb: aqi,
+      pm25: _lerpPm25(i),
+      primaryPollutant: _primaryPollutant,
+      category: CpcbCategory.fromAqi(aqi),
+      recordedAt: now,
+    );
+  }
+
+  ForecastPoint forecastAt(DateTime now, Duration elapsed, int hoursAhead) {
+    final i = _indexAt(elapsed);
+    return ForecastPoint(
+      at: now.add(Duration(hours: hoursAhead)),
+      aqiCpcb: _lerpAqi(i),
+      pm25: _lerpPm25(i),
+      confidence: _lerpConfidence(i),
+    );
+  }
+
+  int _lerpAqi(double i) {
+    final lo = i.floor();
+    final hi = i.ceil();
+    if (lo == hi) return _aqi[lo];
+    final t = i - lo;
+    return (_aqi[lo] + (_aqi[hi] - _aqi[lo]) * t).round();
+  }
+
+  double? _lerpPm25(double i) {
+    final lo = i.floor();
+    final hi = i.ceil();
+    final a = _pm25[lo];
+    final b = _pm25[hi];
+    if (a == null || b == null) return a ?? b;
+    if (lo == hi) return a;
+    final t = i - lo;
+    return a + (b - a) * t;
+  }
+
+  double _lerpConfidence(double i) {
+    final lo = i.floor();
+    final hi = i.ceil();
+    if (lo == hi) return _confidence[lo];
+    final t = i - lo;
+    return (_confidence[lo] + (_confidence[hi] - _confidence[lo]) * t)
+        .clamp(0.0, 1.0);
+  }
 }

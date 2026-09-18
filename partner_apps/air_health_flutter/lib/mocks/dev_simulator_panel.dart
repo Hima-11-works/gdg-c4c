@@ -271,6 +271,9 @@ class _DevSimulatorPanelState extends ConsumerState<DevSimulatorPanel> {
   void _runDemoSequence() {
     final steps = DevScenarioSimulator.demoSteps;
     var i = 0;
+    // Reflect playback state so the play/pause button is accurate while the
+    // sequence runs (its timer is separate from the manual play timer).
+    ref.read(simulatorPlayingProvider.notifier).state = true;
     _autoTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
       if (!mounted || i >= steps.length) {
         timer.cancel();

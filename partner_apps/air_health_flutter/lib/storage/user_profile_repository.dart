@@ -29,12 +29,14 @@ class UserProfileRepository {
     UserHealthContext? healthContext,
     AlertSensitivity? sensitivity,
     CustomSensitivityRules? customRules,
+    UserAlertPreferences? preferences,
   }) async {
     final existing = await _store.read();
     final updated = (existing ?? const UserProfile()).copyWith(
       healthContext: healthContext,
       sensitivity: sensitivity,
       customRules: customRules,
+      preferences: preferences,
     );
     await _store.save(updated);
     return updated;

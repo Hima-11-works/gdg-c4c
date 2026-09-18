@@ -37,12 +37,14 @@ class UserProfileNotifier extends AsyncNotifier<UserProfile?> {
     UserHealthContext? healthContext,
     AlertSensitivity? sensitivity,
     CustomSensitivityRules? customRules,
+    UserAlertPreferences? preferences,
   }) async {
     final repo = ref.read(userProfileRepositoryProvider);
     final updated = await repo.updateProfile(
       healthContext: healthContext,
       sensitivity: sensitivity,
       customRules: customRules,
+      preferences: preferences,
     );
     state = AsyncData(updated);
   }

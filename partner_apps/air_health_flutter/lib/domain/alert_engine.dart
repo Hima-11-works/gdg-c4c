@@ -21,7 +21,7 @@ class AlertEngineResult {
 /// alert state, returns filtered decisions plus updated dedup state.
 ///
 /// Supports: cooldown, deduplication, hysteresis, severity escalation,
-/// recovery detection.
+/// recovery detection, minimum-severity filtering and quiet hours.
 class AlertEngine {
   const AlertEngine();
 
@@ -74,11 +74,27 @@ class AlertEngine {
           now: effectiveNow),
     ];
 
-    // 2. Filter by cooldown and dedup.
+    // 2. Apply delivery preferences BEFORE dedup: a suppressed alert must not
+    // be recorded as "already sent", otherwise it could never fire once the
+    // suppression window ends.
+    final deliverable = candidates.where((candidate) {
+      if (candidate.severity < profile.preferences.minimumSeverity) {
+        return false;
+      }
+      // Quiet hours silence everything except urgent (Very Poor/Severe)
+      // air quality, which still gets through.
+      if (candidate.severity != AlertSeverity.urgent &&
+          profile.preferences.isWithinQuietHours(effectiveNow)) {
+        return false;
+      }
+      return true;
+    }).toList();
+
+    // 3. Filter by cooldown and dedup.
     final filtered = <AlertDecision>[];
     final updatedDedup = List<DedupEntry>.from(priorAlerts);
 
-    for (final candidate in candidates) {
+    for (final candidate in deliverable) {
       final existing = _findExisting(updatedDedup, candidate.dedupKey);
 
       if (existing != null) {

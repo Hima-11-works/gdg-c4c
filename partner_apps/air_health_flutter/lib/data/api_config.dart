@@ -1,37 +1,35 @@
 /// API configuration read from environment variables.
 ///
-/// No keys or URLs are hardcoded — they come from:
-/// - `POLLUTION_API_BASE_URL` (e.g. "https://api.example.com/v1")
-/// - `POLLUTION_API_KEY` (Bearer token)
+/// Only the origin is needed — the grid API is unauthenticated:
+/// - `POLLUTION_API_BASE_URL` (e.g. "http://localhost:8000")
+///
+/// `POLLUTION_API_KEY` is optional and only used by the legacy
+/// `RemotePollutionDataProvider` contract.
 ///
 /// For Flutter, set these in `--dart-define`:
 /// ```
-/// flutter run --dart-define=POLLUTION_API_BASE_URL=https://...
-/// flutter run --dart-define=POLLUTION_API_KEY=sk-...
+/// flutter run --dart-define=POLLUTION_API_BASE_URL=http://localhost:8000
 /// ```
 class ApiConfig {
   const ApiConfig({
     required this.baseUrl,
-    required this.apiKey,
+    this.apiKey,
   });
 
-  /// Read from environment — throws if missing.
+  /// Read from environment — throws if the base URL is missing.
   factory ApiConfig.fromEnvironment() {
     const baseUrl = String.fromEnvironment('POLLUTION_API_BASE_URL');
     const apiKey = String.fromEnvironment('POLLUTION_API_KEY');
     if (baseUrl.isEmpty) {
       throw StateError(
         'POLLUTION_API_BASE_URL not set. '
-        'Pass --dart-define=POLLUTION_API_BASE_URL=https://...',
+        'Pass --dart-define=POLLUTION_API_BASE_URL=http://localhost:8000',
       );
     }
-    if (apiKey.isEmpty) {
-      throw StateError(
-        'POLLUTION_API_KEY not set. '
-        'Pass --dart-define=POLLUTION_API_KEY=sk-...',
-      );
-    }
-    return ApiConfig(baseUrl: baseUrl, apiKey: apiKey);
+    return ApiConfig(
+      baseUrl: baseUrl,
+      apiKey: apiKey.isEmpty ? null : apiKey,
+    );
   }
 
   /// Safe factory — returns null if env vars are missing.
@@ -44,7 +42,9 @@ class ApiConfig {
   }
 
   final String baseUrl;
-  final String apiKey;
+
+  /// Optional Bearer token — the grid API does not require one.
+  final String? apiKey;
 
   /// Base URL without trailing slash.
   String get normalizedBaseUrl =>

@@ -43,51 +43,55 @@ class SensitivityRules {
   final int hysteresisAqi;
 
   /// Build rules for the given [profile].
+  ///
+  /// [UserAlertPreferences.leadTime], when set, overrides the tier default
+  /// for [leadTimePreference] (the "Forecast warning lead time" setting).
   factory SensitivityRules.forProfile(UserSensitivityProfile profile) {
+    final leadOverride = profile.preferences.leadTime;
     if (profile.isCustom && profile.customRules != null) {
       final custom = profile.customRules!;
       return SensitivityRules(
         warningCategory: CpcbCategory.fromAqi(custom.warningAqi),
         forecastCategory: CpcbCategory.fromAqi(custom.forecastWarningAqi),
         rapidRiseAqiPerHour: custom.rapidRiseAqiPerHour,
-        leadTimePreference: const Duration(hours: 3),
+        leadTimePreference: leadOverride ?? const Duration(hours: 3),
         minForecastConfidence: 0.6,
         approachingEventLeadTime: const Duration(hours: 3),
       );
     }
 
     return switch (profile.sensitivity) {
-      AlertSensitivity.standard => const SensitivityRules(
+      AlertSensitivity.standard => SensitivityRules(
           warningCategory: CpcbCategory.poor,
           forecastCategory: CpcbCategory.poor,
           rapidRiseAqiPerHour: 40,
-          leadTimePreference: Duration(hours: 2),
+          leadTimePreference: leadOverride ?? const Duration(hours: 2),
           minForecastConfidence: 0.8,
-          approachingEventLeadTime: Duration(hours: 1),
+          approachingEventLeadTime: const Duration(hours: 1),
         ),
-      AlertSensitivity.sensitive => const SensitivityRules(
+      AlertSensitivity.sensitive => SensitivityRules(
           warningCategory: CpcbCategory.moderate,
           forecastCategory: CpcbCategory.moderate,
           rapidRiseAqiPerHour: 25,
-          leadTimePreference: Duration(hours: 3),
+          leadTimePreference: leadOverride ?? const Duration(hours: 3),
           minForecastConfidence: 0.7,
-          approachingEventLeadTime: Duration(hours: 2),
+          approachingEventLeadTime: const Duration(hours: 2),
         ),
-      AlertSensitivity.high => const SensitivityRules(
+      AlertSensitivity.high => SensitivityRules(
           warningCategory: CpcbCategory.satisfactory,
           forecastCategory: CpcbCategory.moderate,
           rapidRiseAqiPerHour: 15,
-          leadTimePreference: Duration(hours: 6),
+          leadTimePreference: leadOverride ?? const Duration(hours: 6),
           minForecastConfidence: 0.5,
-          approachingEventLeadTime: Duration(hours: 4),
+          approachingEventLeadTime: const Duration(hours: 4),
         ),
-      AlertSensitivity.custom => const SensitivityRules(
+      AlertSensitivity.custom => SensitivityRules(
           warningCategory: CpcbCategory.moderate,
           forecastCategory: CpcbCategory.moderate,
           rapidRiseAqiPerHour: 25,
-          leadTimePreference: Duration(hours: 3),
+          leadTimePreference: leadOverride ?? const Duration(hours: 3),
           minForecastConfidence: 0.6,
-          approachingEventLeadTime: Duration(hours: 3),
+          approachingEventLeadTime: const Duration(hours: 3),
         ),
     };
   }

@@ -10,32 +10,37 @@ export 'location_providers.dart' show currentLocationProvider, resolvedLocationP
 
 // ── Air quality ────────────────────────────────────────────────────────
 
+// NOTE: every provider below `watch`es `pollutionDataProvider` (rather than
+// `read`s it), so that in debug mode a simulator scenario/time change — which
+// overrides `pollutionDataProvider` via `simulatorDataProvider` — actually
+// invalidates and refetches the data.
+
 final currentAirQualityProvider = FutureProvider<AirQualityReading>((ref) async {
-  final provider = ref.read(pollutionDataProvider);
+  final provider = ref.watch(pollutionDataProvider);
   final location = await ref.watch(currentLocationProvider.future);
   return provider.getCurrentAirQuality(location);
 });
 
 final forecastProvider = FutureProvider<List<ForecastPoint>>((ref) async {
-  final provider = ref.read(pollutionDataProvider);
+  final provider = ref.watch(pollutionDataProvider);
   final location = await ref.watch(currentLocationProvider.future);
   return provider.getForecast(location, const Duration(hours: 12));
 });
 
 final nearbyAreasProvider = FutureProvider<List<NearbyArea>>((ref) async {
-  final provider = ref.read(pollutionDataProvider);
+  final provider = ref.watch(pollutionDataProvider);
   final location = await ref.watch(currentLocationProvider.future);
   return provider.getNearbyAreas(location);
 });
 
 final pollutionEventsProvider = FutureProvider<List<PollutionEvent>>((ref) async {
-  final provider = ref.read(pollutionDataProvider);
+  final provider = ref.watch(pollutionDataProvider);
   final location = await ref.watch(currentLocationProvider.future);
   return provider.getPollutionEvents(location);
 });
 
 final dataFreshnessProvider = FutureProvider<DataFreshness>((ref) {
-  final provider = ref.read(pollutionDataProvider);
+  final provider = ref.watch(pollutionDataProvider);
   return provider.getDataFreshness();
 });
 

@@ -157,12 +157,14 @@ class HomeScreen extends ConsumerWidget {
                       return ForecastChart(
                         currentAqi: reading.aqiCpcb,
                         forecast: const [],
+                        now: reading.recordedAt,
                       );
                     }
                     final evts = events.valueOrNull ?? const [];
                     return ForecastChart(
                       currentAqi: reading.aqiCpcb,
                       forecast: points,
+                      now: reading.recordedAt,
                       event: evts.isNotEmpty ? evts.first : null,
                     );
                   },
@@ -178,7 +180,10 @@ class HomeScreen extends ConsumerWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const SectionHeader(title: 'Approaching Pollution'),
-                        ...evts.map((evt) => _PollutionEventCard(event: evt)),
+                        ...evts.map((evt) => _PollutionEventCard(
+                              event: evt,
+                              now: reading.recordedAt,
+                            )),
                       ],
                     );
                   },
@@ -205,14 +210,17 @@ class HomeScreen extends ConsumerWidget {
 // ── Pollution event card ───────────────────────────────────────────────
 
 class _PollutionEventCard extends StatelessWidget {
-  const _PollutionEventCard({required this.event});
+  const _PollutionEventCard({required this.event, this.now});
 
   final PollutionEvent event;
+
+  /// Reference time for the lead-time chip; falls back to the wall clock.
+  final DateTime? now;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final lead = event.expectedArrivalAt.difference(DateTime.now());
+    final lead = event.expectedArrivalAt.difference(now ?? DateTime.now());
 
     return AppCard(
       margin: const EdgeInsets.symmetric(
