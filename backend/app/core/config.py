@@ -37,6 +37,12 @@ class Settings(BaseSettings):
         # Allow the fields below to be set by name when constructed in code
         # (e.g. tests), not only by their environment alias.
         populate_by_name=True,
+        # Hosting providers (Vercel) can auto-import a repo's committed
+        # .env.example as a set of *empty* environment variables. An empty
+        # string is not a valid bool/int/float, so without this the app would
+        # fail validation at startup; ignoring empty values lets each field
+        # fall back to its default instead.
+        env_ignore_empty=True,
     )
 
     environment: str = "development"

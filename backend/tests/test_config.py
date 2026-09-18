@@ -118,3 +118,22 @@ def test_missing_database_configuration_raises_only_when_used(monkeypatch) -> No
 
     with pytest.raises(ValueError, match="DATABASE_URL"):
         _ = settings.database_url
+
+
+def test_empty_environment_values_are_ignored(monkeypatch) -> None:
+    """Vercel auto-imports .env.example as empty env vars; an empty string for
+    a typed field (int/bool) would otherwise fail validation at startup."""
+    monkeypatch.setenv("H3_RESOLUTION", "")
+    monkeypatch.setenv("DEMO_MODE", "")
+    monkeypatch.setenv("GRID_QUERY_MAX_CELLS", "")
+
+    settings = Settings(
+        _env_file=None,
+        postgres_user="u",
+        postgres_password="p",
+        postgres_db="d",
+    )
+
+    assert settings.h3_resolution == 8
+    assert settings.demo_mode is False
+    assert settings.grid_query_max_cells == 50_000
