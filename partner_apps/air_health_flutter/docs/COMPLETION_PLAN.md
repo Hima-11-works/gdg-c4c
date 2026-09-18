@@ -61,7 +61,9 @@ tested. All gaps below are wiring/integration, not half-written domain logic.
    `PollutionDataProvider` shape, or (b) app-side adapter mapping the grid
    API (lat/lon → H3 cell, PM2.5 → CPCB AQI, nearby from the 1-ring cells,
    events from `/alerts`, freshness from `generated_at`).
-10. **iOS** has no platform folder (Android + web only). Add if in scope.
+10. **iOS** has no platform folder (Android + web only). *Deferred* — needs
+    macOS + Xcode + CocoaPods; see the step 7 notes for the commands and
+    Info.plist keys.
 
 ## P2 — Data / UX bugs
 
@@ -95,7 +97,7 @@ tested. All gaps below are wiring/integration, not half-written domain logic.
 | 4 | Fix simulator time model (P0-4) | **done** |
 | 5 | Quiet hours + custom rules + lead time (P1-6/7/8) | **done** |
 | 6 | Backend integration decision + adapter (P1-9) | **done** |
-| 7 | iOS platform (P1-10, if in scope) | pending |
+| 7 | iOS platform (P1-10, if in scope) | deferred (see note) |
 | 8 | P2/P3 cleanup | **done** |
 
 **Verification per step:** `flutter analyze` + `flutter test` (15 test files,
@@ -242,3 +244,31 @@ P3:
 - Tests updated/added: `prefs_store_test.dart`, `alert_record_test.dart`,
   `dummy_scenarios_test.dart` (nearby-forecast regression).
 - Same static-verification caveat (no SDK here).
+
+### Step 7 notes (deferred)
+
+iOS has no `ios/` runner (Android + web only). Generating one requires
+macOS + Xcode + CocoaPods, so it cannot be produced or verified from this
+environment. To add it later, on a Mac:
+
+```bash
+cd partner_apps/air_health_flutter
+flutter create --platforms=ios .
+flutter pub get
+cd ios && pod install
+```
+
+Then, in `ios/Runner/Info.plist` (verify against each plugin's docs and on a
+device — not done here):
+
+- `NSLocationWhenInUseUsageDescription` — required by `geolocator`
+  (and `permission_handler`).
+- If pointing at a plain-HTTP dev backend, an App Transport Security
+  exception (`NSAppTransportSecurity` / `NSAllowsLocalNetworking`); HTTPS
+  needs nothing.
+- Local notifications (`flutter_local_notifications`) request permission at
+  runtime on iOS — no Info.plist permission string, but scheduled
+  notifications may need the `UIBackgroundModes`/notification setup from the
+  plugin's README.
+- Raise `IPHONEOS_DEPLOYMENT_TARGET` if `pod install` requires it for the
+  installed plugin versions.
