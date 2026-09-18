@@ -75,3 +75,46 @@ def test_openaq_api_key_is_not_exposed_in_repr() -> None:
     assert "super-secret-key" not in repr(settings)
     assert settings.openaq_api_key is not None
     assert settings.openaq_api_key.get_secret_value() == "super-secret-key"
+
+
+def test_database_url_override_takes_precedence_and_normalizes_driver() -> None:
+    settings = Settings(
+        database_url_override=(
+            "postgresql://user:pw@managed.example:5432/pollution?sslmode=require"
+        ),
+        postgres_user="ignored",
+        postgres_password="ignored",
+        postgres_db="ignored",
+    )
+
+    url = settings.database_url
+
+    assert url.drivername == "postgresql+psycopg"
+    assert url.host == "managed.example"
+    assert url.database == "pollution"
+    assert url.query["sslmode"] == "require"
+
+
+def test_database_url_override_accepts_postgres_and_psycopg2_schemes() -> None:
+    from_postgres = Settings(database_url_override="postgres://u:p@h/d").database_url
+    from_psycopg2 = Settings(database_url_override="postgresql+psycopg2://u:p@h/d").database_url
+
+    assert from_postgres.drivername == "postgresql+psycopg"
+    assert from_psycopg2.drivername == "postgresql+psycopg"
+
+
+def test_missing_database_configuration_raises_only_when_used(monkeypatch) -> None:
+    """The URL is validated lazily, so a deploy with no database env can still
+    boot and answer /health instead of failing at import."""
+    monkeypatch.delenv("POSTGRES_USER", raising=False)
+    monkeypatch.delenv("POSTGRES_PASSWORD", raising=False)
+    monkeypatch.delenv("POSTGRES_DB", raising=False)
+    settings = Settings(
+        _env_file=None,
+        postgres_user=None,
+        postgres_password=None,
+        postgres_db=None,
+    )
+
+    with pytest.raises(ValueError, match="DATABASE_URL"):
+        _ = settings.database_url

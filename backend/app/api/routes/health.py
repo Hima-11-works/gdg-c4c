@@ -42,7 +42,11 @@ def ready(response: Response) -> ReadinessResponse:
     """Readiness: PostgreSQL is reachable and PostGIS is installed."""
     try:
         postgis_version = get_postgis_version()
-    except SQLAlchemyError as exc:
+    except (SQLAlchemyError, ValueError) as exc:
+        # ValueError covers a missing/incomplete database configuration
+        # (no DATABASE_URL and no POSTGRES_* parts), which would otherwise
+        # surface as a 500 on an unconfigured deploy. Either way this is
+        # "not ready", not an application error.
         logger.warning("Readiness check failed: %s", exc.__class__.__name__)
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return ReadinessResponse(status="unavailable", database="unreachable", postgis_version=None)

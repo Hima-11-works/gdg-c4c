@@ -17,19 +17,37 @@ _engine: Engine | None = None
 _SessionLocal: sessionmaker[Session] | None = None
 
 
+def _connect_args() -> dict[str, object]:
+    """psycopg connect kwargs for the configured database.
+
+    Besides the timeout and UTC session timezone, a managed Postgres
+    configured via DATABASE_URL (Neon / Vercel Postgres) needs TLS, and —
+    when fronted by a transaction-mode pooler such as Neon's `-pooler`
+    endpoint or pgbouncer — must not rely on psycopg 3's server-side
+    prepared statements, which don't survive a connection being handed back
+    to a different backend.
+    """
+    args: dict[str, object] = {
+        "connect_timeout": CONNECT_TIMEOUT_SECONDS,
+        # timestamptz values come back in the session's timezone, and
+        # app.domain.types rejects anything but UTC — without this, a
+        # server whose default timezone isn't UTC fails every read.
+        "options": "-c timezone=UTC",
+    }
+    settings = get_settings()
+    if settings.database_url_override:
+        args["sslmode"] = settings.database_url.query.get("sslmode", "require")
+        args["prepare_threshold"] = None
+    return args
+
+
 def get_engine() -> Engine:
     global _engine
     if _engine is None:
         _engine = create_engine(
             get_settings().database_url,
             pool_pre_ping=True,
-            connect_args={
-                "connect_timeout": CONNECT_TIMEOUT_SECONDS,
-                # timestamptz values come back in the session's timezone, and
-                # app.domain.types rejects anything but UTC — without this, a
-                # server whose default timezone isn't UTC fails every read.
-                "options": "-c timezone=UTC",
-            },
+            connect_args=_connect_args(),
         )
     return _engine
 

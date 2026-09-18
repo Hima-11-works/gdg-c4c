@@ -3,9 +3,9 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from sqlalchemy.engine import URL
+from sqlalchemy.engine import URL, make_url
 
 # backend/app/core/config.py -> repo root. Resolved absolutely so the same .env
 # is found whether the backend is started from the repo root or from backend/.
@@ -13,8 +13,31 @@ from sqlalchemy.engine import URL
 ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
 
 
+def _normalize_managed_url(raw: str) -> URL:
+    """Parse a single managed connection string (Neon / Vercel Postgres).
+
+    Normalizes the driver to the installed psycopg 3 dialect: a bare
+    ``postgresql://`` URL (what Neon/Vercel hand out) would otherwise default
+    to psycopg2, which isn't a dependency, and ``postgres://`` (Heroku-style)
+    or a pasted ``postgresql+psycopg2://`` URL would fail at connect time.
+    """
+    if raw.startswith("postgres://"):
+        raw = "postgresql://" + raw[len("postgres://") :]
+    url = make_url(raw)
+    if url.drivername in ("postgresql", "postgresql+psycopg2"):
+        url = url.set(drivername="postgresql+psycopg")
+    return url
+
+
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=ENV_FILE, env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=ENV_FILE,
+        env_file_encoding="utf-8",
+        extra="ignore",
+        # Allow the fields below to be set by name when constructed in code
+        # (e.g. tests), not only by their environment alias.
+        populate_by_name=True,
+    )
 
     environment: str = "development"
     log_level: str = "INFO"
@@ -37,10 +60,21 @@ class Settings(BaseSettings):
     # change as a breaking change to stored data, not a runtime toggle.
     h3_resolution: int = Field(default=8, ge=0, le=15)
 
-    # Credentials have no defaults: they must come from the environment.
-    postgres_user: str
-    postgres_password: SecretStr
-    postgres_db: str
+    # A single managed connection URL (Neon / Vercel Postgres), e.g.
+    # "postgresql://user:pass@host/db?sslmode=require". When set, it takes
+    # precedence over the POSTGRES_* parts below, which then become optional —
+    # so a serverless deploy can configure the database with one variable.
+    database_url_override: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("DATABASE_URL", "database_url_override"),
+    )
+
+    # Individual connection parts. Required only when DATABASE_URL is unset
+    # (enforced by the database_url property, not at construction time, so the
+    # app can still boot — and serve /health — without database config).
+    postgres_user: str | None = None
+    postgres_password: SecretStr | None = None
+    postgres_db: str | None = None
     postgres_host: str = "localhost"
     postgres_port: int = 5432
 
@@ -242,14 +276,26 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> URL:
+        if self.database_url_override:
+            return _normalize_managed_url(self.database_url_override)
+
+        user = self.postgres_user
+        password = self.postgres_password
+        database = self.postgres_db
+        if not user or password is None or not database:
+            raise ValueError(
+                "Database configuration is incomplete: set DATABASE_URL (a single "
+                "connection string), or all of POSTGRES_USER, POSTGRES_PASSWORD "
+                "and POSTGRES_DB."
+            )
         # URL.create escapes special characters in the password.
         return URL.create(
             drivername="postgresql+psycopg",
-            username=self.postgres_user,
-            password=self.postgres_password.get_secret_value(),
+            username=user,
+            password=password.get_secret_value(),
             host=self.postgres_host,
             port=self.postgres_port,
-            database=self.postgres_db,
+            database=database,
         )
 
 

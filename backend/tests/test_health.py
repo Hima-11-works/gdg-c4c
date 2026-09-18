@@ -42,3 +42,24 @@ def test_ready_returns_503_when_database_unreachable(
         "database": "unreachable",
         "postgis_version": None,
     }
+
+
+def test_ready_returns_503_when_database_not_configured(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No DATABASE_URL and no POSTGRES_* parts is "not ready" (503), not a 500
+    — a deploy with missing database config must still report clearly."""
+
+    def unconfigured() -> str:
+        raise ValueError("Database configuration is incomplete")
+
+    monkeypatch.setattr(health_routes, "get_postgis_version", unconfigured)
+
+    response = client.get("/health/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "unavailable",
+        "database": "unreachable",
+        "postgis_version": None,
+    }

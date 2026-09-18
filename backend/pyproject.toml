@@ -52,3 +52,10 @@ ban-relative-imports = "all"
 # B008 ("no function calls in argument defaults") otherwise flags every
 # FastAPI Depends()/Query()/Path() — that pattern is how FastAPI's DI works.
 extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Path"]
+
+[tool.vercel]
+# Vercel's FastAPI framework preset routes every request to this ASGI app.
+# Declared explicitly (rather than relying on entrypoint auto-detection) since
+# app/main.py builds the instance via create_app(). Dependencies are installed
+# from this file's [project.dependencies]; see docs/DEPLOYMENT_PLAN.md.
+entrypoint = "app.main:app"
