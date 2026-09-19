@@ -34,6 +34,12 @@ class Settings(BaseSettings):
         env_file=ENV_FILE,
         env_file_encoding="utf-8",
         extra="ignore",
+        # Treat an empty environment variable ("H3_RESOLUTION=") as unset so
+        # the default applies. Hosting dashboards (notably Vercel's project
+        # import) can inject every key from a committed .env.example as an
+        # empty value; without this, an empty value for a typed field fails
+        # validation and the whole app refuses to start.
+        env_ignore_empty=True,
         # Allow the fields below to be set by name when constructed in code
         # (e.g. tests), not only by their environment alias.
         populate_by_name=True,

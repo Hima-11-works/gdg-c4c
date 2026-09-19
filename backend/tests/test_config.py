@@ -118,3 +118,23 @@ def test_missing_database_configuration_raises_only_when_used(monkeypatch) -> No
 
     with pytest.raises(ValueError, match="DATABASE_URL"):
         _ = settings.database_url
+
+
+def test_empty_environment_variables_fall_back_to_defaults(monkeypatch) -> None:
+    """A hosting dashboard can inject every key from a committed
+    .env.example as an empty value; empty must mean "unset", not a
+    validation failure that stops the app from starting."""
+    monkeypatch.setenv("H3_RESOLUTION", "")
+    monkeypatch.setenv("DEMO_MODE", "")
+    monkeypatch.setenv("DATABASE_URL", "")
+    settings = Settings(
+        _env_file=None,
+        postgres_user="u",
+        postgres_password="p",
+        postgres_db="d",
+    )
+
+    assert settings.h3_resolution == 8
+    assert settings.demo_mode is False
+    assert settings.database_url_override is None
+    assert settings.database_url.host == "localhost"
