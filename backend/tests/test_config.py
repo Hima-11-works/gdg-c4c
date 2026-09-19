@@ -120,13 +120,13 @@ def test_missing_database_configuration_raises_only_when_used(monkeypatch) -> No
         _ = settings.database_url
 
 
-def test_empty_environment_values_are_ignored(monkeypatch) -> None:
-    """Vercel auto-imports .env.example as empty env vars; an empty string for
-    a typed field (int/bool) would otherwise fail validation at startup."""
+def test_empty_environment_variables_fall_back_to_defaults(monkeypatch) -> None:
+    """A hosting dashboard can inject every key from a committed
+    .env.example as an empty value; empty must mean "unset", not a
+    validation failure that stops the app from starting."""
     monkeypatch.setenv("H3_RESOLUTION", "")
     monkeypatch.setenv("DEMO_MODE", "")
-    monkeypatch.setenv("GRID_QUERY_MAX_CELLS", "")
-
+    monkeypatch.setenv("DATABASE_URL", "")
     settings = Settings(
         _env_file=None,
         postgres_user="u",
@@ -136,4 +136,5 @@ def test_empty_environment_values_are_ignored(monkeypatch) -> None:
 
     assert settings.h3_resolution == 8
     assert settings.demo_mode is False
-    assert settings.grid_query_max_cells == 50_000
+    assert settings.database_url_override is None
+    assert settings.database_url.host == "localhost"

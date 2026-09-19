@@ -14,11 +14,12 @@ import type {
   WeatherReadingOut,
 } from './types'
 
-export const API_BASE_URL: string =
-  // `||`, not `??`: a hosting provider can inject an *empty* VITE_API_BASE_URL
-  // (Vercel auto-imports .env.example), and an empty base URL would send
-  // requests to the frontend's own origin. Fall back to the default instead.
+// `||` (not `??`) so an empty VITE_API_BASE_URL — which a host may inject
+// when auto-importing env files — still falls back, and any trailing slash is
+// stripped so `${API_BASE_URL}${path}` never becomes `//api/v1/...`.
+export const API_BASE_URL: string = (
   import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+).replace(/\/+$/, '')
 
 interface ErrorResponseBody {
   error?: { code?: string; message?: string }

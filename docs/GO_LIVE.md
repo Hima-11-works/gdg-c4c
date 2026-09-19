@@ -139,6 +139,11 @@ Step 8.
    | `DATABASE_URL` | `<POOLED URL>` |
    | `ENVIRONMENT` | `production` |
    | `LOG_LEVEL` | `INFO` |
+   > **Vercel may pre-fill ~50 variables from the committed
+   > `.env.example`.** Delete them all. They are not your settings, and an
+   > empty value can shadow a working default. The backend now treats empty
+   > as "unset", so it will still boot if you miss some — but the only
+   > variable required here is `DATABASE_URL`.
 6. Click **Deploy**. Watch the log; it installs Python deps and finishes with
    **"Deployment ready"** / **"Congratulations"**.
 7. Copy the production URL. Either the big **Visit** button, or
@@ -176,6 +181,9 @@ The frontend is a second Vercel project from the **same** repo.
    | Name | Value |
    |---|---|
    | `VITE_API_BASE_URL` | `https://<API URL>` (origin only — no `/api/v1`, no trailing slash) |
+   > If Vercel pre-fills variables from `.env.example`, delete them and keep
+   > only `VITE_API_BASE_URL`. An empty value falls back to
+   > `http://localhost:8000`, so it must be set before building.
 4. Click **Deploy** and wait for **"Deployment ready"**.
 5. Copy the URL (e.g. `https://air-health.vercel.app`). Save as **WEB URL**.
 
