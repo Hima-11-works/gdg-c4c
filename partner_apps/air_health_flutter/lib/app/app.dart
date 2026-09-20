@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../core/app_info.dart';
 import '../mocks/dev_simulator_panel.dart';
 import '../providers/alert_providers.dart';
 import '../routing/app_router.dart';
@@ -77,7 +78,7 @@ class _AirHealthAppState extends ConsumerState<AirHealthApp>
     final router = ref.watch(routerProvider);
 
     return MaterialApp.router(
-      title: 'Air Health',
+      title: AppInfo.name,
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
       darkTheme: AppTheme.dark,

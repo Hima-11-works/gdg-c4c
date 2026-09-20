@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/app_info.dart';
 import '../../domain/models/models.dart';
 import '../../domain/sensitivity_rules.dart';
 import '../../notifications/notification_service.dart';
@@ -168,7 +169,7 @@ class ProfileScreen extends ConsumerWidget {
               _SettingsTile(
                 icon: Icons.info_outline,
                 title: 'About',
-                subtitle: 'Air Health v1.0.0',
+                subtitle: '${AppInfo.name} v${AppInfo.version}',
                 onTap: () => _showAbout(context),
               ),
             ],
@@ -463,14 +464,15 @@ class ProfileScreen extends ConsumerWidget {
     showDialog(
       context: context,
       builder: (BuildContext dialogContext) => AlertDialog(
-        title: const Text('About Air Health'),
-        content: const Text(
-          'Personal air-quality awareness app.\n\n'
-          'Air Health shows local pollution levels, short-term '
+        title: const Text('About ${AppInfo.name}'),
+        content: Text(
+          '${AppInfo.tagline} app.\n\n'
+          '${AppInfo.name} shows local pollution levels, short-term '
           'forecasts, and personalised alerts — so you can make '
           'informed decisions about outdoor exposure.\n\n'
           'This is an environmental awareness tool, not a '
-          'medical device.',
+          'medical device.\n\n'
+          'Version ${AppInfo.version}',
         ),
         actions: [
           TextButton(
