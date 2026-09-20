@@ -83,9 +83,19 @@ class HomeScreen extends ConsumerWidget {
                 // ── AQI hero ───────────────────────────────────────
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: AppSpacing.xxl),
-                  child: AqiBadge(
-                    aqi: reading.aqiCpcb,
-                    category: reading.category,
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 350),
+                    // Cross-fade + scale when the AQI changes (refresh, or the
+                    // dev simulator advancing its clock).
+                    transitionBuilder: (child, animation) => FadeTransition(
+                      opacity: animation,
+                      child: ScaleTransition(scale: animation, child: child),
+                    ),
+                    child: AqiBadge(
+                      key: ValueKey<int>(reading.aqiCpcb),
+                      aqi: reading.aqiCpcb,
+                      category: reading.category,
+                    ),
                   ),
                 ),
 
