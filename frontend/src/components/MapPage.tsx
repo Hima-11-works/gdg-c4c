@@ -11,6 +11,7 @@ import { lodKey, lodQueryFor, weatherResolutionForLod } from '../lib/lod'
 import { useMapUi } from '../state/MapUiContext'
 import { AlertsPanel } from './AlertsPanel'
 import { CellDetailPanel } from './CellDetailPanel'
+import { FederatedStatusPill } from './FederatedStatusPill'
 import { Legend } from './Legend'
 import { LayerToggle } from './LayerToggle'
 import { MapView } from './MapView'
@@ -112,6 +113,7 @@ export function MapPage() {
 
       <div className="overlay overlay-top-right">
         <SearchBar />
+        <FederatedStatusPill />
         <AlertsPanel />
       </div>
 

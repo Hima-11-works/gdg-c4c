@@ -30,6 +30,12 @@ export interface MapUiState {
    *  when the same place is picked twice. */
   focus: { latitude: number; longitude: number; zoom: number } | null
   showPdi: boolean
+  /** Satellite fire / thermal hotspot layer (VIIRS S-NPP). */
+  showFireHotspots: boolean
+  /** Citizen sensor readings & photo submissions layer. */
+  showCitizenSensors: boolean
+  /** Major economic freight corridors overlay (DMIC / DFC). */
+  showFreightCorridors: boolean
   selectedCell: string | null
   /** The H3 resolution `selectedCell` was fetched at, captured at click
    * time — not read live from `lod` below, since the user can zoom
@@ -53,6 +59,9 @@ export type MapUiAction =
   | { type: 'TOGGLE_CONTRAST' }
   | { type: 'FOCUS_LOCATION'; latitude: number; longitude: number; zoom: number }
   | { type: 'TOGGLE_PDI' }
+  | { type: 'TOGGLE_FIRE_HOTSPOTS' }
+  | { type: 'TOGGLE_CITIZEN_SENSORS' }
+  | { type: 'TOGGLE_FREIGHT_CORRIDORS' }
   | { type: 'SELECT_CELL'; cell: string | null; resolution?: number }
   | { type: 'SET_VIEWPORT'; zoom: number; bbox: BoundingBox }
 
@@ -65,6 +74,9 @@ export const initialMapUiState: MapUiState = {
   contrast: false,
   focus: null,
   showPdi: false,
+  showFireHotspots: false,
+  showCitizenSensors: false,
+  showFreightCorridors: false,
   selectedCell: null,
   selectedCellResolution: null,
   lod: { tier: 'country', resolution: 3, scopedToViewport: false },
@@ -87,6 +99,12 @@ export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState
       }
     case 'TOGGLE_PDI':
       return { ...state, showPdi: !state.showPdi }
+    case 'TOGGLE_FIRE_HOTSPOTS':
+      return { ...state, showFireHotspots: !state.showFireHotspots }
+    case 'TOGGLE_CITIZEN_SENSORS':
+      return { ...state, showCitizenSensors: !state.showCitizenSensors }
+    case 'TOGGLE_FREIGHT_CORRIDORS':
+      return { ...state, showFreightCorridors: !state.showFreightCorridors }
     case 'SELECT_CELL':
       return {
         ...state,

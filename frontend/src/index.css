@@ -700,6 +700,157 @@ body,
   font-size: 0.8rem;
 }
 
+/* --- federated edge status pill (top bar) --- */
+
+.federated-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  align-self: flex-end;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid #2a2e36;
+  border-radius: 999px;
+  background: rgba(18, 20, 26, 0.92);
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: #9ca3af;
+  white-space: nowrap;
+}
+
+.federated-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 4px rgba(34, 197, 94, 0.7);
+}
+
+/* --- layer toggle: signal layers group --- */
+
+.layer-toggle-extra {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.35rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid #2a2e36;
+}
+
+/* --- AI source attribution (hex detail drawer) --- */
+
+.source-attribution {
+  margin: 0.75rem 0;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid #4338ca55;
+  background: rgba(67, 56, 202, 0.12);
+  border-radius: 6px;
+}
+
+.source-attribution h3 {
+  margin: 0 0 0.35rem;
+  font-size: 0.85rem;
+  color: #a5b4fc;
+}
+
+.source-attribution-classified {
+  margin: 0 0 0.4rem;
+  font-size: 0.8rem;
+  color: #e5e7eb;
+}
+
+.source-attribution-fusion {
+  border-top: 1px dashed #4b5563;
+  padding-top: 0.4rem;
+}
+
+.source-attribution-heading {
+  margin: 0 0 0.2rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #a5b4fc;
+}
+
+.source-attribution-fusion ul {
+  margin: 0;
+  padding-left: 1rem;
+  font-size: 0.78rem;
+  color: #d1d5db;
+}
+
+.source-attribution-fusion li {
+  margin: 0.1rem 0;
+}
+
+.source-attribution-note {
+  margin: 0.4rem 0 0;
+  font-size: 0.68rem;
+}
+
+/* --- authority intervention alerts --- */
+
+.alert-item-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.alert-authority {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  width: 100%;
+  margin-top: 0.35rem;
+  padding-top: 0.35rem;
+  border-top: 1px dashed #3a3f4a;
+}
+
+.alert-assigned {
+  font-size: 0.7rem;
+  color: #9ca3af;
+  font-style: italic;
+}
+
+.alert-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.alert-cta {
+  border: 1px solid #4a5060;
+  border-radius: 4px;
+  background: #22262e;
+  color: #d1d5db;
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 0.2rem 0.45rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.alert-cta:hover {
+  background: #2d323c;
+  border-color: #6b7280;
+}
+
+.alert-cta-done {
+  background: #163023;
+  border-color: #26a344;
+  color: #5dd77c;
+}
+
 /* On narrow screens the cell detail panel takes the full width instead of
    floating over the map, so it stays usable on a phone. */
 @media (max-width: 30rem) {
@@ -711,5 +862,10 @@ body,
 
   .overlay {
     max-width: calc(100vw - 1.5rem);
+  }
+
+  .federated-pill {
+    align-self: stretch;
+    justify-content: center;
   }
 }
