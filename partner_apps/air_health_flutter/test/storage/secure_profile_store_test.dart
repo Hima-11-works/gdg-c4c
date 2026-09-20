@@ -39,6 +39,8 @@ void main() {
         quietHoursStart: DateTime(2000, 1, 1, 22, 0),
         quietHoursEnd: DateTime(2000, 1, 1, 7, 0),
         leadTime: const Duration(hours: 6),
+        forecastAlarmsEnabled: false,
+        alarmLead: const Duration(minutes: 15),
       ),
     );
 
@@ -52,6 +54,8 @@ void main() {
     expect(loaded.preferences.quietHoursStart?.hour, 22);
     expect(loaded.preferences.quietHoursEnd?.hour, 7);
     expect(loaded.preferences.leadTime, const Duration(hours: 6));
+    expect(loaded.preferences.forecastAlarmsEnabled, isFalse);
+    expect(loaded.preferences.alarmLead, const Duration(minutes: 15));
   });
 
   test('reads a legacy payload without custom rules or lead time', () async {
@@ -67,6 +71,8 @@ void main() {
     expect(loaded.customRules, isNull);
     expect(loaded.preferences.leadTime, isNull);
     expect(loaded.preferences.hasQuietHours, isFalse);
+    expect(loaded.preferences.forecastAlarmsEnabled, isTrue);
+    expect(loaded.preferences.alarmLead, Duration.zero);
   });
 
   test('keystore decryption failure returns null instead of throwing',
