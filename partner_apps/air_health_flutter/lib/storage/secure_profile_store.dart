@@ -44,21 +44,49 @@ class SecureProfileStore {
   }
 
   Future<UserProfile?> read() async {
-    final raw = await _storage.read(key: _keyProfile);
+    String? raw;
+    try {
+      raw = await _storage.read(key: _keyProfile);
+    } catch (_) {
+      // The keystore key that encrypted the stored value is no longer
+      // valid — e.g. the app was reinstalled with a different signing
+      // key, the device was restored from a backup, or the OS was
+      // upgraded. The value cannot be decrypted, so drop it and start
+      // fresh rather than crashing the whole settings screen.
+      await _safeDelete();
+      return null;
+    }
     if (raw == null) return null;
-    final map = jsonDecode(raw) as Map<String, dynamic>;
-    return UserProfile(
-      healthContext: UserHealthContext.values.firstWhere(
-        (e) => e.name == map['healthContext'],
-        orElse: () => UserHealthContext.none,
-      ),
-      sensitivity: AlertSensitivity.values.firstWhere(
-        (e) => e.name == map['sensitivity'],
-        orElse: () => AlertSensitivity.standard,
-      ),
-      customRules: _readCustomRules(map['customRules']),
-      preferences: _readPreferences(map['preferences']),
-    );
+    try {
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      return UserProfile(
+        healthContext: UserHealthContext.values.firstWhere(
+          (e) => e.name == map['healthContext'],
+          orElse: () => UserHealthContext.none,
+        ),
+        sensitivity: AlertSensitivity.values.firstWhere(
+          (e) => e.name == map['sensitivity'],
+          orElse: () => AlertSensitivity.standard,
+        ),
+        customRules: _readCustomRules(map['customRules']),
+        preferences: _readPreferences(map['preferences']),
+      );
+    } catch (_) {
+      // Corrupt or unparseable value — treat as "no profile".
+      await _safeDelete();
+      return null;
+    }
+  }
+
+  /// Best-effort delete that never throws — used when the stored value is
+  /// already unreadable, so a failure to clean it up must not mask the
+  /// original problem.
+  Future<void> _safeDelete() async {
+    try {
+      await _storage.delete(key: _keyProfile);
+    } catch (_) {
+      // Ignore — the next save() overwrites the key.
+    }
   }
 
   /// Read stored custom sensitivity rules, or null if the profile never had
@@ -99,6 +127,6 @@ class SecureProfileStore {
       value is num ? Duration(minutes: value.toInt()) : null;
 
   Future<void> delete() async {
-    await _storage.delete(key: _keyProfile);
+    await _safeDelete();
   }
 }

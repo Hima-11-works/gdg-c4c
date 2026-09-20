@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
@@ -66,5 +67,48 @@ void main() {
     expect(loaded.customRules, isNull);
     expect(loaded.preferences.leadTime, isNull);
     expect(loaded.preferences.hasQuietHours, isFalse);
+  });
+
+  test('keystore decryption failure returns null instead of throwing',
+      () async {
+    // Simulates the Android BadPaddingException / BAD_DECRYPT case: the
+    // keystore key was invalidated (reinstall, restore-from-backup, OS
+    // upgrade) so the stored value cannot be decrypted.
+    when(() => storage.read(key: any(named: 'key'))).thenThrow(
+      PlatformException(
+        code: 'Exception',
+        message: 'javax.crypto.BadPaddingException: BAD_DECRYPT',
+      ),
+    );
+    when(() => storage.delete(key: any(named: 'key')))
+        .thenAnswer((_) async {});
+
+    final loaded = await store.read();
+
+    expect(loaded, isNull);
+    verify(() => storage.delete(key: any(named: 'key'))).called(1);
+  });
+
+  test('corrupt stored value returns null and clears it', () async {
+    when(() => storage.read(key: any(named: 'key')))
+        .thenAnswer((_) async => 'not json');
+    when(() => storage.delete(key: any(named: 'key')))
+        .thenAnswer((_) async {});
+
+    final loaded = await store.read();
+
+    expect(loaded, isNull);
+    verify(() => storage.delete(key: any(named: 'key'))).called(1);
+  });
+
+  test('delete failure is swallowed so read still returns null', () async {
+    when(() => storage.read(key: any(named: 'key')))
+        .thenThrow(PlatformException(code: 'Exception'));
+    when(() => storage.delete(key: any(named: 'key')))
+        .thenThrow(PlatformException(code: 'Exception'));
+
+    final loaded = await store.read();
+
+    expect(loaded, isNull);
   });
 }

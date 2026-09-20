@@ -6,6 +6,7 @@ import '../../domain/models/models.dart';
 import '../../notifications/notification_service.dart';
 import '../../providers/alert_providers.dart';
 import '../../providers/location_providers.dart';
+import '../../providers/onboarding_providers.dart';
 import '../../providers/prefs_providers.dart';
 import '../../providers/profile_providers.dart';
 import '../../services/location_service.dart';
@@ -67,6 +68,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     await ref.read(prefsStoreProvider).setOnboardingDone(true);
     // Invalidate so the router redirect sees the updated onboarding state.
     ref.invalidate(onboardingDoneProvider);
+    ref.invalidate(onboardingCompleteProvider);
     if (mounted) context.go('/home');
   }
 
