@@ -5,9 +5,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/app_info.dart';
+import '../../core/formatters.dart';
 import '../../domain/models/models.dart';
 import '../../domain/sensitivity_rules.dart';
 import '../../notifications/notification_service.dart';
+import '../../notifications/scheduled_alarm.dart';
 import '../../providers/alert_providers.dart';
 import '../../providers/location_providers.dart';
 import '../../providers/prefs_providers.dart';
@@ -39,6 +41,7 @@ class ProfileScreen extends ConsumerWidget {
           final prefs = profile?.preferences ?? const UserAlertPreferences();
           final location = ref.watch(resolvedLocationProvider);
           final exactAsync = ref.watch(exactAlarmsProvider);
+          final upcomingAsync = ref.watch(upcomingAlarmsProvider);
           // The exact-alarm row only exists on Android; iOS delivers local
           // alarms without an equivalent grant.
           final usesAndroid =
@@ -114,6 +117,7 @@ class ProfileScreen extends ConsumerWidget {
                         .read(alertCoordinatorProvider)
                         .refreshAndEvaluate();
                   }
+                  ref.invalidate(upcomingAlarmsProvider);
                 },
               ),
               _SettingsTile(
@@ -121,6 +125,14 @@ class ProfileScreen extends ConsumerWidget {
                 title: 'Alarm lead time',
                 subtitle: _alarmLeadLabel(prefs),
                 onTap: () => _pickAlarmLead(context, ref, prefs),
+              ),
+              _SettingsTile(
+                icon: Icons.notifications_active,
+                title: 'Upcoming alarms',
+                subtitle: _upcomingAlarmsLabel(upcomingAsync),
+                // The list is a snapshot taken at schedule time; tapping
+                // re-reads it.
+                onTap: () => ref.invalidate(upcomingAlarmsProvider),
               ),
               if (usesAndroid)
                 _SettingsTile(
@@ -345,6 +357,24 @@ class ProfileScreen extends ConsumerWidget {
     final lead = prefs.alarmLead;
     if (lead == Duration.zero) return 'At the predicted time';
     return '${_alarmLeadOptionLabel(lead)} before the change';
+  }
+
+  /// What the Settings "Upcoming alarms" row shows: the nearest scheduled
+  /// alarm(s), or a quiet hint when nothing is pending.
+  static String _upcomingAlarmsLabel(AsyncValue<List<ScheduledAlarm>> alarms) {
+    return alarms.maybeWhen(
+      data: (list) {
+        if (alarms.isLoading) return 'Checking…';
+        if (list.isEmpty) return 'None scheduled';
+        return list
+            .take(2)
+            .map((a) =>
+                '${a.categoryLabel} (AQI ${a.predictedAqi}) around '
+                '${Formatters.time(a.fireAt)}')
+            .join(' · ');
+      },
+      orElse: () => 'Checking…',
+    );
   }
 
   static String _alarmLeadOptionLabel(Duration lead) {

@@ -7,6 +7,7 @@ import '../domain/sensitivity_rules.dart';
 import '../notifications/alert_notification_dispatcher.dart';
 import '../notifications/forecast_alarm_scheduler.dart';
 import '../notifications/notification_service.dart';
+import '../notifications/scheduled_alarm.dart';
 import '../storage/forecast_alarm_store.dart';
 import 'alert_history_provider.dart';
 import 'home_providers.dart';
@@ -55,6 +56,13 @@ final forecastAlarmSchedulerProvider = Provider<ForecastAlarmScheduler>((ref) {
 /// can be invalidated after the user grants it.
 final exactAlarmsProvider = FutureProvider<bool>((ref) {
   return ref.read(notificationServiceProvider).canScheduleExactAlarms();
+});
+
+/// The forecast alarms currently scheduled with the OS, for the Settings
+/// "Upcoming alarms" row. Read directly from the metadata store — the OS
+/// holds the alarms themselves, this is what *we* remember scheduling.
+final upcomingAlarmsProvider = FutureProvider<List<ScheduledAlarm>>((ref) {
+  return ref.read(forecastAlarmStoreProvider).readAll();
 });
 
 /// Dedup state for the alert engine — persisted across evaluations.
