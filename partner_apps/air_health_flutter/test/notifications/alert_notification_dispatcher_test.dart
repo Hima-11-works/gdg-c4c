@@ -45,6 +45,7 @@ void main() {
             id: any(named: 'id'),
             title: any(named: 'title'),
             body: any(named: 'body'),
+            payload: any(named: 'payload'),
           )).thenAnswer((_) async {});
 
       final decisions = [
@@ -62,6 +63,7 @@ void main() {
             id: any(named: 'id'),
             title: any(named: 'title'),
             body: any(named: 'body'),
+            payload: any(named: 'payload'),
           )).called(2);
     });
 
@@ -71,6 +73,7 @@ void main() {
             id: any(named: 'id'),
             title: any(named: 'title'),
             body: any(named: 'body'),
+            payload: any(named: 'payload'),
           )).thenAnswer((invocation) async {
         capturedBody = invocation.namedArguments[#body] as String;
       });
@@ -90,6 +93,7 @@ void main() {
             id: any(named: 'id'),
             title: any(named: 'title'),
             body: any(named: 'body'),
+            payload: any(named: 'payload'),
           )).thenAnswer((_) async {});
 
       final decisions = [
@@ -106,6 +110,7 @@ void main() {
             id: any(named: 'id'),
             title: any(named: 'title'),
             body: any(named: 'body'),
+            payload: any(named: 'payload'),
           ));
     });
 
@@ -114,6 +119,7 @@ void main() {
             id: any(named: 'id'),
             title: any(named: 'title'),
             body: any(named: 'body'),
+            payload: any(named: 'payload'),
           )).thenAnswer((_) async {});
 
       final decisions = [
@@ -132,6 +138,7 @@ void main() {
             id: any(named: 'id'),
             title: any(named: 'title'),
             body: any(named: 'body'),
+            payload: any(named: 'payload'),
           )).called(1);
     });
 
@@ -141,6 +148,7 @@ void main() {
             id: any(named: 'id'),
             title: any(named: 'title'),
             body: any(named: 'body'),
+            payload: any(named: 'payload'),
             urgent: any(named: 'urgent'),
           )).thenAnswer((invocation) async {
         capturedUrgent = invocation.namedArguments[#urgent] as bool?;
@@ -160,6 +168,7 @@ void main() {
             id: any(named: 'id'),
             title: any(named: 'title'),
             body: any(named: 'body'),
+            payload: any(named: 'payload'),
           )).thenAnswer((invocation) async {
         ids.add(invocation.namedArguments[#id] as int);
       });
@@ -190,6 +199,7 @@ void main() {
             id: any(named: 'id'),
             title: any(named: 'title'),
             body: any(named: 'body'),
+            payload: any(named: 'payload'),
           )).thenAnswer((_) async {});
       when(() => mockNotif.cancel(any())).thenAnswer((_) async {});
 
@@ -209,6 +219,7 @@ void main() {
             id: any(named: 'id'),
             title: any(named: 'title'),
             body: any(named: 'body'),
+            payload: any(named: 'payload'),
           )).thenAnswer((invocation) async {
         capturedBodies.add(invocation.namedArguments[#body] as String);
       });

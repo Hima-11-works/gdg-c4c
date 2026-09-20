@@ -43,11 +43,21 @@ class NotificationService {
   );
 
   /// Initialise the plugin. Call once at app startup.
-  Future<void> initialise() async {
+  ///
+  /// [onNotificationTap] receives the tapped notification's payload, so the
+  /// app can deep-link (e.g. to the Alerts screen).
+  Future<void> initialise({
+    void Function(String? payload)? onNotificationTap,
+  }) async {
     const androidSettings =
         AndroidInitializationSettings('ic_notification');
-    const initSettings = InitializationSettings(android: androidSettings);
-    await _plugin.initialize(initSettings);
+    final initSettings = InitializationSettings(android: androidSettings);
+    await _plugin.initialize(
+      initSettings,
+      onDidReceiveNotificationResponse: (response) {
+        onNotificationTap?.call(response.payload);
+      },
+    );
     await _registerChannels();
   }
 
