@@ -151,7 +151,7 @@ class AlertEngine {
     final category = current.category;
     if (category.index < rules.warningCategory.index) return const [];
 
-    final severity = _severityForCategory(category);
+    final severity = severityForCategory(category);
     return [
       AlertDecision(
         shouldAlert: true,
@@ -361,7 +361,10 @@ class AlertEngine {
     return CpcbCategory.values[prevIndex].upperBound + 1;
   }
 
-  static AlertSeverity _severityForCategory(CpcbCategory cat) {
+  /// Alert severity implied by a CPCB category. Public because the forecast
+  /// alarm scheduler classifies upcoming crossings the same way the engine
+  /// classifies current conditions.
+  static AlertSeverity severityForCategory(CpcbCategory cat) {
     return switch (cat) {
       CpcbCategory.good => AlertSeverity.info,
       CpcbCategory.satisfactory => AlertSeverity.info,
