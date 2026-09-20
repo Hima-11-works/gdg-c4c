@@ -1,4 +1,5 @@
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:timezone/data/latest_all.dart' as tz_data;
 import 'package:timezone/timezone.dart' as tz;
 
@@ -109,6 +110,21 @@ class NotificationService {
         AndroidFlutterLocalNotificationsPlugin>();
     if (android == null) return true;
     return await android.canScheduleExactAlarms() ?? true;
+  }
+
+  /// Ask Android (12+) for the exact-alarm grant, opening the system's
+  /// "Alarms & reminders" page when needed. Non-Android platforms always
+  /// report "allowed".
+  ///
+  /// Returns whether exact alarms can be scheduled afterwards.
+  Future<bool> requestExactAlarmPermission() async {
+    final android = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    if (android == null) return true;
+    if (await canScheduleExactAlarms()) return true;
+    final status = await Permission.alarm.request();
+    if (status.isGranted) return true;
+    return canScheduleExactAlarms();
   }
 
   /// Schedule an alarm-style notification for [fireAt] (an absolute instant).

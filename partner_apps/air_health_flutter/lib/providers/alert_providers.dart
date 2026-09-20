@@ -49,6 +49,14 @@ final forecastAlarmSchedulerProvider = Provider<ForecastAlarmScheduler>((ref) {
   );
 });
 
+/// Whether the OS currently allows exact alarms (Android 12+ user grant).
+///
+/// [FutureProvider] so the Settings row reflects the live system state and
+/// can be invalidated after the user grants it.
+final exactAlarmsProvider = FutureProvider<bool>((ref) {
+  return ref.read(notificationServiceProvider).canScheduleExactAlarms();
+});
+
 /// Dedup state for the alert engine — persisted across evaluations.
 final alertDedupStateProvider = StateProvider<List<DedupEntry>>((ref) {
   return const [];
