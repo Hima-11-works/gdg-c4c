@@ -7,7 +7,7 @@
     <!-- Network permission — required for API requests. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <application
-        android:label="air_health_flutter"
+        android:label="Air Health"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
