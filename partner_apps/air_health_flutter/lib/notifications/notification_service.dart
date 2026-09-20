@@ -24,11 +24,22 @@ class NotificationService {
 
   final FlutterLocalNotificationsPlugin _plugin;
 
-  static const _androidChannel = AndroidNotificationChannel(
+  static const _alertsChannel = AndroidNotificationChannel(
     'air_health_alerts',
-    'Air Quality Alerts',
-    description: 'Personalised air quality alerts',
+    'Air quality alerts',
+    description: 'Personalised air-quality advisories for your area.',
     importance: Importance.high,
+  );
+
+  /// A separate, louder channel for urgent (Very Poor/Severe) alerts, so the
+  /// user can mute routine advisories without silencing genuine emergencies.
+  static const _urgentChannel = AndroidNotificationChannel(
+    'air_health_urgent',
+    'Urgent air-quality warnings',
+    description: 'Severe air quality that needs immediate attention.',
+    importance: Importance.max,
+    playSound: true,
+    enableVibration: true,
   );
 
   /// Initialise the plugin. Call once at app startup.
@@ -37,6 +48,19 @@ class NotificationService {
         AndroidInitializationSettings('@mipmap/ic_launcher');
     const initSettings = InitializationSettings(android: androidSettings);
     await _plugin.initialize(initSettings);
+    await _registerChannels();
+  }
+
+  /// Create the Android notification channels explicitly so their
+  /// user-visible names and descriptions are branded (Android 8+); the
+  /// plugin would otherwise create them with only the bare id/name used at
+  /// post time.
+  Future<void> _registerChannels() async {
+    final android = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    if (android == null) return;
+    await android.createNotificationChannel(_alertsChannel);
+    await android.createNotificationChannel(_urgentChannel);
   }
 
   /// Request notification permissions from the user.
@@ -60,18 +84,23 @@ class NotificationService {
   ///
   /// [title] and [body] must be lock-screen safe — no health context,
   /// no sensitivity info, no diagnosis.
+  ///
+  /// Set [urgent] for Very Poor/Severe air quality; it posts on the louder
+  /// urgent channel instead of the routine one.
   Future<void> show({
     required int id,
     required String title,
     required String body,
     String? payload,
+    bool urgent = false,
   }) async {
+    final channel = urgent ? _urgentChannel : _alertsChannel;
     final androidDetails = AndroidNotificationDetails(
-      _androidChannel.id,
-      _androidChannel.name,
-      channelDescription: _androidChannel.description,
-      importance: Importance.high,
-      priority: Priority.high,
+      channel.id,
+      channel.name,
+      channelDescription: channel.description,
+      importance: channel.importance,
+      priority: urgent ? Priority.max : Priority.high,
       styleInformation: BigTextStyleInformation(body),
     );
     final details = NotificationDetails(android: androidDetails);

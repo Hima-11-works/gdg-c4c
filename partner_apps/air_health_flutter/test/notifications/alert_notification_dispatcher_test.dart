@@ -135,6 +135,25 @@ void main() {
           )).called(1);
     });
 
+    test('marks urgent-severity alerts as urgent', () async {
+      bool? capturedUrgent;
+      when(() => mockNotif.show(
+            id: any(named: 'id'),
+            title: any(named: 'title'),
+            body: any(named: 'body'),
+            urgent: any(named: 'urgent'),
+          )).thenAnswer((invocation) async {
+        capturedUrgent = invocation.namedArguments[#urgent] as bool?;
+      });
+
+      await dispatcher.dispatch(
+        decisions: [makeDecision(severity: AlertSeverity.urgent)],
+        sensitivity: AlertSensitivity.standard,
+      );
+
+      expect(capturedUrgent, isTrue);
+    });
+
     test('same dedupKey produces same notification ID', () async {
       final ids = <int>[];
       when(() => mockNotif.show(

@@ -58,6 +58,7 @@ class AlertNotificationDispatcher {
         id: notificationId,
         title: message.title,
         body: message.lockScreenBody, // NEVER the full body
+        urgent: decision.severity == AlertSeverity.urgent,
       );
 
       _activeNotificationIds[decision.dedupKey] = notificationId;
