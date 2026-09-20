@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Monochrome status-bar icon (white on transparent) for notifications.
+     Launcher icons can't be used here: Android masks them to a solid square. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M19.794,16.5 L12,21 L4.206,16.5 L4.206,7.5 L12,3 L19.794,7.5 Z" />
+</vector>

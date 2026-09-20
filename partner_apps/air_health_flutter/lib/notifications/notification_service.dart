@@ -45,7 +45,7 @@ class NotificationService {
   /// Initialise the plugin. Call once at app startup.
   Future<void> initialise() async {
     const androidSettings =
-        AndroidInitializationSettings('@mipmap/ic_launcher');
+        AndroidInitializationSettings('ic_notification');
     const initSettings = InitializationSettings(android: androidSettings);
     await _plugin.initialize(initSettings);
     await _registerChannels();
@@ -99,6 +99,7 @@ class NotificationService {
       channel.id,
       channel.name,
       channelDescription: channel.description,
+      icon: 'ic_notification',
       importance: channel.importance,
       priority: urgent ? Priority.max : Priority.high,
       styleInformation: BigTextStyleInformation(body),
