@@ -2,4 +2,6 @@
 <resources>
     <!-- Dark brand surface behind the adaptive launcher icon. -->
     <color name="ic_launcher_background">#12151A</color>
+    <!-- Brand background shown behind the first Flutter frame (splash). -->
+    <color name="launch_background">#12151A</color>
 </resources>
