@@ -257,7 +257,7 @@ class ProfileScreen extends ConsumerWidget {
   ) {
     final prefs = profile?.preferences ?? const UserAlertPreferences();
     final effective = prefs.leadTime ??
-        SensitivityRules.forProfile(profile ?? const UserProfile())
+        SensitivityRules.forProfile(_toSensitivityProfile(profile))
             .leadTimePreference;
     showModalBottomSheet<void>(
       context: context,
@@ -278,7 +278,7 @@ class ProfileScreen extends ConsumerWidget {
   static String _leadTimeLabel(UserProfile? profile) {
     final prefs = profile?.preferences ?? const UserAlertPreferences();
     final effective = prefs.leadTime ??
-        SensitivityRules.forProfile(profile ?? const UserProfile())
+        SensitivityRules.forProfile(_toSensitivityProfile(profile))
             .leadTimePreference;
     return effective.inHours == 1
         ? '1 hour ahead'
@@ -479,6 +479,24 @@ class ProfileScreen extends ConsumerWidget {
           ),
         ],
       ),
+    );
+  }
+
+  /// Convert a [UserProfile] (nullable) to a [UserSensitivityProfile]
+  /// for [SensitivityRules.forProfile].
+  static UserSensitivityProfile _toSensitivityProfile(UserProfile? p) {
+    if (p == null) {
+      return const UserSensitivityProfile(
+        healthContext: UserHealthContext.none,
+        sensitivity: AlertSensitivity.standard,
+        preferences: UserAlertPreferences(),
+      );
+    }
+    return UserSensitivityProfile(
+      healthContext: p.healthContext,
+      sensitivity: p.sensitivity,
+      preferences: p.preferences,
+      customRules: p.customRules,
     );
   }
 }
