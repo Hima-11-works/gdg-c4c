@@ -276,6 +276,10 @@ class Settings(BaseSettings):
     # contributions), so reports can never drive the model past the CPCB
     # scale.
     fire_pm25_cap_ugm3: float = Field(default=400.0, gt=0)
+    # PDI weight for the fire-report pressure factor (see CellContext /
+    # HeuristicPDIModel). A triage choice like the other PDI weights; the
+    # negative vegetation weight is the only sink, fire is pure pressure.
+    pdi_fire_pressure_weight: float = Field(default=0.25, ge=0)
 
     @model_validator(mode="after")
     def _check_weather_resolution_not_finer_than_grid(self) -> "Settings":

@@ -52,6 +52,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings, get_settings
 from app.db.repositories import (
     SqlAlertRepository,
+    SqlFireReportRepository,
     SqlForecastRepository,
     SqlGridStateRepository,
     SqlSensorReadingRepository,
@@ -63,6 +64,7 @@ from app.ingestion.factory import build_pollution_provider, build_weather_provid
 from app.services.alert_generation import AlertGenerationService
 from app.services.dispersion import DeterministicH3DispersionModel
 from app.services.estimation import IDWPollutionEstimator
+from app.services.fire_gradient import PlumeFireGradientModel
 from app.services.forecasting import ForecastingService
 from app.services.geospatial import GeospatialService
 from app.services.grid_computation import GridComputationService
@@ -145,14 +147,26 @@ def _compute_grid(
         road_pressure_weight=settings.pdi_road_pressure_weight,
         industrial_pressure_weight=settings.pdi_industrial_pressure_weight,
         vegetation_sink_weight=settings.pdi_vegetation_sink_weight,
+        fire_pressure_weight=settings.pdi_fire_pressure_weight,
     )
     geospatial = GeospatialService(resolution=settings.h3_resolution)
+    # Citizen fire reports act as modeled point sources, sharpening the
+    # gradient near reported fires (see app.services.fire_gradient).
+    fire_gradient = PlumeFireGradientModel(
+        source_pm25_ugm3=settings.fire_source_pm25_ugm3,
+        plume_radius_km=settings.fire_plume_radius_km,
+        decay_half_life_hours=settings.fire_decay_half_life_hours,
+        max_age_hours=settings.fire_report_max_age_hours,
+    )
     service = GridComputationService(
         estimator,
         pdi_model,
         geospatial,
         SqlSensorReadingRepository(session),
         SqlGridStateRepository(session),
+        fire_gradient=fire_gradient,
+        fire_repository=SqlFireReportRepository(session),
+        fire_pm25_cap_ugm3=settings.fire_pm25_cap_ugm3,
     )
     result = service.run(
         bbox,

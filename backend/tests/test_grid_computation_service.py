@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from app.domain.h3_grid import cell_center
 from app.domain.pdi import CellContext, PDIResult
-from app.domain.types import PM25, BoundingBox, GridState, SensorReading
+from app.domain.types import PM25, BoundingBox, FireKind, FireReport, GridState, SensorReading
 from app.services.geospatial import GeospatialService
 from app.services.grid_computation import GridComputationService
 from tests.fakes import FakeGridStateRepository, FakeSensorReadingRepository
@@ -119,6 +120,148 @@ def test_run_persists_one_grid_state_per_cell_with_pdi_folded_in() -> None:
     assert saved is not None
     assert saved.pm25 == 42.0
     assert saved.pdi == 67.0
+
+
+class _ConstantFireGradient:
+    """Every cell in the grid gets the same modeled contribution from every
+    report - enough to exercise the blending, not the model's math."""
+
+    def __init__(self, contribution: float, n_reports: int = 1) -> None:
+        self._contribution = contribution
+        self._n_reports = n_reports
+        self.source_pm25_ugm3 = 400.0
+        self.seen_reports: list[FireReport] = []
+
+    def contributions(self, grid, reports, *, timestamp):
+        self.seen_reports = list(reports)
+        return [self._contribution] * len(grid)
+
+
+class _FakeFireReportRepository:
+    def __init__(self, reports: list[FireReport] | None = None) -> None:
+        self.reports = reports or []
+
+    def save(self, report: FireReport) -> FireReport:
+        raise NotImplementedError
+
+    def list_active(self, *, since):
+        return list(self.reports)
+
+
+def _fire_report(cell: str) -> FireReport:
+    latitude, longitude = cell_center(cell)
+    return FireReport(
+        h3_cell=cell,
+        latitude=latitude,
+        longitude=longitude,
+        kind=FireKind.CROP_BURNING,
+        smoke_intensity=4,
+        duration_hours=1.0,
+        reported_at=TIMESTAMP,
+    )
+
+
+def test_fire_reports_sharpen_a_cell_with_a_sensor_estimate() -> None:
+    target_cell = GRID[0]
+    grid_repo = FakeGridStateRepository()
+    fire_gradient = _ConstantFireGradient(contribution=50.0)
+
+    service = GridComputationService(
+        _FakeEstimator({target_cell: 42.0}),
+        _FakePDIModel({target_cell: 67.0}),
+        GEOSPATIAL,
+        FakeSensorReadingRepository(),
+        grid_repo,
+        fire_gradient=fire_gradient,
+        fire_repository=_FakeFireReportRepository([_fire_report(target_cell)]),
+        fire_pm25_cap_ugm3=400.0,
+    )
+    result = service.run(BBOX, timestamp=TIMESTAMP, sensor_max_age=timedelta(hours=3))
+
+    assert result.succeeded is True
+    assert result.fires_used == 1
+    saved = grid_repo.get(target_cell, TIMESTAMP)
+    assert saved.pm25 == 92.0  # 42 + 50, below the cap
+    assert saved.pdi == 67.0
+
+
+def test_run_fires_cannot_drive_a_cell_past_the_cap() -> None:
+    target_cell = GRID[0]
+    grid_repo = FakeGridStateRepository()
+
+    service = GridComputationService(
+        _FakeEstimator({target_cell: 380.0}),
+        _FakePDIModel(),
+        GEOSPATIAL,
+        FakeSensorReadingRepository(),
+        grid_repo,
+        fire_gradient=_ConstantFireGradient(contribution=200.0),
+        fire_repository=_FakeFireReportRepository([_fire_report(target_cell)]),
+        fire_pm25_cap_ugm3=400.0,
+    )
+    result = service.run(BBOX, timestamp=TIMESTAMP, sensor_max_age=timedelta(hours=3))
+
+    assert result.succeeded is True
+    assert grid_repo.get(target_cell, TIMESTAMP).pm25 == 400.0
+
+
+def test_run_without_wired_fires_leaves_estimates_unchanged() -> None:
+    target_cell = GRID[0]
+    grid_repo = FakeGridStateRepository()
+
+    service = GridComputationService(
+        _FakeEstimator({target_cell: 42.0}),
+        _FakePDIModel({target_cell: 67.0}),
+        GEOSPATIAL,
+        FakeSensorReadingRepository(),
+        grid_repo,
+    )
+    result = service.run(BBOX, timestamp=TIMESTAMP, sensor_max_age=timedelta(hours=3))
+
+    assert result.fires_used == 0
+    assert grid_repo.get(target_cell, TIMESTAMP).pm25 == 42.0
+
+
+def test_run_passes_normalized_fire_pressure_to_pdi() -> None:
+    target_cell = GRID[0]
+    grid_repo = FakeGridStateRepository()
+    pdi_model = _FakePDIModel({target_cell: 67.0})
+
+    service = GridComputationService(
+        _FakeEstimator({target_cell: 42.0}),
+        pdi_model,
+        GEOSPATIAL,
+        FakeSensorReadingRepository(),
+        grid_repo,
+        fire_gradient=_ConstantFireGradient(contribution=50.0),
+        fire_repository=_FakeFireReportRepository([_fire_report(target_cell)]),
+        fire_pm25_cap_ugm3=400.0,
+    )
+    service.run(BBOX, timestamp=TIMESTAMP, sensor_max_age=timedelta(hours=3))
+
+    context = pdi_model.calls[0]
+    assert context.fire_pressure == 50.0 / 400.0
+
+
+def test_run_a_cell_without_an_estimate_keeps_null_pm25() -> None:
+    # MVP blending is augment-only: a fire never fabricates a value.
+    target_cell = GRID[0]
+    grid_repo = FakeGridStateRepository()
+
+    service = GridComputationService(
+        _FakeEstimator({}),  # no estimate for any cell
+        _FakePDIModel({}),
+        GEOSPATIAL,
+        FakeSensorReadingRepository(),
+        grid_repo,
+        fire_gradient=_ConstantFireGradient(contribution=90.0),
+        fire_repository=_FakeFireReportRepository([_fire_report(target_cell)]),
+        fire_pm25_cap_ugm3=400.0,
+    )
+    result = service.run(BBOX, timestamp=TIMESTAMP, sensor_max_age=timedelta(hours=3))
+
+    assert result.succeeded is True
+    assert grid_repo.get(target_cell, TIMESTAMP).pm25 is None
 
 
 def test_run_passes_only_recent_matching_pollutant_readings_to_the_estimator() -> None:
