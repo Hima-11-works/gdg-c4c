@@ -22,7 +22,7 @@ code dependency; this module defines its own constants) with four
 lower-value background readings around it, and a steady wind so the
 forecast layer visibly carries it over +1h/+3h/+6h. The hotspot value
 (280 µg/m³) is comfortably past ALERT_CRITICAL_THRESHOLD_UGM3's default
-(150), so a real pipeline run against this data is guaranteed to raise
+(121), so a real pipeline run against this data is guaranteed to raise
 at least one CRITICAL alert without depending on any non-default
 configuration.
 """
