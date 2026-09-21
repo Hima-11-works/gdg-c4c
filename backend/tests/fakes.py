@@ -8,6 +8,7 @@ coding services against Protocols rather than the concrete SQL classes.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 
 from app.domain.providers import ProviderError
@@ -16,6 +17,7 @@ from app.domain.types import (
     Alert,
     BoundingBox,
     Coordinate,
+    FireReport,
     Forecast,
     GridState,
     SensorReading,
@@ -163,6 +165,28 @@ class FakeAlertRepository:
 
     def list_active(self, *, since: datetime) -> list[Alert]:
         return [a for a in self.alerts if a.created_at >= since]
+
+
+class FakeFireReportRepository:
+    """In-memory FireReportRepository, idempotent on client_report_id exactly
+    like the SQL implementation, with DB-style auto-incrementing ids."""
+
+    def __init__(self) -> None:
+        self.reports: list[FireReport] = []
+        self.saved: list[FireReport] = []
+
+    def save(self, report: FireReport) -> FireReport:
+        self.saved.append(report)
+        if report.client_report_id is not None:
+            for existing in self.reports:
+                if existing.client_report_id == report.client_report_id:
+                    return existing
+        stored = replace(report, id=len(self.reports) + 1)
+        self.reports.append(stored)
+        return stored
+
+    def list_active(self, *, since: datetime) -> list[FireReport]:
+        return [r for r in self.reports if r.reported_at >= since]
 
 
 class FakePollutionDataProvider:

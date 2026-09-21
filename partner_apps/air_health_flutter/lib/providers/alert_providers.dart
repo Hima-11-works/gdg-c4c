@@ -3,8 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../domain/alert_engine.dart';
 import '../domain/alert_message_service.dart';
 import '../domain/models/models.dart';
+import '../domain/sensitivity_rules.dart';
 import '../notifications/alert_notification_dispatcher.dart';
+import '../notifications/forecast_alarm_scheduler.dart';
 import '../notifications/notification_service.dart';
+import '../notifications/scheduled_alarm.dart';
+import '../storage/forecast_alarm_store.dart';
 import 'alert_history_provider.dart';
 import 'home_providers.dart';
 import 'profile_providers.dart';
@@ -31,6 +35,34 @@ final alertNotificationDispatcherProvider =
     notificationService: ref.read(notificationServiceProvider),
     messageService: ref.read(alertMessageServiceProvider),
   );
+});
+
+/// Forecast alarm store (low-level secure storage for alarm metadata).
+final forecastAlarmStoreProvider = Provider<ForecastAlarmStore>((ref) {
+  return ForecastAlarmStore();
+});
+
+/// ForecastAlarmScheduler — registers/cancels OS-level forecast alarms.
+final forecastAlarmSchedulerProvider = Provider<ForecastAlarmScheduler>((ref) {
+  return ForecastAlarmScheduler(
+    notificationService: ref.read(notificationServiceProvider),
+    store: ref.read(forecastAlarmStoreProvider),
+  );
+});
+
+/// Whether the OS currently allows exact alarms (Android 12+ user grant).
+///
+/// [FutureProvider] so the Settings row reflects the live system state and
+/// can be invalidated after the user grants it.
+final exactAlarmsProvider = FutureProvider<bool>((ref) {
+  return ref.read(notificationServiceProvider).canScheduleExactAlarms();
+});
+
+/// The forecast alarms currently scheduled with the OS, for the Settings
+/// "Upcoming alarms" row. Read directly from the metadata store — the OS
+/// holds the alarms themselves, this is what *we* remember scheduling.
+final upcomingAlarmsProvider = FutureProvider<List<ScheduledAlarm>>((ref) {
+  return ref.read(forecastAlarmStoreProvider).readAll();
 });
 
 /// Dedup state for the alert engine — persisted across evaluations.
@@ -63,7 +95,13 @@ class AlertCoordinator {
     _ref.invalidate(nearbyAreasProvider);
 
     final profile = await _ref.read(userProfileProvider.future);
-    if (profile == null) return null;
+    if (profile == null) {
+      // A missing profile means onboarding or a reset: nothing here can be
+      // trusted to represent the user, so any OS-level alarms left over from
+      // a previous state must not keep ringing.
+      await _ref.read(forecastAlarmSchedulerProvider).cancelAll();
+      return null;
+    }
 
     final current = await _ref.read(currentAirQualityProvider.future);
     final forecast = await _ref.read(forecastProvider.future);
@@ -114,6 +152,22 @@ class AlertCoordinator {
 
     // Drop stale resolved/old records regardless of new decisions.
     _ref.read(alertHistoryProvider.notifier).prune();
+
+    // Keep the OS-level forecast alarms in step with the latest forecast.
+    // These ring even when the app is closed, so they are reconciled on
+    // every cycle — not only when a decision fires — because a forecast
+    // revision, a preference change, or a reboot all need this sync.
+    try {
+      await _ref.read(forecastAlarmSchedulerProvider).reconcile(
+            forecast: forecast,
+            rules: SensitivityRules.forProfile(sensitivityProfile),
+            preferences: profile.preferences,
+            freshness: freshness,
+          );
+    } catch (_) {
+      // Non-fatal: the next cycle retries. The OS alarm from a previous
+      // cycle stays pending in the meantime.
+    }
 
     return result;
   }

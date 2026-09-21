@@ -52,6 +52,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings, get_settings
 from app.db.repositories import (
     SqlAlertRepository,
+    SqlFireReportRepository,
     SqlForecastRepository,
     SqlGridStateRepository,
     SqlSensorReadingRepository,
@@ -59,15 +60,18 @@ from app.db.repositories import (
 )
 from app.db.session import get_session_factory
 from app.domain.types import BoundingBox, Forecast
+from app.ingestion.demo_reports import demo_fire_reports
 from app.ingestion.factory import build_pollution_provider, build_weather_provider
 from app.services.alert_generation import AlertGenerationService
 from app.services.dispersion import DeterministicH3DispersionModel
 from app.services.estimation import IDWPollutionEstimator
+from app.services.fire_gradient import PlumeFireGradientModel
 from app.services.forecasting import ForecastingService
 from app.services.geospatial import GeospatialService
 from app.services.grid_computation import GridComputationService
 from app.services.ingestion import SensorIngestionService, WeatherIngestionService
 from app.services.pdi import HeuristicPDIModel
+from app.services.reports import FireReportService
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +137,44 @@ async def _ingest_weather(session: Session, settings: Settings, bbox: BoundingBo
     )
 
 
+def _seed_fire_reports(session: Session, settings: Settings, timestamp: datetime) -> StageOutcome:
+    """Demo Mode only: seed the fixed fire sightings so a demo run has a
+    guaranteed fire-gradient effect and GET /api/v1/reports has content.
+
+    Live mode seeds nothing - reports are citizen submissions, and the
+    stage then just reports that fact. Seeding is idempotent *within* a
+    run (the id is bucketed to the run's minute, so a retried run re-saves
+    the same row); each new run stamps one fresh sighting per fire, and
+    sightings older than FIRE_REPORT_MAX_AGE_HOURS age out of both the
+    gradient model and the read side, so a long-lived demo database
+    converges to the last ~12h of sightings rather than growing forever.
+    """
+    if not settings.demo_mode:
+        return StageOutcome(
+            "fire_reports", True, "live mode - citizen reports only, nothing seeded"
+        )
+
+    service = FireReportService(SqlFireReportRepository(session))
+    sightings = demo_fire_reports(reported_at=timestamp, resolution=settings.h3_resolution)
+    bucket = timestamp.strftime("%Y%m%d%H%M")
+    for index, report in enumerate(sightings):
+        service.submit(
+            latitude=report.latitude,
+            longitude=report.longitude,
+            kind=report.kind,
+            smoke_intensity=report.smoke_intensity,
+            duration_hours=report.duration_hours,
+            notes=report.notes,
+            client_report_id=f"demo-fire-{index}-{bucket}",
+            reported_at=report.reported_at,
+        )
+    return StageOutcome(
+        "fire_reports",
+        True,
+        f"seeded={len(sightings)} (deterministic demo sightings)",
+    )
+
+
 def _compute_grid(
     session: Session, settings: Settings, bbox: BoundingBox, timestamp: datetime
 ) -> StageOutcome:
@@ -145,14 +187,26 @@ def _compute_grid(
         road_pressure_weight=settings.pdi_road_pressure_weight,
         industrial_pressure_weight=settings.pdi_industrial_pressure_weight,
         vegetation_sink_weight=settings.pdi_vegetation_sink_weight,
+        fire_pressure_weight=settings.pdi_fire_pressure_weight,
     )
     geospatial = GeospatialService(resolution=settings.h3_resolution)
+    # Citizen fire reports act as modeled point sources, sharpening the
+    # gradient near reported fires (see app.services.fire_gradient).
+    fire_gradient = PlumeFireGradientModel(
+        source_pm25_ugm3=settings.fire_source_pm25_ugm3,
+        plume_radius_km=settings.fire_plume_radius_km,
+        decay_half_life_hours=settings.fire_decay_half_life_hours,
+        max_age_hours=settings.fire_report_max_age_hours,
+    )
     service = GridComputationService(
         estimator,
         pdi_model,
         geospatial,
         SqlSensorReadingRepository(session),
         SqlGridStateRepository(session),
+        fire_gradient=fire_gradient,
+        fire_repository=SqlFireReportRepository(session),
+        fire_pm25_cap_ugm3=settings.fire_pm25_cap_ugm3,
     )
     result = service.run(
         bbox,
@@ -256,6 +310,7 @@ async def run_pipeline(bbox: BoundingBox, *, timestamp: datetime) -> PipelineRep
         stages = [
             await _ingest_sensors(session, settings, bbox, since),
             await _ingest_weather(session, settings, bbox),
+            _seed_fire_reports(session, settings, timestamp),
             _compute_grid(session, settings, bbox, timestamp),
         ]
         forecast_outcome, forecasts = _forecast(session, settings, timestamp)

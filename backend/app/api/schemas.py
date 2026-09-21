@@ -17,7 +17,7 @@ from typing import Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
-from app.domain.types import AlertSeverity
+from app.domain.types import AlertSeverity, FireKind
 
 T = TypeVar("T")
 
@@ -163,6 +163,39 @@ class CellDetailOut(BaseModel):
             "data: a pdi score is computed but its factors aren't persisted yet)."
         ),
     )
+
+
+class FireReportIn(BaseModel):
+    """Request body for POST /api/v1/reports.
+
+    `smoke_intensity` is the user's smoke-amount slider (1 = low, 5 = high) —
+    a triage choice the fire gradient model scales a plume from, never a
+    measurement. `duration_hours` is the user's estimate of how long the
+    burning may have been going (0 = just started).
+    """
+
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    kind: FireKind
+    smoke_intensity: int = Field(ge=1, le=5)
+    duration_hours: float = Field(ge=0, le=24)
+    notes: str | None = Field(default=None, max_length=280)
+    client_report_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class ReportOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    h3_cell: str = Field(description="The H3 cell this report was snapped to at write time.")
+    latitude: float
+    longitude: float
+    kind: FireKind
+    smoke_intensity: int
+    duration_hours: float
+    notes: str | None
+    client_report_id: str | None
+    reported_at: datetime
 
 
 class ErrorDetail(BaseModel):

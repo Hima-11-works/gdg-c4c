@@ -36,6 +36,10 @@ class CellContext:
     road_pressure: float | None = None
     industrial_pressure: float | None = None
     vegetation_sink: float | None = None
+    # Citizen fire reports as a pre-normalized pressure factor (see
+    # app.services.fire_gradient): None when no active report influences
+    # this cell. A pressure, like road/industrial - not a sink.
+    fire_pressure: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

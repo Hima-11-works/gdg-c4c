@@ -1,10 +1,15 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/app_info.dart';
+import '../../core/formatters.dart';
 import '../../domain/models/models.dart';
 import '../../domain/sensitivity_rules.dart';
 import '../../notifications/notification_service.dart';
+import '../../notifications/scheduled_alarm.dart';
 import '../../providers/alert_providers.dart';
 import '../../providers/location_providers.dart';
 import '../../providers/prefs_providers.dart';
@@ -35,6 +40,12 @@ class ProfileScreen extends ConsumerWidget {
         data: (profile) {
           final prefs = profile?.preferences ?? const UserAlertPreferences();
           final location = ref.watch(resolvedLocationProvider);
+          final exactAsync = ref.watch(exactAlarmsProvider);
+          final upcomingAsync = ref.watch(upcomingAlarmsProvider);
+          // The exact-alarm row only exists on Android; iOS delivers local
+          // alarms without an equivalent grant.
+          final usesAndroid =
+              !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
           return ListView(
             padding: const EdgeInsets.only(bottom: AppSpacing.xxxxl),
             children: [
@@ -80,6 +91,61 @@ class ProfileScreen extends ConsumerWidget {
                 endHour: prefs.quietHoursEnd?.hour,
                 onTap: () => _pickQuietHours(context, ref, prefs),
               ),
+              _SwitchTile(
+                icon: Icons.alarm,
+                title: 'Forecast alarms',
+                subtitle: 'Ring at predicted air-quality changes, even '
+                    'when the app is closed',
+                value: prefs.forecastAlarmsEnabled,
+                onChanged: (v) async {
+                  HapticFeedback.selectionClick();
+                  await ref
+                      .read(userProfileProvider.notifier)
+                      .updateFields(
+                        preferences: prefs.copyWith(forecastAlarmsEnabled: v),
+                      );
+                  if (!v) {
+                    // Stop pending OS alarms immediately, so none can ring
+                    // before the next evaluation cycle.
+                    await ref
+                        .read(forecastAlarmSchedulerProvider)
+                        .cancelAll();
+                  } else {
+                    // Reconcile now, so the next alarm is registered without
+                    // waiting for the refresh cadence.
+                    await ref
+                        .read(alertCoordinatorProvider)
+                        .refreshAndEvaluate();
+                  }
+                  ref.invalidate(upcomingAlarmsProvider);
+                },
+              ),
+              _SettingsTile(
+                icon: Icons.alarm_on,
+                title: 'Alarm lead time',
+                subtitle: _alarmLeadLabel(prefs),
+                onTap: () => _pickAlarmLead(context, ref, prefs),
+              ),
+              _SettingsTile(
+                icon: Icons.notifications_active,
+                title: 'Upcoming alarms',
+                subtitle: _upcomingAlarmsLabel(upcomingAsync),
+                // The list is a snapshot taken at schedule time; tapping
+                // re-reads it.
+                onTap: () => ref.invalidate(upcomingAlarmsProvider),
+              ),
+              if (usesAndroid)
+                _SettingsTile(
+                  icon: Icons.access_alarms,
+                  title: 'Exact alarms',
+                  subtitle: exactAsync.maybeWhen(
+                    data: (granted) => granted
+                        ? 'Granted — alarms fire on time'
+                        : 'Not granted — alarms may ring up to 15 min late',
+                    orElse: () => 'Checking…',
+                  ),
+                  onTap: () => _manageExactAlarms(context, ref),
+                ),
 
               // ── Alert Sensitivity ─────────────────────────────────
               _SectionHeader('Alert Sensitivity'),
@@ -168,7 +234,7 @@ class ProfileScreen extends ConsumerWidget {
               _SettingsTile(
                 icon: Icons.info_outline,
                 title: 'About',
-                subtitle: 'Air Health v1.0.0',
+                subtitle: '${AppInfo.name} v${AppInfo.version}',
                 onTap: () => _showAbout(context),
               ),
             ],
@@ -283,6 +349,79 @@ class ProfileScreen extends ConsumerWidget {
     return effective.inHours == 1
         ? '1 hour ahead'
         : '${effective.inHours} hours ahead';
+  }
+
+  // ── Forecast alarms ──────────────────────────────────────────────────
+
+  static String _alarmLeadLabel(UserAlertPreferences prefs) {
+    final lead = prefs.alarmLead;
+    if (lead == Duration.zero) return 'At the predicted time';
+    return '${_alarmLeadOptionLabel(lead)} before the change';
+  }
+
+  /// What the Settings "Upcoming alarms" row shows: the nearest scheduled
+  /// alarm(s), or a quiet hint when nothing is pending.
+  static String _upcomingAlarmsLabel(AsyncValue<List<ScheduledAlarm>> alarms) {
+    return alarms.maybeWhen(
+      data: (list) {
+        if (alarms.isLoading) return 'Checking…';
+        if (list.isEmpty) return 'None scheduled';
+        return list
+            .take(2)
+            .map((a) =>
+                '${a.categoryLabel} (AQI ${a.predictedAqi}) around '
+                '${Formatters.time(a.fireAt)}')
+            .join(' · ');
+      },
+      orElse: () => 'Checking…',
+    );
+  }
+
+  static String _alarmLeadOptionLabel(Duration lead) {
+    return switch (lead) {
+      const Duration(minutes: 10) => '10 minutes',
+      const Duration(minutes: 30) => '30 minutes',
+      const Duration(hours: 1) => '1 hour',
+      _ => '${lead.inMinutes} minutes',
+    };
+  }
+
+  void _pickAlarmLead(
+    BuildContext context,
+    WidgetRef ref,
+    UserAlertPreferences prefs,
+  ) {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (BuildContext sheetContext) => _AlarmLeadPicker(
+        current: prefs.alarmLead,
+        onSelected: (lead) {
+          ref
+              .read(userProfileProvider.notifier)
+              .updateFields(preferences: prefs.copyWith(alarmLead: lead));
+          Navigator.pop(sheetContext);
+        },
+      ),
+    );
+  }
+
+  /// Ask Android (12+) for the exact-alarm grant and reflect the result.
+  Future<void> _manageExactAlarms(BuildContext context, WidgetRef ref) async {
+    final granted = await ref
+        .read(notificationServiceProvider)
+        .requestExactAlarmPermission();
+    if (!context.mounted) return;
+    ref.invalidate(exactAlarmsProvider);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          granted
+              ? 'Exact alarms enabled'
+              : 'Exact alarms are off — alarms may ring up to '
+                  '15 minutes late',
+        ),
+      ),
+    );
   }
 
   // ── Edit health context ──────────────────────────────────────────────
@@ -463,14 +602,15 @@ class ProfileScreen extends ConsumerWidget {
     showDialog(
       context: context,
       builder: (BuildContext dialogContext) => AlertDialog(
-        title: const Text('About Air Health'),
-        content: const Text(
-          'Personal air-quality awareness app.\n\n'
-          'Air Health shows local pollution levels, short-term '
+        title: const Text('About ${AppInfo.name}'),
+        content: Text(
+          '${AppInfo.tagline} app.\n\n'
+          '${AppInfo.name} shows local pollution levels, short-term '
           'forecasts, and personalised alerts — so you can make '
           'informed decisions about outdoor exposure.\n\n'
           'This is an environmental awareness tool, not a '
-          'medical device.',
+          'medical device.\n\n'
+          'Version ${AppInfo.version}',
         ),
         actions: [
           TextButton(
@@ -1100,6 +1240,61 @@ class _LeadTimePicker extends StatelessWidget {
             const SizedBox(height: AppSpacing.md),
             Text(
               'How far ahead a forecast alert may look.',
+              style: AppTypography.bodyMedium.copyWith(color: cs.onSurfaceVariant),
+            ),
+            const SizedBox(height: AppSpacing.xxl),
+            ..._options.map((d) {
+              return Padding(
+                padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                child: _PickerOption(
+                  label: _labelFor(d),
+                  selected: d == current,
+                  onTap: () => onSelected(d),
+                ),
+              );
+            }),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Alarm lead picker ─────────────────────────────────────────────────
+
+class _AlarmLeadPicker extends StatelessWidget {
+  const _AlarmLeadPicker({required this.current, required this.onSelected});
+
+  final Duration current;
+  final ValueChanged<Duration> onSelected;
+
+  static const _options = <Duration>[
+    Duration.zero,
+    Duration(minutes: 10),
+    Duration(minutes: 30),
+    Duration(hours: 1),
+  ];
+
+  static String _labelFor(Duration d) => d == Duration.zero
+      ? 'At the predicted time'
+      : '${ProfileScreen._alarmLeadOptionLabel(d)} before';
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+            AppSpacing.xl, AppSpacing.xxl, AppSpacing.xl, AppSpacing.xxxxl),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Alarm lead time',
+                style: AppTypography.headlineSmall.copyWith(color: cs.onSurface)),
+            const SizedBox(height: AppSpacing.md),
+            Text(
+              'How early the alarm rings before the forecasted change.',
               style: AppTypography.bodyMedium.copyWith(color: cs.onSurfaceVariant),
             ),
             const SizedBox(height: AppSpacing.xxl),

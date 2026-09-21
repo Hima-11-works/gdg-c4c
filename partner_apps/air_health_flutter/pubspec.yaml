@@ -20,6 +20,9 @@ dependencies:
   # Notifications
   flutter_local_notifications: ^19.2.1
 
+  # Timezone handling for scheduled forecast alarms (zonedSchedule needs TZDateTime).
+  timezone: ^0.10.1
+
   # Location & permissions
   geolocator: ^14.0.1
   permission_handler: ^11.4.0

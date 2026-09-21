@@ -259,7 +259,13 @@ accident rather than by design:
   weighted blend, the forecast model is a fixed-formula box model, and
   alerts are plain threshold comparisons. Nothing is trained on data.
 - **No authentication or rate limiting** on the API — every `/api/v1/*`
-  route is open, `GET`-only, and unauthenticated.
+  route is open and unauthenticated. The routes are `GET`-only except
+  `POST /api/v1/reports` (citizen fire reports), which is also open —
+  anyone can submit a report, and a malicious or careless one shifts the
+  modeled plume (mitigated by validation, an age-based expiry and a
+  per-cell PM2.5 cap, but abuse is a known, accepted gap for the MVP).
+- **Fire reports are a triage heuristic.** The smoke slider maps to a
+  modeled plume (see `app.services.fire_gradient`), not a measurement.
 - **No live road/industrial/vegetation/satellite data.** PDI's
   `road_pressure`, `industrial_pressure`, and `vegetation_sink` inputs
   exist in the code but nothing real populates them yet (the demo
@@ -782,13 +788,15 @@ python -m app.pipeline.run     # or ingest / ingest-weather / forecast individua
 For running the whole thing with no live network connection and no API
 keys — hackathon judging, offline demos, CI. `DEMO_MODE=true` substitutes
 a fixed, deterministic PM2.5/wind dataset (`app.ingestion.demo`) for
-OpenAQ/Open-Meteo, chosen by `app.ingestion.factory` — **that is the
-only thing it changes.** Every stage after ingestion (H3 grid coverage,
-IDW interpolation, PDI, the dispersion model, alert generation,
-persistence, the API) is the exact same code path as live mode, running
-for real against this synthetic input. There is no separate demo API
-response shape, and no `if demo_mode` branch anywhere outside
-`app.ingestion.factory`.
+OpenAQ/Open-Meteo, chosen by `app.ingestion.factory` — that and seeding
+two fixed fire sightings (`app.ingestion.demo_reports`, so the
+fire-gradient contribution and `GET /api/v1/reports` are demoable) are
+the only things it changes. Every stage after ingestion (H3 grid
+coverage, IDW interpolation, PDI, the dispersion model, alert
+generation, persistence, the API) is the exact same code path as live
+mode, running for real against this synthetic input. There is no
+separate demo API response shape, and no `if demo_mode` branch anywhere
+outside `app.ingestion.factory` and the pipeline's seeding stage.
 
 The scenario is a smog-episode-scale PM2.5 hotspot (280 µg/m³, central
 Delhi) with four lower background readings around it and a steady 6 m/s
@@ -797,7 +805,10 @@ guaranteed — with no non-default configuration — to produce a clearly
 visible hotspot, forecast values that visibly carry it downwind over
 +1h/+3h/+6h, and at least one CRITICAL alert (280 is comfortably past the
 default `ALERT_CRITICAL_THRESHOLD_UGM3=150.0`). `backend/tests/test_demo_mode.py`
-asserts exactly this, running the real services.
+asserts exactly this, running the real services. The two fire sightings
+sit inside IDW sensor coverage (augment-only blending would otherwise
+make them invisible) and away from the hotspot, so the map shows a
+separate, sharper plume where they're reported.
 
 **`DEMO_MODE` is unrelated to a response's `is_demo` flag.** This is the
 single most likely point of confusion in the whole codebase, so it's
@@ -979,6 +990,8 @@ Interactive docs at `/docs` once the API is running.
 | `GET /api/v1/grid/forecast?hours=1\|3\|6&resolution=&min_lat=&min_lon=&max_lat=&max_lon=` | Forecast PM2.5 per cell at that horizon |
 | `GET /api/v1/cells/{h3_cell}?resolution=` | Current state + forecasts + weather + PDI factor breakdown for one cell (404 if no data at all, 422 if `h3_cell` isn't valid at the configured resolution) |
 | `GET /api/v1/alerts` | Alerts created within `ALERT_ACTIVE_LOOKBACK_HOURS` |
+| `POST /api/v1/reports` | Store a citizen report of an active fire/burning event (kind, location, smoke slider 1-5, duration estimate, optional note); returns it with the H3 cell it snapped to. Idempotent on `client_report_id`. |
+| `GET /api/v1/reports` | Fire/burning reports within `FIRE_REPORT_MAX_AGE_HOURS` (the same window the fire gradient model trusts a report for) |
 
 `resolution` and the four bbox params are optional and independent of
 each other's endpoint — see [Level of detail](#level-of-detail) for the

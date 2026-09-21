@@ -100,6 +100,42 @@ void main() {
       expect(a, equals(b));
       expect(a, isNot(equals(c)));
     });
+
+    test('forecast alarms default on, lead defaults to zero', () {
+      const prefs = UserAlertPreferences();
+      expect(prefs.forecastAlarmsEnabled, isTrue);
+      expect(prefs.alarmLead, Duration.zero);
+    });
+
+    test('forecast alarm settings round-trip', () {
+      const prefs = UserAlertPreferences(
+        forecastAlarmsEnabled: false,
+        alarmLead: Duration(minutes: 30),
+      );
+      expect(prefs.copyWith(forecastAlarmsEnabled: true).forecastAlarmsEnabled,
+          isTrue);
+      expect(
+        const UserAlertPreferences()
+            .copyWith(alarmLead: const Duration(minutes: 10))
+            .alarmLead,
+        const Duration(minutes: 10),
+      );
+      // alarmLead is never null — "no lead" is Duration.zero.
+      expect(
+        UserAlertPreferences(forecastAlarmsEnabled: false)
+            .copyWith(forecastAlarmsEnabled: true)
+            .alarmLead,
+        Duration.zero,
+      );
+    });
+
+    test('equality includes forecast alarm settings', () {
+      const a = UserAlertPreferences(forecastAlarmsEnabled: false);
+      const b = UserAlertPreferences(forecastAlarmsEnabled: false);
+      const c = UserAlertPreferences(alarmLead: Duration(minutes: 5));
+      expect(a, equals(b));
+      expect(a, isNot(equals(c)));
+    });
   });
 
   group('UserAlertPreferences quiet hours', () {

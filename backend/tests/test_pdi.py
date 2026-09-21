@@ -102,6 +102,30 @@ def test_pm25_and_road_pressure_blend_matches_hand_computation() -> None:
     assert result.pdi == pytest.approx(expected)
 
 
+def test_fire_pressure_factor_blends_and_appears_in_factors() -> None:
+    """fire_pressure is a pure pressure (unlike the negative-weighted
+    vegetation sink) and raises the index in proportion to its weight."""
+    model = HeuristicPDIModel(
+        pm25_reference=100.0,
+        pm25_weight=0.7,
+        road_pressure_weight=0.2,
+        industrial_pressure_weight=0.1,
+        vegetation_sink_weight=-0.15,
+        fire_pressure_weight=0.25,
+    )
+
+    result = model.calculate(CellContext(h3_cell=CELL, pm25=50.0, fire_pressure=0.5))
+
+    # Hand computation over the two present factors:
+    #   pdi = 100 * (0.5*0.7 + 0.5*0.25) / (0.7 + 0.25) = 50
+    assert result.pdi == pytest.approx(50.0)
+    assert result.factors["fire_pressure"] == pytest.approx(0.5)
+
+    fire_only = model.calculate(CellContext(h3_cell=CELL, pm25=None, fire_pressure=1.0))
+    assert fire_only.pdi == pytest.approx(100.0)
+    assert fire_only.factors == {"fire_pressure": pytest.approx(1.0)}
+
+
 def test_all_three_factors_blend_matches_hand_computation() -> None:
     model = _model(
         pm25_reference=100.0,

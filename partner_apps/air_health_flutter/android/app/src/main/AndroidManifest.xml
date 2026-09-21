@@ -4,12 +4,17 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <!-- Notification permission — required by flutter_local_notifications on Android 13+. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Exact alarms — scheduled forecast alarms must ring at the predicted
+         time even while the app is closed. Android 12+ gates this behind a
+         user grant; the app falls back to inexact alarms without it. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <!-- Network permission — required for API requests. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <application
-        android:label="air_health_flutter"
+        android:label="Air Health"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round">
         <activity
             android:name=".MainActivity"
             android:exported="true"

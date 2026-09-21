@@ -38,6 +38,8 @@ class SecureProfileStore {
           'quietHoursStart': prefs.quietHoursStart?.toIso8601String(),
           'quietHoursEnd': prefs.quietHoursEnd?.toIso8601String(),
           'leadTimeMinutes': prefs.leadTime?.inMinutes,
+          'forecastAlarmsEnabled': prefs.forecastAlarmsEnabled,
+          'alarmLeadMinutes': prefs.alarmLead.inMinutes,
         },
       }),
     );
@@ -117,6 +119,8 @@ class SecureProfileStore {
       quietHoursStart: _parseDate(map['quietHoursStart']),
       quietHoursEnd: _parseDate(map['quietHoursEnd']),
       leadTime: _parseDuration(map['leadTimeMinutes']),
+      forecastAlarmsEnabled: map['forecastAlarmsEnabled'] as bool? ?? true,
+      alarmLead: _parseDuration(map['alarmLeadMinutes']) ?? Duration.zero,
     );
   }
 

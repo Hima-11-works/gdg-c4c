@@ -18,10 +18,12 @@ def create_app() -> FastAPI:
 
     app = FastAPI(title="Pollution Intelligence Platform API", version=__version__)
 
+    # POST is deliberate: /api/v1/reports is the platform's first write side
+    # (citizen fire reports). Every other route stays GET-only.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origin_list,
-        allow_methods=["GET"],
+        allow_methods=["GET", "POST"],
         allow_headers=["*"],
     )
 

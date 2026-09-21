@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from app.core.config import get_settings
 from app.db.repositories import (
     SqlAlertRepository,
+    SqlFireReportRepository,
     SqlForecastRepository,
     SqlGridStateRepository,
     SqlSensorReadingRepository,
@@ -25,6 +26,8 @@ from app.domain.repositories import DuplicateReadingError
 from app.domain.types import (
     Alert,
     AlertSeverity,
+    FireKind,
+    FireReport,
     Forecast,
     GridState,
     SensorReading,
@@ -542,6 +545,63 @@ def test_alert_round_trip_and_list_active(db_session, cell: str) -> None:
     assert saved.id is not None
     assert saved in repo.list_active(since=NOW - timedelta(hours=1))
     assert repo.list_active(since=NOW + timedelta(hours=1)) == []
+
+
+def test_fire_report_round_trip_and_idempotent_save(db_session, cell: str) -> None:
+    """A report round-trips, appears in the active window, and a resubmission
+    with the same client_report_id returns the original row instead of
+    stacking a second one."""
+    repo = SqlFireReportRepository(db_session)
+    report = FireReport(
+        h3_cell=cell,
+        latitude=37.7749,
+        longitude=-122.4194,
+        kind=FireKind.CROP_BURNING,
+        smoke_intensity=4,
+        duration_hours=1.5,
+        reported_at=NOW,
+        notes="Field stubble, small wind drift",
+        client_report_id="client-fire-1",
+    )
+
+    saved = repo.save(report)
+    assert saved.id is not None
+    assert saved.kind == FireKind.CROP_BURNING
+    assert saved in repo.list_active(since=NOW - timedelta(hours=1))
+    assert repo.list_active(since=NOW + timedelta(hours=1)) == []
+
+    resubmitted = repo.save(report)
+    assert resubmitted.id == saved.id
+    assert len(repo.list_active(since=NOW - timedelta(hours=1))) == 1
+
+
+def test_fire_report_without_client_id_always_adds(db_session, cell: str) -> None:
+    repo = SqlFireReportRepository(db_session)
+
+    first = repo.save(
+        FireReport(
+            h3_cell=cell,
+            latitude=37.7749,
+            longitude=-122.4194,
+            kind=FireKind.BUILDING_FIRE,
+            smoke_intensity=2,
+            duration_hours=0.0,
+            reported_at=NOW,
+        )
+    )
+    second = repo.save(
+        FireReport(
+            h3_cell=cell,
+            latitude=37.7749,
+            longitude=-122.4194,
+            kind=FireKind.BUILDING_FIRE,
+            smoke_intensity=2,
+            duration_hours=0.0,
+            reported_at=NOW,
+        )
+    )
+
+    assert first.id != second.id
 
 
 def test_alert_context_fields_round_trip(db_session, cell: str) -> None:

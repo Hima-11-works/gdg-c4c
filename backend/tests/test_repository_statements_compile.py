@@ -12,6 +12,7 @@ import h3
 from sqlalchemy.dialects import postgresql
 
 from app.db.repositories import alert as alert_repo
+from app.db.repositories import fire_report as fire_report_repo
 from app.db.repositories import forecast as forecast_repo
 from app.db.repositories import grid_state as grid_state_repo
 from app.db.repositories import sensor_reading as sensor_reading_repo
@@ -19,6 +20,8 @@ from app.db.repositories import weather_reading as weather_reading_repo
 from app.domain.types import (
     Alert,
     AlertSeverity,
+    FireKind,
+    FireReport,
     Forecast,
     GridState,
     SensorReading,
@@ -28,7 +31,8 @@ from app.domain.types import (
 DIALECT = postgresql.dialect()
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 LATER = datetime(2026, 1, 1, 3, tzinfo=UTC)
-CELL = h3.latlng_to_cell(37.7749, -122.4194, 8)
+LAT, LON = 37.7749, -122.4194
+CELL = h3.latlng_to_cell(LAT, LON, 8)
 
 
 def _sql(stmt) -> str:
@@ -198,3 +202,26 @@ def test_alert_statements() -> None:
     assert "'warning'" in insert_sql  # the enum's .value, not .name
 
     assert "FROM alert" in _sql(alert_repo._list_active_stmt(NOW))
+
+
+def test_fire_report_statements() -> None:
+    report = FireReport(
+        h3_cell=CELL,
+        latitude=LAT,
+        longitude=LON,
+        kind=FireKind.CROP_BURNING,
+        smoke_intensity=4,
+        duration_hours=1.5,
+        reported_at=NOW,
+        client_report_id="client-123",
+    )
+    insert_sql, params = _sql_and_params(fire_report_repo._insert_stmt(report))
+    assert "INSERT INTO fire_report" in insert_sql
+    # The kind goes in as the enum's .value, not .name (bound, not literal:
+    # this insert also carries a WKTElement, which can't literal-bind).
+    assert "crop_burning" in params.values()
+    assert params["geom"].data == f"POINT({LON} {LAT})"
+
+    assert "FROM fire_report" in _sql(fire_report_repo._list_active_stmt(NOW))
+    by_client = _sql(fire_report_repo._by_client_report_id_stmt("client-123"))
+    assert "client_report_id" in by_client

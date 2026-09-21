@@ -20,6 +20,7 @@ _PM25 = "pm25"
 _ROAD_PRESSURE = "road_pressure"
 _INDUSTRIAL_PRESSURE = "industrial_pressure"
 _VEGETATION_SINK = "vegetation_sink"
+_FIRE_PRESSURE = "fire_pressure"
 
 
 class HeuristicPDIModel:
@@ -68,6 +69,11 @@ class HeuristicPDIModel:
         road_pressure_weight: float,
         industrial_pressure_weight: float,
         vegetation_sink_weight: float,
+        # 0 disables the factor; the composition root sets it from
+        # PDI_FIRE_PRESSURE_WEIGHT so citizen fire reports pull a cell's
+        # pressure up. Defaulted (rather than required) so existing
+        # constructors keep working.
+        fire_pressure_weight: float = 0.0,
     ) -> None:
         if pm25_reference <= 0:
             raise ValueError(f"pm25_reference must be > 0: {pm25_reference}")
@@ -77,6 +83,7 @@ class HeuristicPDIModel:
             _ROAD_PRESSURE: road_pressure_weight,
             _INDUSTRIAL_PRESSURE: industrial_pressure_weight,
             _VEGETATION_SINK: vegetation_sink_weight,
+            _FIRE_PRESSURE: fire_pressure_weight,
         }
 
     def calculate(self, cell_context: CellContext) -> PDIResult:
@@ -89,6 +96,8 @@ class HeuristicPDIModel:
             factors[_INDUSTRIAL_PRESSURE] = clamp01(cell_context.industrial_pressure)
         if cell_context.vegetation_sink is not None:
             factors[_VEGETATION_SINK] = clamp01(cell_context.vegetation_sink)
+        if cell_context.fire_pressure is not None:
+            factors[_FIRE_PRESSURE] = clamp01(cell_context.fire_pressure)
 
         if not factors:
             return PDIResult(h3_cell=cell_context.h3_cell, pdi=None, factors={})

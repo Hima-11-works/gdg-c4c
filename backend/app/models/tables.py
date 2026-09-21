@@ -192,3 +192,34 @@ alert = Table(
     Index("ix_alert_h3_cell_created_at", "h3_cell", "created_at"),
     Index("ix_alert_severity_created_at", "severity", "created_at"),
 )
+
+fire_report = Table(
+    "fire_report",
+    metadata,
+    Column("id", BigInteger, primary_key=True),
+    Column("h3_cell", String(H3_CELL_LENGTH), nullable=False),
+    Column("latitude", Float, nullable=False),
+    Column("longitude", Float, nullable=False),
+    # Derived from latitude/longitude at write time; used for spatial
+    # queries only, never read back into the domain object.
+    Column(
+        "geom", Geography(geometry_type="POINT", srid=4326, spatial_index=False), nullable=False
+    ),
+    Column("kind", String(30), nullable=False),
+    Column("smoke_intensity", SmallInteger, nullable=False),
+    Column("duration_hours", Float, nullable=False),
+    Column("notes", String(280), nullable=True),
+    Column("client_report_id", String(64), nullable=True),
+    Column("reported_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint("latitude BETWEEN -90 AND 90", name="ck_fire_report_latitude"),
+    CheckConstraint("longitude BETWEEN -180 AND 180", name="ck_fire_report_longitude"),
+    CheckConstraint("smoke_intensity BETWEEN 1 AND 5", name="ck_fire_report_smoke_intensity"),
+    CheckConstraint("duration_hours >= 0", name="ck_fire_report_duration_hours"),
+    # Idempotent resubmission: a client retrying with the same generated id
+    # must find the original report, not stack a second one. Nullable on
+    # purpose (older clients / programmatic submissions may omit it), and
+    # Postgres treats NULLs as distinct in a unique index.
+    UniqueConstraint("client_report_id", name="uq_fire_report_client_report_id"),
+    Index("ix_fire_report_reported_at", "reported_at"),
+    Index("ix_fire_report_h3_cell", "h3_cell"),
+)

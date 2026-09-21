@@ -7,6 +7,7 @@ import '../data/pollution_data_provider.dart';
 import '../data/providers/dummy_pollution_data_provider.dart';
 import '../data/providers/grid_api_pollution_data_provider.dart';
 import '../data/providers/scenario_data.dart';
+import '../data/reports/fire_report_api.dart';
 
 /// Grid API client, or null when `POLLUTION_API_BASE_URL` is not set.
 ///
@@ -18,6 +19,17 @@ final gridApiClientProvider = Provider<GridApiClient?>((ref) {
   final config = ApiConfig.tryFromEnvironment();
   if (config == null) return null;
   return DioGridApiClient(dio: createPollutionDio(config));
+});
+
+/// Fire-report API client, or null when the backend isn't configured.
+///
+/// Null (dummy mode) means the "report a fire" flow is unavailable - there
+/// is nowhere to send it - so the UI hides it entirely rather than showing
+/// a button that can only fail.
+final fireReportApiClientProvider = Provider<FireReportApiClient?>((ref) {
+  final config = ApiConfig.tryFromEnvironment();
+  if (config == null) return null;
+  return DioFireReportApiClient(dio: createPollutionDio(config));
 });
 
 /// The single binding point for [PollutionDataProvider].

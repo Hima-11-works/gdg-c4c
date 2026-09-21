@@ -74,4 +74,11 @@ def test_metadata_creates_tables_in_dependency_order_without_error() -> None:
     # sorted_tables raises CircularDependencyError if foreign keys formed a
     # cycle; none are expected here, but this guards against a future one.
     names = [t.name for t in metadata.sorted_tables]
-    assert set(names) == {"sensor_reading", "weather_reading", "grid_state", "forecast", "alert"}
+    assert set(names) == {
+        "sensor_reading",
+        "weather_reading",
+        "grid_state",
+        "forecast",
+        "alert",
+        "fire_report",
+    }

@@ -358,3 +358,77 @@ class Alert:
             _require_finite(self.confidence, "confidence")
             if not 0 <= self.confidence <= 1:
                 raise ValueError(f"confidence must be within [0, 1]: {self.confidence}")
+
+
+class FireKind(StrEnum):
+    """What a citizen-reported fire/burning event is.
+
+    Kept as a closed enum (unlike `pollutant`'s free string) because the kind
+    drives a modeled emission weight — an unknown value would silently
+    contribute nothing, so a report with an unknown kind must be rejected at
+    the boundary instead of silently under-weighted.
+    """
+
+    BUILDING_FIRE = "building_fire"
+    INDUSTRIAL_FIRE = "industrial_fire"
+    FOREST_FIRE = "forest_fire"
+    CROP_BURNING = "crop_burning"
+    OTHER = "other"
+
+
+@dataclass(frozen=True, slots=True)
+class FireReport:
+    """A citizen report of an active fire/burning event near a location.
+
+    This is user evidence, not a measurement: the smoke slider is a triage
+    choice mapped to a modeled emission (see app.services.fire_gradient),
+    never a measurement. Reports are stored exactly as submitted — the
+    influence they exert on the grid is derived downstream, at pipeline
+    time, so later tuning of the model re-applies to every stored report
+    without re-asking the user.
+
+    `h3_cell` is the cell the report was snapped to at write time (the
+    persistence layer validates it against the configured resolution);
+    `client_report_id` is an optional client-generated id used for
+    idempotent resubmission — a retry must update nothing, not add a row.
+    """
+
+    h3_cell: str
+    latitude: float
+    longitude: float
+    kind: FireKind
+    smoke_intensity: int
+    duration_hours: float
+    reported_at: datetime
+    notes: str | None = None
+    client_report_id: str | None = None
+    id: int | None = None
+
+    MAX_NOTES_LENGTH = 280
+    MIN_INTENSITY = 1
+    MAX_INTENSITY = 5
+
+    def __post_init__(self) -> None:
+        _require_utc(self.reported_at, "reported_at")
+        if not isinstance(self.kind, FireKind):
+            raise ValueError(f"kind must be a FireKind, got {self.kind!r}")
+        if not self.h3_cell.strip():
+            raise ValueError("h3_cell must not be empty")
+        if not -90 <= self.latitude <= 90:
+            raise ValueError(f"latitude out of range: {self.latitude}")
+        if not -180 <= self.longitude <= 180:
+            raise ValueError(f"longitude out of range: {self.longitude}")
+        if not self.MIN_INTENSITY <= self.smoke_intensity <= self.MAX_INTENSITY:
+            raise ValueError(
+                f"smoke_intensity must be between {self.MIN_INTENSITY} and "
+                f"{self.MAX_INTENSITY}: {self.smoke_intensity}"
+            )
+        _require_finite(self.duration_hours, "duration_hours")
+        if self.duration_hours < 0:
+            raise ValueError(
+                f"duration_hours must be >= 0 (0 = just started): {self.duration_hours}"
+            )
+        if self.notes is not None and len(self.notes.strip()) > self.MAX_NOTES_LENGTH:
+            raise ValueError(f"notes must be at most {self.MAX_NOTES_LENGTH} characters")
+        if self.client_report_id is not None and not self.client_report_id.strip():
+            raise ValueError("client_report_id must not be blank when given")

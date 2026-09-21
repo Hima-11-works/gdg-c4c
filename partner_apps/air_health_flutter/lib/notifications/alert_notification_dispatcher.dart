@@ -58,6 +58,9 @@ class AlertNotificationDispatcher {
         id: notificationId,
         title: message.title,
         body: message.lockScreenBody, // NEVER the full body
+        urgent: decision.severity == AlertSeverity.urgent,
+        // Tapping the notification deep-links to the Alerts screen.
+        payload: 'alerts',
       );
 
       _activeNotificationIds[decision.dedupKey] = notificationId;

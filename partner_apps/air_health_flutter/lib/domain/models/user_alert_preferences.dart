@@ -1,7 +1,8 @@
 /// User notification and alert preferences — separate from health context.
 ///
 /// Controls how and when alerts are delivered: master switch, quiet hours,
-/// minimum severity, forecast lead time and recovery notifications.
+/// minimum severity, forecast lead time, scheduled forecast alarms and
+/// recovery notifications.
 class UserAlertPreferences {
   const UserAlertPreferences({
     this.alertsEnabled = true,
@@ -9,6 +10,8 @@ class UserAlertPreferences {
     this.quietHoursEnd,
     this.minimumSeverity = AlertSeverity.info,
     this.leadTime,
+    this.forecastAlarmsEnabled = true,
+    this.alarmLead = Duration.zero,
     this.recoveryAlertsEnabled = true,
   });
 
@@ -31,6 +34,16 @@ class UserAlertPreferences {
   /// the current sensitivity tier. Overrides
   /// `SensitivityRules.leadTimePreference`.
   final Duration? leadTime;
+
+  /// Whether to schedule OS-level alarms that ring at forecasted air-quality
+  /// changes, even while the app is closed. Unlike the in-app evaluation
+  /// (which only runs while the app is alive), these are OS-scheduled, so
+  /// they fire with the app killed and the screen off.
+  final bool forecastAlarmsEnabled;
+
+  /// How long before a forecasted change the alarm should ring. Zero means
+  /// the alarm rings exactly at the predicted time.
+  final Duration alarmLead;
 
   /// Whether to send recovery notifications (AQI improving after alert).
   final bool recoveryAlertsEnabled;
@@ -58,6 +71,8 @@ class UserAlertPreferences {
     AlertSeverity? minimumSeverity,
     Duration? leadTime,
     bool clearLeadTime = false,
+    bool? forecastAlarmsEnabled,
+    Duration? alarmLead,
     bool? recoveryAlertsEnabled,
   }) {
     return UserAlertPreferences(
@@ -69,6 +84,9 @@ class UserAlertPreferences {
           clearQuietHours ? null : (quietHoursEnd ?? this.quietHoursEnd),
       minimumSeverity: minimumSeverity ?? this.minimumSeverity,
       leadTime: clearLeadTime ? null : (leadTime ?? this.leadTime),
+      forecastAlarmsEnabled:
+          forecastAlarmsEnabled ?? this.forecastAlarmsEnabled,
+      alarmLead: alarmLead ?? this.alarmLead,
       recoveryAlertsEnabled:
           recoveryAlertsEnabled ?? this.recoveryAlertsEnabled,
     );
@@ -83,6 +101,8 @@ class UserAlertPreferences {
           quietHoursEnd == other.quietHoursEnd &&
           minimumSeverity == other.minimumSeverity &&
           leadTime == other.leadTime &&
+          forecastAlarmsEnabled == other.forecastAlarmsEnabled &&
+          alarmLead == other.alarmLead &&
           recoveryAlertsEnabled == other.recoveryAlertsEnabled;
 
   @override
@@ -92,6 +112,8 @@ class UserAlertPreferences {
         quietHoursEnd,
         minimumSeverity,
         leadTime,
+        forecastAlarmsEnabled,
+        alarmLead,
         recoveryAlertsEnabled,
       );
 
