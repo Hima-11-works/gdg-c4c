@@ -74,6 +74,25 @@ body,
   pointer-events: auto;
 }
 
+/* Search box with the alerts bell beside it, rather than the bell in its own
+   row below. The row sizes to its content so .overlay's 20rem cap can't
+   squeeze the search bar — it overflows that cap to the left, the same way
+   the open alerts list already does. Only the two controls take clicks: the
+   overlay's pointer-events: auto applies to the row, so it's turned back to
+   none here and re-enabled on the children, keeping the gap between them
+   from swallowing map clicks. */
+.top-right-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  width: max-content;
+  pointer-events: none;
+}
+
+.top-right-row > * {
+  pointer-events: auto;
+}
+
 .overlay-bottom-center {
   bottom: 1rem;
   left: 50%;
@@ -100,6 +119,11 @@ body,
    transparent. */
 .side-panel {
   position: relative;
+  /* The body is offset from this element's width (100% + gap), and the width
+     it means is the 1.6rem toggle. In a stretched flex column the wrapper
+     would instead take the column's width - which grows when a sibling panel
+     appears - pushing the body off to the side with it. */
+  align-self: flex-start;
 }
 
 .side-panel-body {
@@ -671,6 +695,8 @@ body,
   border: none;
   background: transparent;
   box-shadow: none;
+  /* Anchor for the list below, which is taken out of flow. */
+  position: relative;
 }
 .alerts-toggle {
   position: relative;
@@ -714,8 +740,13 @@ body,
   text-align: center;
 }
 
+/* Out of flow, hanging below the bell: opening the list must not widen the
+   search row and shove the search box sideways. It covers the federated pill
+   below it while open, which is the acceptable trade for no layout shift. */
 .alerts-list {
-  margin-top: 0.4rem;
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  right: 0;
   width: min(90vw, 22rem);
   max-height: 40vh;
   overflow-y: auto;
@@ -1221,6 +1252,18 @@ body,
 
   .overlay {
     max-width: calc(100vw - 1.5rem);
+  }
+
+  /* The search box and the bell can no longer sit side by side at their full
+     widths here (338 + 38 + gap > the overlay), and a max-content row would
+     overflow the viewport to the left. So the row takes the overlay's width
+     and the search box — the flexible half — gives way. */
+  .top-right-row {
+    width: 100%;
+  }
+
+  .top-right-row > .search-bar {
+    min-width: 0;
   }
 
   .federated-pill {

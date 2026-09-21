@@ -151,9 +151,11 @@ export function MapPage() {
       </div>
 
       <div className="overlay overlay-top-right">
-        <SearchBar />
+        <div className="top-right-row">
+          <SearchBar />
+          <AlertsPanel />
+        </div>
         <FederatedStatusPill />
-        <AlertsPanel />
       </div>
 
       <div className="overlay overlay-bottom-left">
