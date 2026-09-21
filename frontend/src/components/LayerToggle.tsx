@@ -48,6 +48,44 @@ export function LayerToggle() {
         />
         Show {PDI_LABEL} layer
       </label>
+
+      <div className="layer-toggle-extra" role="group" aria-label="Signal layers">
+        <label
+          className="layer-toggle-option"
+          title="VIIRS S-NPP thermal anomalies — active crop residue burning and industrial fires, fused by the AI source classifier"
+        >
+          <input
+            type="checkbox"
+            checked={state.showFireHotspots}
+            onChange={() => dispatch({ type: 'TOGGLE_FIRE_HOTSPOTS' })}
+          />
+          Satellite Fire / Thermal Hotspots (VIIRS)
+        </label>
+
+        <label
+          className="layer-toggle-option"
+          title="Ground-truth readings and photo submissions from citizen reporters, ingested at the federated edge"
+        >
+          <input
+            type="checkbox"
+            checked={state.showCitizenSensors}
+            onChange={() => dispatch({ type: 'TOGGLE_CITIZEN_SENSORS' })}
+          />
+          Citizen Sensor &amp; Photo Submissions
+        </label>
+
+        <label
+          className="layer-toggle-option"
+          title="Delhi–Mumbai Industrial Corridor and dedicated freight corridors — major anthropogenic emission lines"
+        >
+          <input
+            type="checkbox"
+            checked={state.showFreightCorridors}
+            onChange={() => dispatch({ type: 'TOGGLE_FREIGHT_CORRIDORS' })}
+          />
+          Major Economic Freight Corridors (DMIC / Freight Corridors)
+        </label>
+      </div>
     </div>
   )
 }

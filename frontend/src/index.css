@@ -51,6 +51,14 @@ body,
   right: 0.75rem;
   align-items: flex-end;
   z-index: 3;
+  /* The overlay's own box (its gaps/empty space) must not swallow clicks
+     meant for the drawer underneath it — only its actual panels do.
+     This is what made the hex drawer's ✕ button feel dead. */
+  pointer-events: none;
+}
+
+.overlay-top-right > * {
+  pointer-events: auto;
 }
 
 .overlay-bottom-center {
@@ -594,8 +602,9 @@ body,
 
 /* --- cell detail --- */
 
-/* Starts below the top-right stack (search bar + alerts bell, which sit
-   above it, z-index 3) so a selected cell never hides them. */
+/* Starts below the top-right stack (search bar + federated pill + alerts
+   bell, which sit above it, z-index 3) so a selected cell never hides
+   them. */
 .cell-detail {
   position: absolute;
   top: 6rem;
@@ -609,29 +618,54 @@ body,
 .cell-detail-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.5rem;
 }
 
+.cell-detail-titles {
+  min-width: 0;
+}
+
+/* Readable region title — human name first, raw H3 index below. */
 .cell-detail-header h2 {
-  font-size: 0.85rem;
-  font-family: monospace;
-  word-break: break-all;
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1.25;
   margin: 0;
+  overflow-wrap: anywhere;
 }
 
-.cell-detail-header button {
+.cell-detail-index {
+  display: block;
+  margin-top: 0.1rem;
+  font-size: 0.68rem;
+  font-family: monospace;
+  color: #6b7280;
+  word-break: break-all;
+}
+
+/* Explicit clickable ✕ with a comfortable touch target; sized up from the
+   old bare text glyph so it is never a hair-thin target. */
+.cell-detail-close {
+  flex-shrink: 0;
   cursor: pointer;
-  border: none;
+  border: 1px solid #3a3f4a;
+  border-radius: 50%;
   background: transparent;
-  font-size: 1rem;
+  width: 1.8rem;
+  height: 1.8rem;
+  min-width: 1.8rem;
+  min-height: 1.8rem;
+  line-height: 1;
+  font-size: 0.9rem;
   color: #9ca3af;
+  transition: color 0.15s, border-color 0.15s;
+  pointer-events: auto;
 }
 
-.cell-detail-location {
-  margin: 0.4rem 0 0;
-  font-size: 0.8rem;
-  color: #9ca3af;
+.cell-detail-close:hover {
+  color: #e5e7eb;
+  border-color: #6b7280;
 }
 
 .cell-detail-grid {
@@ -700,6 +734,317 @@ body,
   font-size: 0.8rem;
 }
 
+/* --- federated edge status pill (top bar) --- */
+
+.federated-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  align-self: flex-end;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid #2a2e36;
+  border-radius: 999px;
+  background: rgba(18, 20, 26, 0.92);
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: #9ca3af;
+  white-space: nowrap;
+}
+
+.federated-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 4px rgba(34, 197, 94, 0.7);
+}
+
+/* --- layer toggle: signal layers group --- */
+
+.layer-toggle-extra {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.35rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid #2a2e36;
+}
+
+/* --- AI source attribution (hex detail drawer) --- */
+
+.source-attribution {
+  margin: 0.75rem 0;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid #4338ca55;
+  background: rgba(67, 56, 202, 0.12);
+  border-radius: 6px;
+}
+
+.source-attribution h3 {
+  margin: 0 0 0.35rem;
+  font-size: 0.85rem;
+  color: #a5b4fc;
+}
+
+.source-attribution-classified {
+  margin: 0 0 0.4rem;
+  font-size: 0.8rem;
+  color: #e5e7eb;
+}
+
+.source-attribution-fusion {
+  border-top: 1px dashed #4b5563;
+  padding-top: 0.4rem;
+}
+
+.source-attribution-heading {
+  margin: 0 0 0.2rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #a5b4fc;
+}
+
+.source-attribution-fusion ul {
+  margin: 0;
+  padding-left: 1rem;
+  font-size: 0.78rem;
+  color: #d1d5db;
+}
+
+.source-attribution-fusion li {
+  margin: 0.1rem 0;
+}
+
+.source-attribution-note {
+  margin: 0.4rem 0 0;
+  font-size: 0.68rem;
+}
+
+/* --- citizen report widget (under Data Fusion) --- */
+
+.citizen-report {
+  margin-top: 0.45rem;
+  padding: 0.4rem;
+  border: 1px solid #3a3f4a;
+  background: rgba(31, 33, 40, 0.85);
+  border-radius: 6px;
+}
+
+.citizen-report-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+
+.citizen-thumb {
+  width: 64px;
+  height: 64px;
+  border-radius: 5px;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 1px solid #3a3f4a;
+}
+
+.citizen-report-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.78rem;
+  color: #e5e7eb;
+  min-width: 0;
+}
+
+.citizen-score {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #5dd77c;
+}
+
+/* --- freight corridor node popup --- */
+
+.freight-node-popup .maplibregl-popup-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  background: rgba(18, 20, 26, 0.96);
+  border: 1px solid #00F5D455;
+  border-radius: 8px;
+  padding: 0.5rem 0.7rem;
+  color: #e5e7eb;
+  font-size: 0.75rem;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+}
+
+.freight-node-popup strong {
+  font-size: 0.8rem;
+}
+
+.freight-node-popup .freight-popup-corridor {
+  color: #00F5D4;
+  font-size: 0.68rem;
+}
+
+/* --- satellite fire anomaly popup --- */
+
+.fire-anomaly-popup .maplibregl-popup-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  background: rgba(18, 20, 26, 0.96);
+  border: 1px solid #FF950055;
+  border-radius: 8px;
+  padding: 0.5rem 0.7rem;
+  color: #e5e7eb;
+  font-size: 0.75rem;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+}
+
+.fire-anomaly-popup strong {
+  color: #ffb84d;
+  font-size: 0.8rem;
+}
+
+.fire-anomaly-popup b {
+  color: #fff;
+}
+
+.fire-anomaly-popup .fire-popup-source {
+  color: #9ca3af;
+  font-size: 0.68rem;
+}
+
+.fire-anomaly-popup .fire-popup-action {
+  margin-top: 0.15rem;
+  padding-top: 0.25rem;
+  border-top: 1px dashed #3a3f4a;
+  color: #5dd77c;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+/* --- rapid intervention dispatch bar (drawer bottom) --- */
+
+/* Sticky at the bottom of the scrolling drawer so the intervention CTA is
+   reachable no matter how far the readings scroll. */
+.intervention-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  margin: 0.6rem -0.8rem -0.6rem;
+  padding: 0.55rem 0.8rem calc(0.6rem + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid #2a2e36;
+  background: rgba(18, 20, 26, 0.97);
+}
+
+.intervention-cta {
+  width: 100%;
+  border: 1px solid #dc2626;
+  border-radius: 8px;
+  background: #dc2626;
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  padding: 0.55rem 0.75rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.08s;
+}
+
+.intervention-cta:hover:not(:disabled) {
+  background: #b91c1c;
+  border-color: #b91c1c;
+}
+
+.intervention-cta:active:not(:disabled) {
+  transform: scale(0.99);
+}
+
+.intervention-cta:disabled {
+  cursor: default;
+}
+
+.intervention-cta-done {
+  background: #163023;
+  border-color: #26a344;
+  color: #5dd77c;
+}
+
+.intervention-cta-done:hover:not(:disabled) {
+  background: #163023;
+}
+
+.intervention-status {
+  margin: 0.35rem 0 0;
+  font-size: 0.68rem;
+  color: #9ca3af;
+  text-align: center;
+}
+
+/* --- authority intervention alerts --- */
+
+.alert-item-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.alert-authority {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  width: 100%;
+  margin-top: 0.35rem;
+  padding-top: 0.35rem;
+  border-top: 1px dashed #3a3f4a;
+}
+
+.alert-assigned {
+  font-size: 0.7rem;
+  color: #9ca3af;
+  font-style: italic;
+}
+
+.alert-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.alert-cta {
+  border: 1px solid #4a5060;
+  border-radius: 4px;
+  background: #22262e;
+  color: #d1d5db;
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 0.2rem 0.45rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.alert-cta:hover {
+  background: #2d323c;
+  border-color: #6b7280;
+}
+
+.alert-cta-done {
+  background: #163023;
+  border-color: #26a344;
+  color: #5dd77c;
+}
+
 /* On narrow screens the cell detail panel takes the full width instead of
    floating over the map, so it stays usable on a phone. */
 @media (max-width: 30rem) {
@@ -711,5 +1056,10 @@ body,
 
   .overlay {
     max-width: calc(100vw - 1.5rem);
+  }
+
+  .federated-pill {
+    align-self: stretch;
+    justify-content: center;
   }
 }

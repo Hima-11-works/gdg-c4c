@@ -1,13 +1,14 @@
 // Shared color ramps for the map layers and the Legend, so the two never
-// drift apart. PM2.5's bands run Very Good → Hazardous at 0 / 25 / 35 / 50 /
-// 80 / 150 / 250 µg/m³; PDI's are a plain, unrelated sequential ramp — using
-// a visually distinct scale (not the pollution colors) is deliberate, so a
-// PDI layer is never mistaken for a second pollution measurement.
+// drift apart. PM2.5's bands follow the Indian CPCB National Air Quality
+// Index (NAQI) scale — Good (0–30), Satisfactory (31–60), Moderate
+// (61–90), Poor (91–120), Very Poor (121–250), Severe (>250 µg/m³).
+// PDI's are a plain, unrelated sequential ramp — using a visually
+// distinct scale (not the pollution colors) is deliberate, so a PDI layer
+// is never mistaken for a second pollution measurement.
 //
 // Colors are tuned for readability against the dark monochrome basemap
-// (see lib/mapTheme.ts). The lowest band is a deep green (it sits on
-// near-black, so it needs to be distinctly green yet clearly "calm"); the
-// ramp then steps green → yellow → orange → red → purple.
+// (see lib/mapTheme.ts). The ramp steps green → light green → yellow →
+// orange → red → maroon per CPCB.
 //
 // This single array drives everything color-related: the hex fill
 // expression, the smooth view's `sampleColor`, contrast mode's band
@@ -21,14 +22,17 @@ export interface ColorStop {
   label: string
 }
 
+/** CPCB NAQI PM2.5 bands. `value` is the *lower* bound of each band —
+ *  MapLibre's `interpolate` colors a value v with the last stop ≤ v, so
+ *  a value of 31 picks Satisfactory, 91 picks Poor, and a value above
+ *  the final stop clamps to Severe's maroon. */
 export const PM25_COLOR_SCALE: ColorStop[] = [
-  { value: 0, color: '#166534', label: 'Very Good (0)' },
-  { value: 25, color: '#22c55e', label: 'Good (25)' },
-  { value: 35, color: '#eab308', label: 'Moderate (35)' },
-  { value: 50, color: '#f97316', label: 'Unhealthy for sensitive groups (50)' },
-  { value: 80, color: '#ef4444', label: 'Unhealthy (80)' },
-  { value: 150, color: '#a855f7', label: 'Very unhealthy (150)' },
-  { value: 250, color: '#7c3aed', label: 'Hazardous (250+)' },
+  { value: 0, color: '#22c55e', label: 'Good (0–30)' },
+  { value: 31, color: '#9ade51', label: 'Satisfactory (31–60)' },
+  { value: 61, color: '#eab308', label: 'Moderate (61–90)' },
+  { value: 91, color: '#f97316', label: 'Poor (91–120)' },
+  { value: 121, color: '#ef4444', label: 'Very Poor (121–250)' },
+  { value: 251, color: '#7f1d1d', label: 'Severe (250+)' },
 ]
 
 export const PDI_COLOR_SCALE: ColorStop[] = [
