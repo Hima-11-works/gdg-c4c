@@ -7,6 +7,7 @@ import {
   Popup,
   setWorkerUrl,
 } from 'maplibre-gl'
+import type { FilterSpecification } from 'maplibre-gl'
 import { cellToBoundary } from 'h3-js'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
@@ -228,10 +229,19 @@ const SOURCE_FIRE = 'satellite-fires'
 const LAYER_FIRE_HEATMAP = 'satellite-fires-layer'
 const LAYER_FIRE_PULSE = 'satellite-fires-pulse'
 const LAYER_FIRE_CORE = 'satellite-fires-core'
-const FIRE_CORE_COLOR = '#FF3B30'
-const FIRE_GLOW_COLOR = '#FF9500'
-const FIRE_GLOW_OPACITY = 0.45
+// Thermal anomalies are triaged by severity (lib/fireAnomalies): minor
+// detections stay small and amber, elevated ones orange, critical ones
+// large deep-red. The glow halo and the pulse are filtered to severity 3,
+// so the animation marks what is actually urgent rather than animating
+// every detection — the triage the spec asks for, expressed in the paint.
+const FIRE_MINOR_COLOR = '#FBBF24'
+const FIRE_ELEVATED_COLOR = '#F97316'
+const FIRE_CRITICAL_COLOR = '#E11D48'
+const FIRE_GLOW_COLOR = '#E11D48'
+const FIRE_GLOW_OPACITY = 0.5
 const FIRE_CORE_OPACITY = 0.95
+/** Only critical detections get bloom + pulse. */
+const FIRE_CRITICAL_ONLY: FilterSpecification = ['==', ['get', 'severity'], 3]
 const FIRE_PULSE_FRAME_COUNT = 6
 const FIRE_PULSE_FRAME_MS = 380
 const FIRE_PULSE_IMAGE_PREFIX = 'fire-pulse'
@@ -870,6 +880,9 @@ export function MapView({
             id: LAYER_FIRE_HEATMAP,
             type: 'circle',
             source: SOURCE_FIRE,
+            // Critical detections only: the bloom should draw the eye to
+            // what needs a response, not to every small burn.
+            filter: FIRE_CRITICAL_ONLY,
             layout: { visibility: 'none' },
             paint: {
               'circle-color': FIRE_GLOW_COLOR,
@@ -893,6 +906,7 @@ export function MapView({
             id: LAYER_FIRE_PULSE,
             type: 'symbol',
             source: SOURCE_FIRE,
+            filter: FIRE_CRITICAL_ONLY,
             layout: {
               'icon-image': FIRE_PULSE_IMAGES[0],
               'icon-allow-overlap': true,
@@ -906,10 +920,31 @@ export function MapView({
             source: SOURCE_FIRE,
             layout: { visibility: 'none' },
             paint: {
-              'circle-radius': 4.5,
-              'circle-color': FIRE_CORE_COLOR,
-              'circle-stroke-color': '#1a0c08',
-              'circle-stroke-width': 1.2,
+              // 4px for a minor burn up to 10px for a critical fire at the
+              // deepest zoom tier, so size alone carries the triage.
+              'circle-radius': [
+                'interpolate',
+                ['linear'],
+                ['zoom'],
+                3,
+                ['match', ['get', 'severity'], 1, 2.5, 2, 4, 3, 6, 4],
+                8,
+                ['match', ['get', 'severity'], 1, 4, 2, 7, 3, 10, 4],
+              ],
+              'circle-color': [
+                'match',
+                ['get', 'severity'],
+                1,
+                FIRE_MINOR_COLOR,
+                2,
+                FIRE_ELEVATED_COLOR,
+                3,
+                FIRE_CRITICAL_COLOR,
+                // Fallback for a missing severity: fail loud, not quiet.
+                FIRE_CRITICAL_COLOR,
+              ],
+              'circle-stroke-color': ['match', ['get', 'severity'], 3, '#FECDD3', '#1A0C08'],
+              'circle-stroke-width': ['match', ['get', 'severity'], 3, 1.6, 1.2],
               'circle-opacity': FIRE_CORE_OPACITY,
             },
           })
