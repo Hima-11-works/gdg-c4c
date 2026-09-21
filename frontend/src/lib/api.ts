@@ -9,6 +9,7 @@ import type {
   BoundingBox,
   CellDetailOut,
   Envelope,
+  FireReportOut,
   ForecastOut,
   GridStateOut,
   WeatherReadingOut,
@@ -105,6 +106,10 @@ export function fetchWeather(query: LodQuery = {}): Promise<Envelope<WeatherRead
 
 export function fetchAlerts(): Promise<Envelope<AlertOut[]>> {
   return apiGet('/api/v1/alerts')
+}
+
+export function fetchReports(): Promise<Envelope<FireReportOut[]>> {
+  return apiGet('/api/v1/reports')
 }
 
 export function fetchCellDetail(

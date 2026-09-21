@@ -23,8 +23,9 @@ import {
   freightNodesFeatureCollection,
 } from '../lib/freightCorridors'
 import {
+  EMPTY_REPORTS,
   cameraPinImage,
-  citizenReportsFeatureCollection,
+  reportsFeatureCollection,
 } from '../lib/citizenReports'
 import {
   anomalyById,
@@ -60,7 +61,7 @@ import {
 import { useMapUi } from '../state/MapUiContext'
 import type { MapViewMode } from '../state/mapUiReducer'
 import type { AsyncResource } from '../hooks/useApiResource'
-import type { BoundingBox, ForecastOut, GridStateOut, WeatherReadingOut } from '../lib/types'
+import type { BoundingBox, FireReportOut, ForecastOut, GridStateOut, WeatherReadingOut } from '../lib/types'
 import type { Position } from 'geojson'
 
 // The app is scoped to India: on load, fit the whole country in view
@@ -512,6 +513,7 @@ interface MapViewProps {
   currentGrid: AsyncResource<GridStateOut[]>
   forecastGrid: AsyncResource<ForecastOut[]>
   weather: AsyncResource<WeatherReadingOut[]>
+  citizenReports: AsyncResource<FireReportOut[]>
 }
 
 /** Full-screen MapLibre map. Owns the map instance imperatively (MapLibre
@@ -521,7 +523,12 @@ interface MapViewProps {
  * viewport -> level of detail). No pollution math happens here, and no
  * fetching either — every value rendered is exactly what MapPage's
  * level-of-detail-scoped fetch returned for the current viewport. */
-export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
+export function MapView({
+  currentGrid,
+  forecastGrid,
+  weather,
+  citizenReports,
+}: MapViewProps) {
   const { state, dispatch } = useMapUi()
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
@@ -815,7 +822,7 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
           // the selection outline, hidden until the toggle turns them on.
           map!.addSource(SOURCE_CITIZEN, {
             type: 'geojson',
-            data: citizenReportsFeatureCollection() as never,
+            data: EMPTY_REPORTS as never,
           })
           map!.addImage(CITIZEN_IMAGE, cameraPinImage())
           map!.addLayer({
@@ -1112,6 +1119,17 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
       state.showCitizenSensors ? 'visible' : 'none',
     )
   }, [mapReady, state.showCitizenSensors])
+
+  // Feed the map the reports the backend actually returned. Only real
+  // submitted reports become pins; a failed/absent fetch leaves the source
+  // empty rather than falling back to anything invented.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    const source = mapRef.current.getSource(SOURCE_CITIZEN)
+    if (!(source instanceof GeoJSONSource)) return
+    const reports = citizenReports.status === 'success' ? citizenReports.data : []
+    source.setData(reportsFeatureCollection(reports) as never)
+  }, [mapReady, citizenReports])
 
   // Switching the render mode (or toggling contrast) resets the double buffer
   // to a known state (set 'a' shown, 'b' hidden, buffer roles reset) so the

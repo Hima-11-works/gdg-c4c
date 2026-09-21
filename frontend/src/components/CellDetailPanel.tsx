@@ -3,40 +3,37 @@ import { fetchCellDetail } from '../lib/api'
 import { PDI_LABEL, PDI_TOOLTIP, compassLabel, formatNumber, pdiFactorLabel } from '../lib/format'
 import { cellCenter } from '../lib/h3Geometry'
 import { regionTitle } from '../lib/regionName'
-import { citizenReportForCell, reportThumbnail } from '../lib/citizenReports'
+import { FIRE_KIND_LABELS, minutesAgo, reportForCell, smokeLabel } from '../lib/citizenReports'
 import { useApiResource } from '../hooks/useApiResource'
+import type { AsyncResource } from '../hooks/useApiResource'
 import { useStateBoundaries } from '../hooks/useStateBoundaries'
 import { useMapUi } from '../state/MapUiContext'
-import type { CellDetailOut } from '../lib/types'
+import type { CellDetailOut, FireReportOut } from '../lib/types'
 
-/** The most recent citizen submission for this cell - illustrative seed
- *  data (see lib/citizenReports) until the web reads GET /api/v1/reports.
- *  Deliberately NOT framed as evidence behind any classification: the only
- *  modelled explanation of a cell in this drawer is the backend's PDI
- *  factor breakdown. */
-function CitizenReportWidget({ h3Cell }: { h3Cell: string }) {
-  const report = citizenReportForCell(h3Cell)
-  if (report === null) return null
-
+/** The most recent citizen report filed in this cell, from
+ *  GET /api/v1/reports. Deliberately NOT framed as evidence behind any
+ *  classification: the only modelled explanation of a cell in this drawer is
+ *  the backend's PDI factor breakdown. */
+function CitizenReportWidget({ report }: { report: FireReportOut }) {
+  const age = minutesAgo(report.reported_at)
   return (
     <section className="citizen-report">
       <h3>Citizen report</h3>
-      <div className="citizen-report-row">
-        <img
-          className="citizen-thumb"
-          src={reportThumbnail(report.category)}
-          alt={'Illustrative citizen photo: ' + report.category}
-          width={64}
-          height={64}
-          loading="lazy"
-        />
-        <div className="citizen-report-meta">
-          <strong>{report.category}</strong>
-          <span className="muted">
-            {report.minutesAgo} mins ago - {report.name}
-          </span>
-          <span className="muted">Illustrative - not yet wired to the reports API.</span>
-        </div>
+      <div className="citizen-report-meta">
+        <strong>{FIRE_KIND_LABELS[report.kind] ?? report.kind}</strong>
+        <span className="muted">
+          Smoke: {smokeLabel(report.smoke_intensity)} ({report.smoke_intensity}/5) ·{' '}
+          {report.duration_hours === 0
+            ? 'just started'
+            : `~${formatNumber(report.duration_hours)}h`}{' '}
+          · {age} mins ago
+        </span>
+        {report.notes !== null && report.notes !== '' && (
+          <span className="muted">{report.notes}</span>
+        )}
+        <span className="muted">
+          Cell {report.h3_cell} — the model treats this as an active source.
+        </span>
       </div>
     </section>
   )
@@ -45,11 +42,11 @@ function CitizenReportWidget({ h3Cell }: { h3Cell: string }) {
 function CellDetailContent({
   detail,
   isDemo,
-  showCitizenReports,
+  report,
 }: {
   detail: CellDetailOut
   isDemo: boolean
-  showCitizenReports: boolean
+  report: FireReportOut | null
 }) {
   const current = detail.current
   const windSpeed = detail.weather?.wind_speed ?? current?.wind_speed ?? null
@@ -144,7 +141,7 @@ function CellDetailContent({
         </ul>
       )}
 
-      {showCitizenReports && <CitizenReportWidget h3Cell={detail.h3_cell} />}
+      {report !== null && <CitizenReportWidget report={report} />}
     </>
   )
 }
@@ -190,7 +187,11 @@ function InterventionActionBar({ h3Cell }: { h3Cell: string }) {
   )
 }
 
-export function CellDetailPanel() {
+export function CellDetailPanel({
+  citizenReports,
+}: {
+  citizenReports: AsyncResource<FireReportOut[]>
+}) {
   const { state, dispatch } = useMapUi()
   const selectedCell = state.selectedCell
   // Captured at click time (see mapUiReducer's SELECT_CELL case), not
@@ -256,7 +257,14 @@ export function CellDetailPanel() {
           <CellDetailContent
             detail={resource.data}
             isDemo={resource.isDemo}
-            showCitizenReports={state.showCitizenSensors}
+            report={
+              state.showCitizenSensors
+                ? reportForCell(
+                    citizenReports.status === 'success' ? citizenReports.data : [],
+                    selectedCell,
+                  )
+                : null
+            }
           />
           <InterventionActionBar h3Cell={selectedCell} />
         </>

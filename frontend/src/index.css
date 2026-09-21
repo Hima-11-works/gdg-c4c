@@ -775,7 +775,7 @@ body,
    the drawer's only modelled explanation of a cell is the backend's PDI
    factor breakdown, styled by .pdi-factor-* below.) */
 
-/* --- citizen report widget (under Data Fusion) --- */
+/* --- citizen report widget (real submissions, GET /api/v1/reports) --- */
 
 .citizen-report {
   margin-top: 0.45rem;
@@ -785,21 +785,6 @@ body,
   border-radius: 6px;
 }
 
-.citizen-report-row {
-  display: flex;
-  gap: 0.5rem;
-  align-items: flex-start;
-}
-
-.citizen-thumb {
-  width: 64px;
-  height: 64px;
-  border-radius: 5px;
-  object-fit: cover;
-  flex-shrink: 0;
-  border: 1px solid #3a3f4a;
-}
-
 .citizen-report-meta {
   display: flex;
   flex-direction: column;
@@ -807,12 +792,6 @@ body,
   font-size: 0.78rem;
   color: #e5e7eb;
   min-width: 0;
-}
-
-.citizen-score {
-  font-size: 0.72rem;
-  font-weight: 600;
-  color: #5dd77c;
 }
 
 /* --- freight corridor node popup --- */

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { fetchGridCurrent, fetchWeather } from '../lib/api'
+import { fetchGridCurrent, fetchReports, fetchWeather } from '../lib/api'
 import { useApiResource } from '../hooks/useApiResource'
 import {
   ensureForecastFrame,
@@ -63,6 +63,13 @@ export function MapPage() {
     enabled: viewportReady,
   })
 
+  // Citizen fire/burning reports (POST/GET /api/v1/reports). Fetched once
+  // here and shared by the map pins and the hex drawer, so the two can't
+  // disagree; polled so a new report appears without a reload.
+  const reports = useApiResource(fetchReports, [], {
+    pollIntervalMs: POLL_INTERVAL_MS,
+  })
+
   // A view change (new queryKey) invalidates the forecast cache for this
   // view: warm the current position plus the next WARM_WINDOW keyframes so
   // playback is smooth from the moment it starts. The warm-up is an explicit
@@ -104,6 +111,7 @@ export function MapPage() {
         currentGrid={currentGrid.resource}
         forecastGrid={forecastGrid.resource}
         weather={weather.resource}
+        citizenReports={reports.resource}
       />
 
       <div className="overlay overlay-top-left">
@@ -121,7 +129,7 @@ export function MapPage() {
         <TimelineControl />
       </div>
 
-      <CellDetailPanel />
+      <CellDetailPanel citizenReports={reports.resource} />
     </div>
   )
 }

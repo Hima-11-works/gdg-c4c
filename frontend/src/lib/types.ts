@@ -92,11 +92,36 @@ export interface CellDetailOut {
   forecasts: ForecastOut[]
   weather: WeatherReadingOut | null
   // The normalized [0, 1] value of each factor behind current.pdi (e.g.
-  // "pm25", "industrial_pressure", "road_pressure", "vegetation_sink") —
-  // not each factor's weighted contribution, just how strongly that
-  // signal was present here. Null when no breakdown is available for
-  // this reading (today: always present for demo cells, never for real
-  // ones — the real pipeline computes a pdi score but doesn't persist
-  // its per-factor breakdown yet).
+  // "pm25", "industrial_pressure", "road_pressure", "vegetation_sink",
+  // "fire_pressure") - not each factor's weighted contribution, just how
+  // strongly that signal was present here. Null when no breakdown is
+  // available for this reading (a row written before migration 0005, or a
+  // PDI model that returns none). The pipeline persists it now.
   pdi_factors: Record<string, number> | null
+}
+
+/** What a citizen reported burning. Wire values match the backend's
+ *  app.domain.types.FireKind. */
+export type FireReportKind =
+  | 'building_fire'
+  | 'industrial_fire'
+  | 'forest_fire'
+  | 'crop_burning'
+  | 'other'
+
+/** One citizen fire/burning report, as POST/GET /api/v1/reports return it.
+ *  `smoke_intensity` is the user's 1-5 smoke slider - a triage choice the
+ *  backend scales a modeled plume from, not a measurement. */
+export interface FireReportOut {
+  id: number
+  /** The H3 cell the backend snapped the report to at write time. */
+  h3_cell: string
+  latitude: number
+  longitude: number
+  kind: FireReportKind
+  smoke_intensity: number
+  duration_hours: number
+  notes: string | null
+  client_report_id: string | null
+  reported_at: string
 }
