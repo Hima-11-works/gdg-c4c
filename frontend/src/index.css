@@ -888,6 +888,31 @@ body,
   border-color: #b91c1c;
 }
 
+/* Severity variants of the same action. The colour of the button is the
+   triage: escalate (critical) keeps the red, inspect (elevated / no
+   detection) is amber, and the local ward log is deliberately low-key
+   because it saves nothing anywhere but this browser. */
+.intervention-cta-inspect {
+  background: #b45309;
+  border-color: #b45309;
+}
+
+.intervention-cta-inspect:hover:not(:disabled) {
+  background: #92400e;
+  border-color: #92400e;
+}
+
+.intervention-cta-log {
+  background: transparent;
+  border-color: #4b5563;
+  color: #d1d5db;
+}
+
+.intervention-cta-log:hover:not(:disabled) {
+  background: #1f2937;
+  border-color: #6b7280;
+}
+
 .intervention-cta:active:not(:disabled) {
   transform: scale(0.99);
 }
@@ -911,6 +936,54 @@ body,
   font-size: 0.68rem;
   color: #9ca3af;
   text-align: center;
+}
+
+/* --- triage priority badge (drawer header) --- */
+
+/* Sits directly under the region title: one line that says how urgent the
+   clicked cell is, driven by the thermal anomalies that fall inside it.
+   severity-3/2/1 colour-code off the same palette as the map markers, so
+   the badge and the dots on the map read as the same thing. */
+.priority-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0.5rem 0 0;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid;
+  border-radius: 8px;
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+.priority-dot {
+  flex: none;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.priority-3 {
+  border-color: #e11d48;
+  background: rgba(225, 29, 72, 0.12);
+  color: #fb7185;
+}
+
+.priority-2 {
+  border-color: #f97316;
+  background: rgba(249, 115, 22, 0.12);
+  color: #fdba74;
+}
+
+.priority-1 {
+  border-color: #fbbf24;
+  background: rgba(251, 191, 36, 0.1);
+  color: #fcd34d;
+}
+
+.priority-badge .muted {
+  color: #9ca3af;
 }
 
 /* --- authority intervention alerts --- */

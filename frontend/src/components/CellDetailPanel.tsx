@@ -4,6 +4,12 @@ import { PDI_LABEL, PDI_TOOLTIP, compassLabel, formatNumber, pdiFactorLabel } fr
 import { cellCenter } from '../lib/h3Geometry'
 import { regionTitle } from '../lib/regionName'
 import { FIRE_KIND_LABELS, minutesAgo, reportForCell, smokeLabel } from '../lib/citizenReports'
+import {
+  anomaliesInCell,
+  priorityForSeverity,
+  worstAnomalyInCell,
+} from '../lib/fireAnomalies'
+import type { FireSeverity, ThermalAnomaly } from '../lib/fireAnomalies'
 import { useApiResource } from '../hooks/useApiResource'
 import type { AsyncResource } from '../hooks/useApiResource'
 import { useStateBoundaries } from '../hooks/useStateBoundaries'
@@ -36,6 +42,40 @@ function CitizenReportWidget({ report }: { report: FireReportOut }) {
         </span>
       </div>
     </section>
+  )
+}
+
+/** Triage priority of the clicked cell, from the thermal anomalies that
+ *  fall inside it (lib/fireAnomalies). Cell-based matching on purpose: a
+ *  detection is a point and the drawer's unit is a cell, so "in this cell"
+ *  is the only claim that is actually true — no nearest-neighbour
+ *  guessing. The detections behind it are hand-authored mocks, hence the
+ *  "(illustrative)" note; severity counts up, priority counts down, so
+ *  severity 3 is Priority 1. */
+function PriorityBadge({ h3Cell }: { h3Cell: string }) {
+  const anomalies = anomaliesInCell(h3Cell)
+  if (anomalies.length === 0) return null
+
+  const worst = anomalies[0]
+  const priority = priorityForSeverity(worst.severity)
+  const label =
+    worst.severity === 3 ? 'Critical risk' : worst.severity === 2 ? 'Elevated' : 'Minor / localized'
+  const count =
+    anomalies.length === 1 ? '1 thermal anomaly' : `${anomalies.length} thermal anomalies`
+  const frp = anomalies.length === 1 ? 'FRP' : 'worst FRP'
+
+  return (
+    <div className={`priority-badge priority-${worst.severity}`} role="status">
+      <span className="priority-dot" aria-hidden="true" />
+      <span>
+        <strong>
+          Priority {priority}: {label}
+        </strong>{' '}
+        <span className="muted">
+          — {count} in this cell ({frp} {worst.frp.toFixed(1)} MW, illustrative)
+        </span>
+      </span>
+    </div>
   )
 }
 
@@ -149,37 +189,108 @@ function CellDetailContent({
 /**
  * Bottom action bar of the inspection drawer.
  *
- * There is no authority-routing backend, so this does the one real, honest
- * thing available locally: it copies a plain-text inspection note for this
- * cell to the clipboard, for the operator to send through whatever channel
- * they actually have (email, a CPCB/SPCB portal). It does NOT dispatch,
- * notify, or record anything anywhere.
+ * There is no authority-routing backend, so every action here is something
+ * that genuinely happens on this device and nothing more:
+ *
+ *  - Critical severity (3) copies an escalation note addressed to a State
+ *    Rapid Action Unit.
+ *  - Elevated severity (2) copies the plain inspection note.
+ *  - Minor severity (1) appends the cell to a ward list kept in
+ *    localStorage on this device only.
+ *  - No detection in the cell keeps the plain inspection note.
+ *
+ * It does NOT dispatch, notify, or record anything anywhere — the status
+ * line says so, and the ward list is explicitly local.
  */
+const WARD_LOG_KEY = 'air-health:ward-log'
+
+interface WardLogEntry {
+  h3Cell: string
+  loggedAt: string
+  pm25: number | null
+  pdi: number | null
+}
+
+function readWardLog(): WardLogEntry[] {
+  try {
+    const raw = window.localStorage.getItem(WARD_LOG_KEY)
+    if (raw === null) return []
+    const parsed: unknown = JSON.parse(raw)
+    return Array.isArray(parsed) ? (parsed as WardLogEntry[]) : []
+  } catch {
+    return []
+  }
+}
+
 function InterventionActionBar({
   h3Cell,
   detail,
+  anomaly,
 }: {
   h3Cell: string
   detail: CellDetailOut
+  anomaly: ThermalAnomaly | null
 }) {
-  const [status, setStatus] = useState<'idle' | 'copied' | 'failed'>('idle')
+  const [status, setStatus] = useState<'idle' | 'copied' | 'logged' | 'failed'>('idle')
+  const [wardCount, setWardCount] = useState(() => readWardLog().length)
 
-  const copyNote = async () => {
-    const current = detail.current
-    const factors =
+  const severity: FireSeverity | null = anomaly?.severity ?? null
+  const variant = severity === 3 ? 'escalate' : severity === 1 ? 'log' : 'inspect'
+
+  const current = detail.current
+  const observed = [
+    `H3 cell: ${h3Cell}`,
+    `Observed: ${current?.timestamp ?? 'no current reading'}`,
+    `PM2.5: ${current?.pm25 === null || current?.pm25 === undefined ? 'n/a' : `${formatNumber(current.pm25)} µg/m³`}`,
+    `PDI: ${current?.pdi === null || current?.pdi === undefined ? 'n/a' : formatNumber(current.pdi)}`,
+    `PDI factors: ${
       detail.pdi_factors === null
         ? 'not available'
         : Object.entries(detail.pdi_factors)
             .map(([key, value]) => `${key} ${Math.round(value * 100)}%`)
             .join(', ')
-    const note = [
-      'Air-quality inspection note (Air Health dashboard)',
-      `H3 cell: ${h3Cell}`,
-      `Observed: ${current?.timestamp ?? 'no current reading'}`,
-      `PM2.5: ${current?.pm25 === null || current?.pm25 === undefined ? 'n/a' : `${formatNumber(current.pm25)} µg/m³`}`,
-      `PDI: ${current?.pdi === null || current?.pdi === undefined ? 'n/a' : formatNumber(current.pdi)}`,
-      `PDI factors: ${factors}`,
-    ].join('\n')
+    }`,
+  ]
+
+  const detection =
+    anomaly === null
+      ? []
+      : [
+          `Thermal anomaly: FRP ${anomaly.frp.toFixed(1)} MW, detected ${anomaly.detectionMinutesAgo} mins ago, confidence ${Math.round(anomaly.confidence * 100)}% (illustrative mock detection, not a satellite feed)`,
+        ]
+
+  const note =
+    variant === 'escalate'
+      ? [
+          'Escalation note (Air Health dashboard) - for the State Rapid Action Unit',
+          `Priority 1 of 3: critical thermal anomaly in this cell`,
+          ...observed,
+          ...detection,
+          'Reason for escalation: a critical-severity detection is inside a cell already under watch.',
+        ].join('\n')
+      : ['Air-quality inspection note (Air Health dashboard)', ...observed].join('\n')
+
+  const runAction = async () => {
+    if (variant === 'log') {
+      try {
+        const entry: WardLogEntry = {
+          h3Cell,
+          loggedAt: new Date().toISOString(),
+          pm25: current?.pm25 ?? null,
+          pdi: current?.pdi ?? null,
+        }
+        // The list is a set of cells, not an append-only log: re-logging a
+        // cell refreshes its entry instead of piling up duplicates the
+        // operator would have to de-duplicate by hand.
+        const next = [...readWardLog().filter((existing) => existing.h3Cell !== h3Cell), entry]
+        window.localStorage.setItem(WARD_LOG_KEY, JSON.stringify(next))
+        setWardCount(next.length)
+        setStatus('logged')
+      } catch {
+        setStatus('failed')
+      }
+      return
+    }
 
     try {
       await navigator.clipboard.writeText(note)
@@ -189,23 +300,50 @@ function InterventionActionBar({
     }
   }
 
+  const ctaLabel =
+    status === 'copied'
+      ? '✓ Note copied'
+      : status === 'logged'
+        ? '✓ Logged to ward list'
+        : variant === 'escalate'
+          ? 'Copy escalation note for the State Rapid Action Unit'
+          : variant === 'log'
+            ? 'Log to ward list (this device)'
+            : 'Copy inspection note'
+
+  const statusText =
+    status === 'copied'
+      ? 'Copied — send it to the relevant authority yourself.'
+      : status === 'logged'
+        ? `Saved on this device only (${wardCount} ${wardCount === 1 ? 'entry' : 'entries'}). Nothing left this device.`
+        : status === 'failed'
+          ? 'Could not access local storage or the clipboard.'
+          : variant === 'escalate'
+            ? 'Nothing is sent automatically; this only prepares an escalation note.'
+            : variant === 'log'
+              ? 'Nothing is sent automatically; this only appends to a list on this device.'
+              : 'Nothing is sent automatically; this only prepares a note.'
+
+  const title =
+    variant === 'escalate'
+      ? 'Copy a plain-text escalation note for this cell, addressed to a State Rapid Action Unit'
+      : variant === 'log'
+        ? 'Append this cell to a ward list kept in this browser only'
+        : 'Copy a plain-text inspection note for this cell to the clipboard'
+
   return (
     <div className="intervention-bar" role="group" aria-label="Inspection note">
       <button
         type="button"
-        className={`intervention-cta ${status === 'copied' ? 'intervention-cta-done' : ''}`}
-        onClick={copyNote}
-        title="Copy a plain-text inspection note for this cell to the clipboard"
+        className={`intervention-cta intervention-cta-${variant} ${
+          status === 'copied' || status === 'logged' ? 'intervention-cta-done' : ''
+        }`}
+        onClick={runAction}
+        title={title}
       >
-        {status === 'copied' ? '✓ Note copied' : 'Copy inspection note'}
+        {ctaLabel}
       </button>
-      <p className="intervention-status">
-        {status === 'copied'
-          ? 'Copied — send it to the relevant authority yourself.'
-          : status === 'failed'
-            ? 'Could not access the clipboard.'
-            : 'Nothing is sent automatically; this only prepares a note.'}
-      </p>
+      <p className="intervention-status">{statusText}</p>
     </div>
   )
 }
@@ -246,6 +384,10 @@ export function CellDetailPanel({
 
   const close = () => dispatch({ type: 'SELECT_CELL', cell: null })
 
+  // Worst thermal anomaly inside the clicked cell (if any) - drives both the
+  // triage badge and the severity of the action bar.
+  const anomaly = worstAnomalyInCell(selectedCell)
+
   return (
     <aside className="panel cell-detail" aria-label="Cell details">
       <div className="cell-detail-header">
@@ -263,6 +405,8 @@ export function CellDetailPanel({
           ✕
         </button>
       </div>
+
+      <PriorityBadge h3Cell={selectedCell} />
 
       {resource.status === 'loading' && <p>Loading…</p>}
 
@@ -289,7 +433,7 @@ export function CellDetailPanel({
                 : null
             }
           />
-          <InterventionActionBar h3Cell={selectedCell} detail={resource.data} />
+          <InterventionActionBar h3Cell={selectedCell} detail={resource.data} anomaly={anomaly} />
         </>
       )}
     </aside>
