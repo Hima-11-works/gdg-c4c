@@ -52,38 +52,38 @@ export function LayerToggle() {
       <div className="layer-toggle-extra" role="group" aria-label="Signal layers">
         <label
           className="layer-toggle-option"
-          title="VIIRS S-NPP thermal anomalies — active crop residue burning and industrial fires, fused by the AI source classifier"
+          title="Illustrative VIIRS-style thermal anomalies - no satellite ingest exists yet; these are hand-authored mock detections (see lib/fireAnomalies)"
         >
           <input
             type="checkbox"
             checked={state.showFireHotspots}
             onChange={() => dispatch({ type: 'TOGGLE_FIRE_HOTSPOTS' })}
           />
-          Satellite Fire / Thermal Hotspots (VIIRS)
+          Satellite Fire / Thermal Hotspots (illustrative)
         </label>
 
         <label
           className="layer-toggle-option"
-          title="Ground-truth readings and photo submissions from citizen reporters, ingested at the federated edge"
+          title="Citizen fire/burning reports from GET /api/v1/reports - real submissions, snapped to the H3 cell they were filed in"
         >
           <input
             type="checkbox"
             checked={state.showCitizenSensors}
             onChange={() => dispatch({ type: 'TOGGLE_CITIZEN_SENSORS' })}
           />
-          Citizen Sensor &amp; Photo Submissions
+          Citizen Fire Reports
         </label>
 
         <label
           className="layer-toggle-option"
-          title="Delhi–Mumbai Industrial Corridor and dedicated freight corridors — major anthropogenic emission lines"
+          title="Illustrative hand-authored corridor geometry (Western DFC / DMIC) - no routes endpoint exists yet (see lib/freightCorridors)"
         >
           <input
             type="checkbox"
             checked={state.showFreightCorridors}
             onChange={() => dispatch({ type: 'TOGGLE_FREIGHT_CORRIDORS' })}
           />
-          Major Economic Freight Corridors (DMIC / Freight Corridors)
+          Major Freight Corridors (illustrative)
         </label>
       </div>
     </div>

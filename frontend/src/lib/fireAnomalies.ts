@@ -47,10 +47,12 @@ const ANOMALY_SEED: ThermalAnomaly[] = [
   { id: 'f16', lat: 22.79, lon: 83.97, frp: 52.4, detectionMinutesAgo: 24, confidence: 0.94, region: 'industrial' },
 ]
 
-/** Deterministic per-point action the response system already ran. */
+/** The kind of response a detection *would* trigger in the authority
+ *  workflow the brief describes. Illustrative: no alert is sent, because
+ *  no CAQM/SPCB integration exists (see README's known limitations). */
 const DETECTION_ACTIONS: Record<ThermalAnomaly['region'], string> = {
-  stubble: 'Automated CAQM Stubble Alert Dispatched',
-  industrial: 'Automated SPCB Industrial Compliance Alert Dispatched',
+  stubble: 'Illustrative: CAQM stubble alert (not sent)',
+  industrial: 'Illustrative: SPCB industrial compliance alert (not sent)',
 }
 
 /** Feature collection for the thermal-anomaly map layers. */
@@ -83,7 +85,7 @@ export function anomalyById(id: number | string | null | undefined): ThermalAnom
 export function anomalyPopupHtml(anomaly: ThermalAnomaly): string {
   return (
     `<strong>Satellite Thermal Anomaly</strong>` +
-    `<span class="fire-popup-source">Source: VIIRS (Suomi-NPP) 375m Active Fire</span>` +
+    `<span class="fire-popup-source">Illustrative mock - no VIIRS/satellite ingest exists yet</span>` +
     `<span>FRP (Fire Radiative Power): <b>${anomaly.frp.toFixed(1)} MW</b></span>` +
     `<span>Detection Time: <b>${anomaly.detectionMinutesAgo} mins ago</b></span>` +
     `<span class="fire-popup-action">${anomaly.confidence >= 0.9 ? '✓ ' : '⚙ '}${DETECTION_ACTIONS[anomaly.region]}</span>`
