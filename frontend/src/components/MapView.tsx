@@ -560,6 +560,11 @@ export function MapView({
   const pendingPdiRef = useRef<{ cancel: () => void } | null>(null)
   // Last PDI toggle state acted on, so the toggle effect skips its mount run.
   const showPdiRef = useRef(state.showPdi)
+  // The info popup currently on the map (a thermal anomaly or a freight node)
+  // together with the key identifying its feature, so clicking that same
+  // feature again closes it rather than stacking an identical popup, and so
+  // Escape can close whatever is open. At most one is ever open.
+  const popupRef = useRef<{ key: string; popup: Popup } | null>(null)
 
   const reducedMotion = prefersReducedMotion()
 
@@ -573,8 +578,23 @@ export function MapView({
       pendingPdiRef.current = null
       animationFinishRef.current?.cancel()
       animationFinishRef.current = null
+      popupRef.current = null
     }
   }, [])
+
+  // Escape closes whatever is open on the map: the info popup and the cell
+  // drawer. On window rather than the canvas so it works wherever focus is,
+  // matching the search box, which already closes its own dropdown on Escape.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      popupRef.current?.popup.remove()
+      popupRef.current = null
+      dispatch({ type: 'SELECT_CELL', cell: null })
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [dispatch])
 
   // Create the map once: fetch the base style, patch it to a dark
   // monochrome palette, then initialize MapLibre with the patched style.
@@ -837,6 +857,30 @@ export function MapView({
             },
           })
 
+          // Info popups (freight nodes, thermal anomalies). Only one is open
+          // at a time, and clicking the feature that already has one open
+          // closes it instead of stacking a duplicate - so a second click on
+          // the same node reads as "close", not as "open it again". The ref
+          // is what lets Escape close the popup from outside this effect.
+          const togglePopup = (
+            key: string,
+            lngLat: [number, number],
+            className: string,
+            html: string,
+            offset: number,
+          ) => {
+            const open = popupRef.current
+            const isSameFeature = open !== null && open.key === key && open.popup.isOpen()
+            open?.popup.remove()
+            popupRef.current = null
+            if (isSameFeature) return
+            const popup = new Popup({ className, closeButton: false, offset })
+              .setLngLat(lngLat)
+              .setHTML(html)
+              .addTo(map!)
+            popupRef.current = { key, popup }
+          }
+
           // Freight node popups: congestion + emission impact for the
           // clicked node. Popup garbage-collects itself on close.
           map!.on('click', LAYER_FREIGHT_NODES, (event) => {
@@ -845,19 +889,16 @@ export function MapView({
             if (!feature || !props) return
             // Node features are authored Points (see freightCorridors.ts).
             const geometry = feature.geometry as unknown as { coordinates: [number, number] }
-            new Popup({
-              className: 'freight-node-popup',
-              closeButton: false,
-              offset: 12,
-            })
-              .setLngLat(geometry.coordinates)
-              .setHTML(
-                `<strong>${props.name}</strong>` +
-                  `<span class="freight-popup-corridor">${props.corridor}</span>` +
-                  `<span>Corridor congestion: <b>${props.congestion}%</b></span>` +
-                  `<span>Emission impact: <b>${props.emission}</b> t CO₂e / day</span>`,
-              )
-              .addTo(map!)
+            togglePopup(
+              `freight:${props.name}`,
+              geometry.coordinates,
+              'freight-node-popup',
+              `<strong>${props.name}</strong>` +
+                `<span class="freight-popup-corridor">${props.corridor}</span>` +
+                `<span>Corridor congestion: <b>${props.congestion}%</b></span>` +
+                `<span>Emission impact: <b>${props.emission}</b> t CO₂e / day</span>`,
+              12,
+            )
           })
           map!.on('mouseenter', LAYER_FREIGHT_NODES, () => {
             map!.getCanvas().style.cursor = 'pointer'
@@ -949,7 +990,7 @@ export function MapView({
             },
           })
 
-          // Fire dot popups — VIIRS metadata + the automated dispatch.
+          // Fire dot popups — VIIRS metadata + the triage priority.
           map!.on('click', LAYER_FIRE_CORE, (event) => {
             const feature = event.features?.[0]
             const props = feature?.properties
@@ -958,14 +999,13 @@ export function MapView({
             if (anomaly === null) return
             // Anomaly features are authored Points (see fireAnomalies.ts).
             const geometry = feature.geometry as unknown as { coordinates: [number, number] }
-            new Popup({
-              className: 'fire-anomaly-popup',
-              closeButton: false,
-              offset: 10,
-            })
-              .setLngLat(geometry.coordinates)
-              .setHTML(anomalyPopupHtml(anomaly))
-              .addTo(map!)
+            togglePopup(
+              `fire:${props.id}`,
+              geometry.coordinates,
+              'fire-anomaly-popup',
+              anomalyPopupHtml(anomaly),
+              10,
+            )
           })
           map!.on('mouseenter', LAYER_FIRE_CORE, () => {
             map!.getCanvas().style.cursor = 'pointer'
@@ -978,10 +1018,11 @@ export function MapView({
           map!.on('click', clickableLayers, (event) => {
             const h3Cell = event.features?.[0]?.properties?.h3_cell
             if (typeof h3Cell === 'string') {
-              // No resolution is passed: the reducer derives it from the cell
+              // Toggling: clicking the cell already in the drawer closes it.
+              // No resolution is passed — the reducer derives it from the cell
               // string itself, which is the only thing that knows it (a cell
               // is valid only at its own resolution - see resolutionOfCell).
-              dispatch({ type: 'SELECT_CELL', cell: h3Cell })
+              dispatch({ type: 'TOGGLE_CELL', cell: h3Cell })
             }
           })
           map!.on('mouseenter', clickableLayers, () => {

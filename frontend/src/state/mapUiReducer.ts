@@ -64,6 +64,7 @@ export type MapUiAction =
   | { type: 'TOGGLE_CITIZEN_SENSORS' }
   | { type: 'TOGGLE_FREIGHT_CORRIDORS' }
   | { type: 'SELECT_CELL'; cell: string | null; resolution?: number }
+  | { type: 'TOGGLE_CELL'; cell: string }
   | { type: 'SET_VIEWPORT'; zoom: number; bbox: BoundingBox }
 
 // The app opens fitted to all of India (see MapView's INDIA_BOUNDS), so
@@ -82,6 +83,25 @@ export const initialMapUiState: MapUiState = {
   selectedCellResolution: null,
   lod: { tier: 'country', resolution: 3, scopedToViewport: false },
   bbox: null,
+}
+
+/** Selection state with the cell's own resolution derived from the cell
+ *  string, never from the current zoom tier: the tier can be a step ahead of
+ *  the data still painted on screen right after a zoom (see
+ *  resolutionOfCell), and GET /cells/{h3_cell} rejects a mismatched pair
+ *  with 422. `fallbackResolution` is only for a caller that already knows
+ *  better than the cell string does. */
+function withSelectedCell(
+  state: MapUiState,
+  cell: string | null,
+  fallbackResolution?: number,
+): MapUiState {
+  return {
+    ...state,
+    selectedCell: cell,
+    selectedCellResolution:
+      cell === null ? null : (resolutionOfCell(cell) ?? fallbackResolution ?? null),
+  }
 }
 
 export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState {
@@ -107,19 +127,13 @@ export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState
     case 'TOGGLE_FREIGHT_CORRIDORS':
       return { ...state, showFreightCorridors: !state.showFreightCorridors }
     case 'SELECT_CELL':
-      return {
-        ...state,
-        selectedCell: action.cell,
-        // The cell's OWN resolution, not the current zoom tier: the tier can
-        // be a step ahead of the data still painted on screen right after a
-        // zoom (see resolutionOfCell), and GET /cells/{h3_cell} rejects a
-        // mismatched pair with 422. `action.resolution` is only a fallback
-        // for a caller that already knows better than the cell string does.
-        selectedCellResolution:
-          action.cell === null
-            ? null
-            : (resolutionOfCell(action.cell) ?? action.resolution ?? null),
-      }
+      return withSelectedCell(state, action.cell, action.resolution)
+    case 'TOGGLE_CELL':
+      // Clicking the cell that is already open closes the drawer; clicking
+      // any other cell selects it. The comparison lives here rather than in
+      // the click handler, which is registered once and would otherwise need
+      // the current selection pushed into it through a ref.
+      return withSelectedCell(state, state.selectedCell === action.cell ? null : action.cell)
     case 'SET_VIEWPORT': {
       const lod = lodForZoom(action.zoom)
       return { ...state, lod, bbox: lod.scopedToViewport ? action.bbox : null }
