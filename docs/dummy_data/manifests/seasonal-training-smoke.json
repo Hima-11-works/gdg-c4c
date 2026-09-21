@@ -1,0 +1,55 @@
+{
+  "schema_version": "dummy-manifest-v1",
+  "generator_version": "planned-1",
+  "profile": "seasonal-training-smoke",
+  "scenario_id": "seasonal_mix",
+  "seed": 42,
+  "anchor_utc": "2025-01-15T00:00:00Z",
+  "timezone": "Asia/Kolkata",
+  "region": "delhi-ncr",
+  "native_h3_resolution": 8,
+  "cell_count": 256,
+  "station_count": 32,
+  "road_segment_count": 64,
+  "weather_sample_count": 16,
+  "history_hours": 8760,
+  "replay_hours": 8760,
+  "forecast_hours": [1, 2, 3, 4, 5, 6],
+  "data_mode": "demo",
+  "input_kind": "synthetic",
+  "annual_profiles": [
+    "clean_breezy",
+    "winter_stagnation",
+    "monsoon_washout",
+    "post_rain_rebound",
+    "rush_hour",
+    "weekend_contrast",
+    "industrial_vs_green",
+    "upwind_fire",
+    "wind_shift"
+  ],
+  "expected_events": [
+    "rolling_time_split_has_train_validation_test",
+    "spatial_holdout_excludes_station_from_idw_features",
+    "model_artifact_records_feature_schema_and_seed",
+    "synthetic_only_artifact_cannot_be_promoted"
+  ],
+  "expected_assertions": [
+    "issue_time_cutoff_excludes_future_weather",
+    "target_station_is_excluded_from_current_baseline",
+    "missingness_is_preserved_in_feature_export",
+    "annual_artifact_is_generated_on_demand_and_not_committed"
+  ],
+  "dataset_refs": [
+    {
+      "dataset_id": "air-health-synthetic",
+      "source": "Air Health",
+      "product": "deterministic environmental scenario",
+      "version": "planned-1",
+      "kind": "synthetic",
+      "region": "delhi-ncr",
+      "attribution": "Air Health synthetic scenario",
+      "license": "project test fixture"
+    }
+  ]
+}

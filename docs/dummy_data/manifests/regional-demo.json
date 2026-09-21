@@ -1,0 +1,63 @@
+{
+  "schema_version": "dummy-manifest-v1",
+  "generator_version": "planned-1",
+  "profile": "regional-demo",
+  "scenario_id": "winter_stagnation",
+  "seed": 42,
+  "anchor_utc": "2025-01-15T00:00:00Z",
+  "timezone": "Asia/Kolkata",
+  "region": "delhi-ncr",
+  "native_h3_resolution": 8,
+  "cell_count": 256,
+  "station_count": 32,
+  "road_segment_count": 64,
+  "weather_sample_count": 16,
+  "history_hours": 48,
+  "replay_hours": 72,
+  "forecast_hours": [1, 3, 6],
+  "data_mode": "demo",
+  "input_kind": "synthetic",
+  "supported_scenarios": [
+    "clean_breezy",
+    "winter_stagnation",
+    "monsoon_washout",
+    "post_rain_rebound",
+    "rush_hour",
+    "weekend_contrast",
+    "industrial_vs_green",
+    "upwind_fire",
+    "wind_shift",
+    "population_pair",
+    "sparse_stations",
+    "stale_weather",
+    "traffic_outage",
+    "empty_fire_feed",
+    "duplicate_reports",
+    "partial_region"
+  ],
+  "expected_events": [
+    "scenario_switch_changes_features",
+    "exposure_changes_when_population_changes",
+    "rainfall_episode_reduces_authored_concentration",
+    "wind_shift_changes_downwind_response"
+  ],
+  "expected_assertions": [
+    "current_weather_forecast_exposure_and_detail_share_run_id",
+    "res8_cells_aggregate_to_res3_res4_res5_without_double_counting",
+    "unknown_population_is_not_zero",
+    "missing_traffic_is_not_zero_traffic",
+    "successful_empty_fire_feed_is_distinct_from_fire_provider_failure"
+  ],
+  "dataset_refs": [
+    {
+      "dataset_id": "air-health-synthetic",
+      "source": "Air Health",
+      "product": "deterministic environmental scenario",
+      "version": "planned-1",
+      "kind": "synthetic",
+      "region": "delhi-ncr",
+      "attribution": "Air Health synthetic scenario",
+      "license": "project test fixture"
+    }
+  ]
+}
