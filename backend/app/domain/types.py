@@ -253,6 +253,11 @@ class GridState:
     confidence: float
     pm25: float | None = None
     pdi: float | None = None
+    # The normalized [0, 1] value of each factor that produced `pdi`
+    # (app.domain.pdi.PDIResult.factors), so a reader can show *why* a
+    # cell scores the way it does. None when no factor breakdown is
+    # available (older rows, or a PDI model that returns none).
+    pdi_factors: dict[str, float] | None = None
     wind_speed: float | None = None
     wind_direction: float | None = None
 
@@ -266,6 +271,13 @@ class GridState:
                 raise ValueError(f"pm25 must be >= 0: {self.pm25}")
         if self.pdi is not None:
             _require_finite(self.pdi, "pdi")
+        if self.pdi_factors is not None:
+            for name, value in self.pdi_factors.items():
+                if not name:
+                    raise ValueError("pdi_factors keys must not be empty")
+                _require_finite(value, f"pdi_factors[{name!r}]")
+                if not 0 <= value <= 1:
+                    raise ValueError(f"pdi_factors[{name!r}] must be within [0, 1]: {value}")
         if self.wind_speed is not None:
             _require_finite(self.wind_speed, "wind_speed")
             if self.wind_speed < 0:

@@ -4,8 +4,8 @@
 // network until a routes endpoint exists; the feature shape matches what
 // such an endpoint should return.
 //
-// Overlays like this are contextual information for the AI source
-// classifier and intervention planning — never a relocation recommendation.
+// Overlays like this are contextual information for intervention planning
+// and inspection targeting — never a relocation recommendation.
 
 import type { FeatureCollection, LineString, Point } from 'geojson'
 

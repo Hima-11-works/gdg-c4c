@@ -527,7 +527,7 @@ separate and only holds `VITE_API_BASE_URL`.
 | `DISPERSION_MAX_TRANSPORT_FRACTION`, `DISPERSION_WIND_TRANSPORT_REFERENCE_MS`, `DISPERSION_CALM_WIND_THRESHOLD_MS` | dispersion | How much PM2.5 wind can move per hour, and at what speeds (defaults 0.6, 8 m/s, 0.5 m/s) |
 | `DISPERSION_WIND_CONE_HALF_ANGLE_DEG` | dispersion | Half-angle (default 50°) of the downwind neighbor-selection cone |
 | `DISPERSION_CONFIDENCE_DECAY_PER_HOUR`, `DISPERSION_MISSING_WEATHER_CONFIDENCE_PENALTY` | dispersion | Per-hour confidence discount, and an extra one for a cell with no weather reading (defaults 0.9, 0.5) |
-| `ALERT_WARNING_THRESHOLD_UGM3`, `ALERT_CRITICAL_THRESHOLD_UGM3` | alerts | PM2.5 at/above which a cell alerts WARNING/CRITICAL now, or WATCH if only a forecast reaches it (defaults 80, 150 — matching the map's PM2.5 color-band boundaries) |
+| `ALERT_WARNING_THRESHOLD_UGM3`, `ALERT_CRITICAL_THRESHOLD_UGM3` | alerts | PM2.5 at/above which a cell alerts WARNING/CRITICAL now, or WATCH if only a forecast reaches it (defaults 91, 121 — the CPCB NAQI Poor/Very Poor PM2.5 boundaries, matching the map's color bands; `backend/tests/test_alert_threshold_bands.py` guards the alignment) |
 | `ALERT_SHARP_INCREASE_THRESHOLD_UGM3` | alerts | Current-to-forecast jump (µg/m³) counted as a "sharp increase" alert (default 25) |
 | `ALERT_PDI_HIGH_THRESHOLD`, `ALERT_PDI_WORSENING_MIN_INCREASE_UGM3` | alerts | PDI considered "high pressure", and the smaller PM2.5 increase counted as "worsening" alongside it (defaults 60, 5) |
 | `ALERT_ACTIVE_LOOKBACK_HOURS` | alerts | A cell with an alert created within this many hours is skipped on the next run, and is what `/api/v1/alerts` considers "active" (default 24) |
@@ -804,7 +804,7 @@ westerly wind, chosen so a pipeline run against it is
 guaranteed — with no non-default configuration — to produce a clearly
 visible hotspot, forecast values that visibly carry it downwind over
 +1h/+3h/+6h, and at least one CRITICAL alert (280 is comfortably past the
-default `ALERT_CRITICAL_THRESHOLD_UGM3=150.0`). `backend/tests/test_demo_mode.py`
+default `ALERT_CRITICAL_THRESHOLD_UGM3=121.0`). `backend/tests/test_demo_mode.py`
 asserts exactly this, running the real services. The two fire sightings
 sit inside IDW sensor coverage (augment-only blending would otherwise
 make them invisible) and away from the hotspot, so the map shows a

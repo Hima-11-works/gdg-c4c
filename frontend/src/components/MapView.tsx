@@ -7,6 +7,7 @@ import {
   Popup,
   setWorkerUrl,
 } from 'maplibre-gl'
+import type { FilterSpecification } from 'maplibre-gl'
 import { cellToBoundary } from 'h3-js'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
@@ -23,8 +24,9 @@ import {
   freightNodesFeatureCollection,
 } from '../lib/freightCorridors'
 import {
+  EMPTY_REPORTS,
   cameraPinImage,
-  citizenReportsFeatureCollection,
+  reportsFeatureCollection,
 } from '../lib/citizenReports'
 import {
   anomalyById,
@@ -41,6 +43,7 @@ import {
 import { renderSmoothField } from '../lib/smoothField'
 import { buildRangeContours } from '../lib/pm25Contours'
 import { INDIA_BBOX, lodBbox, MAX_ZOOM, PDI_MIN_ZOOM } from '../lib/lod'
+import { scopeContains, scopeMask } from '../lib/scope'
 import { INDIA_OUTLINE_URL, STATE_BOUNDARIES_URL } from '../lib/stateBoundaries'
 import { BASE_STYLE_URL, OVERLAY, WIND, BASEMAP, patchBasemapStyle } from '../lib/mapTheme'
 import {
@@ -60,7 +63,8 @@ import {
 import { useMapUi } from '../state/MapUiContext'
 import type { MapViewMode } from '../state/mapUiReducer'
 import type { AsyncResource } from '../hooks/useApiResource'
-import type { BoundingBox, ForecastOut, GridStateOut, WeatherReadingOut } from '../lib/types'
+import { useStateBoundaries } from '../hooks/useStateBoundaries'
+import type { BoundingBox, FireReportOut, ForecastOut, GridStateOut, WeatherReadingOut } from '../lib/types'
 import type { Position } from 'geojson'
 
 // The app is scoped to India: on load, fit the whole country in view
@@ -227,10 +231,19 @@ const SOURCE_FIRE = 'satellite-fires'
 const LAYER_FIRE_HEATMAP = 'satellite-fires-layer'
 const LAYER_FIRE_PULSE = 'satellite-fires-pulse'
 const LAYER_FIRE_CORE = 'satellite-fires-core'
-const FIRE_CORE_COLOR = '#FF3B30'
-const FIRE_GLOW_COLOR = '#FF9500'
-const FIRE_GLOW_OPACITY = 0.45
+// Thermal anomalies are triaged by severity (lib/fireAnomalies): minor
+// detections stay small and amber, elevated ones orange, critical ones
+// large deep-red. The glow halo and the pulse are filtered to severity 3,
+// so the animation marks what is actually urgent rather than animating
+// every detection — the triage the spec asks for, expressed in the paint.
+const FIRE_MINOR_COLOR = '#FBBF24'
+const FIRE_ELEVATED_COLOR = '#F97316'
+const FIRE_CRITICAL_COLOR = '#E11D48'
+const FIRE_GLOW_COLOR = '#E11D48'
+const FIRE_GLOW_OPACITY = 0.5
 const FIRE_CORE_OPACITY = 0.95
+/** Only critical detections get bloom + pulse. */
+const FIRE_CRITICAL_ONLY: FilterSpecification = ['==', ['get', 'severity'], 3]
 const FIRE_PULSE_FRAME_COUNT = 6
 const FIRE_PULSE_FRAME_MS = 380
 const FIRE_PULSE_IMAGE_PREFIX = 'fire-pulse'
@@ -238,6 +251,14 @@ const firePulseImageName = (frame: number): string => `${FIRE_PULSE_IMAGE_PREFIX
 const FIRE_PULSE_IMAGES = Array.from({ length: FIRE_PULSE_FRAME_COUNT }, (_, i) =>
   firePulseImageName(i),
 )
+
+// Place-scope mask: the veil drawn over everything outside a searched place.
+// Near-background rather than pure grey so it reads as "not in scope" instead
+// of as a data value on the dark base style.
+const SOURCE_SCOPE_MASK = 'scope-mask'
+const LAYER_SCOPE_MASK = 'scope-mask-fill'
+const SCOPE_MASK_COLOR = '#0d0f14'
+const SCOPE_MASK_OPACITY = 0.86
 
 // Wind currents are supplementary/decorative ("generalized meteorological
 // information"), not the primary data layer the way the PM2.5/PDI cells
@@ -512,6 +533,7 @@ interface MapViewProps {
   currentGrid: AsyncResource<GridStateOut[]>
   forecastGrid: AsyncResource<ForecastOut[]>
   weather: AsyncResource<WeatherReadingOut[]>
+  citizenReports: AsyncResource<FireReportOut[]>
 }
 
 /** Full-screen MapLibre map. Owns the map instance imperatively (MapLibre
@@ -521,21 +543,16 @@ interface MapViewProps {
  * viewport -> level of detail). No pollution math happens here, and no
  * fetching either — every value rendered is exactly what MapPage's
  * level-of-detail-scoped fetch returned for the current viewport. */
-export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
+export function MapView({
+  currentGrid,
+  forecastGrid,
+  weather,
+  citizenReports,
+}: MapViewProps) {
   const { state, dispatch } = useMapUi()
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
   const [mapReady, setMapReady] = useState(false)
-
-  // The map-creation effect below runs once (on mount) and registers the
-  // click handler then, so it closes over whatever `state.lod` was at
-  // that instant unless read through a ref kept fresh every render —
-  // needed so a click always reports the resolution actually on screen,
-  // not the one active when the map was first created.
-  const lodResolutionRef = useRef(state.lod.resolution)
-  useEffect(() => {
-    lodResolutionRef.current = state.lod.resolution
-  }, [state.lod.resolution])
 
   // Which double-buffer set is currently visible.
   const visibleSetRef = useRef<Pm25Set>('a')
@@ -553,6 +570,20 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
   const pendingPdiRef = useRef<{ cancel: () => void } | null>(null)
   // Last PDI toggle state acted on, so the toggle effect skips its mount run.
   const showPdiRef = useRef(state.showPdi)
+  // State/UT polygons, already loaded for the map's own boundary layers and
+  // reused here to clip the place-scope mask to a real border.
+  const stateBoundaries = useStateBoundaries()
+  // Live mirrors of the place scope for the map's click handlers. Those are
+  // registered once when the map is created, so reading the state directly
+  // would freeze whatever it was at creation (no scope at all) and the
+  // out-of-scope click guard would never fire.
+  const scopeRef = useRef(state.scope)
+  const stateBoundariesRef = useRef(stateBoundaries)
+  // The info popup currently on the map (a thermal anomaly or a freight node)
+  // together with the key identifying its feature, so clicking that same
+  // feature again closes it rather than stacking an identical popup, and so
+  // Escape can close whatever is open. At most one is ever open.
+  const popupRef = useRef<{ key: string; popup: Popup } | null>(null)
 
   const reducedMotion = prefersReducedMotion()
 
@@ -566,8 +597,29 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
       pendingPdiRef.current = null
       animationFinishRef.current?.cancel()
       animationFinishRef.current = null
+      popupRef.current = null
     }
   }, [])
+
+  // Keep the click handlers' mirrors of the scope current (see scopeRef).
+  useEffect(() => {
+    scopeRef.current = state.scope
+    stateBoundariesRef.current = stateBoundaries
+  }, [state.scope, stateBoundaries])
+
+  // Escape closes whatever is open on the map: the info popup and the cell
+  // drawer. On window rather than the canvas so it works wherever focus is,
+  // matching the search box, which already closes its own dropdown on Escape.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      popupRef.current?.popup.remove()
+      popupRef.current = null
+      dispatch({ type: 'SELECT_CELL', cell: null })
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [dispatch])
 
   // Create the map once: fetch the base style, patch it to a dark
   // monochrome palette, then initialize MapLibre with the patched style.
@@ -815,7 +867,7 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
           // the selection outline, hidden until the toggle turns them on.
           map!.addSource(SOURCE_CITIZEN, {
             type: 'geojson',
-            data: citizenReportsFeatureCollection() as never,
+            data: EMPTY_REPORTS as never,
           })
           map!.addImage(CITIZEN_IMAGE, cameraPinImage())
           map!.addLayer({
@@ -830,6 +882,30 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
             },
           })
 
+          // Info popups (freight nodes, thermal anomalies). Only one is open
+          // at a time, and clicking the feature that already has one open
+          // closes it instead of stacking a duplicate - so a second click on
+          // the same node reads as "close", not as "open it again". The ref
+          // is what lets Escape close the popup from outside this effect.
+          const togglePopup = (
+            key: string,
+            lngLat: [number, number],
+            className: string,
+            html: string,
+            offset: number,
+          ) => {
+            const open = popupRef.current
+            const isSameFeature = open !== null && open.key === key && open.popup.isOpen()
+            open?.popup.remove()
+            popupRef.current = null
+            if (isSameFeature) return
+            const popup = new Popup({ className, closeButton: false, offset })
+              .setLngLat(lngLat)
+              .setHTML(html)
+              .addTo(map!)
+            popupRef.current = { key, popup }
+          }
+
           // Freight node popups: congestion + emission impact for the
           // clicked node. Popup garbage-collects itself on close.
           map!.on('click', LAYER_FREIGHT_NODES, (event) => {
@@ -838,19 +914,16 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
             if (!feature || !props) return
             // Node features are authored Points (see freightCorridors.ts).
             const geometry = feature.geometry as unknown as { coordinates: [number, number] }
-            new Popup({
-              className: 'freight-node-popup',
-              closeButton: false,
-              offset: 12,
-            })
-              .setLngLat(geometry.coordinates)
-              .setHTML(
-                `<strong>${props.name}</strong>` +
-                  `<span class="freight-popup-corridor">${props.corridor}</span>` +
-                  `<span>Corridor congestion: <b>${props.congestion}%</b></span>` +
-                  `<span>Emission impact: <b>${props.emission}</b> t CO₂e / day</span>`,
-              )
-              .addTo(map!)
+            togglePopup(
+              `freight:${props.name}`,
+              geometry.coordinates,
+              'freight-node-popup',
+              `<strong>${props.name}</strong>` +
+                `<span class="freight-popup-corridor">${props.corridor}</span>` +
+                `<span>Corridor congestion: <b>${props.congestion}%</b></span>` +
+                `<span>Emission impact: <b>${props.emission}</b> t CO₂e / day</span>`,
+              12,
+            )
           })
           map!.on('mouseenter', LAYER_FREIGHT_NODES, () => {
             map!.getCanvas().style.cursor = 'pointer'
@@ -873,6 +946,9 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
             id: LAYER_FIRE_HEATMAP,
             type: 'circle',
             source: SOURCE_FIRE,
+            // Critical detections only: the bloom should draw the eye to
+            // what needs a response, not to every small burn.
+            filter: FIRE_CRITICAL_ONLY,
             layout: { visibility: 'none' },
             paint: {
               'circle-color': FIRE_GLOW_COLOR,
@@ -896,6 +972,7 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
             id: LAYER_FIRE_PULSE,
             type: 'symbol',
             source: SOURCE_FIRE,
+            filter: FIRE_CRITICAL_ONLY,
             layout: {
               'icon-image': FIRE_PULSE_IMAGES[0],
               'icon-allow-overlap': true,
@@ -909,15 +986,53 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
             source: SOURCE_FIRE,
             layout: { visibility: 'none' },
             paint: {
-              'circle-radius': 4.5,
-              'circle-color': FIRE_CORE_COLOR,
-              'circle-stroke-color': '#1a0c08',
-              'circle-stroke-width': 1.2,
+              // 4px for a minor burn up to 10px for a critical fire at the
+              // deepest zoom tier, so size alone carries the triage.
+              'circle-radius': [
+                'interpolate',
+                ['linear'],
+                ['zoom'],
+                3,
+                ['match', ['get', 'severity'], 1, 2.5, 2, 4, 3, 6, 4],
+                8,
+                ['match', ['get', 'severity'], 1, 4, 2, 7, 3, 10, 4],
+              ],
+              'circle-color': [
+                'match',
+                ['get', 'severity'],
+                1,
+                FIRE_MINOR_COLOR,
+                2,
+                FIRE_ELEVATED_COLOR,
+                3,
+                FIRE_CRITICAL_COLOR,
+                // Fallback for a missing severity: fail loud, not quiet.
+                FIRE_CRITICAL_COLOR,
+              ],
+              'circle-stroke-color': ['match', ['get', 'severity'], 3, '#FECDD3', '#1A0C08'],
+              'circle-stroke-width': ['match', ['get', 'severity'], 3, 1.6, 1.2],
               'circle-opacity': FIRE_CORE_OPACITY,
             },
           })
 
-          // Fire dot popups — VIIRS metadata + the automated dispatch.
+          // Place scope mask — added last so it sits over every data layer.
+          // The geometry is the whole world with the scoped place punched out
+          // as a hole (lib/scope.ts), so a hexagon straddling the boundary is
+          // greyed only on the outside part and the scope stays clear. Hidden
+          // until a place is scoped.
+          map!.addSource(SOURCE_SCOPE_MASK, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+          map!.addLayer({
+            id: LAYER_SCOPE_MASK,
+            type: 'fill',
+            source: SOURCE_SCOPE_MASK,
+            layout: { visibility: 'none' },
+            paint: {
+              'fill-color': SCOPE_MASK_COLOR,
+              'fill-opacity': SCOPE_MASK_OPACITY,
+            },
+          })
+
+          // Fire dot popups — VIIRS metadata + the triage priority.
           map!.on('click', LAYER_FIRE_CORE, (event) => {
             const feature = event.features?.[0]
             const props = feature?.properties
@@ -926,14 +1041,13 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
             if (anomaly === null) return
             // Anomaly features are authored Points (see fireAnomalies.ts).
             const geometry = feature.geometry as unknown as { coordinates: [number, number] }
-            new Popup({
-              className: 'fire-anomaly-popup',
-              closeButton: false,
-              offset: 10,
-            })
-              .setLngLat(geometry.coordinates)
-              .setHTML(anomalyPopupHtml(anomaly))
-              .addTo(map!)
+            togglePopup(
+              `fire:${props.id}`,
+              geometry.coordinates,
+              'fire-anomaly-popup',
+              anomalyPopupHtml(anomaly),
+              10,
+            )
           })
           map!.on('mouseenter', LAYER_FIRE_CORE, () => {
             map!.getCanvas().style.cursor = 'pointer'
@@ -945,9 +1059,23 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
           const clickableLayers = [LAYER_PM25_FILL.a, LAYER_PM25_FILL.b, LAYER_PDI_FILL]
           map!.on('click', clickableLayers, (event) => {
             const h3Cell = event.features?.[0]?.properties?.h3_cell
-            if (typeof h3Cell === 'string') {
-              dispatch({ type: 'SELECT_CELL', cell: h3Cell, resolution: lodResolutionRef.current })
+            if (typeof h3Cell !== 'string') return
+            // A greyed-out cell is outside the scoped place: there is no
+            // drawer for a cell the user can't see, so those clicks do
+            // nothing. Judged against the same geometry the mask is drawn
+            // from (lib/scope.ts), not by hit-testing the render.
+            const scope = scopeRef.current
+            if (
+              scope !== null &&
+              !scopeContains(scope, stateBoundariesRef.current, event.lngLat.lat, event.lngLat.lng)
+            ) {
+              return
             }
+            // Toggling: clicking the cell already in the drawer closes it.
+            // No resolution is passed — the reducer derives it from the cell
+            // string itself, which is the only thing that knows it (a cell
+            // is valid only at its own resolution - see resolutionOfCell).
+            dispatch({ type: 'TOGGLE_CELL', cell: h3Cell })
           })
           map!.on('mouseenter', clickableLayers, () => {
             map!.getCanvas().style.cursor = 'pointer'
@@ -1112,6 +1240,17 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
       state.showCitizenSensors ? 'visible' : 'none',
     )
   }, [mapReady, state.showCitizenSensors])
+
+  // Feed the map the reports the backend actually returned. Only real
+  // submitted reports become pins; a failed/absent fetch leaves the source
+  // empty rather than falling back to anything invented.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    const source = mapRef.current.getSource(SOURCE_CITIZEN)
+    if (!(source instanceof GeoJSONSource)) return
+    const reports = citizenReports.status === 'success' ? citizenReports.data : []
+    source.setData(reportsFeatureCollection(reports) as never)
+  }, [mapReady, citizenReports])
 
   // Switching the render mode (or toggling contrast) resets the double buffer
   // to a known state (set 'a' shown, 'b' hidden, buffer roles reset) so the
@@ -1364,6 +1503,22 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
     map.setLayoutProperty(LAYER_FIRE_PULSE, 'visibility', visibility)
     map.setLayoutProperty(LAYER_FIRE_CORE, 'visibility', visibility)
   }, [mapReady, state.showFireHotspots])
+
+  // Place scope — swap in the mask geometry (the world minus the scoped
+  // place) and show it. Boundary scopes wait for the state polygons to load;
+  // until then there is no mask, which is the honest state to show rather
+  // than a guessed area. Cheap enough to rebuild on every scope change: it's
+  // one polygon, and the mask is static while the map pans and zooms.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    const map = mapRef.current
+    const source = map.getSource(SOURCE_SCOPE_MASK) as GeoJSONSource | undefined
+    if (source === undefined) return
+
+    const mask = state.scope === null ? null : scopeMask(state.scope, stateBoundaries)
+    source.setData((mask ?? EMPTY_FEATURE_COLLECTION) as never)
+    map.setLayoutProperty(LAYER_SCOPE_MASK, 'visibility', mask === null ? 'none' : 'visible')
+  }, [mapReady, state.scope, stateBoundaries])
 
   // Animate the thermal-anomaly pulse ring by cycling the icon frames —
   // same pattern as the wind streaks. Static under prefers-reduced-motion.

@@ -1,19 +1,21 @@
-// Static interoperability status pill for the top bar. Signals that the
-// dashboard is federated across state-level edge nodes. Node count is
-// deterministic for the demo (12 seeded state nodes); when a real
-// federation-status endpoint lands, read it instead of the constant.
-
-const FEDERATED_NODES = 12
+// Illustrative interoperability status for the top bar.
+//
+// There is no federation-status endpoint and no federation layer in this
+// platform (see README's known limitations), so this is a fixed
+// placeholder, not a live reading: `ILLUSTRATIVE_NODES` is a constant and
+// the label says so. When a real federation-status endpoint lands, fetch
+// it and drop the word "illustrative" from the label.
+const ILLUSTRATIVE_NODES = 12
 
 export function FederatedStatusPill() {
   return (
     <span
       className="federated-pill"
-      title={`${FEDERATED_NODES} state edge nodes are currently contributing readings to this dashboard`}
+      title="Illustrative only - the platform has no federation-status endpoint yet; this is a fixed placeholder count, not a live reading."
       role="status"
     >
       <span className="federated-dot" aria-hidden="true" />
-      Federated Edge: {FEDERATED_NODES} State Nodes Synced
+      Federated Edge: illustrative ({ILLUSTRATIVE_NODES} nodes)
     </span>
   )
 }

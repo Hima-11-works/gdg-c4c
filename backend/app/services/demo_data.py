@@ -751,12 +751,12 @@ def demo_forecasts(resolution: int, hours: float) -> list[Forecast]:
     return forecasts_for_cells(demo_cells(resolution), hours)
 
 
-# Mirrors ALERT_CRITICAL_THRESHOLD_UGM3's default (150.0): this module
-# doesn't read live settings (see module docstring — deterministic,
-# config-independent placeholders), so the demo alert's severity is
-# pinned to the same default a real pipeline run would use, not derived
-# from it.
-_CRITICAL_PM25_THRESHOLD = 150.0
+# Mirrors ALERT_CRITICAL_THRESHOLD_UGM3's default (121.0, the CPCB NAQI
+# PM2.5 "Very Poor" band boundary): this module doesn't read live settings
+# (see module docstring - deterministic, config-independent placeholders),
+# so the demo alert's severity is pinned to the same default a real
+# pipeline run would use, not derived from it.
+_CRITICAL_PM25_THRESHOLD = 121.0
 
 
 def demo_alerts(resolution: int) -> list[Alert]:

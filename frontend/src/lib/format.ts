@@ -53,6 +53,7 @@ const PDI_FACTOR_LABELS: Record<string, string> = {
   industrial_pressure: 'Urban / industrial pressure',
   road_pressure: 'Road / activity pressure',
   vegetation_sink: 'Vegetation (sink)',
+  fire_pressure: 'Reported fire',
 }
 
 export function pdiFactorLabel(key: string): string {

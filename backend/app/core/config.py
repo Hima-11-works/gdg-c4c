@@ -225,17 +225,19 @@ class Settings(BaseSettings):
     # --- Alerts (app.services.alert_generation.AlertGenerationService) ---
     # PM2.5 (µg/m3) at or above which a cell gets a WARNING alert if it's
     # happening now, or a WATCH alert if only a forecast horizon reaches
-    # it. Default matches the "Unhealthy" boundary of the map's PM2.5 color
-    # bands (frontend/src/lib/colorScales.ts) — a normalization/triage
-    # choice, not a regulatory claim.
-    alert_warning_threshold_ugm3: float = Field(default=80.0, gt=0)
+    # it. Default is the CPCB NAQI PM2.5 "Poor" boundary (91), matching
+    # the map's color bands (frontend/src/lib/colorScales.ts) - a
+    # normalization/triage choice, not a regulatory claim.
+    # backend/tests/test_alert_threshold_bands.py fails if this stops
+    # sitting on one of the map's band boundaries.
+    alert_warning_threshold_ugm3: float = Field(default=91.0, gt=0)
     # PM2.5 at or above which a cell gets a CRITICAL alert if happening
-    # now (still only WATCH if just a forecast horizon reaches it — see
+    # now (still only WATCH if just a forecast horizon reaches it - see
     # AlertGenerationService's docstring for why severity encodes
     # "happening now" vs "advance warning" rather than just magnitude).
-    # Default matches the "Very unhealthy" boundary of the map's PM2.5
-    # color bands.
-    alert_critical_threshold_ugm3: float = Field(default=150.0, gt=0)
+    # Default is the CPCB NAQI PM2.5 "Very Poor" boundary (121), the next
+    # band up from the warning threshold.
+    alert_critical_threshold_ugm3: float = Field(default=121.0, gt=0)
     # A cell with an alert already created within this many hours is
     # skipped on the next pipeline run, so a persistent condition doesn't
     # spawn a new alert every run. Shared with the read side (app.services

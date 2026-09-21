@@ -9,6 +9,8 @@ import type {
   BoundingBox,
   CellDetailOut,
   Envelope,
+  FireReportOut,
+  FireReportSubmit,
   ForecastOut,
   GridStateOut,
   WeatherReadingOut,
@@ -88,6 +90,31 @@ async function apiGet<T>(path: string): Promise<T> {
   return response.json() as Promise<T>
 }
 
+/** The app's only write call: POST /api/v1/reports (citizen fire reports). */
+async function apiPost<T>(path: string, payload: unknown): Promise<T> {
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+  } catch {
+    throw new ApiError(0, 'network_error', 'Could not reach the backend. Is it running?')
+  }
+
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as ErrorResponseBody | null
+    throw new ApiError(
+      response.status,
+      body?.error?.code ?? 'http_error',
+      body?.error?.message ?? `Request failed with status ${response.status}`,
+    )
+  }
+
+  return response.json() as Promise<T>
+}
+
 export function fetchGridCurrent(query: LodQuery = {}): Promise<Envelope<GridStateOut[]>> {
   return apiGet(`/api/v1/grid/current${buildQuery(lodParams(query))}`)
 }
@@ -105,6 +132,16 @@ export function fetchWeather(query: LodQuery = {}): Promise<Envelope<WeatherRead
 
 export function fetchAlerts(): Promise<Envelope<AlertOut[]>> {
   return apiGet('/api/v1/alerts')
+}
+
+export function fetchReports(): Promise<Envelope<FireReportOut[]>> {
+  return apiGet('/api/v1/reports')
+}
+
+export function submitReport(
+  payload: FireReportSubmit,
+): Promise<Envelope<FireReportOut>> {
+  return apiPost('/api/v1/reports', payload)
 }
 
 export function fetchCellDetail(

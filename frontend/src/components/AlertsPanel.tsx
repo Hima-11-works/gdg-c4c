@@ -13,31 +13,34 @@ const SEVERITY_LABEL: Record<AlertSeverity, string> = {
   critical: 'Critical',
 }
 
-/** Authority assigned per alert, by severity — escalation ladder as the
- *  action-oriented alert centre routes cases up the intervention chain. */
-const ASSIGNED_AUTHORITY: Record<AlertSeverity, string> = {
+/** Suggested escalation path per severity - a prompt for whoever is reading
+ *  the alert, NOT an assignment: this dashboard has no authority-routing
+ *  backend, so nothing is dispatched, notified or recorded. */
+const SUGGESTED_AUTHORITY: Record<AlertSeverity, string> = {
   watch: 'Municipal Air Quality Monitoring Cell',
   warning: 'State Pollution Control Board Rapid Action Unit',
   critical: 'CPCB Emergency Response Task Force',
 }
 
-/** Authority intervention actions surfaced per alert severity. */
-const AUTHORITY_ACTIONS: Record<AlertSeverity, string[]> = {
-  watch: ['Issue Advisory'],
-  warning: ['Dispatch Anti-Smog Gun', 'Issue Enforcement Notice'],
-  critical: ['Dispatch Anti-Smog Gun', 'Issue Enforcement Notice', 'Escalate to Cabinet'],
+/** Suggested response actions per severity - a local checklist of what an
+ *  operator might do by hand. Ticking one does not send anything. */
+const SUGGESTED_ACTIONS: Record<AlertSeverity, string[]> = {
+  watch: ['Issue advisory'],
+  warning: ['Inspect site', 'Issue enforcement notice'],
+  critical: ['Inspect site', 'Issue enforcement notice', 'Escalate to CPCB'],
 }
 
-function AlertItem({ alert, onSelect }: { alert: AlertOut; onSelect: () => void }) {
-  const [acknowledged, setAcknowledged] = useState<Set<string>>(new Set())
-
-  const acknowledge = (action: string) =>
-    setAcknowledged((prev) => {
-      const next = new Set(prev)
-      next.add(action)
-      return next
-    })
-
+function AlertItem({
+  alert,
+  onSelect,
+  done,
+  onToggle,
+}: {
+  alert: AlertOut
+  onSelect: () => void
+  done: (action: string) => boolean
+  onToggle: (action: string) => void
+}) {
   return (
     <div className={`alert-item severity-${alert.severity}`}>
       <button type="button" className="alert-item-body" onClick={onSelect}>
@@ -56,20 +59,26 @@ function AlertItem({ alert, onSelect }: { alert: AlertOut; onSelect: () => void 
       </button>
 
       <div className="alert-authority">
-        <span className="alert-assigned">Assigned: {ASSIGNED_AUTHORITY[alert.severity]}</span>
+        <span className="alert-assigned">
+          Suggested escalation: {SUGGESTED_AUTHORITY[alert.severity]}
+        </span>
         <div className="alert-actions">
-          {AUTHORITY_ACTIONS[alert.severity].map((action) => {
-            const done = acknowledged.has(action)
+          {SUGGESTED_ACTIONS[alert.severity].map((action) => {
+            const checked = done(action)
             return (
               <button
                 key={action}
                 type="button"
-                className={`alert-cta ${done ? 'alert-cta-done' : ''}`}
-                onClick={() => acknowledge(action)}
-                aria-pressed={done}
-                title={done ? 'Dispatch acknowledged on the federated edge' : `Trigger ${action}`}
+                className={`alert-cta ${checked ? 'alert-cta-done' : ''}`}
+                onClick={() => onToggle(action)}
+                aria-pressed={checked}
+                title={
+                  checked
+                    ? `${action} - ticked locally (nothing is sent)`
+                    : `Tick ${action} off on this local checklist`
+                }
               >
-                {done ? '✓ ' : ''}
+                {checked ? '✓ ' : ''}
                 {action}
               </button>
             )
@@ -82,12 +91,26 @@ function AlertItem({ alert, onSelect }: { alert: AlertOut; onSelect: () => void 
 
 export function AlertsPanel() {
   const [open, setOpen] = useState(false)
+  // The checklist is per-alert and lives here (not inside AlertItem) so a
+  // 60s poll re-rendering the list cannot wipe what an operator ticked.
+  const [checked, setChecked] = useState<Set<string>>(new Set())
   const { dispatch } = useMapUi()
   const { resource, refetch } = useApiResource(fetchAlerts, [], {
     pollIntervalMs: POLL_INTERVAL_MS,
   })
 
   const count = resource.status === 'success' ? resource.data.length : 0
+
+  const keyFor = (alert: AlertOut, action: string) =>
+    `${alert.h3_cell}-${alert.created_at}-${action}`
+  const toggle = (alert: AlertOut, action: string) =>
+    setChecked((prev) => {
+      const next = new Set(prev)
+      const key = keyFor(alert, action)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
 
   return (
     <div className="panel alerts-panel">
@@ -138,12 +161,21 @@ export function AlertsPanel() {
 
           {resource.status === 'success' && resource.data.length === 0 && <p>No active alerts.</p>}
 
+          {resource.status === 'success' && resource.data.length > 0 && (
+            <p className="muted alerts-checklist-note">
+              The checklist below is local to this session — this dashboard cannot dispatch or
+              notify authorities yet.
+            </p>
+          )}
+
           {resource.status === 'success' &&
             resource.data.map((alert) => (
               <AlertItem
                 key={`${alert.h3_cell}-${alert.created_at}`}
                 alert={alert}
                 onSelect={() => dispatch({ type: 'SELECT_CELL', cell: alert.h3_cell })}
+                done={(action) => checked.has(keyFor(alert, action))}
+                onToggle={(action) => toggle(alert, action)}
               />
             ))}
         </div>

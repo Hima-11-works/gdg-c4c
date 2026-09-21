@@ -3,141 +3,90 @@ import { fetchCellDetail } from '../lib/api'
 import { PDI_LABEL, PDI_TOOLTIP, compassLabel, formatNumber, pdiFactorLabel } from '../lib/format'
 import { cellCenter } from '../lib/h3Geometry'
 import { regionTitle } from '../lib/regionName'
-import { citizenReportForCell, reportThumbnail } from '../lib/citizenReports'
+import { FIRE_KIND_LABELS, minutesAgo, reportForCell, smokeLabel } from '../lib/citizenReports'
+import {
+  anomaliesInCell,
+  priorityForSeverity,
+  worstAnomalyInCell,
+} from '../lib/fireAnomalies'
+import type { FireSeverity, ThermalAnomaly } from '../lib/fireAnomalies'
 import { useApiResource } from '../hooks/useApiResource'
+import type { AsyncResource } from '../hooks/useApiResource'
 import { useStateBoundaries } from '../hooks/useStateBoundaries'
 import { useMapUi } from '../state/MapUiContext'
-import type { CellDetailOut } from '../lib/types'
+import type { CellDetailOut, FireReportOut } from '../lib/types'
 
-/** One fused AI source-attribution hypothesis for a hex's pollution.
- *  Deterministically classified from the cell's own readings (wind, load,
- *  confidence) so the same hex always yields the same attribution. */
-const SOURCE_CLASSES: { label: string; kind: string }[] = [
-  { label: 'Agricultural Stubble / Biomass', kind: 'stubble' },
-  { label: 'Vehicle & Traffic Exhaust', kind: 'traffic' },
-  { label: 'Industrial & Power Plant Emissions', kind: 'industrial' },
-  { label: 'Construction & Road Dust', kind: 'dust' },
-  { label: 'Cross-Border Plume Transport', kind: 'transport' },
-]
-
-/** Deterministic classifier over the cell's own readings. Stands in for
- *  the federated server's source-attribution model until that endpoint
- *  exists; the shape it returns is exactly what the real API contract
- *  should fill in. */
-function classifySource(detail: CellDetailOut): {
-  label: string
-  confidence: number
-} | null {
-  const current = detail.current
-  const wind = detail.weather?.wind_speed ?? current?.wind_speed ?? null
-  const dir = detail.weather?.wind_direction ?? current?.wind_direction ?? null
-  const factors = detail.pdi_factors
-  if (current === null) return null
-
-  const industrial = factors?.industrial_pressure ?? 0
-  const road = factors?.road_pressure ?? 0
-  const vegetation = factors?.vegetation_sink ?? 0
-
-  // Weighted heuristic over fused signals, scored per hypothesis then
-  // normalised into a [0.55, 0.95] "confidence" band for display.
-  const scores: Record<string, number> = {
-    stubble: (dir !== null && wind !== null && wind > 4 ? 0.8 : 0.4) * (1 - Math.min(0, vegetation)) + (current.pm25 ?? 0) > 120 ? 2.2 : 0,
-    traffic: road * 2 + (current.pm25 ?? 0) < 90 ? 0.5 : 1.2,
-    industrial: industrial * 2.5,
-    dust: road * 0.8 + (wind !== null && wind < 2 ? 1 : 0),
-  }
-  // Long-range transport reads as: strong wind + vegetation sink present.
-  if (wind !== null && wind > 6) scores.stubble += 1.5
-  if (wind !== null && wind < 1.5) scores.dust += 1.2
-
-  let bestKind = 'industrial'
-  let best = -1
-  for (const [kind, score] of Object.entries(scores)) {
-    if (score > best) {
-      best = score
-      bestKind = kind
-    }
-  }
-  const chosen = SOURCE_CLASSES.find((s) => s.kind === bestKind) ?? SOURCE_CLASSES[2]
-  const confidence = 0.72 + ((best % 1) + 1) % 1 * 0.2
-  return { label: chosen.label, confidence: Math.min(0.93, Math.max(0.55, confidence)) }
-}
-
-function SourceAttributionCard({
-  detail,
-  showCitizenReports,
-}: {
-  detail: CellDetailOut
-  showCitizenReports: boolean
-}) {
-  const attribution = classifySource(detail)
-  if (attribution === null) return null
-
-  const satelliteAod = Math.min(0.95, 0.35 + (detail.current?.pm25 ?? 0) / 600)
-  const confirmations = Math.max(1, Math.round((detail.current?.confidence ?? 0.5) * 3))
-
+/** The most recent citizen report filed in this cell, from
+ *  GET /api/v1/reports. Deliberately NOT framed as evidence behind any
+ *  classification: the only modelled explanation of a cell in this drawer is
+ *  the backend's PDI factor breakdown. */
+function CitizenReportWidget({ report }: { report: FireReportOut }) {
+  const age = minutesAgo(report.reported_at)
   return (
-    <section className="source-attribution">
-      <h3>AI Source Attribution</h3>
-      <p className="source-attribution-classified">
-        Classified Source: <strong>{attribution.label}</strong>
-        <span className="muted"> ({Math.round(attribution.confidence * 100)}% confidence)</span>
-      </p>
-      <div className="source-attribution-fusion">
-        <p className="source-attribution-heading">Data Fusion</p>
-        <ul>
-          <li>Satellite AOD: {satelliteAod.toFixed(2)}</li>
-          <li>{confirmations} Citizen Photo Confirmations</li>
-          <li>Downwind Plume Drift</li>
-        </ul>
-        {showCitizenReports && <CitizenReportWidget h3Cell={detail.h3_cell} />}
+    <section className="citizen-report">
+      <h3>Citizen report</h3>
+      <div className="citizen-report-meta">
+        <strong>{FIRE_KIND_LABELS[report.kind] ?? report.kind}</strong>
+        <span className="muted">
+          Smoke: {smokeLabel(report.smoke_intensity)} ({report.smoke_intensity}/5) ·{' '}
+          {report.duration_hours === 0
+            ? 'just started'
+            : `~${formatNumber(report.duration_hours)}h`}{' '}
+          · {age} mins ago
+        </span>
+        {report.notes !== null && report.notes !== '' && (
+          <span className="muted">{report.notes}</span>
+        )}
+        <span className="muted">
+          Cell {report.h3_cell} — the model treats this as an active source.
+        </span>
       </div>
-      <p className="muted source-attribution-note">
-        Multi-modal fusion — outputs are probabilistic attribution, not enforcement evidence.
-      </p>
     </section>
   )
 }
 
-/** Citizen report widget under the Data Fusion block — the fused
- *  confirmation the AI attribution cites, with photo thumbnail, category
- *  and AI verification score. */
-function CitizenReportWidget({ h3Cell }: { h3Cell: string }) {
-  const report = citizenReportForCell(h3Cell)
-  if (report === null) return null
+/** Triage priority of the clicked cell, from the thermal anomalies that
+ *  fall inside it (lib/fireAnomalies). Cell-based matching on purpose: a
+ *  detection is a point and the drawer's unit is a cell, so "in this cell"
+ *  is the only claim that is actually true — no nearest-neighbour
+ *  guessing. The detections behind it are hand-authored mocks, hence the
+ *  "(illustrative)" note; severity counts up, priority counts down, so
+ *  severity 3 is Priority 1. */
+function PriorityBadge({ h3Cell }: { h3Cell: string }) {
+  const anomalies = anomaliesInCell(h3Cell)
+  if (anomalies.length === 0) return null
+
+  const worst = anomalies[0]
+  const priority = priorityForSeverity(worst.severity)
+  const label =
+    worst.severity === 3 ? 'Critical risk' : worst.severity === 2 ? 'Elevated' : 'Minor / localized'
+  const count =
+    anomalies.length === 1 ? '1 thermal anomaly' : `${anomalies.length} thermal anomalies`
+  const frp = anomalies.length === 1 ? 'FRP' : 'worst FRP'
 
   return (
-    <section className="citizen-report">
-      <p className="source-attribution-heading">Citizen Report</p>
-      <div className="citizen-report-row">
-        <img
-          className="citizen-thumb"
-          src={reportThumbnail(report.category)}
-          alt={`Citizen photo: ${report.category}`}
-          width={64}
-          height={64}
-          loading="lazy"
-        />
-        <div className="citizen-report-meta">
-          <strong>{report.category}</strong>
-          <span className="muted">
-            {report.minutesAgo} mins ago · {report.name}
-          </span>
-          <span className="citizen-score">AI Verification Score: {Math.round(report.aiScore * 100)}%</span>
-        </div>
-      </div>
-    </section>
+    <div className={`priority-badge priority-${worst.severity}`} role="status">
+      <span className="priority-dot" aria-hidden="true" />
+      <span>
+        <strong>
+          Priority {priority}: {label}
+        </strong>{' '}
+        <span className="muted">
+          — {count} in this cell ({frp} {worst.frp.toFixed(1)} MW, illustrative)
+        </span>
+      </span>
+    </div>
   )
 }
 
 function CellDetailContent({
   detail,
   isDemo,
-  showCitizenReports,
+  report,
 }: {
   detail: CellDetailOut
   isDemo: boolean
-  showCitizenReports: boolean
+  report: FireReportOut | null
 }) {
   const current = detail.current
   const windSpeed = detail.weather?.wind_speed ?? current?.wind_speed ?? null
@@ -193,7 +142,6 @@ function CellDetailContent({
         <dd>{current === null ? '—' : `${Math.round(current.confidence * 100)}%`}</dd>
       </dl>
 
-      <SourceAttributionCard detail={detail} showCitizenReports={showCitizenReports} />
 
       <h3>Forecast</h3>
       {detail.forecasts.length === 0 ? (
@@ -232,52 +180,179 @@ function CellDetailContent({
           })}
         </ul>
       )}
+
+      {report !== null && <CitizenReportWidget report={report} />}
     </>
   )
 }
 
-/** Sticky bottom action bar of the inspection drawer — the rapid-
- *  intervention dispatch that satisfies the brief's "alert relevant
- *  authorities" clause. Dispatch is acknowledged locally (deterministic
- *  status line); the brief's real routing endpoint plugs in at this exact
- *  button without touching the rest of the drawer. */
-function InterventionActionBar({ h3Cell }: { h3Cell: string }) {
-  const [dispatched, setDispatched] = useState(false)
+/**
+ * Bottom action bar of the inspection drawer.
+ *
+ * There is no authority-routing backend, so every action here is something
+ * that genuinely happens on this device and nothing more:
+ *
+ *  - Critical severity (3) copies an escalation note addressed to a State
+ *    Rapid Action Unit.
+ *  - Elevated severity (2) copies the plain inspection note.
+ *  - Minor severity (1) appends the cell to a ward list kept in
+ *    localStorage on this device only.
+ *  - No detection in the cell keeps the plain inspection note.
+ *
+ * It does NOT dispatch, notify, or record anything anywhere — the status
+ * line says so, and the ward list is explicitly local.
+ */
+const WARD_LOG_KEY = 'air-health:ward-log'
 
-  const dispatchNow = () => {
-    if (dispatched) return
-    setDispatched(true)
-    // Broadcast so the Alerts panel/edge node can pick the intervention up
-    // (federated dispatch hook point — the brief's "alert relevant
-    // authorities" clauses ride on this exact event).
-    window.dispatchEvent(
-      new CustomEvent('air-health:intervention-dispatched', {
-        detail: { cell: h3Cell, routedTo: 'State Pollution Control Board' },
-      }),
-    )
+interface WardLogEntry {
+  h3Cell: string
+  loggedAt: string
+  pm25: number | null
+  pdi: number | null
+}
+
+function readWardLog(): WardLogEntry[] {
+  try {
+    const raw = window.localStorage.getItem(WARD_LOG_KEY)
+    if (raw === null) return []
+    const parsed: unknown = JSON.parse(raw)
+    return Array.isArray(parsed) ? (parsed as WardLogEntry[]) : []
+  } catch {
+    return []
+  }
+}
+
+function InterventionActionBar({
+  h3Cell,
+  detail,
+  anomaly,
+}: {
+  h3Cell: string
+  detail: CellDetailOut
+  anomaly: ThermalAnomaly | null
+}) {
+  const [status, setStatus] = useState<'idle' | 'copied' | 'logged' | 'failed'>('idle')
+  const [wardCount, setWardCount] = useState(() => readWardLog().length)
+
+  const severity: FireSeverity | null = anomaly?.severity ?? null
+  const variant = severity === 3 ? 'escalate' : severity === 1 ? 'log' : 'inspect'
+
+  const current = detail.current
+  const observed = [
+    `H3 cell: ${h3Cell}`,
+    `Observed: ${current?.timestamp ?? 'no current reading'}`,
+    `PM2.5: ${current?.pm25 === null || current?.pm25 === undefined ? 'n/a' : `${formatNumber(current.pm25)} µg/m³`}`,
+    `PDI: ${current?.pdi === null || current?.pdi === undefined ? 'n/a' : formatNumber(current.pdi)}`,
+    `PDI factors: ${
+      detail.pdi_factors === null
+        ? 'not available'
+        : Object.entries(detail.pdi_factors)
+            .map(([key, value]) => `${key} ${Math.round(value * 100)}%`)
+            .join(', ')
+    }`,
+  ]
+
+  const detection =
+    anomaly === null
+      ? []
+      : [
+          `Thermal anomaly: FRP ${anomaly.frp.toFixed(1)} MW, detected ${anomaly.detectionMinutesAgo} mins ago, confidence ${Math.round(anomaly.confidence * 100)}% (illustrative mock detection, not a satellite feed)`,
+        ]
+
+  const note =
+    variant === 'escalate'
+      ? [
+          'Escalation note (Air Health dashboard) - for the State Rapid Action Unit',
+          `Priority 1 of 3: critical thermal anomaly in this cell`,
+          ...observed,
+          ...detection,
+          'Reason for escalation: a critical-severity detection is inside a cell already under watch.',
+        ].join('\n')
+      : ['Air-quality inspection note (Air Health dashboard)', ...observed].join('\n')
+
+  const runAction = async () => {
+    if (variant === 'log') {
+      try {
+        const entry: WardLogEntry = {
+          h3Cell,
+          loggedAt: new Date().toISOString(),
+          pm25: current?.pm25 ?? null,
+          pdi: current?.pdi ?? null,
+        }
+        // The list is a set of cells, not an append-only log: re-logging a
+        // cell refreshes its entry instead of piling up duplicates the
+        // operator would have to de-duplicate by hand.
+        const next = [...readWardLog().filter((existing) => existing.h3Cell !== h3Cell), entry]
+        window.localStorage.setItem(WARD_LOG_KEY, JSON.stringify(next))
+        setWardCount(next.length)
+        setStatus('logged')
+      } catch {
+        setStatus('failed')
+      }
+      return
+    }
+
+    try {
+      await navigator.clipboard.writeText(note)
+      setStatus('copied')
+    } catch {
+      setStatus('failed')
+    }
   }
 
+  const ctaLabel =
+    status === 'copied'
+      ? '✓ Note copied'
+      : status === 'logged'
+        ? '✓ Logged to ward list'
+        : variant === 'escalate'
+          ? 'Copy escalation note for the State Rapid Action Unit'
+          : variant === 'log'
+            ? 'Log to ward list (this device)'
+            : 'Copy inspection note'
+
+  const statusText =
+    status === 'copied'
+      ? 'Copied — send it to the relevant authority yourself.'
+      : status === 'logged'
+        ? `Saved on this device only (${wardCount} ${wardCount === 1 ? 'entry' : 'entries'}). Nothing left this device.`
+        : status === 'failed'
+          ? 'Could not access local storage or the clipboard.'
+          : variant === 'escalate'
+            ? 'Nothing is sent automatically; this only prepares an escalation note.'
+            : variant === 'log'
+              ? 'Nothing is sent automatically; this only appends to a list on this device.'
+              : 'Nothing is sent automatically; this only prepares a note.'
+
+  const title =
+    variant === 'escalate'
+      ? 'Copy a plain-text escalation note for this cell, addressed to a State Rapid Action Unit'
+      : variant === 'log'
+        ? 'Append this cell to a ward list kept in this browser only'
+        : 'Copy a plain-text inspection note for this cell to the clipboard'
+
   return (
-    <div className="intervention-bar" role="group" aria-label="Rapid intervention">
+    <div className="intervention-bar" role="group" aria-label="Inspection note">
       <button
         type="button"
-        className={`intervention-cta ${dispatched ? 'intervention-cta-done' : ''}`}
-        onClick={dispatchNow}
-        disabled={dispatched}
-        title="Dispatch the State Pollution Control Board Rapid Action Unit to this hex"
+        className={`intervention-cta intervention-cta-${variant} ${
+          status === 'copied' || status === 'logged' ? 'intervention-cta-done' : ''
+        }`}
+        onClick={runAction}
+        title={title}
       >
-        {dispatched ? '✓ Rapid Action Unit Dispatched' : '🚨 Dispatch Rapid Action Unit'}
+        {ctaLabel}
       </button>
-      <p className="intervention-status">
-        {dispatched
-          ? 'Dispatch acknowledged by the federated edge.'
-          : 'Routes alert to State Pollution Control Board.'}
-      </p>
+      <p className="intervention-status">{statusText}</p>
     </div>
   )
 }
 
-export function CellDetailPanel() {
+export function CellDetailPanel({
+  citizenReports,
+}: {
+  citizenReports: AsyncResource<FireReportOut[]>
+}) {
   const { state, dispatch } = useMapUi()
   const selectedCell = state.selectedCell
   // Captured at click time (see mapUiReducer's SELECT_CELL case), not
@@ -309,6 +384,10 @@ export function CellDetailPanel() {
 
   const close = () => dispatch({ type: 'SELECT_CELL', cell: null })
 
+  // Worst thermal anomaly inside the clicked cell (if any) - drives both the
+  // triage badge and the severity of the action bar.
+  const anomaly = worstAnomalyInCell(selectedCell)
+
   return (
     <aside className="panel cell-detail" aria-label="Cell details">
       <div className="cell-detail-header">
@@ -327,6 +406,8 @@ export function CellDetailPanel() {
         </button>
       </div>
 
+      <PriorityBadge h3Cell={selectedCell} />
+
       {resource.status === 'loading' && <p>Loading…</p>}
 
       {resource.status === 'error' && (
@@ -343,9 +424,16 @@ export function CellDetailPanel() {
           <CellDetailContent
             detail={resource.data}
             isDemo={resource.isDemo}
-            showCitizenReports={state.showCitizenSensors}
+            report={
+              state.showCitizenSensors
+                ? reportForCell(
+                    citizenReports.status === 'success' ? citizenReports.data : [],
+                    selectedCell,
+                  )
+                : null
+            }
           />
-          <InterventionActionBar h3Cell={selectedCell} />
+          <InterventionActionBar h3Cell={selectedCell} detail={resource.data} anomaly={anomaly} />
         </>
       )}
     </aside>

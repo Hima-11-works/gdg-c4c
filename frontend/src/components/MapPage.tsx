@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react'
-import { fetchGridCurrent, fetchWeather } from '../lib/api'
+import { useEffect, useRef, useState } from 'react'
+import { fetchGridCurrent, fetchReports, fetchWeather } from '../lib/api'
 import { useApiResource } from '../hooks/useApiResource'
 import {
   ensureForecastFrame,
@@ -15,6 +15,8 @@ import { FederatedStatusPill } from './FederatedStatusPill'
 import { Legend } from './Legend'
 import { LayerToggle } from './LayerToggle'
 import { MapView } from './MapView'
+import { ReportFireForm } from './ReportFireForm'
+import { ScopeChip } from './ScopeChip'
 import { SearchBar } from './SearchBar'
 import { StatusBanner } from './StatusBanner'
 import { TimelineControl } from './TimelineControl'
@@ -27,6 +29,19 @@ const POLL_INTERVAL_MS = 60_000
 export function MapPage() {
   const { state } = useMapUi()
   const { lod, bbox, forecastMinutes } = state
+  // The submit form is open/closed here so its map-centre location and the
+  // reports list it refetches both come from this component's data.
+  const [reportOpen, setReportOpen] = useState(false)
+
+  // A report is filed where the user is looking: the viewport centre. The
+  // backend snaps it to an H3 cell and returns that in the response.
+  const reportCenter =
+    bbox === null
+      ? null
+      : {
+          latitude: (bbox.minLat + bbox.maxLat) / 2,
+          longitude: (bbox.minLon + bbox.maxLon) / 2,
+        }
 
   const viewportReady = !lod.scopedToViewport || bbox !== null
   // Padded by one cell radius (see lib/lod.ts's lodQueryFor) so cells that
@@ -61,6 +76,13 @@ export function MapPage() {
   const weather = useApiResource(() => fetchWeather(weatherQuery), [lodKey(weatherQuery)], {
     pollIntervalMs: POLL_INTERVAL_MS,
     enabled: viewportReady,
+  })
+
+  // Citizen fire/burning reports (POST/GET /api/v1/reports). Fetched once
+  // here and shared by the map pins and the hex drawer, so the two can't
+  // disagree; polled so a new report appears without a reload.
+  const reports = useApiResource(fetchReports, [], {
+    pollIntervalMs: POLL_INTERVAL_MS,
   })
 
   // A view change (new queryKey) invalidates the forecast cache for this
@@ -104,24 +126,48 @@ export function MapPage() {
         currentGrid={currentGrid.resource}
         forecastGrid={forecastGrid.resource}
         weather={weather.resource}
+        citizenReports={reports.resource}
       />
 
       <div className="overlay overlay-top-left">
         <Legend />
-        <LayerToggle />
+        {reportCenter !== null && (
+          <button
+            type="button"
+            className="panel report-open"
+            onClick={() => setReportOpen(true)}
+          >
+            Report a fire
+          </button>
+        )}
+        {reportOpen && reportCenter !== null && (
+          <ReportFireForm
+            latitude={reportCenter.latitude}
+            longitude={reportCenter.longitude}
+            onClose={() => setReportOpen(false)}
+            onSubmitted={reports.refetch}
+          />
+        )}
       </div>
 
       <div className="overlay overlay-top-right">
-        <SearchBar />
+        <div className="top-right-row">
+          <SearchBar />
+          <AlertsPanel />
+        </div>
         <FederatedStatusPill />
-        <AlertsPanel />
+      </div>
+
+      <div className="overlay overlay-bottom-left">
+        <LayerToggle />
       </div>
 
       <div className="overlay overlay-bottom-center">
+        <ScopeChip />
         <TimelineControl />
       </div>
 
-      <CellDetailPanel />
+      <CellDetailPanel citizenReports={reports.resource} />
     </div>
   )
 }

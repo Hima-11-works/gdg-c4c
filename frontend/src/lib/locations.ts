@@ -45,6 +45,16 @@ export const KIND_LABEL: Record<LocationKind, string> = {
   locality: 'Locality',
 }
 
+/** Plural forms, for prose that talks about a kind of place rather than one
+ *  of them (the scope chip's "no boundary data exists for …"). Spelling these
+ *  out avoids the "localitys" that naive pluralisation produces. */
+export const KIND_PLURAL: Record<LocationKind, string> = {
+  state: 'states / UTs',
+  district: 'districts',
+  city: 'cities',
+  locality: 'localities',
+}
+
 // Rank by match quality first, then by kind (states/districts more useful
 // than a locality of the same name), then shortest name (more likely the
 // canonical place).

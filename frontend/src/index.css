@@ -16,6 +16,19 @@ body,
   margin: 0;
 }
 
+/* Scrollbars are hidden everywhere: the dashboard is a full-viewport map
+   with panels floating over it, and a scrollbar gutter is chrome none of
+   them want. Only the bar is hidden — the panels keep their max-heights and
+   still scroll by wheel, trackpad, touch and keyboard. Firefox needs
+   scrollbar-width, WebKit/Blink need the pseudo-element. */
+* {
+  scrollbar-width: none;
+}
+
+*::-webkit-scrollbar {
+  display: none;
+}
+
 .map-page {
   position: relative;
   width: 100%;
@@ -61,6 +74,25 @@ body,
   pointer-events: auto;
 }
 
+/* Search box with the alerts bell beside it, rather than the bell in its own
+   row below. The row sizes to its content so .overlay's 20rem cap can't
+   squeeze the search bar — it overflows that cap to the left, the same way
+   the open alerts list already does. Only the two controls take clicks: the
+   overlay's pointer-events: auto applies to the row, so it's turned back to
+   none here and re-enabled on the children, keeping the gap between them
+   from swallowing map clicks. */
+.top-right-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  width: max-content;
+  pointer-events: none;
+}
+
+.top-right-row > * {
+  pointer-events: auto;
+}
+
 .overlay-bottom-center {
   bottom: 1rem;
   left: 50%;
@@ -70,6 +102,98 @@ body,
      read as off-center. Let the box size to the panel, and center it. */
   max-width: none;
   align-items: center;
+}
+
+.overlay-bottom-left {
+  bottom: 1rem;
+  left: 0.75rem;
+  align-items: flex-start;
+}
+
+/* --- collapsible side panels (legend, settings & layers) --- */
+
+/* The body is absolutely positioned against the arrow button, so popping a
+   panel in or out never reflows the panels around it: the button holds its
+   place and the body slides away behind it. Visibility is transitioned too,
+   so a collapsed panel leaves the tab order instead of merely going
+   transparent. */
+.side-panel {
+  position: relative;
+  /* The body is offset from this element's width (100% + gap), and the width
+     it means is the 1.6rem toggle. In a stretched flex column the wrapper
+     would instead take the column's width - which grows when a sibling panel
+     appears - pushing the body off to the side with it. */
+  align-self: flex-start;
+}
+
+.side-panel-body {
+  transition:
+    transform 0.24s ease,
+    opacity 0.2s ease,
+    visibility 0.24s;
+}
+
+.side-panel.is-closed .side-panel-body {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Legend (top left): the button is the anchor at the screen edge and the
+   body hangs to its right, so collapsing slides the panel left behind the
+   button and out of the way. */
+.side-panel-left .side-panel-body {
+  position: absolute;
+  top: 0;
+  left: calc(100% + 0.4rem);
+  width: max-content;
+  max-width: min(80vw, 20rem);
+}
+
+.side-panel-left.is-closed .side-panel-body {
+  transform: translateX(calc(-100% - 0.4rem));
+}
+
+/* Settings & layers (bottom left): the body sits above its button and slides
+   down when it collapses. */
+.side-panel-up .side-panel-body {
+  position: absolute;
+  bottom: calc(100% + 0.4rem);
+  left: 0;
+  width: max-content;
+  max-width: min(80vw, 20rem);
+}
+
+.side-panel-up.is-closed .side-panel-body {
+  transform: translateY(calc(100% + 0.4rem));
+}
+
+/* The arrow itself: a small panel-coloured button that reads as the panel's
+   handle. The chevron points the way the panel will move on click. */
+.side-panel-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border: 1px solid #2a2e36;
+  border-radius: 6px;
+  background: rgba(18, 20, 26, 0.92);
+  color: #9ca3af;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.side-panel-toggle:hover {
+  color: #e5e7eb;
+  border-color: #6b7280;
+}
+
+.side-panel-toggle svg {
+  width: 0.9rem;
+  height: 0.9rem;
 }
 
 .panel {
@@ -142,7 +266,7 @@ body,
 .timeline-control {
   position: relative;
   width: min(85vw, 32rem);
-  padding: 0.4rem 0.7rem 0.5rem;
+  padding: 0.75rem 0.95rem 0.8rem;
 }
 
 .layer-toggle,
@@ -208,7 +332,7 @@ body,
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
   gap: 0.6rem;
-  margin-bottom: 0.35rem;
+  margin-bottom: 0.55rem;
 }
 
 .timeline-horizon {
@@ -220,17 +344,18 @@ body,
   white-space: nowrap;
 }
 
-/* Primary play/pause button — centered, largest control. */
+/* Primary play/pause button — centered, largest control. Rectangular so it
+   reads as the timeline's transport control rather than a floating circle. */
 .timeline-playbtn {
   justify-self: center;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 2.7rem;
-  height: 2.7rem;
+  width: 3.4rem;
+  height: 2.4rem;
   padding: 0;
   border: 1px solid #3b82f6;
-  border-radius: 50%;
+  border-radius: 8px;
   background: #2563eb;
   color: #fff;
   cursor: pointer;
@@ -290,7 +415,7 @@ body,
 .timeline-ticks {
   position: relative;
   height: 1.1rem;
-  margin-bottom: 0.1rem;
+  margin-bottom: 0.2rem;
 }
 
 .timeline-tick {
@@ -385,6 +510,62 @@ body,
 
 .timeline-track:focus-visible .timeline-handle {
   box-shadow: 0 0 0 3px #3b82f6;
+}
+
+/* --- place scope chip (above the timeline) --- */
+
+/* Names the place the map is scoped to. Wider than a normal panel so the
+   "approximate area" note reads as a sentence, but capped so it never
+   competes with the timeline below it. */
+.scope-chip {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  max-width: min(90vw, 30rem);
+}
+
+.scope-chip-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.scope-chip-line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+}
+
+.scope-chip-note {
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: #9ca3af;
+}
+
+.scope-chip-close {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 1px solid #3a3f4a;
+  border-radius: 6px;
+  background: transparent;
+  color: #9ca3af;
+  font-size: 0.7rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.scope-chip-close:hover {
+  color: #e5e7eb;
+  border-color: #6b7280;
 }
 
 /* --- legend --- */
@@ -514,8 +695,9 @@ body,
   border: none;
   background: transparent;
   box-shadow: none;
+  /* Anchor for the list below, which is taken out of flow. */
+  position: relative;
 }
-
 .alerts-toggle {
   position: relative;
   display: flex;
@@ -558,8 +740,13 @@ body,
   text-align: center;
 }
 
+/* Out of flow, hanging below the bell: opening the list must not widen the
+   search row and shove the search box sideways. It covers the federated pill
+   below it while open, which is the acceptable trade for no layout shift. */
 .alerts-list {
-  margin-top: 0.4rem;
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  right: 0;
   width: min(90vw, 22rem);
   max-height: 40vh;
   overflow-y: auto;
@@ -771,59 +958,11 @@ body,
   border-top: 1px solid #2a2e36;
 }
 
-/* --- AI source attribution (hex detail drawer) --- */
+/* (The fabricated "AI source attribution" card and its styles were removed -
+   the drawer's only modelled explanation of a cell is the backend's PDI
+   factor breakdown, styled by .pdi-factor-* below.) */
 
-.source-attribution {
-  margin: 0.75rem 0;
-  padding: 0.5rem 0.6rem;
-  border: 1px solid #4338ca55;
-  background: rgba(67, 56, 202, 0.12);
-  border-radius: 6px;
-}
-
-.source-attribution h3 {
-  margin: 0 0 0.35rem;
-  font-size: 0.85rem;
-  color: #a5b4fc;
-}
-
-.source-attribution-classified {
-  margin: 0 0 0.4rem;
-  font-size: 0.8rem;
-  color: #e5e7eb;
-}
-
-.source-attribution-fusion {
-  border-top: 1px dashed #4b5563;
-  padding-top: 0.4rem;
-}
-
-.source-attribution-heading {
-  margin: 0 0 0.2rem;
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: #a5b4fc;
-}
-
-.source-attribution-fusion ul {
-  margin: 0;
-  padding-left: 1rem;
-  font-size: 0.78rem;
-  color: #d1d5db;
-}
-
-.source-attribution-fusion li {
-  margin: 0.1rem 0;
-}
-
-.source-attribution-note {
-  margin: 0.4rem 0 0;
-  font-size: 0.68rem;
-}
-
-/* --- citizen report widget (under Data Fusion) --- */
+/* --- citizen report widget (real submissions, GET /api/v1/reports) --- */
 
 .citizen-report {
   margin-top: 0.45rem;
@@ -833,21 +972,6 @@ body,
   border-radius: 6px;
 }
 
-.citizen-report-row {
-  display: flex;
-  gap: 0.5rem;
-  align-items: flex-start;
-}
-
-.citizen-thumb {
-  width: 64px;
-  height: 64px;
-  border-radius: 5px;
-  object-fit: cover;
-  flex-shrink: 0;
-  border: 1px solid #3a3f4a;
-}
-
 .citizen-report-meta {
   display: flex;
   flex-direction: column;
@@ -855,12 +979,6 @@ body,
   font-size: 0.78rem;
   color: #e5e7eb;
   min-width: 0;
-}
-
-.citizen-score {
-  font-size: 0.72rem;
-  font-weight: 600;
-  color: #5dd77c;
 }
 
 /* --- freight corridor node popup --- */
@@ -958,6 +1076,31 @@ body,
   border-color: #b91c1c;
 }
 
+/* Severity variants of the same action. The colour of the button is the
+   triage: escalate (critical) keeps the red, inspect (elevated / no
+   detection) is amber, and the local ward log is deliberately low-key
+   because it saves nothing anywhere but this browser. */
+.intervention-cta-inspect {
+  background: #b45309;
+  border-color: #b45309;
+}
+
+.intervention-cta-inspect:hover:not(:disabled) {
+  background: #92400e;
+  border-color: #92400e;
+}
+
+.intervention-cta-log {
+  background: transparent;
+  border-color: #4b5563;
+  color: #d1d5db;
+}
+
+.intervention-cta-log:hover:not(:disabled) {
+  background: #1f2937;
+  border-color: #6b7280;
+}
+
 .intervention-cta:active:not(:disabled) {
   transform: scale(0.99);
 }
@@ -981,6 +1124,54 @@ body,
   font-size: 0.68rem;
   color: #9ca3af;
   text-align: center;
+}
+
+/* --- triage priority badge (drawer header) --- */
+
+/* Sits directly under the region title: one line that says how urgent the
+   clicked cell is, driven by the thermal anomalies that fall inside it.
+   severity-3/2/1 colour-code off the same palette as the map markers, so
+   the badge and the dots on the map read as the same thing. */
+.priority-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0.5rem 0 0;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid;
+  border-radius: 8px;
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+.priority-dot {
+  flex: none;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.priority-3 {
+  border-color: #e11d48;
+  background: rgba(225, 29, 72, 0.12);
+  color: #fb7185;
+}
+
+.priority-2 {
+  border-color: #f97316;
+  background: rgba(249, 115, 22, 0.12);
+  color: #fdba74;
+}
+
+.priority-1 {
+  border-color: #fbbf24;
+  background: rgba(251, 191, 36, 0.1);
+  color: #fcd34d;
+}
+
+.priority-badge .muted {
+  color: #9ca3af;
 }
 
 /* --- authority intervention alerts --- */
@@ -1014,6 +1205,11 @@ body,
   font-size: 0.7rem;
   color: #9ca3af;
   font-style: italic;
+}
+
+.alerts-checklist-note {
+  margin: 0.35rem 0 0.1rem;
+  font-size: 0.7rem;
 }
 
 .alert-actions {
@@ -1058,8 +1254,96 @@ body,
     max-width: calc(100vw - 1.5rem);
   }
 
+  /* The search box and the bell can no longer sit side by side at their full
+     widths here (338 + 38 + gap > the overlay), and a max-content row would
+     overflow the viewport to the left. So the row takes the overlay's width
+     and the search box — the flexible half — gives way. */
+  .top-right-row {
+    width: 100%;
+  }
+
+  .top-right-row > .search-bar {
+    min-width: 0;
+  }
+
   .federated-pill {
     align-self: stretch;
     justify-content: center;
   }
+}
+
+/* --- report-a-fire form (the dashboard's only write side) --- */
+
+.report-open {
+  cursor: pointer;
+  color: #e5e7eb;
+  font: inherit;
+  text-align: left;
+}
+
+.report-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: 20rem;
+}
+
+.report-form-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.report-form-header h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.report-form-close {
+  border: none;
+  background: transparent;
+  color: #9ca3af;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.report-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.8rem;
+}
+
+.report-field select,
+.report-field textarea,
+.report-field input[type='range'] {
+  width: 100%;
+  padding: 0.3rem;
+  border: 1px solid #3a3f4a;
+  border-radius: 6px;
+  background: #12141a;
+  color: #e5e7eb;
+  font: inherit;
+}
+
+.report-form-submit {
+  padding: 0.45rem;
+  border: 1px solid #f59e0b88;
+  border-radius: 6px;
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  font: inherit;
+  cursor: pointer;
+}
+
+.report-form-submit:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.report-form-error {
+  margin: 0;
+  font-size: 0.78rem;
+  color: #f87171;
 }

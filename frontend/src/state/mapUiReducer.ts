@@ -6,13 +6,21 @@
 // Context+useReducer here — the rest of the app's state (server data) is
 // NOT kept here, see hooks/useApiResource.ts.
 
+import { resolutionOfCell } from '../lib/h3Geometry'
 import { lodForZoom } from '../lib/lod'
+import { scopeForPlace } from '../lib/scope'
 import type { Lod } from '../lib/lod'
+import type { MapScope } from '../lib/scope'
+import type { LocationKind } from '../lib/locations'
 import type { BoundingBox } from '../lib/types'
 
 /** How the pollution field is drawn: discrete H3 hexagons, or a smooth
  *  continuous raster (Gaussian-smoothed value field). */
 export type MapViewMode = 'hex' | 'smooth'
+
+/** How far clearing a place scope is allowed to zoom back out to. One step
+ *  per clear, and never past a slightly-wider-than-country framing. */
+const MIN_ZOOM_OUT = 4
 
 export interface MapUiState {
   /** Forecast horizon in minutes. 0 = current conditions ("Now"),
@@ -36,6 +44,19 @@ export interface MapUiState {
   showCitizenSensors: boolean
   /** Major economic freight corridors overlay (DMIC / DFC). */
   showFreightCorridors: boolean
+  /** Whether the legend panel is popped out (top right) or collapsed to its
+   *  arrow button. A preference, so it is persisted (see lib/persistedMapUi). */
+  legendOpen: boolean
+  /** Same, for the settings & layer checklist panel (bottom left). */
+  settingsOpen: boolean
+  /** The searched place the map is scoped to: cells outside its area are
+   *  greyed out and a chip above the timeline names it. Null = whole map.
+   *  Session state, not a preference - deliberately not persisted. */
+  scope: MapScope | null
+  /** The map's current zoom, as last reported by MapView. Kept because
+   *  clearing a scope steps one zoom level back out, and the reducer has no
+   *  other way to know how far in the map currently is. Session state. */
+  zoom: number
   selectedCell: string | null
   /** The H3 resolution `selectedCell` was fetched at, captured at click
    * time — not read live from `lod` below, since the user can zoom
@@ -57,12 +78,24 @@ export type MapUiAction =
   | { type: 'SELECT_FORECAST'; minutes: number }
   | { type: 'SET_VIEW_MODE'; mode: MapViewMode }
   | { type: 'TOGGLE_CONTRAST' }
-  | { type: 'FOCUS_LOCATION'; latitude: number; longitude: number; zoom: number }
+  | {
+      type: 'SELECT_PLACE'
+      name: string
+      kind: LocationKind
+      state: string
+      latitude: number
+      longitude: number
+      zoom: number
+    }
+  | { type: 'CLEAR_SCOPE' }
   | { type: 'TOGGLE_PDI' }
   | { type: 'TOGGLE_FIRE_HOTSPOTS' }
   | { type: 'TOGGLE_CITIZEN_SENSORS' }
   | { type: 'TOGGLE_FREIGHT_CORRIDORS' }
+  | { type: 'TOGGLE_LEGEND' }
+  | { type: 'TOGGLE_SETTINGS' }
   | { type: 'SELECT_CELL'; cell: string | null; resolution?: number }
+  | { type: 'TOGGLE_CELL'; cell: string }
   | { type: 'SET_VIEWPORT'; zoom: number; bbox: BoundingBox }
 
 // The app opens fitted to all of India (see MapView's INDIA_BOUNDS), so
@@ -77,10 +110,36 @@ export const initialMapUiState: MapUiState = {
   showFireHotspots: false,
   showCitizenSensors: false,
   showFreightCorridors: false,
+  legendOpen: true,
+  settingsOpen: true,
+  scope: null,
+  // Corrected by the map's first SET_VIEWPORT; only read if a scope is
+  // cleared before the map has reported a viewport, which can't really
+  // happen (the chip only exists once a search has happened).
+  zoom: 4,
   selectedCell: null,
   selectedCellResolution: null,
   lod: { tier: 'country', resolution: 3, scopedToViewport: false },
   bbox: null,
+}
+
+/** Selection state with the cell's own resolution derived from the cell
+ *  string, never from the current zoom tier: the tier can be a step ahead of
+ *  the data still painted on screen right after a zoom (see
+ *  resolutionOfCell), and GET /cells/{h3_cell} rejects a mismatched pair
+ *  with 422. `fallbackResolution` is only for a caller that already knows
+ *  better than the cell string does. */
+function withSelectedCell(
+  state: MapUiState,
+  cell: string | null,
+  fallbackResolution?: number,
+): MapUiState {
+  return {
+    ...state,
+    selectedCell: cell,
+    selectedCellResolution:
+      cell === null ? null : (resolutionOfCell(cell) ?? fallbackResolution ?? null),
+  }
 }
 
 export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState {
@@ -91,12 +150,48 @@ export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState
       return { ...state, viewMode: action.mode }
     case 'TOGGLE_CONTRAST':
       return { ...state, contrast: !state.contrast }
-    case 'FOCUS_LOCATION':
-      // Always a fresh object, so re-selecting the same place re-flies.
+    case 'SELECT_PLACE': {
+      // Picking a search result does two things: flies the map there, and
+      // scopes it to the place - the rest of the map is greyed out behind a
+      // mask and a chip names the place above the timeline.
+      const scope = scopeForPlace(
+        {
+          name: action.name,
+          kind: action.kind,
+          state: action.state,
+          latitude: action.latitude,
+          longitude: action.longitude,
+        },
+        action.zoom,
+      )
       return {
         ...state,
+        scope,
+        // Always a fresh object, so re-selecting the same place re-flies.
         focus: { latitude: action.latitude, longitude: action.longitude, zoom: action.zoom },
       }
+    }
+    case 'CLEAR_SCOPE': {
+      // Drop the mask and step one zoom level back out, holding the middle of
+      // the current view (or the scope's own point, before the map has
+      // reported a viewport). MIN_ZOOM_OUT keeps repeated clears from
+      // drifting out past the country view.
+      const zoom = Math.max(MIN_ZOOM_OUT, state.zoom - 1)
+      const centre =
+        state.bbox === null
+          ? state.scope === null
+            ? null
+            : { latitude: state.scope.latitude, longitude: state.scope.longitude }
+          : {
+              latitude: (state.bbox.minLat + state.bbox.maxLat) / 2,
+              longitude: (state.bbox.minLon + state.bbox.maxLon) / 2,
+            }
+      return {
+        ...state,
+        scope: null,
+        focus: centre === null ? state.focus : { ...centre, zoom },
+      }
+    }
     case 'TOGGLE_PDI':
       return { ...state, showPdi: !state.showPdi }
     case 'TOGGLE_FIRE_HOTSPOTS':
@@ -105,15 +200,21 @@ export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState
       return { ...state, showCitizenSensors: !state.showCitizenSensors }
     case 'TOGGLE_FREIGHT_CORRIDORS':
       return { ...state, showFreightCorridors: !state.showFreightCorridors }
+    case 'TOGGLE_LEGEND':
+      return { ...state, legendOpen: !state.legendOpen }
+    case 'TOGGLE_SETTINGS':
+      return { ...state, settingsOpen: !state.settingsOpen }
     case 'SELECT_CELL':
-      return {
-        ...state,
-        selectedCell: action.cell,
-        selectedCellResolution: action.cell === null ? null : (action.resolution ?? null),
-      }
+      return withSelectedCell(state, action.cell, action.resolution)
+    case 'TOGGLE_CELL':
+      // Clicking the cell that is already open closes the drawer; clicking
+      // any other cell selects it. The comparison lives here rather than in
+      // the click handler, which is registered once and would otherwise need
+      // the current selection pushed into it through a ref.
+      return withSelectedCell(state, state.selectedCell === action.cell ? null : action.cell)
     case 'SET_VIEWPORT': {
       const lod = lodForZoom(action.zoom)
-      return { ...state, lod, bbox: lod.scopedToViewport ? action.bbox : null }
+      return { ...state, zoom: action.zoom, lod, bbox: lod.scopedToViewport ? action.bbox : null }
     }
     default:
       return state

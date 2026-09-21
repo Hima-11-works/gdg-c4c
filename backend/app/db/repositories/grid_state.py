@@ -22,6 +22,7 @@ def _row_to_domain(row: Row) -> GridState:
         timestamp=row.timestamp,
         pm25=row.pm25,
         pdi=row.pdi,
+        pdi_factors=row.pdi_factors,
         confidence=row.confidence,
         wind_speed=row.wind_speed,
         wind_direction=row.wind_direction,
@@ -34,13 +35,14 @@ def _values(state: GridState) -> dict:
         "timestamp": state.timestamp,
         "pm25": state.pm25,
         "pdi": state.pdi,
+        "pdi_factors": state.pdi_factors,
         "confidence": state.confidence,
         "wind_speed": state.wind_speed,
         "wind_direction": state.wind_direction,
     }
 
 
-_UPDATE_COLUMNS = ("pm25", "pdi", "confidence", "wind_speed", "wind_direction")
+_UPDATE_COLUMNS = ("pm25", "pdi", "pdi_factors", "confidence", "wind_speed", "wind_direction")
 
 
 def _upsert_stmt(state: GridState) -> PgInsert:
