@@ -3,7 +3,10 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/formatters.dart';
+import '../../data/reports/fire_report_api.dart';
 import '../../domain/models/models.dart';
+import '../../features/reports/report_fire_sheet.dart';
+import '../../providers/data_providers.dart';
 import '../../providers/home_providers.dart';
 import '../../providers/profile_providers.dart';
 import '../../theme/app_colors.dart';
@@ -41,6 +44,15 @@ class HomeScreen extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Air Health')),
+      // Citizen fire reports need a backend to talk to; in dummy mode there
+      // is nowhere to send one, so the entry point hides itself.
+      floatingActionButton: ref.watch(fireReportApiClientProvider) == null
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: () => _openReportSheet(context),
+              icon: const Icon(Icons.local_fire_department),
+              label: const Text('Report fire'),
+            ),
       body: airQuality.when(
         loading: () => const LoadingState(message: 'Loading air quality…'),
         error: (e, _) => ErrorState(
@@ -215,6 +227,14 @@ class HomeScreen extends ConsumerWidget {
           );
         },
       ),
+    );
+  }
+
+  void _openReportSheet(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (BuildContext sheetContext) => const ReportFireSheet(),
     );
   }
 }
