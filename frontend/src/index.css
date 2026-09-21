@@ -102,22 +102,23 @@ body,
   pointer-events: none;
 }
 
-/* Top-right legend: the body hangs to the left of its button and slides
-   right when it collapses (the button is the anchor at the screen edge). */
-.side-panel-right .side-panel-body {
+/* Legend (top left): the button is the anchor at the screen edge and the
+   body hangs to its right, so collapsing slides the panel left behind the
+   button and out of the way. */
+.side-panel-left .side-panel-body {
   position: absolute;
   top: 0;
-  right: calc(100% + 0.4rem);
+  left: calc(100% + 0.4rem);
   width: max-content;
   max-width: min(80vw, 20rem);
 }
 
-.side-panel-right.is-closed .side-panel-body {
-  transform: translateX(calc(100% + 0.4rem));
+.side-panel-left.is-closed .side-panel-body {
+  transform: translateX(calc(-100% - 0.4rem));
 }
 
-/* Bottom-left settings: the body sits above its button and slides down when
-   it collapses. */
+/* Settings & layers (bottom left): the body sits above its button and slides
+   down when it collapses. */
 .side-panel-up .side-panel-body {
   position: absolute;
   bottom: calc(100% + 0.4rem);

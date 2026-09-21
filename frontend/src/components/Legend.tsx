@@ -10,7 +10,7 @@ export function Legend() {
   return (
     <SidePanel
       id="legend-panel"
-      side="right"
+      side="left"
       open={state.legendOpen}
       onToggle={() => dispatch({ type: 'TOGGLE_LEGEND' })}
       label={state.legendOpen ? 'Hide legend' : 'Show legend'}
