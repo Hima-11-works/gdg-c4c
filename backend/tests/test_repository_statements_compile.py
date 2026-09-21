@@ -12,11 +12,15 @@ import h3
 from sqlalchemy.dialects import postgresql
 
 from app.db.repositories import alert as alert_repo
+from app.db.repositories import dataset_version as dataset_repo
 from app.db.repositories import fire_report as fire_report_repo
 from app.db.repositories import forecast as forecast_repo
 from app.db.repositories import grid_state as grid_state_repo
+from app.db.repositories import ingestion_run as run_repo
 from app.db.repositories import sensor_reading as sensor_reading_repo
 from app.db.repositories import weather_reading as weather_reading_repo
+from app.domain.features import InputKind
+from app.domain.scenario import DatasetVersion, IngestionRun, IngestionRunStatus
 from app.domain.types import (
     Alert,
     AlertSeverity,
@@ -225,3 +229,36 @@ def test_fire_report_statements() -> None:
     assert "FROM fire_report" in _sql(fire_report_repo._list_active_stmt(NOW))
     by_client = _sql(fire_report_repo._by_client_report_id_stmt("client-123"))
     assert "client_report_id" in by_client
+
+
+def test_environmental_metadata_statements() -> None:
+    dataset = DatasetVersion(
+        dataset_id="synthetic-v1",
+        source="Air Health",
+        product="scenario",
+        version="m1-1",
+        kind=InputKind.SYNTHETIC,
+        region="delhi-ncr",
+        attribution="Air Health synthetic scenario",
+        license="test fixture",
+        available_at=NOW,
+    )
+    dataset_sql = _sql(dataset_repo._upsert_stmt(dataset))
+    assert "INSERT INTO dataset_version" in dataset_sql
+    assert "ON CONFLICT" in dataset_sql
+    assert "DO UPDATE SET" in dataset_sql
+
+    run = IngestionRun(
+        run_id="run-1",
+        dataset_id=dataset.dataset_id,
+        started_at=NOW,
+        finished_at=LATER,
+        fetched_at=LATER,
+        status=IngestionRunStatus.SUCCEEDED,
+        simulation_id="tiny-ci:winter_stagnation:42",
+    )
+    run_sql, params = _sql_and_params(run_repo._upsert_stmt(run))
+    assert "INSERT INTO ingestion_run" in run_sql
+    assert "ON CONFLICT" in run_sql
+    assert "DO UPDATE SET" in run_sql
+    assert params["errors"] == []

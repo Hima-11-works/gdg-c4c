@@ -1,6 +1,6 @@
 {
   "schema_version": "dummy-manifest-v1",
-  "generator_version": "planned-1",
+  "generator_version": "m1-1",
   "profile": "seasonal-training-smoke",
   "scenario_id": "seasonal_mix",
   "seed": 42,
@@ -45,7 +45,7 @@
       "dataset_id": "air-health-synthetic",
       "source": "Air Health",
       "product": "deterministic environmental scenario",
-      "version": "planned-1",
+      "version": "m1-1",
       "kind": "synthetic",
       "region": "delhi-ncr",
       "attribution": "Air Health synthetic scenario",

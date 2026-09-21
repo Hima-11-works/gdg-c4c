@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol
 
+from app.domain.scenario import DatasetVersion, IngestionRun
 from app.domain.types import Alert, FireReport, Forecast, GridState, SensorReading, WeatherReading
 
 
@@ -134,3 +135,19 @@ class FireReportRepository(Protocol):
         ...
 
     def list_active(self, *, since: datetime) -> list[FireReport]: ...
+
+
+class DatasetVersionRepository(Protocol):
+    def upsert(self, dataset: DatasetVersion) -> DatasetVersion: ...
+
+    def get(self, dataset_id: str) -> DatasetVersion | None: ...
+
+    def list(self, *, source: str | None = None) -> list[DatasetVersion]: ...
+
+
+class IngestionRunRepository(Protocol):
+    def upsert(self, run: IngestionRun) -> IngestionRun: ...
+
+    def get(self, run_id: str) -> IngestionRun | None: ...
+
+    def list(self, *, dataset_id: str | None = None) -> list[IngestionRun]: ...

@@ -4,6 +4,8 @@
     python -m app.cli ingest-weather [--min-lat --min-lon --max-lat --max-lon]
     python -m app.cli export-grid [--out grid.geojson] [--min-lat ...]
     python -m app.cli forecast
+    python -m app.cli demo-generate --profile tiny-ci --out demo.json
+    python -m app.cli demo-replay --profile regional-demo --at 2025-01-15T12:00:00Z
 
 Runs one ingestion pass against the bounding box from .env (overridable
 per-call with the flags above) and prints a summary. This is a manual
@@ -41,6 +43,7 @@ from app.db.repositories import (
 )
 from app.db.session import get_session_factory
 from app.domain.types import BoundingBox
+from app.ingestion.demo_scenarios import ScenarioGenerator
 from app.ingestion.factory import build_pollution_provider, build_weather_provider
 from app.services.dispersion import DeterministicH3DispersionModel
 from app.services.forecasting import ForecastingResult, ForecastingService
@@ -178,6 +181,59 @@ async def _run_forecast(args: argparse.Namespace) -> int:
     return _report_forecast(result)
 
 
+def _parse_utc_argument(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+        raise ValueError("time must be an RFC 3339 UTC timestamp, for example 2025-01-15T12:00:00Z")
+    return parsed.astimezone(UTC)
+
+
+async def _run_demo_snapshot(args: argparse.Namespace) -> int:
+    generator = ScenarioGenerator.from_manifest(
+        args.profile,
+        manifest_path=Path(args.manifest) if args.manifest else None,
+        scenario_id=args.scenario,
+        seed=args.seed,
+        anchor_utc=_parse_utc_argument(args.anchor) if args.anchor else None,
+    )
+    if args.at:
+        snapshot = generator.generate_at(_parse_utc_argument(args.at))
+    else:
+        snapshot = generator.generate(args.replay_hour)
+    output_path = Path(args.out)
+    changed = snapshot.write_json(output_path)
+    state = "wrote" if changed else "unchanged"
+    print(
+        f"Demo snapshot {state}: profile={snapshot.profile} scenario={snapshot.scenario_id} "
+        f"replay_at={snapshot.replay_at.isoformat()} cells={len(snapshot.cells)} "
+        f"stations={len(snapshot.sensor_readings)} checksum={snapshot.checksum} path={output_path}"
+    )
+    return 0
+
+
+def _add_demo_snapshot_parser(subparsers: argparse._SubParsersAction, command: str) -> None:
+    demo_parser = subparsers.add_parser(
+        command,
+        help="Generate a deterministic offline environmental scenario snapshot.",
+    )
+    demo_parser.add_argument(
+        "--profile",
+        choices=("tiny-ci", "regional-demo", "seasonal-training-smoke"),
+        default="tiny-ci",
+    )
+    demo_parser.add_argument("--scenario", default=None)
+    demo_parser.add_argument("--seed", type=int, default=None)
+    demo_parser.add_argument("--anchor", default=None, help="UTC anchor timestamp (RFC 3339).")
+    replay_group = demo_parser.add_mutually_exclusive_group()
+    replay_group.add_argument("--replay-hour", type=int, default=0)
+    replay_group.add_argument(
+        "--at", default=None, help="UTC replay timestamp; mutually exclusive with replay-hour."
+    )
+    demo_parser.add_argument("--manifest", default=None)
+    demo_parser.add_argument("--out", default="demo-snapshot.json")
+    demo_parser.set_defaults(func=_run_demo_snapshot)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.cli", description="Development commands.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -213,6 +269,9 @@ def main(argv: list[str] | None = None) -> int:
         help="Run one forecast pipeline pass (DeterministicH3DispersionModel) and persist results.",
     )
     forecast_parser.set_defaults(func=_run_forecast)
+
+    _add_demo_snapshot_parser(subparsers, "demo-generate")
+    _add_demo_snapshot_parser(subparsers, "demo-replay")
 
     args = parser.parse_args(argv)
     logging.basicConfig(level=get_settings().log_level)

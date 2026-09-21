@@ -35,6 +35,46 @@ metadata = MetaData()
 # H3 cell addresses render as at most 15 hex characters; 16 leaves headroom.
 H3_CELL_LENGTH = 16
 
+dataset_version = Table(
+    "dataset_version",
+    metadata,
+    Column("id", String(120), primary_key=True),
+    Column("source", String(80), nullable=False),
+    Column("product", String(120), nullable=False),
+    Column("version", String(80), nullable=False),
+    Column("kind", String(20), nullable=False),
+    Column("region", String(80), nullable=False),
+    Column("attribution", String(240), nullable=False),
+    Column("license", String(160), nullable=False),
+    Column("coverage_start", DateTime(timezone=True), nullable=True),
+    Column("coverage_end", DateTime(timezone=True), nullable=True),
+    Column("available_at", DateTime(timezone=True), nullable=True),
+    CheckConstraint(
+        "coverage_end IS NULL OR coverage_start IS NULL OR coverage_end >= coverage_start",
+        name="ck_dataset_version_coverage_order",
+    ),
+    Index("ix_dataset_version_source", "source"),
+)
+
+ingestion_run = Table(
+    "ingestion_run",
+    metadata,
+    Column("id", String(120), primary_key=True),
+    Column("dataset_id", String(120), nullable=False),
+    Column("started_at", DateTime(timezone=True), nullable=False),
+    Column("finished_at", DateTime(timezone=True), nullable=True),
+    Column("fetched_at", DateTime(timezone=True), nullable=True),
+    Column("status", String(20), nullable=False),
+    Column("errors", JSONB, nullable=False),
+    Column("simulation_id", String(120), nullable=True),
+    CheckConstraint(
+        "finished_at IS NULL OR finished_at >= started_at",
+        name="ck_ingestion_run_finish_order",
+    ),
+    Index("ix_ingestion_run_dataset_started", "dataset_id", "started_at"),
+    Index("ix_ingestion_run_status", "status"),
+)
+
 sensor_reading = Table(
     "sensor_reading",
     metadata,
