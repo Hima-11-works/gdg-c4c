@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { GeoJSONSource, ImageSource, Map as MapLibreMap, NavigationControl, setWorkerUrl } from 'maplibre-gl'
+import {
+  GeoJSONSource,
+  ImageSource,
+  Map as MapLibreMap,
+  NavigationControl,
+  Popup,
+  setWorkerUrl,
+} from 'maplibre-gl'
 import { cellToBoundary } from 'h3-js'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
@@ -10,6 +17,20 @@ import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&ur
 // bundle the worker (with its shared chunk) and hand back a real URL.
 setWorkerUrl(maplibreWorkerUrl)
 import { colorScaleExpression, PDI_COLOR_SCALE, PM25_COLOR_SCALE } from '../lib/colorScales'
+import {
+  FREIGHT_LINE_COLOR,
+  freightLinesFeatureCollection,
+  freightNodesFeatureCollection,
+} from '../lib/freightCorridors'
+import {
+  cameraPinImage,
+  citizenReportsFeatureCollection,
+} from '../lib/citizenReports'
+import {
+  anomalyById,
+  anomalyPopupHtml,
+  fireAnomalyFeatureCollection,
+} from '../lib/fireAnomalies'
 import {
   cellCenter,
   cellsToFeatureCollection,
@@ -181,6 +202,43 @@ const WIND_STREAK_IMAGES = Array.from({ length: WIND_STREAK_FRAME_COUNT }, (_, i
 const SOURCE_SELECTED = 'selected-cell'
 const LAYER_SELECTED_OUTLINE = 'selected-cell-outline'
 
+// Economic freight corridors — a glowing polyline overlay plus clickable
+// congestion node markers. Pure context for the intervention picture.
+const SOURCE_FREIGHT_LINES = 'freight-lines'
+const LAYER_FREIGHT_GLOW = 'freight-lines-glow'
+const LAYER_FREIGHT_LINE = 'freight-lines-core'
+const SOURCE_FREIGHT_NODES = 'freight-nodes'
+const LAYER_FREIGHT_NODES = 'freight-nodes-markers'
+const FREIGHT_NODE_COLOR = '#00F5D4'
+const FREIGHT_GLOW_OPACITY = 0.25
+const FREIGHT_LINE_OPACITY = 0.95
+
+// Citizen report camera pins — amber, wrapped in white pill badges, above
+// corridors but below the selection outline, hidden until toggled on.
+const SOURCE_CITIZEN = 'citizen-reports'
+const LAYER_CITIZEN_PINS = 'citizen-report-pins'
+const CITIZEN_IMAGE = 'citizen-camera-pin'
+
+// VIIRS 375m active-fire detections — the spec-named `satellite-fires-layer`
+// is the blurred glowing halo; under it sit an animated pulse ring and a
+// hot core dot, so the points read as satellite thermal detections.
+const SOURCE_FIRE = 'satellite-fires'
+/** The spec-named thermal-anomaly halo layer. */
+const LAYER_FIRE_HEATMAP = 'satellite-fires-layer'
+const LAYER_FIRE_PULSE = 'satellite-fires-pulse'
+const LAYER_FIRE_CORE = 'satellite-fires-core'
+const FIRE_CORE_COLOR = '#FF3B30'
+const FIRE_GLOW_COLOR = '#FF9500'
+const FIRE_GLOW_OPACITY = 0.45
+const FIRE_CORE_OPACITY = 0.95
+const FIRE_PULSE_FRAME_COUNT = 6
+const FIRE_PULSE_FRAME_MS = 380
+const FIRE_PULSE_IMAGE_PREFIX = 'fire-pulse'
+const firePulseImageName = (frame: number): string => `${FIRE_PULSE_IMAGE_PREFIX}-${frame}`
+const FIRE_PULSE_IMAGES = Array.from({ length: FIRE_PULSE_FRAME_COUNT }, (_, i) =>
+  firePulseImageName(i),
+)
+
 // Wind currents are supplementary/decorative ("generalized meteorological
 // information"), not the primary data layer the way the PM2.5/PDI cells
 // are — so rather than rendering one streak per fetched weather point
@@ -256,6 +314,25 @@ function windStreakFrame(frame: number): ImageData {
   ctx.lineTo(x, headPos)
   ctx.stroke()
 
+  return ctx.getImageData(0, 0, size, size)
+}
+
+/** One frame of the thermal-anomaly pulse ring: an expanding orange ring
+ *  that fades out — frame 0 tight and bright, the last frame wide and
+ *  nearly gone. Cycling the frames animates the satellite-detection pulse. */
+function firePulseFrame(frame: number): ImageData {
+  const size = 44
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const ctx = canvas.getContext('2d')!
+  const t = frame / FIRE_PULSE_FRAME_COUNT
+  const radius = 7 + t * 10
+  ctx.beginPath()
+  ctx.arc(size / 2, size / 2, radius, 0, Math.PI * 2)
+  ctx.globalAlpha = (1 - t) * 0.55
+  ctx.fillStyle = FIRE_GLOW_COLOR
+  ctx.fill()
   return ctx.getImageData(0, 0, size, size)
 }
 
@@ -688,6 +765,183 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
             },
           })
 
+          // Freight corridors — glow under a bright core stroke, hidden
+          // until the toggle effect fades them in. Node markers sit above.
+          map!.addSource(SOURCE_FREIGHT_LINES, {
+            type: 'geojson',
+            data: freightLinesFeatureCollection(),
+          })
+          map!.addLayer({
+            id: LAYER_FREIGHT_GLOW,
+            type: 'line',
+            source: SOURCE_FREIGHT_LINES,
+            layout: { 'line-cap': 'round', 'line-join': 'round', visibility: 'none' },
+            paint: {
+              'line-color': FREIGHT_LINE_COLOR,
+              'line-width': 10,
+              'line-opacity': FREIGHT_GLOW_OPACITY,
+            },
+          })
+          map!.addLayer({
+            id: LAYER_FREIGHT_LINE,
+            type: 'line',
+            source: SOURCE_FREIGHT_LINES,
+            layout: { 'line-cap': 'round', 'line-join': 'round', visibility: 'none' },
+            paint: {
+              'line-color': FREIGHT_LINE_COLOR,
+              'line-width': 4,
+              'line-opacity': FREIGHT_LINE_OPACITY,
+            },
+          })
+          map!.addSource(SOURCE_FREIGHT_NODES, {
+            type: 'geojson',
+            data: freightNodesFeatureCollection(),
+          })
+          map!.addLayer({
+            id: LAYER_FREIGHT_NODES,
+            type: 'circle',
+            source: SOURCE_FREIGHT_NODES,
+            layout: { visibility: 'none' },
+            paint: {
+              'circle-radius': 7,
+              'circle-color': FREIGHT_NODE_COLOR,
+              'circle-stroke-color': '#0b1f1c',
+              'circle-stroke-width': 2,
+              'circle-opacity': 0.95,
+            },
+          })
+
+          // Citizen report camera pins — amber, above corridors but below
+          // the selection outline, hidden until the toggle turns them on.
+          map!.addSource(SOURCE_CITIZEN, {
+            type: 'geojson',
+            data: citizenReportsFeatureCollection() as never,
+          })
+          map!.addImage(CITIZEN_IMAGE, cameraPinImage())
+          map!.addLayer({
+            id: LAYER_CITIZEN_PINS,
+            type: 'symbol',
+            source: SOURCE_CITIZEN,
+            layout: {
+              'icon-image': CITIZEN_IMAGE,
+              'icon-size': 0.72,
+              'icon-allow-overlap': true,
+              visibility: 'none',
+            },
+          })
+
+          // Freight node popups: congestion + emission impact for the
+          // clicked node. Popup garbage-collects itself on close.
+          map!.on('click', LAYER_FREIGHT_NODES, (event) => {
+            const feature = event.features?.[0]
+            const props = feature?.properties
+            if (!feature || !props) return
+            // Node features are authored Points (see freightCorridors.ts).
+            const geometry = feature.geometry as unknown as { coordinates: [number, number] }
+            new Popup({
+              className: 'freight-node-popup',
+              closeButton: false,
+              offset: 12,
+            })
+              .setLngLat(geometry.coordinates)
+              .setHTML(
+                `<strong>${props.name}</strong>` +
+                  `<span class="freight-popup-corridor">${props.corridor}</span>` +
+                  `<span>Corridor congestion: <b>${props.congestion}%</b></span>` +
+                  `<span>Emission impact: <b>${props.emission}</b> t CO₂e / day</span>`,
+              )
+              .addTo(map!)
+          })
+          map!.on('mouseenter', LAYER_FREIGHT_NODES, () => {
+            map!.getCanvas().style.cursor = 'pointer'
+          })
+          map!.on('mouseleave', LAYER_FREIGHT_NODES, () => {
+            map!.getCanvas().style.cursor = ''
+          })
+
+          // VIIRS thermal anomalies — glow halo (the spec-named layer),
+          // animated pulse ring, then the hot core dot. Registered after the
+          // citizen pins so a fire next to a camera pin still reads hot.
+          map!.addSource(SOURCE_FIRE, {
+            type: 'geojson',
+            data: fireAnomalyFeatureCollection(),
+          })
+          for (let frame = 0; frame < FIRE_PULSE_FRAME_COUNT; frame++) {
+            map!.addImage(firePulseImageName(frame), firePulseFrame(frame))
+          }
+          map!.addLayer({
+            id: LAYER_FIRE_HEATMAP,
+            type: 'circle',
+            source: SOURCE_FIRE,
+            layout: { visibility: 'none' },
+            paint: {
+              'circle-color': FIRE_GLOW_COLOR,
+              // radius 8–12px halo, blurred to read as thermal bloom.
+              'circle-radius': [
+                'interpolate',
+                ['linear'],
+                ['zoom'],
+                3,
+                6,
+                8,
+                11,
+                12,
+                15,
+              ],
+              'circle-blur': 1,
+              'circle-opacity': FIRE_GLOW_OPACITY,
+            },
+          })
+          map!.addLayer({
+            id: LAYER_FIRE_PULSE,
+            type: 'symbol',
+            source: SOURCE_FIRE,
+            layout: {
+              'icon-image': FIRE_PULSE_IMAGES[0],
+              'icon-allow-overlap': true,
+              'icon-ignore-placement': true,
+              visibility: 'none',
+            },
+          })
+          map!.addLayer({
+            id: LAYER_FIRE_CORE,
+            type: 'circle',
+            source: SOURCE_FIRE,
+            layout: { visibility: 'none' },
+            paint: {
+              'circle-radius': 4.5,
+              'circle-color': FIRE_CORE_COLOR,
+              'circle-stroke-color': '#1a0c08',
+              'circle-stroke-width': 1.2,
+              'circle-opacity': FIRE_CORE_OPACITY,
+            },
+          })
+
+          // Fire dot popups — VIIRS metadata + the automated dispatch.
+          map!.on('click', LAYER_FIRE_CORE, (event) => {
+            const feature = event.features?.[0]
+            const props = feature?.properties
+            if (!feature || !props) return
+            const anomaly = anomalyById(props.id)
+            if (anomaly === null) return
+            // Anomaly features are authored Points (see fireAnomalies.ts).
+            const geometry = feature.geometry as unknown as { coordinates: [number, number] }
+            new Popup({
+              className: 'fire-anomaly-popup',
+              closeButton: false,
+              offset: 10,
+            })
+              .setLngLat(geometry.coordinates)
+              .setHTML(anomalyPopupHtml(anomaly))
+              .addTo(map!)
+          })
+          map!.on('mouseenter', LAYER_FIRE_CORE, () => {
+            map!.getCanvas().style.cursor = 'pointer'
+          })
+          map!.on('mouseleave', LAYER_FIRE_CORE, () => {
+            map!.getCanvas().style.cursor = ''
+          })
+
           const clickableLayers = [LAYER_PM25_FILL.a, LAYER_PM25_FILL.b, LAYER_PDI_FILL]
           map!.on('click', clickableLayers, (event) => {
             const h3Cell = event.features?.[0]?.properties?.h3_cell
@@ -834,6 +1088,30 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
     // view's layers change; the showPdi guard above makes that a no-op unless
     // PDI actually toggled.
   }, [mapReady, state.showPdi, state.viewMode, state.contrast])
+
+  // Freight corridors toggle — visibility-based hiding on all three layers
+  // (glow stroke, core stroke, node markers), same rule as the fire layer.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    const map = mapRef.current
+    const visibility: 'visible' | 'none' = state.showFreightCorridors
+      ? 'visible'
+      : 'none'
+    map.setLayoutProperty(LAYER_FREIGHT_GLOW, 'visibility', visibility)
+    map.setLayoutProperty(LAYER_FREIGHT_LINE, 'visibility', visibility)
+    map.setLayoutProperty(LAYER_FREIGHT_NODES, 'visibility', visibility)
+  }, [mapReady, state.showFreightCorridors])
+
+  // Citizen report pins toggle — visibility-based hiding.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    const map = mapRef.current
+    map.setLayoutProperty(
+      LAYER_CITIZEN_PINS,
+      'visibility',
+      state.showCitizenSensors ? 'visible' : 'none',
+    )
+  }, [mapReady, state.showCitizenSensors])
 
   // Switching the render mode (or toggling contrast) resets the double buffer
   // to a known state (set 'a' shown, 'b' hidden, buffer roles reset) so the
@@ -1070,6 +1348,50 @@ export function MapView({ currentGrid, forecastGrid, weather }: MapViewProps) {
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
   }, [mapReady, reducedMotion])
+
+  // Fire-layer toggle — visibility-based hiding for every satellite-fire
+  // layer. Opacity tricks can't be trusted here: the core dot's *stroke*
+  // ring renders even at circle-opacity 0 (stroke opacity is a separate
+  // paint property), which is what left the black outlines behind.
+  // Layout visibility removes the layer from rendering entirely.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    const map = mapRef.current
+    const visibility: 'visible' | 'none' = state.showFireHotspots
+      ? 'visible'
+      : 'none'
+    map.setLayoutProperty(LAYER_FIRE_HEATMAP, 'visibility', visibility)
+    map.setLayoutProperty(LAYER_FIRE_PULSE, 'visibility', visibility)
+    map.setLayoutProperty(LAYER_FIRE_CORE, 'visibility', visibility)
+  }, [mapReady, state.showFireHotspots])
+
+  // Animate the thermal-anomaly pulse ring by cycling the icon frames —
+  // same pattern as the wind streaks. Static under prefers-reduced-motion.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    if (!state.showFireHotspots) return
+    const map = mapRef.current
+
+    if (reducedMotion) {
+      map.setLayoutProperty(LAYER_FIRE_PULSE, 'icon-image', FIRE_PULSE_IMAGES[0])
+      return
+    }
+
+    let raf = 0
+    let lastFrame = -1
+    const tick = (now: number) => {
+      if (document.visibilityState === 'visible') {
+        const frame = Math.floor(now / FIRE_PULSE_FRAME_MS) % FIRE_PULSE_FRAME_COUNT
+        if (frame !== lastFrame) {
+          lastFrame = frame
+          map.setLayoutProperty(LAYER_FIRE_PULSE, 'icon-image', FIRE_PULSE_IMAGES[frame])
+        }
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [mapReady, reducedMotion, state.showFireHotspots])
 
   return <div ref={containerRef} className="map-canvas" />
 }

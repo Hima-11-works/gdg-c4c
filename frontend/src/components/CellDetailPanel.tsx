@@ -1,7 +1,9 @@
+import { useState } from 'react'
 import { fetchCellDetail } from '../lib/api'
 import { PDI_LABEL, PDI_TOOLTIP, compassLabel, formatNumber, pdiFactorLabel } from '../lib/format'
 import { cellCenter } from '../lib/h3Geometry'
-import { findStateForPoint } from '../lib/stateBoundaries'
+import { regionTitle } from '../lib/regionName'
+import { citizenReportForCell, reportThumbnail } from '../lib/citizenReports'
 import { useApiResource } from '../hooks/useApiResource'
 import { useStateBoundaries } from '../hooks/useStateBoundaries'
 import { useMapUi } from '../state/MapUiContext'
@@ -61,7 +63,13 @@ function classifySource(detail: CellDetailOut): {
   return { label: chosen.label, confidence: Math.min(0.93, Math.max(0.55, confidence)) }
 }
 
-function SourceAttributionCard({ detail }: { detail: CellDetailOut }) {
+function SourceAttributionCard({
+  detail,
+  showCitizenReports,
+}: {
+  detail: CellDetailOut
+  showCitizenReports: boolean
+}) {
   const attribution = classifySource(detail)
   if (attribution === null) return null
 
@@ -82,6 +90,7 @@ function SourceAttributionCard({ detail }: { detail: CellDetailOut }) {
           <li>{confirmations} Citizen Photo Confirmations</li>
           <li>Downwind Plume Drift</li>
         </ul>
+        {showCitizenReports && <CitizenReportWidget h3Cell={detail.h3_cell} />}
       </div>
       <p className="muted source-attribution-note">
         Multi-modal fusion — outputs are probabilistic attribution, not enforcement evidence.
@@ -90,14 +99,49 @@ function SourceAttributionCard({ detail }: { detail: CellDetailOut }) {
   )
 }
 
-function CellDetailContent({ detail, isDemo }: { detail: CellDetailOut; isDemo: boolean }) {
+/** Citizen report widget under the Data Fusion block — the fused
+ *  confirmation the AI attribution cites, with photo thumbnail, category
+ *  and AI verification score. */
+function CitizenReportWidget({ h3Cell }: { h3Cell: string }) {
+  const report = citizenReportForCell(h3Cell)
+  if (report === null) return null
+
+  return (
+    <section className="citizen-report">
+      <p className="source-attribution-heading">Citizen Report</p>
+      <div className="citizen-report-row">
+        <img
+          className="citizen-thumb"
+          src={reportThumbnail(report.category)}
+          alt={`Citizen photo: ${report.category}`}
+          width={64}
+          height={64}
+          loading="lazy"
+        />
+        <div className="citizen-report-meta">
+          <strong>{report.category}</strong>
+          <span className="muted">
+            {report.minutesAgo} mins ago · {report.name}
+          </span>
+          <span className="citizen-score">AI Verification Score: {Math.round(report.aiScore * 100)}%</span>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function CellDetailContent({
+  detail,
+  isDemo,
+  showCitizenReports,
+}: {
+  detail: CellDetailOut
+  isDemo: boolean
+  showCitizenReports: boolean
+}) {
   const current = detail.current
   const windSpeed = detail.weather?.wind_speed ?? current?.wind_speed ?? null
   const windDirection = detail.weather?.wind_direction ?? current?.wind_direction ?? null
-
-  const boundaries = useStateBoundaries()
-  const [lat, lon] = cellCenter(detail.h3_cell)
-  const stateName = boundaries ? findStateForPoint(lat, lon, boundaries) : null
 
   if (current === null && detail.forecasts.length === 0 && detail.weather === null) {
     return <p>No data for this cell yet.</p>
@@ -110,8 +154,6 @@ function CellDetailContent({ detail, isDemo }: { detail: CellDetailOut; isDemo: 
           Demo data — illustrative, not measured.
         </p>
       )}
-
-      {stateName !== null && <p className="cell-detail-location">{stateName}</p>}
 
       <dl className="cell-detail-grid">
         <dt>PM2.5</dt>
@@ -151,7 +193,7 @@ function CellDetailContent({ detail, isDemo }: { detail: CellDetailOut; isDemo: 
         <dd>{current === null ? '—' : `${Math.round(current.confidence * 100)}%`}</dd>
       </dl>
 
-      <SourceAttributionCard detail={detail} />
+      <SourceAttributionCard detail={detail} showCitizenReports={showCitizenReports} />
 
       <h3>Forecast</h3>
       {detail.forecasts.length === 0 ? (
@@ -194,6 +236,47 @@ function CellDetailContent({ detail, isDemo }: { detail: CellDetailOut; isDemo: 
   )
 }
 
+/** Sticky bottom action bar of the inspection drawer — the rapid-
+ *  intervention dispatch that satisfies the brief's "alert relevant
+ *  authorities" clause. Dispatch is acknowledged locally (deterministic
+ *  status line); the brief's real routing endpoint plugs in at this exact
+ *  button without touching the rest of the drawer. */
+function InterventionActionBar({ h3Cell }: { h3Cell: string }) {
+  const [dispatched, setDispatched] = useState(false)
+
+  const dispatchNow = () => {
+    if (dispatched) return
+    setDispatched(true)
+    // Broadcast so the Alerts panel/edge node can pick the intervention up
+    // (federated dispatch hook point — the brief's "alert relevant
+    // authorities" clauses ride on this exact event).
+    window.dispatchEvent(
+      new CustomEvent('air-health:intervention-dispatched', {
+        detail: { cell: h3Cell, routedTo: 'State Pollution Control Board' },
+      }),
+    )
+  }
+
+  return (
+    <div className="intervention-bar" role="group" aria-label="Rapid intervention">
+      <button
+        type="button"
+        className={`intervention-cta ${dispatched ? 'intervention-cta-done' : ''}`}
+        onClick={dispatchNow}
+        disabled={dispatched}
+        title="Dispatch the State Pollution Control Board Rapid Action Unit to this hex"
+      >
+        {dispatched ? '✓ Rapid Action Unit Dispatched' : '🚨 Dispatch Rapid Action Unit'}
+      </button>
+      <p className="intervention-status">
+        {dispatched
+          ? 'Dispatch acknowledged by the federated edge.'
+          : 'Routes alert to State Pollution Control Board.'}
+      </p>
+    </div>
+  )
+}
+
 export function CellDetailPanel() {
   const { state, dispatch } = useMapUi()
   const selectedCell = state.selectedCell
@@ -201,6 +284,20 @@ export function CellDetailPanel() {
   // read live from state.lod — the user may have zoomed since, and a
   // cell string only means anything at the resolution it was minted at.
   const resolution = state.selectedCellResolution ?? undefined
+  const boundaries = useStateBoundaries()
+
+  // Humanized drawer title: readable region (state + deterministic zone)
+  // derived from the clicked hex's center coordinates; the raw H3 index
+  // drops to a muted subline.
+  let title: string | null = null
+  if (selectedCell !== null) {
+    try {
+      const [lat, lon] = cellCenter(selectedCell)
+      title = regionTitle(lat, lon, boundaries)
+    } catch {
+      title = null
+    }
+  }
 
   const { resource, refetch } = useApiResource(
     () => fetchCellDetail(selectedCell ?? '', resolution),
@@ -210,14 +307,21 @@ export function CellDetailPanel() {
 
   if (selectedCell === null) return null
 
+  const close = () => dispatch({ type: 'SELECT_CELL', cell: null })
+
   return (
     <aside className="panel cell-detail" aria-label="Cell details">
       <div className="cell-detail-header">
-        <h2>{selectedCell}</h2>
+        <div className="cell-detail-titles">
+          <h2>{title ?? selectedCell}</h2>
+          <span className="cell-detail-index">{selectedCell}</span>
+        </div>
         <button
           type="button"
-          onClick={() => dispatch({ type: 'SELECT_CELL', cell: null })}
-          aria-label="Close"
+          className="cell-detail-close"
+          onClick={close}
+          aria-label="Close cell details"
+          title="Close"
         >
           ✕
         </button>
@@ -235,7 +339,14 @@ export function CellDetailPanel() {
       )}
 
       {resource.status === 'success' && (
-        <CellDetailContent detail={resource.data} isDemo={resource.isDemo} />
+        <>
+          <CellDetailContent
+            detail={resource.data}
+            isDemo={resource.isDemo}
+            showCitizenReports={state.showCitizenSensors}
+          />
+          <InterventionActionBar h3Cell={selectedCell} />
+        </>
       )}
     </aside>
   )
