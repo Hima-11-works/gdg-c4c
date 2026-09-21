@@ -37,6 +37,11 @@ export interface MapUiState {
   showCitizenSensors: boolean
   /** Major economic freight corridors overlay (DMIC / DFC). */
   showFreightCorridors: boolean
+  /** Whether the legend panel is popped out (top right) or collapsed to its
+   *  arrow button. A preference, so it is persisted (see lib/persistedMapUi). */
+  legendOpen: boolean
+  /** Same, for the settings & layer checklist panel (bottom left). */
+  settingsOpen: boolean
   selectedCell: string | null
   /** The H3 resolution `selectedCell` was fetched at, captured at click
    * time — not read live from `lod` below, since the user can zoom
@@ -63,6 +68,8 @@ export type MapUiAction =
   | { type: 'TOGGLE_FIRE_HOTSPOTS' }
   | { type: 'TOGGLE_CITIZEN_SENSORS' }
   | { type: 'TOGGLE_FREIGHT_CORRIDORS' }
+  | { type: 'TOGGLE_LEGEND' }
+  | { type: 'TOGGLE_SETTINGS' }
   | { type: 'SELECT_CELL'; cell: string | null; resolution?: number }
   | { type: 'TOGGLE_CELL'; cell: string }
   | { type: 'SET_VIEWPORT'; zoom: number; bbox: BoundingBox }
@@ -79,6 +86,8 @@ export const initialMapUiState: MapUiState = {
   showFireHotspots: false,
   showCitizenSensors: false,
   showFreightCorridors: false,
+  legendOpen: true,
+  settingsOpen: true,
   selectedCell: null,
   selectedCellResolution: null,
   lod: { tier: 'country', resolution: 3, scopedToViewport: false },
@@ -126,6 +135,10 @@ export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState
       return { ...state, showCitizenSensors: !state.showCitizenSensors }
     case 'TOGGLE_FREIGHT_CORRIDORS':
       return { ...state, showFreightCorridors: !state.showFreightCorridors }
+    case 'TOGGLE_LEGEND':
+      return { ...state, legendOpen: !state.legendOpen }
+    case 'TOGGLE_SETTINGS':
+      return { ...state, settingsOpen: !state.settingsOpen }
     case 'SELECT_CELL':
       return withSelectedCell(state, action.cell, action.resolution)
     case 'TOGGLE_CELL':

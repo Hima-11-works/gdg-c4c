@@ -129,8 +129,6 @@ export function MapPage() {
       />
 
       <div className="overlay overlay-top-left">
-        <Legend />
-        <LayerToggle />
         {reportCenter !== null && (
           <button
             type="button"
@@ -154,6 +152,11 @@ export function MapPage() {
         <SearchBar />
         <FederatedStatusPill />
         <AlertsPanel />
+        <Legend />
+      </div>
+
+      <div className="overlay overlay-bottom-left">
+        <LayerToggle />
       </div>
 
       <div className="overlay overlay-bottom-center">

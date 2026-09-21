@@ -72,6 +72,92 @@ body,
   align-items: center;
 }
 
+.overlay-bottom-left {
+  bottom: 1rem;
+  left: 0.75rem;
+  align-items: flex-start;
+}
+
+/* --- collapsible side panels (legend, settings & layers) --- */
+
+/* The body is absolutely positioned against the arrow button, so popping a
+   panel in or out never reflows the panels around it: the button holds its
+   place and the body slides away behind it. Visibility is transitioned too,
+   so a collapsed panel leaves the tab order instead of merely going
+   transparent. */
+.side-panel {
+  position: relative;
+}
+
+.side-panel-body {
+  transition:
+    transform 0.24s ease,
+    opacity 0.2s ease,
+    visibility 0.24s;
+}
+
+.side-panel.is-closed .side-panel-body {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Top-right legend: the body hangs to the left of its button and slides
+   right when it collapses (the button is the anchor at the screen edge). */
+.side-panel-right .side-panel-body {
+  position: absolute;
+  top: 0;
+  right: calc(100% + 0.4rem);
+  width: max-content;
+  max-width: min(80vw, 20rem);
+}
+
+.side-panel-right.is-closed .side-panel-body {
+  transform: translateX(calc(100% + 0.4rem));
+}
+
+/* Bottom-left settings: the body sits above its button and slides down when
+   it collapses. */
+.side-panel-up .side-panel-body {
+  position: absolute;
+  bottom: calc(100% + 0.4rem);
+  left: 0;
+  width: max-content;
+  max-width: min(80vw, 20rem);
+}
+
+.side-panel-up.is-closed .side-panel-body {
+  transform: translateY(calc(100% + 0.4rem));
+}
+
+/* The arrow itself: a small panel-coloured button that reads as the panel's
+   handle. The chevron points the way the panel will move on click. */
+.side-panel-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border: 1px solid #2a2e36;
+  border-radius: 6px;
+  background: rgba(18, 20, 26, 0.92);
+  color: #9ca3af;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.side-panel-toggle:hover {
+  color: #e5e7eb;
+  border-color: #6b7280;
+}
+
+.side-panel-toggle svg {
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
 .panel {
   background: rgba(18, 20, 26, 0.92);
   border: 1px solid #2a2e36;
