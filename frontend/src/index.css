@@ -515,7 +515,6 @@ body,
   background: transparent;
   box-shadow: none;
 }
-
 .alerts-toggle {
   position: relative;
   display: flex;
@@ -993,4 +992,80 @@ body,
     align-self: stretch;
     justify-content: center;
   }
+}
+
+/* --- report-a-fire form (the dashboard's only write side) --- */
+
+.report-open {
+  cursor: pointer;
+  color: #e5e7eb;
+  font: inherit;
+  text-align: left;
+}
+
+.report-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: 20rem;
+}
+
+.report-form-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.report-form-header h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.report-form-close {
+  border: none;
+  background: transparent;
+  color: #9ca3af;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.report-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.8rem;
+}
+
+.report-field select,
+.report-field textarea,
+.report-field input[type='range'] {
+  width: 100%;
+  padding: 0.3rem;
+  border: 1px solid #3a3f4a;
+  border-radius: 6px;
+  background: #12141a;
+  color: #e5e7eb;
+  font: inherit;
+}
+
+.report-form-submit {
+  padding: 0.45rem;
+  border: 1px solid #f59e0b88;
+  border-radius: 6px;
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  font: inherit;
+  cursor: pointer;
+}
+
+.report-form-submit:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.report-form-error {
+  margin: 0;
+  font-size: 0.78rem;
+  color: #f87171;
 }

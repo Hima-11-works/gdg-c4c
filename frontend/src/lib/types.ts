@@ -125,3 +125,16 @@ export interface FireReportOut {
   client_report_id: string | null
   reported_at: string
 }
+
+/** Request body for POST /api/v1/reports - the same bounds the backend
+ *  validates (intensity 1-5, duration 0-24h, notes <= 280 chars). */
+export interface FireReportSubmit {
+  latitude: number
+  longitude: number
+  kind: FireReportKind
+  smoke_intensity: number
+  duration_hours: number
+  notes?: string
+  /** Idempotency id: a retry of the same submission must not stack reports. */
+  client_report_id?: string
+}

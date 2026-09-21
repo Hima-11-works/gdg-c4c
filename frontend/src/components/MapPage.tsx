@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { fetchGridCurrent, fetchReports, fetchWeather } from '../lib/api'
 import { useApiResource } from '../hooks/useApiResource'
 import {
@@ -15,6 +15,7 @@ import { FederatedStatusPill } from './FederatedStatusPill'
 import { Legend } from './Legend'
 import { LayerToggle } from './LayerToggle'
 import { MapView } from './MapView'
+import { ReportFireForm } from './ReportFireForm'
 import { SearchBar } from './SearchBar'
 import { StatusBanner } from './StatusBanner'
 import { TimelineControl } from './TimelineControl'
@@ -27,6 +28,19 @@ const POLL_INTERVAL_MS = 60_000
 export function MapPage() {
   const { state } = useMapUi()
   const { lod, bbox, forecastMinutes } = state
+  // The submit form is open/closed here so its map-centre location and the
+  // reports list it refetches both come from this component's data.
+  const [reportOpen, setReportOpen] = useState(false)
+
+  // A report is filed where the user is looking: the viewport centre. The
+  // backend snaps it to an H3 cell and returns that in the response.
+  const reportCenter =
+    bbox === null
+      ? null
+      : {
+          latitude: (bbox.minLat + bbox.maxLat) / 2,
+          longitude: (bbox.minLon + bbox.maxLon) / 2,
+        }
 
   const viewportReady = !lod.scopedToViewport || bbox !== null
   // Padded by one cell radius (see lib/lod.ts's lodQueryFor) so cells that
@@ -117,6 +131,23 @@ export function MapPage() {
       <div className="overlay overlay-top-left">
         <Legend />
         <LayerToggle />
+        {reportCenter !== null && (
+          <button
+            type="button"
+            className="panel report-open"
+            onClick={() => setReportOpen(true)}
+          >
+            Report a fire
+          </button>
+        )}
+        {reportOpen && reportCenter !== null && (
+          <ReportFireForm
+            latitude={reportCenter.latitude}
+            longitude={reportCenter.longitude}
+            onClose={() => setReportOpen(false)}
+            onSubmitted={reports.refetch}
+          />
+        )}
       </div>
 
       <div className="overlay overlay-top-right">
