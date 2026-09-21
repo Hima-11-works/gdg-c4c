@@ -771,57 +771,9 @@ body,
   border-top: 1px solid #2a2e36;
 }
 
-/* --- AI source attribution (hex detail drawer) --- */
-
-.source-attribution {
-  margin: 0.75rem 0;
-  padding: 0.5rem 0.6rem;
-  border: 1px solid #4338ca55;
-  background: rgba(67, 56, 202, 0.12);
-  border-radius: 6px;
-}
-
-.source-attribution h3 {
-  margin: 0 0 0.35rem;
-  font-size: 0.85rem;
-  color: #a5b4fc;
-}
-
-.source-attribution-classified {
-  margin: 0 0 0.4rem;
-  font-size: 0.8rem;
-  color: #e5e7eb;
-}
-
-.source-attribution-fusion {
-  border-top: 1px dashed #4b5563;
-  padding-top: 0.4rem;
-}
-
-.source-attribution-heading {
-  margin: 0 0 0.2rem;
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: #a5b4fc;
-}
-
-.source-attribution-fusion ul {
-  margin: 0;
-  padding-left: 1rem;
-  font-size: 0.78rem;
-  color: #d1d5db;
-}
-
-.source-attribution-fusion li {
-  margin: 0.1rem 0;
-}
-
-.source-attribution-note {
-  margin: 0.4rem 0 0;
-  font-size: 0.68rem;
-}
+/* (The fabricated "AI source attribution" card and its styles were removed -
+   the drawer's only modelled explanation of a cell is the backend's PDI
+   factor breakdown, styled by .pdi-factor-* below.) */
 
 /* --- citizen report widget (under Data Fusion) --- */
 
