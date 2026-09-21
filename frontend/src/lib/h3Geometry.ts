@@ -4,7 +4,13 @@
 // (h3_cell, value) pairs already computed by the backend into GeoJSON for
 // MapLibre. No interpolation, estimation, or forecasting happens here.
 
-import { cellToBoundary, cellToLatLng, getHexagonEdgeLengthAvg, getResolution } from 'h3-js'
+import {
+  cellToBoundary,
+  cellToLatLng,
+  getHexagonEdgeLengthAvg,
+  getResolution,
+  latLngToCell,
+} from 'h3-js'
 import type { Feature, FeatureCollection, Point, Polygon, Position } from 'geojson'
 
 export interface CellValue {
@@ -73,6 +79,14 @@ export function resolutionOfCell(h3Cell: string): number | undefined {
   } catch {
     return undefined
   }
+}
+
+/** The H3 cell a point falls in at `resolution` - the inverse of
+ *  cellCenter, used to say which cell a point event (a satellite fire
+ *  detection, say) belongs to, in the same terms the drawer's selection is
+ *  expressed in. */
+export function cellForPoint(latitude: number, longitude: number, resolution: number): string {
+  return latLngToCell(latitude, longitude, resolution)
 }
 
 /** Average H3 cell edge length at `resolution`, in km. Sizes the smoothing
