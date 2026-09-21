@@ -323,6 +323,32 @@ def test_grid_state_with_null_pollution_fields_round_trips(db_session, cell: str
     assert repo.get(cell, NOW) == result
 
 
+def test_grid_state_pdi_factors_round_trip(db_session, cell: str) -> None:
+    """The PDI factor breakdown (migration 0005) - including the
+    fire_pressure factor citizen reports contribute - must survive a
+    round trip through JSONB, and stay None (not {}) when absent."""
+    repo = SqlGridStateRepository(db_session)
+
+    with_factors = repo.upsert(
+        GridState(
+            h3_cell=cell,
+            timestamp=NOW,
+            confidence=0.8,
+            pm25=42.0,
+            pdi=61.0,
+            pdi_factors={"pm25": 0.24, "fire_pressure": 0.36},
+        )
+    )
+    assert with_factors.pdi_factors == {"pm25": 0.24, "fire_pressure": 0.36}
+    assert repo.get(cell, NOW).pdi_factors == {
+        "pm25": 0.24,
+        "fire_pressure": 0.36,
+    }
+
+    without = repo.upsert(GridState(h3_cell=cell, timestamp=NOW, confidence=0.0, pdi=12.0))
+    assert without.pdi_factors is None
+
+
 def test_grid_state_latest_returns_one_row_per_cell(db_session, cell: str) -> None:
     repo = SqlGridStateRepository(db_session)
     repo.upsert(

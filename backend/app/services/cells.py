@@ -27,10 +27,10 @@ class CellDetail:
     # The normalized [0, 1] value of each factor behind `current.pdi` —
     # see app.domain.pdi.PDIResult.factors for the real-pipeline shape
     # this mirrors. None (not an empty dict) when no breakdown is
-    # available: the real pipeline computes a PDI score but doesn't
-    # persist its per-factor breakdown anywhere yet, so a real cell's
-    # detail view has a `pdi` but not (yet) a `pdi_factors`. Demo cells
-    # always have one — see app.services.demo_data.generate_pdi_factors.
+    # available: the pipeline persists the breakdown on the row now
+    # (migration 0005), so this is None only for an older row written
+    # before that column existed. Demo cells always have one — see
+    # app.services.demo_data.generate_pdi_factors.
     pdi_factors: dict[str, float] | None = None
 
 
@@ -71,7 +71,16 @@ class CellService:
         weather = self._weather_repository.latest_for_cell(h3_cell)
 
         if current is not None or forecasts or weather is not None:
-            return ServiceResult(CellDetail(h3_cell, current, forecasts, weather), is_demo=False)
+            return ServiceResult(
+                CellDetail(
+                    h3_cell,
+                    current,
+                    forecasts,
+                    weather,
+                    current.pdi_factors if current is not None else None,
+                ),
+                is_demo=False,
+            )
 
         if not demo_data.is_within_demo_domain(h3_cell):
             return None

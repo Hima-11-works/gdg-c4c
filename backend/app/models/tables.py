@@ -26,6 +26,7 @@ from sqlalchemy import (
 from sqlalchemy import (
     Enum as SAEnum,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 
 from app.domain.types import AlertSeverity
 
@@ -110,10 +111,16 @@ grid_state = Table(
     Column("h3_cell", String(H3_CELL_LENGTH), primary_key=True),
     Column("timestamp", DateTime(timezone=True), primary_key=True),
     # Nullable: a cell without enough nearby evidence gets no fabricated
-    # value (see app.services.estimation). confidence stays NOT NULL —
+    # value (see app.services.estimation). confidence stays NOT NULL -
     # 0.0 means "no evidence", not "unknown".
     Column("pm25", Float, nullable=True),
     Column("pdi", Float, nullable=True),
+    # The normalized [0, 1] value of each factor behind `pdi` (see
+    # app.domain.pdi.PDIResult.factors) - e.g. {"pm25": 0.81,
+    # "fire_pressure": 0.36} - so the API can explain a cell's score
+    # instead of only reporting it. Nullable: older rows predate the
+    # column, and a PDI model may return no breakdown.
+    Column("pdi_factors", JSONB, nullable=True),
     Column("confidence", Float, nullable=False),
     Column("wind_speed", Float, nullable=True),
     Column("wind_direction", Float, nullable=True),

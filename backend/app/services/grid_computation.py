@@ -211,4 +211,13 @@ class GridComputationService:
     def _with_pdi(self, state: GridState, fire_pressure: float | None = None) -> GridState:
         context = CellContext(h3_cell=state.h3_cell, pm25=state.pm25, fire_pressure=fire_pressure)
         pdi_result = self._pdi_model.calculate(context)
-        return replace(state, pdi=pdi_result.pdi)
+        # Persist the breakdown alongside the score: the API's
+        # pdi_factors is otherwise permanently null for real cells, and
+        # it is how the fire contribution (fire_pressure) becomes visible
+        # to a reader. An empty dict means "computed, no factors" - store
+        # None rather than {} so "no breakdown" stays one value.
+        return replace(
+            state,
+            pdi=pdi_result.pdi,
+            pdi_factors=pdi_result.factors or None,
+        )

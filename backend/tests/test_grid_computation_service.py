@@ -62,10 +62,17 @@ class _FakePDIModel:
         self.calls.append(cell_context)
         if self._error is not None:
             raise self._error
+        pdi = self._pdi_by_cell.get(cell_context.h3_cell)
         return PDIResult(
             h3_cell=cell_context.h3_cell,
-            pdi=self._pdi_by_cell.get(cell_context.h3_cell),
-            factors={},
+            pdi=pdi,
+            # A breakdown when the cell has a score, so tests can assert the
+            # pipeline persists it (the API's pdi_factors).
+            factors=(
+                {"pm25": 0.5, "fire_pressure": cell_context.fire_pressure}
+                if pdi is not None and cell_context.fire_pressure is not None
+                else ({"pm25": 0.5} if pdi is not None else {})
+            ),
         )
 
 
@@ -120,6 +127,8 @@ def test_run_persists_one_grid_state_per_cell_with_pdi_folded_in() -> None:
     assert saved is not None
     assert saved.pm25 == 42.0
     assert saved.pdi == 67.0
+    # The factor breakdown is persisted, not just the score.
+    assert saved.pdi_factors == {"pm25": 0.5}
 
 
 class _ConstantFireGradient:
@@ -241,6 +250,12 @@ def test_run_passes_normalized_fire_pressure_to_pdi() -> None:
 
     context = pdi_model.calls[0]
     assert context.fire_pressure == 50.0 / 400.0
+    # ...and the breakdown (including the fire factor) reaches the row, so
+    # the API can show why the cell scores the way it does.
+    assert grid_repo.get(target_cell, TIMESTAMP).pdi_factors == {
+        "pm25": 0.5,
+        "fire_pressure": 50.0 / 400.0,
+    }
 
 
 def test_run_a_cell_without_an_estimate_keeps_null_pm25() -> None:
