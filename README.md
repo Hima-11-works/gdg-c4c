@@ -788,13 +788,15 @@ python -m app.pipeline.run     # or ingest / ingest-weather / forecast individua
 For running the whole thing with no live network connection and no API
 keys — hackathon judging, offline demos, CI. `DEMO_MODE=true` substitutes
 a fixed, deterministic PM2.5/wind dataset (`app.ingestion.demo`) for
-OpenAQ/Open-Meteo, chosen by `app.ingestion.factory` — **that is the
-only thing it changes.** Every stage after ingestion (H3 grid coverage,
-IDW interpolation, PDI, the dispersion model, alert generation,
-persistence, the API) is the exact same code path as live mode, running
-for real against this synthetic input. There is no separate demo API
-response shape, and no `if demo_mode` branch anywhere outside
-`app.ingestion.factory`.
+OpenAQ/Open-Meteo, chosen by `app.ingestion.factory` — that and seeding
+two fixed fire sightings (`app.ingestion.demo_reports`, so the
+fire-gradient contribution and `GET /api/v1/reports` are demoable) are
+the only things it changes. Every stage after ingestion (H3 grid
+coverage, IDW interpolation, PDI, the dispersion model, alert
+generation, persistence, the API) is the exact same code path as live
+mode, running for real against this synthetic input. There is no
+separate demo API response shape, and no `if demo_mode` branch anywhere
+outside `app.ingestion.factory` and the pipeline's seeding stage.
 
 The scenario is a smog-episode-scale PM2.5 hotspot (280 µg/m³, central
 Delhi) with four lower background readings around it and a steady 6 m/s
@@ -803,7 +805,10 @@ guaranteed — with no non-default configuration — to produce a clearly
 visible hotspot, forecast values that visibly carry it downwind over
 +1h/+3h/+6h, and at least one CRITICAL alert (280 is comfortably past the
 default `ALERT_CRITICAL_THRESHOLD_UGM3=150.0`). `backend/tests/test_demo_mode.py`
-asserts exactly this, running the real services.
+asserts exactly this, running the real services. The two fire sightings
+sit inside IDW sensor coverage (augment-only blending would otherwise
+make them invisible) and away from the hotspot, so the map shows a
+separate, sharper plume where they're reported.
 
 **`DEMO_MODE` is unrelated to a response's `is_demo` flag.** This is the
 single most likely point of confusion in the whole codebase, so it's

@@ -8,7 +8,7 @@ import h3
 
 from app.core.config import get_settings
 from app.domain.repositories import FireReportRepository
-from app.domain.types import FireReport
+from app.domain.types import FireKind, FireReport
 from app.services.results import ServiceResult
 
 
@@ -30,7 +30,7 @@ class FireReportService:
         *,
         latitude: float,
         longitude: float,
-        kind: str,
+        kind: FireKind,
         smoke_intensity: int,
         duration_hours: float,
         notes: str | None = None,

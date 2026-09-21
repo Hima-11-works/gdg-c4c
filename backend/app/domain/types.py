@@ -410,6 +410,8 @@ class FireReport:
 
     def __post_init__(self) -> None:
         _require_utc(self.reported_at, "reported_at")
+        if not isinstance(self.kind, FireKind):
+            raise ValueError(f"kind must be a FireKind, got {self.kind!r}")
         if not self.h3_cell.strip():
             raise ValueError("h3_cell must not be empty")
         if not -90 <= self.latitude <= 90:

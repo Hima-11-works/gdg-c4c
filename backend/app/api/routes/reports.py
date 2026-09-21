@@ -33,7 +33,7 @@ def submit_report(
     report = service.submit(
         latitude=payload.latitude,
         longitude=payload.longitude,
-        kind=payload.kind.value,
+        kind=payload.kind,
         smoke_intensity=payload.smoke_intensity,
         duration_hours=payload.duration_hours,
         notes=payload.notes,
