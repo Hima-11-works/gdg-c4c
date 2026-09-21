@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.db.repositories import (
     SqlAlertRepository,
+    SqlFireReportRepository,
     SqlForecastRepository,
     SqlGridStateRepository,
     SqlSensorReadingRepository,
@@ -27,6 +28,7 @@ from app.domain.types import BoundingBox
 from app.services.alerts import AlertService
 from app.services.cells import CellService
 from app.services.grid import GridService
+from app.services.reports import FireReportService
 from app.services.sensors import SensorService
 from app.services.weather import WeatherService
 
@@ -79,3 +81,7 @@ def get_cell_service(session: Session = Depends(get_db)) -> CellService:
 
 def get_alert_service(session: Session = Depends(get_db)) -> AlertService:
     return AlertService(SqlAlertRepository(session))
+
+
+def get_fire_report_service(session: Session = Depends(get_db)) -> FireReportService:
+    return FireReportService(SqlFireReportRepository(session))

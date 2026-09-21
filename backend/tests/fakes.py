@@ -8,6 +8,7 @@ coding services against Protocols rather than the concrete SQL classes.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 
 from app.domain.providers import ProviderError
@@ -168,7 +169,7 @@ class FakeAlertRepository:
 
 class FakeFireReportRepository:
     """In-memory FireReportRepository, idempotent on client_report_id exactly
-    like the SQL implementation."""
+    like the SQL implementation, with DB-style auto-incrementing ids."""
 
     def __init__(self) -> None:
         self.reports: list[FireReport] = []
@@ -180,8 +181,9 @@ class FakeFireReportRepository:
             for existing in self.reports:
                 if existing.client_report_id == report.client_report_id:
                     return existing
-        self.reports.append(report)
-        return report
+        stored = replace(report, id=len(self.reports) + 1)
+        self.reports.append(stored)
+        return stored
 
     def list_active(self, *, since: datetime) -> list[FireReport]:
         return [r for r in self.reports if r.reported_at >= since]

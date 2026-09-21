@@ -259,7 +259,13 @@ accident rather than by design:
   weighted blend, the forecast model is a fixed-formula box model, and
   alerts are plain threshold comparisons. Nothing is trained on data.
 - **No authentication or rate limiting** on the API — every `/api/v1/*`
-  route is open, `GET`-only, and unauthenticated.
+  route is open and unauthenticated. The routes are `GET`-only except
+  `POST /api/v1/reports` (citizen fire reports), which is also open —
+  anyone can submit a report, and a malicious or careless one shifts the
+  modeled plume (mitigated by validation, an age-based expiry and a
+  per-cell PM2.5 cap, but abuse is a known, accepted gap for the MVP).
+- **Fire reports are a triage heuristic.** The smoke slider maps to a
+  modeled plume (see `app.services.fire_gradient`), not a measurement.
 - **No live road/industrial/vegetation/satellite data.** PDI's
   `road_pressure`, `industrial_pressure`, and `vegetation_sink` inputs
   exist in the code but nothing real populates them yet (the demo
@@ -979,6 +985,8 @@ Interactive docs at `/docs` once the API is running.
 | `GET /api/v1/grid/forecast?hours=1\|3\|6&resolution=&min_lat=&min_lon=&max_lat=&max_lon=` | Forecast PM2.5 per cell at that horizon |
 | `GET /api/v1/cells/{h3_cell}?resolution=` | Current state + forecasts + weather + PDI factor breakdown for one cell (404 if no data at all, 422 if `h3_cell` isn't valid at the configured resolution) |
 | `GET /api/v1/alerts` | Alerts created within `ALERT_ACTIVE_LOOKBACK_HOURS` |
+| `POST /api/v1/reports` | Store a citizen report of an active fire/burning event (kind, location, smoke slider 1-5, duration estimate, optional note); returns it with the H3 cell it snapped to. Idempotent on `client_report_id`. |
+| `GET /api/v1/reports` | Fire/burning reports within `FIRE_REPORT_MAX_AGE_HOURS` (the same window the fire gradient model trusts a report for) |
 
 `resolution` and the four bbox params are optional and independent of
 each other's endpoint — see [Level of detail](#level-of-detail) for the
