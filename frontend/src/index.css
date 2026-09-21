@@ -946,6 +946,11 @@ body,
   font-style: italic;
 }
 
+.alerts-checklist-note {
+  margin: 0.35rem 0 0.1rem;
+  font-size: 0.7rem;
+}
+
 .alert-actions {
   display: flex;
   flex-wrap: wrap;

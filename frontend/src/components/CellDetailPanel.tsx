@@ -146,42 +146,65 @@ function CellDetailContent({
   )
 }
 
-/** Sticky bottom action bar of the inspection drawer — the rapid-
- *  intervention dispatch that satisfies the brief's "alert relevant
- *  authorities" clause. Dispatch is acknowledged locally (deterministic
- *  status line); the brief's real routing endpoint plugs in at this exact
- *  button without touching the rest of the drawer. */
-function InterventionActionBar({ h3Cell }: { h3Cell: string }) {
-  const [dispatched, setDispatched] = useState(false)
+/**
+ * Bottom action bar of the inspection drawer.
+ *
+ * There is no authority-routing backend, so this does the one real, honest
+ * thing available locally: it copies a plain-text inspection note for this
+ * cell to the clipboard, for the operator to send through whatever channel
+ * they actually have (email, a CPCB/SPCB portal). It does NOT dispatch,
+ * notify, or record anything anywhere.
+ */
+function InterventionActionBar({
+  h3Cell,
+  detail,
+}: {
+  h3Cell: string
+  detail: CellDetailOut
+}) {
+  const [status, setStatus] = useState<'idle' | 'copied' | 'failed'>('idle')
 
-  const dispatchNow = () => {
-    if (dispatched) return
-    setDispatched(true)
-    // Broadcast so the Alerts panel/edge node can pick the intervention up
-    // (federated dispatch hook point — the brief's "alert relevant
-    // authorities" clauses ride on this exact event).
-    window.dispatchEvent(
-      new CustomEvent('air-health:intervention-dispatched', {
-        detail: { cell: h3Cell, routedTo: 'State Pollution Control Board' },
-      }),
-    )
+  const copyNote = async () => {
+    const current = detail.current
+    const factors =
+      detail.pdi_factors === null
+        ? 'not available'
+        : Object.entries(detail.pdi_factors)
+            .map(([key, value]) => `${key} ${Math.round(value * 100)}%`)
+            .join(', ')
+    const note = [
+      'Air-quality inspection note (Air Health dashboard)',
+      `H3 cell: ${h3Cell}`,
+      `Observed: ${current?.timestamp ?? 'no current reading'}`,
+      `PM2.5: ${current?.pm25 === null || current?.pm25 === undefined ? 'n/a' : `${formatNumber(current.pm25)} µg/m³`}`,
+      `PDI: ${current?.pdi === null || current?.pdi === undefined ? 'n/a' : formatNumber(current.pdi)}`,
+      `PDI factors: ${factors}`,
+    ].join('\n')
+
+    try {
+      await navigator.clipboard.writeText(note)
+      setStatus('copied')
+    } catch {
+      setStatus('failed')
+    }
   }
 
   return (
-    <div className="intervention-bar" role="group" aria-label="Rapid intervention">
+    <div className="intervention-bar" role="group" aria-label="Inspection note">
       <button
         type="button"
-        className={`intervention-cta ${dispatched ? 'intervention-cta-done' : ''}`}
-        onClick={dispatchNow}
-        disabled={dispatched}
-        title="Dispatch the State Pollution Control Board Rapid Action Unit to this hex"
+        className={`intervention-cta ${status === 'copied' ? 'intervention-cta-done' : ''}`}
+        onClick={copyNote}
+        title="Copy a plain-text inspection note for this cell to the clipboard"
       >
-        {dispatched ? '✓ Rapid Action Unit Dispatched' : '🚨 Dispatch Rapid Action Unit'}
+        {status === 'copied' ? '✓ Note copied' : 'Copy inspection note'}
       </button>
       <p className="intervention-status">
-        {dispatched
-          ? 'Dispatch acknowledged by the federated edge.'
-          : 'Routes alert to State Pollution Control Board.'}
+        {status === 'copied'
+          ? 'Copied — send it to the relevant authority yourself.'
+          : status === 'failed'
+            ? 'Could not access the clipboard.'
+            : 'Nothing is sent automatically; this only prepares a note.'}
       </p>
     </div>
   )
@@ -266,7 +289,7 @@ export function CellDetailPanel({
                 : null
             }
           />
-          <InterventionActionBar h3Cell={selectedCell} />
+          <InterventionActionBar h3Cell={selectedCell} detail={resource.data} />
         </>
       )}
     </aside>
