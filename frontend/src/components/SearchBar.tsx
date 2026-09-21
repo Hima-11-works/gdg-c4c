@@ -1,7 +1,8 @@
 // Location search — states, districts, cities, localities. Client-side
 // ranked search over the bundled GeoNames dataset (lib/locations.ts),
-// lazy-loaded on first focus. Selecting a result dispatches FOCUS_LOCATION,
-// which MapView turns into a flyTo.
+// lazy-loaded on first focus. Selecting a result dispatches SELECT_PLACE,
+// which flies the map there (MapView turns the resulting focus into a
+// flyTo) and scopes it to that place - see lib/scope.ts.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { KIND_LABEL, ZOOM_BY_KIND, loadLocations, searchLocations } from '../lib/locations'
@@ -9,7 +10,7 @@ import { useMapUi } from '../state/MapUiContext'
 import type { IndiaLocation } from '../lib/locations'
 
 export function SearchBar() {
-  const { dispatch } = useMapUi()
+  const { state, dispatch } = useMapUi()
   const [query, setQuery] = useState('')
   const [locations, setLocations] = useState<IndiaLocation[] | null>(null)
   const [loadError, setLoadError] = useState(false)
@@ -41,9 +42,21 @@ export function SearchBar() {
     return () => document.removeEventListener('pointerdown', onPointerDown)
   }, [open])
 
+  // Dismissing the scope chip (the × above the timeline) empties the box too,
+  // so it doesn't keep displaying a place the map is no longer scoped to.
+  // Only the transition to "no scope" clears it: typing, or moving straight
+  // from one place to another, leaves the text alone.
+  useEffect(() => {
+    // eslint-disable-next-line react/set-state-in-effect
+    if (state.scope === null) setQuery('')
+  }, [state.scope])
+
   const select = (loc: IndiaLocation) => {
     dispatch({
-      type: 'FOCUS_LOCATION',
+      type: 'SELECT_PLACE',
+      name: loc.n,
+      kind: loc.t,
+      state: loc.s,
       latitude: loc.lat,
       longitude: loc.lon,
       zoom: ZOOM_BY_KIND[loc.t],

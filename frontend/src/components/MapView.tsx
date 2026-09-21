@@ -43,6 +43,7 @@ import {
 import { renderSmoothField } from '../lib/smoothField'
 import { buildRangeContours } from '../lib/pm25Contours'
 import { INDIA_BBOX, lodBbox, MAX_ZOOM, PDI_MIN_ZOOM } from '../lib/lod'
+import { scopeContains, scopeMask } from '../lib/scope'
 import { INDIA_OUTLINE_URL, STATE_BOUNDARIES_URL } from '../lib/stateBoundaries'
 import { BASE_STYLE_URL, OVERLAY, WIND, BASEMAP, patchBasemapStyle } from '../lib/mapTheme'
 import {
@@ -62,6 +63,7 @@ import {
 import { useMapUi } from '../state/MapUiContext'
 import type { MapViewMode } from '../state/mapUiReducer'
 import type { AsyncResource } from '../hooks/useApiResource'
+import { useStateBoundaries } from '../hooks/useStateBoundaries'
 import type { BoundingBox, FireReportOut, ForecastOut, GridStateOut, WeatherReadingOut } from '../lib/types'
 import type { Position } from 'geojson'
 
@@ -249,6 +251,14 @@ const firePulseImageName = (frame: number): string => `${FIRE_PULSE_IMAGE_PREFIX
 const FIRE_PULSE_IMAGES = Array.from({ length: FIRE_PULSE_FRAME_COUNT }, (_, i) =>
   firePulseImageName(i),
 )
+
+// Place-scope mask: the veil drawn over everything outside a searched place.
+// Near-background rather than pure grey so it reads as "not in scope" instead
+// of as a data value on the dark base style.
+const SOURCE_SCOPE_MASK = 'scope-mask'
+const LAYER_SCOPE_MASK = 'scope-mask-fill'
+const SCOPE_MASK_COLOR = '#0d0f14'
+const SCOPE_MASK_OPACITY = 0.86
 
 // Wind currents are supplementary/decorative ("generalized meteorological
 // information"), not the primary data layer the way the PM2.5/PDI cells
@@ -560,6 +570,15 @@ export function MapView({
   const pendingPdiRef = useRef<{ cancel: () => void } | null>(null)
   // Last PDI toggle state acted on, so the toggle effect skips its mount run.
   const showPdiRef = useRef(state.showPdi)
+  // State/UT polygons, already loaded for the map's own boundary layers and
+  // reused here to clip the place-scope mask to a real border.
+  const stateBoundaries = useStateBoundaries()
+  // Live mirrors of the place scope for the map's click handlers. Those are
+  // registered once when the map is created, so reading the state directly
+  // would freeze whatever it was at creation (no scope at all) and the
+  // out-of-scope click guard would never fire.
+  const scopeRef = useRef(state.scope)
+  const stateBoundariesRef = useRef(stateBoundaries)
   // The info popup currently on the map (a thermal anomaly or a freight node)
   // together with the key identifying its feature, so clicking that same
   // feature again closes it rather than stacking an identical popup, and so
@@ -581,6 +600,12 @@ export function MapView({
       popupRef.current = null
     }
   }, [])
+
+  // Keep the click handlers' mirrors of the scope current (see scopeRef).
+  useEffect(() => {
+    scopeRef.current = state.scope
+    stateBoundariesRef.current = stateBoundaries
+  }, [state.scope, stateBoundaries])
 
   // Escape closes whatever is open on the map: the info popup and the cell
   // drawer. On window rather than the canvas so it works wherever focus is,
@@ -990,6 +1015,23 @@ export function MapView({
             },
           })
 
+          // Place scope mask — added last so it sits over every data layer.
+          // The geometry is the whole world with the scoped place punched out
+          // as a hole (lib/scope.ts), so a hexagon straddling the boundary is
+          // greyed only on the outside part and the scope stays clear. Hidden
+          // until a place is scoped.
+          map!.addSource(SOURCE_SCOPE_MASK, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+          map!.addLayer({
+            id: LAYER_SCOPE_MASK,
+            type: 'fill',
+            source: SOURCE_SCOPE_MASK,
+            layout: { visibility: 'none' },
+            paint: {
+              'fill-color': SCOPE_MASK_COLOR,
+              'fill-opacity': SCOPE_MASK_OPACITY,
+            },
+          })
+
           // Fire dot popups — VIIRS metadata + the triage priority.
           map!.on('click', LAYER_FIRE_CORE, (event) => {
             const feature = event.features?.[0]
@@ -1017,13 +1059,23 @@ export function MapView({
           const clickableLayers = [LAYER_PM25_FILL.a, LAYER_PM25_FILL.b, LAYER_PDI_FILL]
           map!.on('click', clickableLayers, (event) => {
             const h3Cell = event.features?.[0]?.properties?.h3_cell
-            if (typeof h3Cell === 'string') {
-              // Toggling: clicking the cell already in the drawer closes it.
-              // No resolution is passed — the reducer derives it from the cell
-              // string itself, which is the only thing that knows it (a cell
-              // is valid only at its own resolution - see resolutionOfCell).
-              dispatch({ type: 'TOGGLE_CELL', cell: h3Cell })
+            if (typeof h3Cell !== 'string') return
+            // A greyed-out cell is outside the scoped place: there is no
+            // drawer for a cell the user can't see, so those clicks do
+            // nothing. Judged against the same geometry the mask is drawn
+            // from (lib/scope.ts), not by hit-testing the render.
+            const scope = scopeRef.current
+            if (
+              scope !== null &&
+              !scopeContains(scope, stateBoundariesRef.current, event.lngLat.lat, event.lngLat.lng)
+            ) {
+              return
             }
+            // Toggling: clicking the cell already in the drawer closes it.
+            // No resolution is passed — the reducer derives it from the cell
+            // string itself, which is the only thing that knows it (a cell
+            // is valid only at its own resolution - see resolutionOfCell).
+            dispatch({ type: 'TOGGLE_CELL', cell: h3Cell })
           })
           map!.on('mouseenter', clickableLayers, () => {
             map!.getCanvas().style.cursor = 'pointer'
@@ -1451,6 +1503,22 @@ export function MapView({
     map.setLayoutProperty(LAYER_FIRE_PULSE, 'visibility', visibility)
     map.setLayoutProperty(LAYER_FIRE_CORE, 'visibility', visibility)
   }, [mapReady, state.showFireHotspots])
+
+  // Place scope — swap in the mask geometry (the world minus the scoped
+  // place) and show it. Boundary scopes wait for the state polygons to load;
+  // until then there is no mask, which is the honest state to show rather
+  // than a guessed area. Cheap enough to rebuild on every scope change: it's
+  // one polygon, and the mask is static while the map pans and zooms.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    const map = mapRef.current
+    const source = map.getSource(SOURCE_SCOPE_MASK) as GeoJSONSource | undefined
+    if (source === undefined) return
+
+    const mask = state.scope === null ? null : scopeMask(state.scope, stateBoundaries)
+    source.setData((mask ?? EMPTY_FEATURE_COLLECTION) as never)
+    map.setLayoutProperty(LAYER_SCOPE_MASK, 'visibility', mask === null ? 'none' : 'visible')
+  }, [mapReady, state.scope, stateBoundaries])
 
   // Animate the thermal-anomaly pulse ring by cycling the icon frames —
   // same pattern as the wind streaks. Static under prefers-reduced-motion.

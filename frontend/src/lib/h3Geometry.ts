@@ -89,6 +89,12 @@ export function cellForPoint(latitude: number, longitude: number, resolution: nu
   return latLngToCell(latitude, longitude, resolution)
 }
 
+/** The boundary of an H3 cell as a closed GeoJSON ring of [lon, lat]
+ *  positions, ready to be used as a polygon ring or a hole. */
+export function cellBoundaryRing(h3Cell: string): Position[] {
+  return cellToBoundary(h3Cell, true) as unknown as Position[]
+}
+
 /** Average H3 cell edge length at `resolution`, in km. Sizes the smoothing
  *  kernel of the smooth (raster) view so the blur scales with the grid: a
  *  coarse country-tier grid gets a wide kernel, a fine city-tier grid a

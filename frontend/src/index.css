@@ -488,6 +488,62 @@ body,
   box-shadow: 0 0 0 3px #3b82f6;
 }
 
+/* --- place scope chip (above the timeline) --- */
+
+/* Names the place the map is scoped to. Wider than a normal panel so the
+   "approximate area" note reads as a sentence, but capped so it never
+   competes with the timeline below it. */
+.scope-chip {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  max-width: min(90vw, 30rem);
+}
+
+.scope-chip-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.scope-chip-line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+}
+
+.scope-chip-note {
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: #9ca3af;
+}
+
+.scope-chip-close {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 1px solid #3a3f4a;
+  border-radius: 6px;
+  background: transparent;
+  color: #9ca3af;
+  font-size: 0.7rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.scope-chip-close:hover {
+  color: #e5e7eb;
+  border-color: #6b7280;
+}
+
 /* --- legend --- */
 
 .legend-row {

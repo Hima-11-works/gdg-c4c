@@ -16,6 +16,7 @@ import { Legend } from './Legend'
 import { LayerToggle } from './LayerToggle'
 import { MapView } from './MapView'
 import { ReportFireForm } from './ReportFireForm'
+import { ScopeChip } from './ScopeChip'
 import { SearchBar } from './SearchBar'
 import { StatusBanner } from './StatusBanner'
 import { TimelineControl } from './TimelineControl'
@@ -160,6 +161,7 @@ export function MapPage() {
       </div>
 
       <div className="overlay overlay-bottom-center">
+        <ScopeChip />
         <TimelineControl />
       </div>
 
