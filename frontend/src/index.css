@@ -16,6 +16,19 @@ body,
   margin: 0;
 }
 
+/* Scrollbars are hidden everywhere: the dashboard is a full-viewport map
+   with panels floating over it, and a scrollbar gutter is chrome none of
+   them want. Only the bar is hidden — the panels keep their max-heights and
+   still scroll by wheel, trackpad, touch and keyboard. Firefox needs
+   scrollbar-width, WebKit/Blink need the pseudo-element. */
+* {
+  scrollbar-width: none;
+}
+
+*::-webkit-scrollbar {
+  display: none;
+}
+
 .map-page {
   position: relative;
   width: 100%;
