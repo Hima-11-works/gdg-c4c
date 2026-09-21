@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol
 
-from app.domain.types import Alert, Forecast, GridState, SensorReading, WeatherReading
+from app.domain.types import Alert, FireReport, Forecast, GridState, SensorReading, WeatherReading
 
 
 class DuplicateReadingError(Exception):
@@ -120,3 +120,17 @@ class AlertRepository(Protocol):
     def add(self, alert: Alert) -> Alert: ...
 
     def list_active(self, *, since: datetime) -> list[Alert]: ...
+
+
+class FireReportRepository(Protocol):
+    def save(self, report: FireReport) -> FireReport:
+        """Store a report and return it (with its database id).
+
+        Idempotent on `client_report_id` when given: a resubmission with the
+        same client-generated id returns the original row unchanged —
+        retries must not stack reports. Without a client id, every call
+        adds a row.
+        """
+        ...
+
+    def list_active(self, *, since: datetime) -> list[FireReport]: ...

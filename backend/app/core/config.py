@@ -257,6 +257,26 @@ class Settings(BaseSettings):
     # with already-high PDI, even a modest uptick is worth flagging.
     alert_pdi_worsening_min_increase_ugm3: float = Field(default=5.0, ge=0)
 
+    # --- Fire reports (citizen reports as modeled point sources) ---
+    # NOT a measurement of anything: a smoke slider is a triage choice, and
+    # these knobs scale the modeled plume the reports justify. See
+    # app.services.fire_gradient. All values are µg/m3 / km / hours.
+    # The PM2.5 (extra) contribution of a maximum-intensity (5/5) report at
+    # the source cell, before kind weighting and age decay.
+    fire_source_pm25_ugm3: float = Field(default=180.0, gt=0)
+    # Distance from a report within which the falloff is nonzero.
+    fire_plume_radius_km: float = Field(default=1.5, gt=0)
+    # Hours over which a report's influence halves as it ages (fires burn
+    # down, and a report goes stale).
+    fire_decay_half_life_hours: float = Field(default=4.0, gt=0)
+    # A report stops influencing the grid entirely after this many hours —
+    # beyond that it is assumed extinguished/unverified rather than trusted.
+    fire_report_max_age_hours: float = Field(default=12.0, gt=0)
+    # Hard ceiling on a cell's final blended PM2.5 (IDW estimate + fire
+    # contributions), so reports can never drive the model past the CPCB
+    # scale.
+    fire_pm25_cap_ugm3: float = Field(default=400.0, gt=0)
+
     @model_validator(mode="after")
     def _check_weather_resolution_not_finer_than_grid(self) -> "Settings":
         if self.weather_h3_resolution > self.h3_resolution:
