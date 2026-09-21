@@ -2,6 +2,7 @@ export 'air_quality_reading.dart';
 export 'alert_models.dart';
 export 'cpcb_category.dart';
 export 'data_freshness.dart';
+export 'fire_report.dart';
 export 'forecast_point.dart';
 export 'location_point.dart';
 export 'nearby_area.dart';
