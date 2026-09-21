@@ -4,7 +4,7 @@
 // (h3_cell, value) pairs already computed by the backend into GeoJSON for
 // MapLibre. No interpolation, estimation, or forecasting happens here.
 
-import { cellToBoundary, cellToLatLng, getHexagonEdgeLengthAvg } from 'h3-js'
+import { cellToBoundary, cellToLatLng, getHexagonEdgeLengthAvg, getResolution } from 'h3-js'
 import type { Feature, FeatureCollection, Point, Polygon, Position } from 'geojson'
 
 export interface CellValue {
@@ -53,6 +53,26 @@ const boundaryCache = new Map<string, Position[]>()
  * rendering (the polygon boundary above is what's drawn). */
 export function cellCenter(h3Cell: string): [number, number] {
   return cellToLatLng(h3Cell) as [number, number]
+}
+
+/** The H3 resolution a cell string was minted at, or undefined if it isn't
+ *  a valid cell.
+ *
+ *  A cell string is only meaningful at its own resolution: the backend's
+ *  GET /cells/{h3_cell} validates `resolution` against the cell and returns
+ *  422 on a mismatch (app.domain.h3_grid.assert_valid_cell). So this — not
+ *  the current zoom tier — is what a selection must ask for. The two
+ *  diverge for a moment after every zoom that changes tier: the tier state
+ *  updates immediately (see SET_VIEWPORT) while the matching data is still
+ *  in flight, so the cells still painted on screen are the previous,
+ *  coarser tier's. Reading the resolution off the clicked cell keeps that
+ *  window correct instead of erroring. */
+export function resolutionOfCell(h3Cell: string): number | undefined {
+  try {
+    return getResolution(h3Cell)
+  } catch {
+    return undefined
+  }
 }
 
 /** Average H3 cell edge length at `resolution`, in km. Sizes the smoothing

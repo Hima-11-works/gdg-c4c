@@ -6,6 +6,7 @@
 // Context+useReducer here — the rest of the app's state (server data) is
 // NOT kept here, see hooks/useApiResource.ts.
 
+import { resolutionOfCell } from '../lib/h3Geometry'
 import { lodForZoom } from '../lib/lod'
 import type { Lod } from '../lib/lod'
 import type { BoundingBox } from '../lib/types'
@@ -109,7 +110,15 @@ export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState
       return {
         ...state,
         selectedCell: action.cell,
-        selectedCellResolution: action.cell === null ? null : (action.resolution ?? null),
+        // The cell's OWN resolution, not the current zoom tier: the tier can
+        // be a step ahead of the data still painted on screen right after a
+        // zoom (see resolutionOfCell), and GET /cells/{h3_cell} rejects a
+        // mismatched pair with 422. `action.resolution` is only a fallback
+        // for a caller that already knows better than the cell string does.
+        selectedCellResolution:
+          action.cell === null
+            ? null
+            : (resolutionOfCell(action.cell) ?? action.resolution ?? null),
       }
     case 'SET_VIEWPORT': {
       const lod = lodForZoom(action.zoom)

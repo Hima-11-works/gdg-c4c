@@ -534,16 +534,6 @@ export function MapView({
   const mapRef = useRef<MapLibreMap | null>(null)
   const [mapReady, setMapReady] = useState(false)
 
-  // The map-creation effect below runs once (on mount) and registers the
-  // click handler then, so it closes over whatever `state.lod` was at
-  // that instant unless read through a ref kept fresh every render —
-  // needed so a click always reports the resolution actually on screen,
-  // not the one active when the map was first created.
-  const lodResolutionRef = useRef(state.lod.resolution)
-  useEffect(() => {
-    lodResolutionRef.current = state.lod.resolution
-  }, [state.lod.resolution])
-
   // Which double-buffer set is currently visible.
   const visibleSetRef = useRef<Pm25Set>('a')
   // The exact data array (currentGrid.data / forecastGrid.data) painted on
@@ -953,7 +943,10 @@ export function MapView({
           map!.on('click', clickableLayers, (event) => {
             const h3Cell = event.features?.[0]?.properties?.h3_cell
             if (typeof h3Cell === 'string') {
-              dispatch({ type: 'SELECT_CELL', cell: h3Cell, resolution: lodResolutionRef.current })
+              // No resolution is passed: the reducer derives it from the cell
+              // string itself, which is the only thing that knows it (a cell
+              // is valid only at its own resolution - see resolutionOfCell).
+              dispatch({ type: 'SELECT_CELL', cell: h3Cell })
             }
           })
           map!.on('mouseenter', clickableLayers, () => {
