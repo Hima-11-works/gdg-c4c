@@ -99,6 +99,7 @@ class CellStaticFeatures:
     vegetation_fraction: float | None = None
     bare_soil_fraction: float | None = None
     industrial_fraction: float | None = None
+    coverage_fraction: float = 1.0
     dataset_refs: tuple[DatasetRef, ...] = ()
     valid_from: datetime | None = None
     available_at: datetime | None = None
@@ -121,6 +122,7 @@ class CellStaticFeatures:
             value = getattr(self, name)
             if value is not None:
                 _bounded(value, name, 0.0, 1.0)
+        _bounded(self.coverage_fraction, "coverage_fraction", 0.0, 1.0)
         for road_class, length in self.road_length_km_by_class.items():
             if not road_class.strip():
                 raise ValueError("road class must not be empty")

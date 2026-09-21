@@ -13,13 +13,14 @@ from sqlalchemy.dialects import postgresql
 
 from app.db.repositories import alert as alert_repo
 from app.db.repositories import dataset_version as dataset_repo
+from app.db.repositories import feature_snapshot as feature_repo
 from app.db.repositories import fire_report as fire_report_repo
 from app.db.repositories import forecast as forecast_repo
 from app.db.repositories import grid_state as grid_state_repo
 from app.db.repositories import ingestion_run as run_repo
 from app.db.repositories import sensor_reading as sensor_reading_repo
 from app.db.repositories import weather_reading as weather_reading_repo
-from app.domain.features import InputKind
+from app.domain.features import CellFeatureVector, FeatureSnapshot, InputKind
 from app.domain.scenario import DatasetVersion, IngestionRun, IngestionRunStatus
 from app.domain.types import (
     Alert,
@@ -262,3 +263,23 @@ def test_environmental_metadata_statements() -> None:
     assert "ON CONFLICT" in run_sql
     assert "DO UPDATE SET" in run_sql
     assert params["errors"] == []
+
+
+def test_feature_snapshot_statements() -> None:
+    snapshot = FeatureSnapshot(
+        h3_cell=CELL,
+        issued_at=NOW,
+        valid_at=LATER,
+        horizon_hours=3,
+        feature_schema_version="environmental-v1",
+        vector=CellFeatureVector(current_pm25=18.0, rain_1h_mm=0.0),
+    )
+    sql, params = _sql_and_params(feature_repo._upsert_stmt("run-1", [snapshot]))
+    assert "INSERT INTO cell_feature_snapshot" in sql
+    assert "ON CONFLICT" in sql
+    assert "ON CONFLICT (run_id, h3_cell, horizon_hours)" in sql
+    assert any(
+        isinstance(value, dict) and value.get("current_pm25") == 18.0
+        for value in params.values()
+    )
+    assert "FROM cell_feature_snapshot" in _sql(feature_repo._list_for_run_stmt("run-1"))

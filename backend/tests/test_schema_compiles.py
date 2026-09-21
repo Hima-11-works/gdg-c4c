@@ -10,6 +10,7 @@ from sqlalchemy.schema import CreateTable
 
 from app.models.tables import (
     alert,
+    cell_feature_snapshot,
     dataset_version,
     forecast,
     grid_state,
@@ -84,6 +85,8 @@ def test_environmental_run_metadata_columns_are_present() -> None:
     assert dataset_version.c.coverage_start.nullable is True
     assert ingestion_run.c.errors.nullable is False
     assert ingestion_run.c.simulation_id.nullable is True
+    assert cell_feature_snapshot.c.vector.nullable is False
+    assert cell_feature_snapshot.c.quality.nullable is False
 
 
 def test_metadata_creates_tables_in_dependency_order_without_error() -> None:
@@ -99,4 +102,5 @@ def test_metadata_creates_tables_in_dependency_order_without_error() -> None:
         "fire_report",
         "dataset_version",
         "ingestion_run",
+        "cell_feature_snapshot",
     }

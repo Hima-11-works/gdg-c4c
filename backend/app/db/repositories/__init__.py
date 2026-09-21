@@ -2,6 +2,7 @@
 
 from app.db.repositories.alert import SqlAlertRepository
 from app.db.repositories.dataset_version import SqlDatasetVersionRepository
+from app.db.repositories.feature_snapshot import SqlFeatureSnapshotRepository
 from app.db.repositories.fire_report import SqlFireReportRepository
 from app.db.repositories.forecast import SqlForecastRepository
 from app.db.repositories.grid_state import SqlGridStateRepository
@@ -12,6 +13,7 @@ from app.db.repositories.weather_reading import SqlWeatherReadingRepository
 __all__ = [
     "SqlAlertRepository",
     "SqlDatasetVersionRepository",
+    "SqlFeatureSnapshotRepository",
     "SqlFireReportRepository",
     "SqlForecastRepository",
     "SqlGridStateRepository",

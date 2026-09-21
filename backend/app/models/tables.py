@@ -75,6 +75,31 @@ ingestion_run = Table(
     Index("ix_ingestion_run_status", "status"),
 )
 
+cell_feature_snapshot = Table(
+    "cell_feature_snapshot",
+    metadata,
+    Column("id", String(180), primary_key=True),
+    Column("run_id", String(120), nullable=False),
+    Column("h3_cell", String(H3_CELL_LENGTH), nullable=False),
+    Column("issued_at", DateTime(timezone=True), nullable=False),
+    Column("valid_at", DateTime(timezone=True), nullable=False),
+    Column("horizon_hours", Float, nullable=False),
+    Column("feature_schema_version", String(60), nullable=False),
+    Column("vector", JSONB, nullable=False),
+    Column("quality", JSONB, nullable=False),
+    Column("dataset_refs", JSONB, nullable=False),
+    CheckConstraint("horizon_hours >= 0", name="ck_feature_snapshot_horizon_nonnegative"),
+    CheckConstraint("valid_at >= issued_at", name="ck_feature_snapshot_valid_after_issue"),
+    UniqueConstraint(
+        "run_id",
+        "h3_cell",
+        "horizon_hours",
+        name="uq_feature_snapshot_run_cell_horizon",
+    ),
+    Index("ix_feature_snapshot_run_valid", "run_id", "valid_at"),
+    Index("ix_feature_snapshot_cell_valid", "h3_cell", "valid_at"),
+)
+
 sensor_reading = Table(
     "sensor_reading",
     metadata,

@@ -283,6 +283,7 @@ def _static_dict(features: CellStaticFeatures) -> dict[str, Any]:
         "vegetation_fraction": features.vegetation_fraction,
         "bare_soil_fraction": features.bare_soil_fraction,
         "industrial_fraction": features.industrial_fraction,
+        "coverage_fraction": features.coverage_fraction,
         "valid_from": _iso(features.valid_from) if features.valid_from else None,
         "available_at": _iso(features.available_at) if features.available_at else None,
     }
@@ -559,6 +560,7 @@ class ScenarioGenerator:
                     vegetation_fraction=round(vegetation, 4),
                     bare_soil_fraction=round(max(0.01, 1 - built_up - vegetation), 4),
                     industrial_fraction=round(industrial, 4),
+                    coverage_fraction=0.72 if self.scenario_id == "partial_region" else 1.0,
                     dataset_refs=self._dataset_refs,
                     valid_from=self.anchor_utc,
                     available_at=valid_at,

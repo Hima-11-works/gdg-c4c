@@ -47,6 +47,7 @@ from app.ingestion.demo_scenarios import ScenarioGenerator
 from app.ingestion.factory import build_pollution_provider, build_weather_provider
 from app.services.dispersion import DeterministicH3DispersionModel
 from app.services.forecasting import ForecastingResult, ForecastingService
+from app.services.features import FeatureBuilder, feature_snapshot_to_dict
 from app.services.geospatial import GeospatialService
 from app.services.ingestion import IngestionResult, SensorIngestionService, WeatherIngestionService
 
@@ -211,6 +212,55 @@ async def _run_demo_snapshot(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _run_demo_features(args: argparse.Namespace) -> int:
+    if args.replay_hour < 0 or args.history_hours < 0:
+        raise ValueError("replay-hour and history-hours must be >= 0")
+    generator = ScenarioGenerator.from_manifest(
+        args.profile,
+        manifest_path=Path(args.manifest) if args.manifest else None,
+        scenario_id=args.scenario,
+        seed=args.seed,
+        anchor_utc=_parse_utc_argument(args.anchor) if args.anchor else None,
+    )
+    target = generator.generate(args.replay_hour)
+    history_start = max(0, args.replay_hour - args.history_hours)
+    history = [generator.generate(hour) for hour in range(history_start, args.replay_hour + 1)]
+    sensor_readings = [reading for snapshot in history for reading in snapshot.sensor_readings]
+    weather_features = [sample for snapshot in history for sample in snapshot.weather]
+    builder = FeatureBuilder(resolution=8)
+    snapshots = builder.build(
+        cells=target.cells,
+        issued_at=target.replay_at,
+        valid_at=target.replay_at,
+        sensor_readings=sensor_readings,
+        weather_features=weather_features,
+        static_features=target.static_features,
+        traffic_observations=target.roads,
+        fire_detections=target.fires,
+        dataset_refs=target.dataset_refs,
+    )
+    payload = {
+        "schema_version": "feature-export-v1",
+        "profile": target.profile,
+        "scenario_id": target.scenario_id,
+        "replay_at": target.replay_at.isoformat().replace("+00:00", "Z"),
+        "history_hours": args.history_hours,
+        "feature_count": len(snapshots),
+        "features": [feature_snapshot_to_dict(snapshot) for snapshot in snapshots],
+    }
+    output_path = Path(args.out)
+    content = json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
+    changed = not output_path.exists() or output_path.read_text(encoding="utf-8") != content
+    if changed:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(content, encoding="utf-8", newline="\n")
+    print(
+        f"Feature export {'wrote' if changed else 'unchanged'}: profile={target.profile} "
+        f"scenario={target.scenario_id} features={len(snapshots)} path={output_path}"
+    )
+    return 0
+
+
 def _add_demo_snapshot_parser(subparsers: argparse._SubParsersAction, command: str) -> None:
     demo_parser = subparsers.add_parser(
         command,
@@ -232,6 +282,25 @@ def _add_demo_snapshot_parser(subparsers: argparse._SubParsersAction, command: s
     demo_parser.add_argument("--manifest", default=None)
     demo_parser.add_argument("--out", default="demo-snapshot.json")
     demo_parser.set_defaults(func=_run_demo_snapshot)
+
+
+def _add_demo_features_parser(subparsers: argparse._SubParsersAction) -> None:
+    parser = subparsers.add_parser(
+        "demo-features", help="Build deterministic environmental features offline."
+    )
+    parser.add_argument(
+        "--profile",
+        choices=("tiny-ci", "regional-demo", "seasonal-training-smoke"),
+        default="tiny-ci",
+    )
+    parser.add_argument("--scenario", default=None)
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--anchor", default=None, help="UTC anchor timestamp (RFC 3339).")
+    parser.add_argument("--replay-hour", type=int, default=0)
+    parser.add_argument("--history-hours", type=int, default=24)
+    parser.add_argument("--manifest", default=None)
+    parser.add_argument("--out", default="feature-snapshot.json")
+    parser.set_defaults(func=_run_demo_features)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -272,6 +341,7 @@ def main(argv: list[str] | None = None) -> int:
 
     _add_demo_snapshot_parser(subparsers, "demo-generate")
     _add_demo_snapshot_parser(subparsers, "demo-replay")
+    _add_demo_features_parser(subparsers)
 
     args = parser.parse_args(argv)
     logging.basicConfig(level=get_settings().log_level)

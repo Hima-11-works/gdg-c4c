@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol
 
+from app.domain.features import FeatureSnapshot
 from app.domain.scenario import DatasetVersion, IngestionRun
 from app.domain.types import Alert, FireReport, Forecast, GridState, SensorReading, WeatherReading
 
@@ -151,3 +152,11 @@ class IngestionRunRepository(Protocol):
     def get(self, run_id: str) -> IngestionRun | None: ...
 
     def list(self, *, dataset_id: str | None = None) -> list[IngestionRun]: ...
+
+
+class FeatureSnapshotRepository(Protocol):
+    def upsert_many(
+        self, run_id: str, snapshots: list[FeatureSnapshot]
+    ) -> list[FeatureSnapshot]: ...
+
+    def list_for_run(self, run_id: str) -> list[FeatureSnapshot]: ...
