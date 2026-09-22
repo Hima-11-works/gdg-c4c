@@ -61,6 +61,16 @@ tested. All gaps below are wiring/integration, not half-written domain logic.
    `PollutionDataProvider` shape, or (b) app-side adapter mapping the grid
    API (lat/lon → H3 cell, PM2.5 → CPCB AQI, nearby from the 1-ring cells,
    events from `/alerts`, freshness from `generated_at`).
+
+   > **As built (updated 2026-09-22):** option (b), and the adapter now targets
+   > the versioned publication API — `/api/v2/meta`, `/api/v2/grid/current`,
+   > `/api/v2/grid/forecast?hours=`, `/api/v2/weather`, `/api/v2/alerts` — so
+   > every read is pinned to one published `run_id`. The v1 grid/weather/
+   > alerts paths named above are no longer called by this app (they remain
+   > served for older released builds). Citizen fire reports are the one v1
+   > surface still in use: `POST`/`GET /api/v1/reports`. See
+   > `docs/ARCHITECTURE.md`'s "Backend integration" and the repository's
+   > `docs/architecture.md` route-to-consumer table.
 10. **iOS** has no platform folder (Android + web only). *Deferred* — needs
     macOS + Xcode + CocoaPods; see the step 7 notes for the commands and
     Info.plist keys.
@@ -199,6 +209,12 @@ incl. `test/acceptance/acceptance_test.dart`). Add tests for each new piece
 - `lib/data/grid/grid_api.dart`: DTOs + `GridApiClient` interface +
   `DioGridApiClient` for `/api/v1/grid/current`, `/grid/forecast`,
   `/weather`, `/alerts`, plus `GeoBounds`.
+
+  > **As built (updated 2026-09-22):** those four paths are now under
+  > `/api/v2` (`/api/v2/meta`, `/api/v2/grid/current`,
+  > `/api/v2/grid/forecast?hours=`, `/api/v2/weather`, `/api/v2/alerts`),
+  > pinned to one published `run_id`. The v1 equivalents are still served
+  > but no longer called by this app.
 - `lib/domain/pm25_aqi.dart`: PM2.5 → CPCB AQI via the CPCB PM2.5
   sub-index (piecewise-linear, clamped to 0–500). Approximation only.
 - `lib/data/providers/grid_api_pollution_data_provider.dart`: implements

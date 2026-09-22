@@ -129,13 +129,21 @@ adapter for the platform's grid API. It is selected automatically when
 otherwise; debug builds override both with the scenario simulator. The API
 is unauthenticated and the adapter maps:
 
-- `/api/v1/grid/current` + `/api/v1/weather`, joined on `h3_cell` (grid
+- `/api/v2/meta` once (cached for 5 minutes) → the published `run_id` every
+  other read is pinned to, plus the forecast horizons that run supports
+- `/api/v2/grid/current` + `/api/v2/weather`, joined on `h3_cell` (grid
   cells carry no coordinates; weather is the coordinate source), → the
   nearest cell's reading
-- `/api/v1/grid/forecast?minutes=` — one horizon per call, requested hourly
-  up to the API's 6-hour cap — → `ForecastPoint`s
-- `/api/v1/alerts` for the user's cell → `PollutionEvent`s
+- `/api/v2/grid/forecast?hours=` — one horizon per call, requested hourly
+  up to the publication's 6-hour cap — → `ForecastPoint`s
+- `/api/v2/alerts` for the user's cell → `PollutionEvent`s
 - the response `generated_at` → `DataFreshness`
+
+Fire/burning reports are the app's only other backend surface, and they are
+on v1: `POST /api/v1/reports` and `GET /api/v1/reports`
+(`lib/data/reports/fire_report_api.dart`). The v1 grid/weather/cells/alerts
+routes are **not** used by this app any more — see the route-to-consumer
+table in the repository's `docs/architecture.md`.
 
 PM2.5 is converted to a CPCB AQI with the PM2.5 sub-index
 (`lib/domain/pm25_aqi.dart`) — an approximation, since the API reports PM2.5

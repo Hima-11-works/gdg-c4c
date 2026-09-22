@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { fetchGridCurrent, fetchPublishedMeta, fetchReports, fetchWeather } from '../lib/api'
-import { fetchActiveFires } from '../lib/activeFires'
+import {
+  fetchActiveFires,
+  fetchGridCurrent,
+  fetchPublishedMeta,
+  fetchReports,
+  fetchWeather,
+} from '../lib/api'
 import { useApiResource } from '../hooks/useApiResource'
 import {
   ensureForecastFrame,
@@ -27,9 +32,9 @@ import type { ForecastOut } from '../lib/types'
 
 const POLL_INTERVAL_MS = 60_000
 const FALLBACK_SUPPORTED_HOURS = [1, 3, 6]
-// FIRMS publishes a new global 24h archive roughly hourly; polling on the
-// same 60s cadence as the rest of the app would hammer a large public CSV
-// for no new data, so it refreshes far more slowly.
+// FIRMS near-real-time detections arrive on the order of an hour, and the
+// backend ingests them on its own schedule, so the app's 60s cadence would
+// only re-read unchanged rows. This refreshes far more slowly.
 const FIRMS_POLL_INTERVAL_MS = 10 * 60 * 1000
 
 export function MapPage() {
@@ -120,11 +125,17 @@ export function MapPage() {
     pollIntervalMs: POLL_INTERVAL_MS,
   })
 
-  // NASA FIRMS active fires. Only fetched while the layer is switched on —
-  // a several-MB public CSV has no business downloading for a user who
-  // never turns the layer on. Enabling the toggle flips `enabled` and the
-  // hook fetches immediately.
-  const activeFires = useApiResource(fetchActiveFires, [state.showActiveFires], {
+  // NASA FIRMS active fires, read from our own backend (GET /api/v1/fires)
+  // instead of NASA's public CSV. The backend holds the FIRMS credentials,
+  // does the parsing and owns the caching; the browser needs no key and no
+  // CSV parser, and the map and the pipeline see the same detections.
+  //
+  // Only fetched while the layer is switched on - enabling the toggle flips
+  // `enabled` and the hook fetches immediately. No bbox is sent: this layer
+  // covers all of India, and the endpoint clips by H3 cell at the resolution
+  // the detections were stored at, which a viewport-scoped request wouldn't
+  // match (see backend/app/services/fires.py).
+  const activeFires = useApiResource(() => fetchActiveFires(), [state.showActiveFires], {
     pollIntervalMs: FIRMS_POLL_INTERVAL_MS,
     enabled: state.showActiveFires,
   })

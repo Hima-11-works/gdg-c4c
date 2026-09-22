@@ -258,8 +258,9 @@ accident rather than by design:
 - **No machine learning anywhere.** Interpolation is IDW, PDI is a
   weighted blend, the forecast model is a fixed-formula box model, and
   alerts are plain threshold comparisons. Nothing is trained on data.
-- **No authentication or rate limiting** on the API — every `/api/v1/*`
-  route is open and unauthenticated. The routes are `GET`-only except
+- **No authentication or rate limiting** on the API — every route, on both
+  `/api/v1/*` and `/api/v2/*`, is open and unauthenticated. They are
+  `GET`-only except
   `POST /api/v1/reports` (citizen fire reports), which is also open —
   anyone can submit a report, and a malicious or careless one shifts the
   modeled plume (mitigated by validation, an age-based expiry and a
@@ -305,8 +306,8 @@ flowchart LR
         AGS["AlertGenerationService<br/>4 threshold rules"]
     end
 
-    subgraph API["FastAPI /api/v1"]
-        Routes["sensors · weather · grid · cells · alerts"]
+    subgraph API["FastAPI /api/v1 + /api/v2"]
+        Routes["sensors · weather · grid · cells · alerts · reports · fires"]
     end
 
     subgraph FE["Frontend — React + MapLibre"]
@@ -474,13 +475,13 @@ OpenAQ ──┐                                   ┌── Open-Meteo
       alert table
          │
          ▼
-    FastAPI /api/v1/* ──── polled every 60s ──── React + MapLibre frontend
+    FastAPI /api/v1/* + /api/v2/* ──── polled every 60s ──── React + MapLibre frontend
 ```
 
 Everything above `sensor_reading`/`weather_reading` is a **manual
 trigger** (`python -m app.cli <command>` or `python -m app.pipeline.run`)
 — nothing runs on a timer. A single pipeline run persists real rows;
-every `/api/v1/*` endpoint reads from its repository first and only
+every `/api/v1/*` and `/api/v2/*` endpoint reads from its repository first and only
 falls back to `app/services/demo_data.py`'s static illustrative values
 (`is_demo: true`) if that repository query returns nothing at all. See
 [API overview](#api-overview) and [Demo mode](#demo-mode) for the two
@@ -581,8 +582,8 @@ on Windows.
 |---|---|
 | http://localhost:8000/health | Liveness — the process is up, never touches the DB |
 | http://localhost:8000/health/ready | Readiness — PostgreSQL reachable + PostGIS installed (200 or 503) |
-| http://localhost:8000/docs | Swagger UI for every `/api/v1/*` endpoint |
-| http://localhost:8000/api/v1/sensors | Try it — demo data until ingestion has run |
+| http://localhost:8000/docs | Swagger UI for every endpoint (v1 and v2) |
+| http://localhost:8000/api/v1/sensors | Try it — demo data until ingestion has run (raw station audit trail; no client calls it) |
 
 To run a CLI command inside the running `api` container instead of a
 separate host install:
@@ -977,21 +978,49 @@ contours, which dissolve in step with the fills they describe.
 
 ## API overview
 
-Base path `/api/v1`, plus unversioned `/health` and `/health/ready`.
-Interactive docs at `/docs` once the API is running.
+Base paths `/api/v1` and `/api/v2`, plus unversioned `/health` and
+`/health/ready`. Interactive docs at `/docs` once the API is running.
+`/api/v2` serves versioned, run-pinned prediction publications (see
+[docs/architecture.md](docs/architecture.md)'s "Environmental publication API");
+`/api/v1` is the original contract, still used by both clients for citizen
+reports and by the web for the FIRMS layer.
 
-| Endpoint | Returns |
-|---|---|
-| `GET /health` | Liveness — process up, never touches the DB |
-| `GET /health/ready` | Readiness — PostgreSQL reachable + PostGIS installed |
-| `GET /api/v1/sensors` | Latest reading per sensor (raw ingestion audit trail — the only endpoint that names a `source`; not part of the map/grid contract below, and the frontend never calls it) |
-| `GET /api/v1/weather?resolution=&min_lat=&min_lon=&max_lat=&max_lon=` | Latest weather per H3 cell |
-| `GET /api/v1/grid/current?resolution=&min_lat=&min_lon=&max_lat=&max_lon=` | Current PM2.5 + PDI per cell |
-| `GET /api/v1/grid/forecast?hours=1\|3\|6&resolution=&min_lat=&min_lon=&max_lat=&max_lon=` | Forecast PM2.5 per cell at that horizon |
-| `GET /api/v1/cells/{h3_cell}?resolution=` | Current state + forecasts + weather + PDI factor breakdown for one cell (404 if no data at all, 422 if `h3_cell` isn't valid at the configured resolution) |
-| `GET /api/v1/alerts` | Alerts created within `ALERT_ACTIVE_LOOKBACK_HOURS` |
-| `POST /api/v1/reports` | Store a citizen report of an active fire/burning event (kind, location, smoke slider 1-5, duration estimate, optional note); returns it with the H3 cell it snapped to. Idempotent on `client_report_id`. |
-| `GET /api/v1/reports` | Fire/burning reports within `FIRE_REPORT_MAX_AGE_HOURS` (the same window the fire gradient model trusts a report for) |
+| Endpoint | Returns | Called by |
+|---|---|---|
+| `GET /health` | Liveness - process up, never touches the DB | infra only (compose healthcheck, deploy smoke tests) |
+| `GET /health/ready` | Readiness - PostgreSQL reachable + PostGIS installed | infra only (compose waits on it, go-live checks it) |
+| `GET /api/v1/sensors` | Latest reading per sensor (raw ingestion audit trail - the only endpoint that names a `source`) | **nothing** - see below |
+| `GET /api/v1/weather?resolution=&min_lat=&min_lon=&max_lat=&max_lon=` | Latest weather per H3 cell | **nothing** - superseded by `/api/v2/weather` |
+| `GET /api/v1/grid/current?resolution=&min_lat=&min_lon=&max_lat=&max_lon=` | Current PM2.5 + PDI per cell | **nothing** - superseded by `/api/v2/grid/current` |
+| `GET /api/v1/grid/forecast?hours=1\|3\|6&resolution=&min_lat=&min_lon=&max_lat=&max_lon=` | Forecast PM2.5 per cell at that horizon | **nothing** - superseded by `/api/v2/grid/forecast` |
+| `GET /api/v1/cells/{h3_cell}?resolution=` | Current state + forecasts + weather + PDI factor breakdown for one cell (404 if no data at all, 422 if `h3_cell` isn't valid at the configured resolution) | **nothing** - superseded by `/api/v2/cells/{h3_cell}` |
+| `GET /api/v1/alerts` | Alerts created within `ALERT_ACTIVE_LOOKBACK_HOURS` | **nothing** - superseded by `/api/v2/alerts` |
+| `POST /api/v1/reports` | Store a citizen report of an active fire/burning event (kind, location, smoke slider 1-5, duration estimate, optional note); returns it with the H3 cell it snapped to. Idempotent on `client_report_id`. | web + app |
+| `GET /api/v1/reports` | Fire/burning reports within `FIRE_REPORT_MAX_AGE_HOURS` (the same window the fire gradient model trusts a report for) | web + app |
+| `GET /api/v1/fires?since_hours=&min_lat=&min_lon=&max_lat=&max_lon=` | NASA FIRMS detections the backend has ingested, worst FRP first, capped at 2000 | web |
+| `GET /api/v1/tiles/gibs/{layer}/{z}/{y}/{x}?date=` | One NASA GIBS WMTS tile, proxied and cached by the backend (`layer` is `truecolor` or `aod`) | web |
+| `GET /api/v1/tiles/no2/{z}/{y}/{x}` | One Sentinel-5P NO2 WMS GetMap tile, proxied with the credential held server-side (404 while `NO2_WMS_URL` is unset) | web |
+| `GET /api/v2/meta` | Run identity, mode, resolution and forecast anchors | web + app |
+| `GET /api/v2/grid/current?run_id=&resolution=&bbox` | Concentration, centroid, provenance and per-cell exposure | web + app |
+| `GET /api/v2/grid/forecast?hours=&run_id=&resolution=&bbox` | Published anchors and 15-minute interpolations | web + app |
+| `GET /api/v2/cells/{h3_cell}?run_id=&resolution=` | Current, anchor forecasts, weather, static features and exposure | web only (the app has no per-cell detail read) |
+| `GET /api/v2/weather?hours=&run_id=&resolution=&bbox` | Run-pinned weather and source versions | web + app |
+| `GET /api/v2/alerts?run_id=` | Alerts derived from that publication | web + app |
+| `GET /api/v2/exposure?hours=&threshold_pm25=&run_id=&resolution=&bbox` | Population-weighted concentration and covered/unknown population for the whole scope | **nothing** - see below |
+
+**Why the web doesn't call `/api/v1/sensors` or `/api/v2/exposure`.** Both are
+deliberate, not oversights. `/api/v1/sensors` is the raw station audit trail
+(`source`, `external_sensor_id`, `pollutant`, `value`) with no station UI on
+either client; the web's citizen layer shows *human* fire reports (kind, smoke
+slider, duration) and so reads `/api/v1/reports` instead - different data, not
+a different view of the same data. `/api/v2/exposure` is the one-summary-per-
+region roll-up, while the web already reads the per-cell `exposure` field that
+ships on `/api/v2/grid/current`, `/api/v2/grid/forecast` and
+`/api/v2/cells/{h3_cell}` and renders it in the drawer and as its "Exposure"
+map metric. Both routes are kept and documented rather than removed; the full
+route-to-consumer mapping, and why the legacy v1 map routes are still served,
+is in [docs/architecture.md](docs/architecture.md)'s API section.
+
 
 `resolution` and the four bbox params are optional and independent of
 each other's endpoint — see [Level of detail](#level-of-detail) for the

@@ -1,14 +1,22 @@
-// The ONLY module allowed to call `fetch`. Every export here corresponds
-// to one documented backend endpoint (docs/architecture.md's "API"
-// section) and does nothing beyond typing the response — no pollution
-// math, no derived/aggregated values. That logic lives in the backend;
-// this module (and the rest of the frontend) only displays what it returns.
+// Every read and write of our own backend API lives here. Each export
+// corresponds to one documented backend route (docs/architecture.md's "API"
+// section) and returns it typed for the UI; where a response's row shape
+// differs from the view model the map and drawer already consume, the small
+// adapter sits with the export that needs it (see fetchActiveFires). No
+// pollution math and no aggregation: derived values come from the backend,
+// and this module - like the rest of the frontend - only displays them.
+//
+// `fetch` does appear outside this module, but never for API reads:
+// components/MapView.tsx fetches the basemap style, and lib/locations.ts +
+// lib/stateBoundaries.ts fetch the bundled /data/* assets. Anything that
+// talks to the backend API belongs here instead.
 
 import type {
   AlertOut,
   BoundingBox,
   CellDetailOut,
   Envelope,
+  FireHotspotOut,
   FireReportOut,
   FireReportSubmit,
   ForecastOut,
@@ -21,6 +29,8 @@ import type {
   WeatherV2Out,
   WeatherReadingOut,
 } from './types'
+import { activeFireFromHotspot } from './activeFires'
+import type { ActiveFire } from './activeFires'
 
 // `||` (not `??`) so an empty VITE_API_BASE_URL — which a host may inject
 // when auto-importing env files — still falls back, and any trailing slash is
@@ -269,6 +279,24 @@ export function fetchAlerts(runId?: string): Promise<Envelope<AlertOut[]>> {
 
 export function fetchReports(): Promise<Envelope<FireReportOut[]>> {
   return apiGet('/api/v1/reports')
+}
+
+/** NASA FIRMS detections the backend has ingested (GET /api/v1/fires),
+ *  mapped to the map's own ActiveFire view model so the layers and popup
+ *  don't care where the rows came from.
+ *
+ *  `query` is the same level-of-detail pair grid/weather take. Omit it for
+ *  the whole stored set - which is what the fires layer does, since it covers
+ *  all of India and the endpoint filters by H3 cell at the resolution the
+ *  detections were stored at (a viewport-scoped request would have to match
+ *  that resolution exactly; see backend/app/services/fires.py). */
+export function fetchActiveFires(query: LodQuery = {}): Promise<Envelope<ActiveFire[]>> {
+  return apiGet<Envelope<FireHotspotOut[]>>(
+    `/api/v1/fires${buildQuery(lodParams(query))}`,
+  ).then((envelope) => ({
+    ...envelope,
+    data: envelope.data.map(activeFireFromHotspot),
+  }))
 }
 
 export function submitReport(

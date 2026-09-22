@@ -198,6 +198,40 @@ class ReportOut(BaseModel):
     reported_at: datetime
 
 
+class FireHotspotOut(BaseModel):
+    """One stored NASA FIRMS detection (GET /api/v1/fires).
+
+    A satellite thermal detection, not a confirmed ground fire — the same
+    distinction the ingest side keeps (see docs/M5_FIRES_AND_TRAFFIC.md).
+    Field names follow the domain object
+    (app.domain.environmental_observations.FireHotspot) like every other
+    Out schema, so the units stay in the name: `frp_mw` is megawatts,
+    `brightness_ti4_k` is the 4-micron brightness temperature in kelvin.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    detection_id: str = Field(description="Stable content-derived id — safe as a list key.")
+    h3_cell: str = Field(description="The H3 cell this detection was snapped to at ingest time.")
+    latitude: float
+    longitude: float
+    frp_mw: float = Field(description="Fire Radiative Power, megawatts.")
+    brightness_ti4_k: float | None = Field(
+        default=None, description="Brightness temperature (4 µm band), kelvin. Null when absent."
+    )
+    confidence_raw: str = Field(
+        description="The raw FIRMS confidence token: 'l'/'n'/'h', or a 0-100 string for MODIS."
+    )
+    confidence_class: str = Field(
+        description="Normalised confidence class: 'low', 'nominal', 'high' or 'unknown'."
+    )
+    acquired_at: datetime = Field(description="Satellite overpass time, UTC.")
+    satellite: str
+    daynight: str | None = Field(
+        default=None, description="'D' for a daytime overpass, 'N' for night, null when unknown."
+    )
+
+
 class ErrorDetail(BaseModel):
     code: str
     message: str

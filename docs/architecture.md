@@ -145,16 +145,39 @@ never built. GeoJSON may still make sense once the frontend map is wired
 up — nothing here forecloses adding it as an alternative representation
 later, it's just not what exists today.
 
-| Endpoint | Returns |
-|---|---|
-| `GET /health` | API liveness — never touches the database |
-| `GET /health/ready` | PostgreSQL + PostGIS readiness, 200/503 |
-| `GET /api/v1/sensors` | Latest reading per sensor |
-| `GET /api/v1/weather?resolution=&min_lat=&min_lon=&max_lat=&max_lon=` | Latest weather per cell |
-| `GET /api/v1/grid/current?resolution=&min_lat=&min_lon=&max_lat=&max_lon=` | Current `GridState` per cell |
-| `GET /api/v1/grid/forecast?hours=1\|3\|6&resolution=&min_lat=&min_lon=&max_lat=&max_lon=` | Latest `Forecast` per cell at that horizon |
-| `GET /api/v1/cells/{h3_cell}?resolution=` | Current state + all forecasts + weather for one cell |
-| `GET /api/v1/alerts` | Alerts created within `ALERT_ACTIVE_LOOKBACK_HOURS` (default 24h; see `app/services/alerts.py`) |
+| Endpoint | Returns | Called by |
+|---|---|---|
+| `GET /health` | API liveness — never touches the database | infra only — `docker-compose.yml`'s healthcheck and the deploy smoke tests; no client calls it |
+| `GET /health/ready` | PostgreSQL + PostGIS readiness, 200/503 | infra only — `docker-compose.yml` waits on this, and `docs/GO_LIVE.md` checks it after a deploy |
+| `GET /api/v1/sensors` | Latest reading per sensor | **nothing** - raw ingestion audit trail, see below |
+| `GET /api/v1/weather?resolution=&min_lat=&min_lon=&max_lat=&max_lon=` | Latest weather per cell | **nothing** - superseded by `GET /api/v2/weather` |
+| `GET /api/v1/grid/current?resolution=&min_lat=&min_lon=&max_lat=&max_lon=` | Current `GridState` per cell | **nothing** - superseded by `GET /api/v2/grid/current` |
+| `GET /api/v1/grid/forecast?hours=1\|3\|6&resolution=&min_lat=&min_lon=&max_lat=&max_lon=` | Latest `Forecast` per cell at that horizon | **nothing** - superseded by `GET /api/v2/grid/forecast` |
+| `GET /api/v1/cells/{h3_cell}?resolution=` | Current state + all forecasts + weather for one cell | **nothing** - superseded by `GET /api/v2/cells/{h3_cell}` |
+| `GET /api/v1/alerts` | Alerts created within `ALERT_ACTIVE_LOOKBACK_HOURS` (default 24h; see `app/services/alerts.py`) | **nothing** - superseded by `GET /api/v2/alerts` |
+| `GET /api/v1/reports` | Fire/burning reports within `FIRE_REPORT_MAX_AGE_HOURS` | web + app |
+| `POST /api/v1/reports` | Store a citizen report of an active fire/burning event | web + app |
+| `GET /api/v1/fires?since_hours=&min_lat=&min_lon=&max_lat=&max_lon=` | Stored NASA FIRMS detections, worst FRP first, capped | web |
+| `GET /api/v1/tiles/gibs/{layer}/{z}/{y}/{x}?date=` | One proxied NASA GIBS WMTS tile (image, not JSON) | web |
+| `GET /api/v1/tiles/no2/{z}/{y}/{x}` | One proxied Sentinel-5P NO2 WMS GetMap tile (image) | web |
+
+**Who calls what, and why the legacy rows are still here.** The `Called by`
+column is the contract that keeps this from drifting again: it was written by
+reading every path each client requests - `frontend/src/lib/api.ts` for the web
+app and `partner_apps/air_health_flutter/lib/data/**` for the partner app -
+not by assuming. The v1 grid/weather/cells/alerts routes are **kept but no
+longer called by either client**: both moved to the versioned `/api/v2`
+publication reads, and they stay in place because an already-released build of
+the partner app may still request them. They are covered by
+`tests/test_api_contract.py`, which pins the legacy v1 shape on purpose.
+`GET /api/v1/sensors` is a different case: it is the only endpoint that names a
+`source`/`external_sensor_id`, it exists as a raw ingestion audit trail rather
+than as part of the map/grid contract, and neither client has a station UI to
+read it with. The web's "Citizen Fire Reports" layer shows *human* reports
+(`kind`, smoke slider, duration) and therefore reads `/api/v1/reports`, not
+`/api/v1/sensors` - those are two different kinds of data, not two views of
+one. Adding a station layer later is what would give `/api/v1/sensors` a
+consumer; until then it is deliberate, documented dead weight.
 
 Every response (`/health` excepted) is wrapped the same way:
 `{"generated_at": <UTC ISO-8601>, "is_demo": bool, "data": ...}`. `data` is
@@ -184,7 +207,8 @@ any future source (satellite retrievals, government sensor feeds, ...).
 ("is this illustrative or measured?"), not "which system produced this?".
 `GET /api/v1/sensors`' `source`/`external_sensor_id` fields are the sole,
 deliberate exception — that endpoint is a raw ingestion audit trail, not
-part of the map/grid contract, and the frontend never calls it. Swapping
+part of the map/grid contract, and no client calls it (see the
+route-to-consumer table above). Swapping
 `app.ingestion.demo` for a real provider, or adding a new one, never
 requires a frontend change: `app.services.demo_data` and every real
 `*Provider` implementation both terminate in the exact same domain types
@@ -200,15 +224,25 @@ where applicable. Clients resolve GET /api/v2/meta once, then pass
 latest_run_id to current, forecast, weather, alert, and cell-detail reads so
 those views cannot drift onto different hourly publications during refresh.
 
-| Endpoint | Returns |
-|---|---|
-| GET /api/v2/meta?run_id= | Run identity, mode, resolution and forecast anchors |
-| GET /api/v2/grid/current?run_id=&resolution=&bbox | Concentration, centroid, provenance and population exposure |
-| GET /api/v2/grid/forecast?hours=&run_id=&resolution=&bbox | Published anchors and 15-minute interpolations |
-| GET /api/v2/cells/{h3_cell}?run_id=&resolution= | Current, anchor forecasts, weather, static features and exposure |
-| GET /api/v2/weather?hours=&run_id=&resolution=&bbox | Run-pinned weather and source versions |
-| GET /api/v2/alerts?run_id= | Alerts derived from that publication |
-| GET /api/v2/exposure?hours=&threshold_pm25=&run_id=&resolution=&bbox | Population-weighted concentration and covered/unknown population |
+| Endpoint | Returns | Called by |
+|---|---|---|
+| GET /api/v2/meta?run_id= | Run identity, mode, resolution and forecast anchors | web + app (both resolve the pointer before their other reads) |
+| GET /api/v2/grid/current?run_id=&resolution=&bbox | Concentration, centroid, provenance and population exposure | web + app |
+| GET /api/v2/grid/forecast?hours=&run_id=&resolution=&bbox | Published anchors and 15-minute interpolations | web + app |
+| GET /api/v2/cells/{h3_cell}?run_id=&resolution= | Current, anchor forecasts, weather, static features and exposure | web only (the app has no per-cell detail read) |
+| GET /api/v2/weather?hours=&run_id=&resolution=&bbox | Run-pinned weather and source versions | web + app |
+| GET /api/v2/alerts?run_id= | Alerts derived from that publication | web + app |
+| GET /api/v2/exposure?hours=&threshold_pm25=&run_id=&resolution=&bbox | Population-weighted concentration and covered/unknown population | **nothing** - see below |
+
+`/api/v2/exposure` is the aggregate roll-up (one summary for the requested
+scope), and neither client calls it. That is not because exposure is unused -
+both clients read the *per-cell* `exposure` field that rides along on
+`/api/v2/grid/current`, `/api/v2/grid/forecast` and `/api/v2/cells/{h3_cell}`,
+and the web renders it in the drawer and as its "Exposure" map metric. The
+summary endpoint is for a caller that wants one number for a region rather
+than a field of cells: a future summary card in the web UI, or an external
+consumer. Documented rather than deleted, because it is the only route that
+answers that question.
 
 Forecast requests may use 15-minute steps. Values between stored anchors
 are linearly interpolated and identify interpolated-between-published-anchors
