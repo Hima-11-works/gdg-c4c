@@ -217,11 +217,7 @@ export function MapPage() {
         />
       </div>
 
-      <CellDetailPanel
-        publishedRunId={publishedRunId}
-        citizenReports={reports.resource}
-        activeFires={activeFires.resource}
-      />
+      <CellDetailPanel publishedRunId={publishedRunId} citizenReports={reports.resource} />
     </div>
   )
 }

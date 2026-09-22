@@ -972,43 +972,6 @@ body,
   border-radius: 6px;
 }
 
-/* --- data fusion (drawer) --- */
-
-/* Three sources, shown side by side. Same visual language as the citizen
-   report block so the drawer reads as a stack of evidence, not one score. */
-.data-fusion {
-  margin-top: 0.45rem;
-  padding: 0.4rem;
-  border: 1px solid #3a3f4a;
-  background: rgba(31, 33, 40, 0.85);
-  border-radius: 6px;
-}
-
-.data-fusion-note,
-.data-fusion-source {
-  margin: 0.25rem 0 0;
-  font-size: 0.68rem;
-  line-height: 1.35;
-}
-
-.data-fusion-list {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 0.15rem 0.5rem;
-  margin: 0.4rem 0 0;
-  font-size: 0.78rem;
-}
-
-.data-fusion-list dt {
-  color: #9ca3af;
-  white-space: nowrap;
-}
-
-.data-fusion-list dd {
-  margin: 0;
-  color: #e5e7eb;
-}
-
 .citizen-report-meta {
   display: flex;
   flex-direction: column;

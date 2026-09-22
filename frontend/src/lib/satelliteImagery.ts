@@ -76,58 +76,30 @@ export function gibsAerosolTileUrl(date: Date = latestImageryDate()): string {
 }
 
 // ---------------------------------------------------------------------------
-// Industrial emissions - Copernicus Sentinel-5P TROPOMI tropospheric NO2.
+// Industrial emissions — Copernicus Sentinel-5P tropospheric NO2.
 //
-// Real, keyless, tiled source: NASA GIBS republishes the ESA TROPOMI L2
-// tropospheric NO2 column as a daily WMTS layer in the same epsg3857/best
-// pyramid the other GIBS layers above use, so the browser renders actual
-// Sentinel-5P data with no account, token or backend of our own.
-// `GoogleMapsCompatible_Level6` is its deepest matrix, so the zoom is capped
-// and MapLibre overzooms past it rather than requesting tiles that don't
-// exist (same trick as True Color's level 9).
-//
-// VITE_NO2_WMS_URL still wins when it is set: a WMS GetMap endpoint (CDSE /
-// Sentinel Hub, or the Google Earth Engine WMS app once that backend exists)
-// can serve a finer or different product with no code change here.
+// Sentinel-5P NO2 is served as a WMS layer by the Copernicus Data Space
+// Ecosystem (CDSE) / Sentinel Hub, and by Google Earth Engine. Both require
+// an account token, so this stays an explicit, clearly-marked placeholder:
+// point `VITE_NO2_WMS_URL` at a GetMap endpoint and the layer comes alive
+// with no code change. Until then no tiles are requested — showing a
+// fabricated heat-map where real NO2 should be would be worse than showing
+// nothing at all.
 // ---------------------------------------------------------------------------
 
-/** Deepest GIBS tile matrix for the TROPOMI NO2 product. */
-export const GIBS_NO2_MAX_ZOOM = 6
-/** Attribution for the GIBS-published TROPOMI product. */
-export const GIBS_NO2_ATTRIBUTION =
-  'NO₂: ESA Copernicus Sentinel-5P (TROPOMI) via NASA GIBS'
-/** Attribution for a configured WMS endpoint (the provider's own terms). */
-export const NO2_WMS_ATTRIBUTION = 'NO₂: Copernicus Sentinel-5P (ESA)'
-
-const GIBS_NO2_BASE =
-  'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best' +
-  '/TROPOMI_L2_Nitrogen_Dioxide_Tropospheric_Column/default'
-const GIBS_NO2_MATRIX_SET = 'GoogleMapsCompatible_Level6'
-
-/** Optional WMS GetMap override (see .env.example). */
+/** Placeholder: set VITE_NO2_WMS_URL to a Sentinel-5P NO2 WMS GetMap
+ *  endpoint (see .env.example) to render real industrial-emission tiles. */
 export const NO2_WMS_URL: string | undefined = import.meta.env.VITE_NO2_WMS_URL
 
-/** True when a WMS endpoint is configured and therefore wins over GIBS. */
-export const NO2_USES_WMS: boolean = (NO2_WMS_URL ?? '') !== ''
+/** Attribution shown once a real NO2 endpoint is configured. */
+export const NO2_ATTRIBUTION = 'NO₂: Copernicus Sentinel-5P (ESA)'
 
-/** Attribution for whichever NO2 source is actually in use. */
-export const NO2_ATTRIBUTION: string = NO2_USES_WMS
-  ? NO2_WMS_ATTRIBUTION
-  : GIBS_NO2_ATTRIBUTION
-
-/** GIBS TROPOMI NO2 tile template for a UTC date - default yesterday, the
- *  newest daily composite that is reliably complete (same rule as the other
- *  GIBS layers here). */
-export function gibsNo2TileUrl(date: Date = latestImageryDate()): string {
-  return `${GIBS_NO2_BASE}/${gibsDateString(date)}/${GIBS_NO2_MATRIX_SET}/{z}/{y}/{x}.png`
-}
-
-/** MapLibre raster tiles entry for the NO2 layer: the configured WMS GetMap
- *  endpoint wrapped in `{bbox-epsg-3857}`, or the keyless GIBS TROPOMI layer
- *  when no endpoint is configured. */
-export function no2TileUrl(date: Date = latestImageryDate()): string {
-  if (!NO2_USES_WMS) return gibsNo2TileUrl(date)
-  const separator = NO2_WMS_URL !== undefined && NO2_WMS_URL.includes('?') ? '&' : '?'
+/** MapLibre raster tiles entry for a WMS layer: wraps the GetMap endpoint in
+ *  MapLibre's `{bbox-epsg-3857}` substitution so the source requests the
+ *  right extent per tile. Returns null while no endpoint is configured. */
+export function no2TileUrl(): string | null {
+  if (!NO2_WMS_URL) return null
+  const separator = NO2_WMS_URL.includes('?') ? '&' : '?'
   return (
     `${NO2_WMS_URL}${separator}` +
     'service=WMS&version=1.3.0&request=GetMap' +

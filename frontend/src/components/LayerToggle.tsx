@@ -116,14 +116,14 @@ export function LayerToggle() {
 
           <label
             className="layer-toggle-option"
-            title="Copernicus Sentinel-5P TROPOMI tropospheric NO2 - real daily satellite tiles from NASA GIBS, drawn at 60% opacity as a visual overlay (no per-cell value is derived from it). Set VITE_NO2_WMS_URL to serve it from a WMS endpoint instead."
+            title="Copernicus Sentinel-5P tropospheric NO2 via WMS. Inert until VITE_NO2_WMS_URL is set to a GetMap endpoint - no fabricated data is shown in the meantime."
           >
             <input
               type="checkbox"
               checked={state.showIndustrialEmissions}
               onChange={() => dispatch({ type: 'TOGGLE_INDUSTRIAL_EMISSIONS' })}
             />
-            Satellite NO2 Emissions (Sentinel-5P)
+            Industrial Emissions (Sentinel-5P NO2)
           </label>
 
           <label

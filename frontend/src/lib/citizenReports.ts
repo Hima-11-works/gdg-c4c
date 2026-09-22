@@ -8,7 +8,6 @@
 // lookups over whatever the API returned. It never fabricates a report.
 
 import type { FeatureCollection, Point } from 'geojson'
-import { cellForPoint, resolutionOfCell } from './h3Geometry'
 import type { FireReportKind, FireReportOut } from './types'
 
 /** Human-readable label per report kind. */
@@ -28,31 +27,20 @@ export function smokeLabel(intensity: number): string {
   return SMOKE_LABELS[index]
 }
 
-/** Every report whose coordinates fall inside `h3Cell`, newest first.
- *
- *  Matched by point-in-cell, not by cell-string equality: the backend snaps
- *  a report to its own H3_RESOLUTION at write time, which is finer than the
- *  cell the drawer selects (a level-of-detail resolution), so the two
- *  strings rarely match and an exact comparison would silently show nothing.
- */
-export function reportsInCell(
-  reports: FireReportOut[],
-  h3Cell: string | null | undefined,
-): FireReportOut[] {
-  if (!h3Cell) return []
-  const resolution = resolutionOfCell(h3Cell)
-  if (resolution === undefined) return []
-  return reports
-    .filter((report) => cellForPoint(report.latitude, report.longitude, resolution) === h3Cell)
-    .sort((a, b) => Date.parse(b.reported_at) - Date.parse(a.reported_at))
-}
-
-/** The newest report in this cell - or null. */
+/** The report filed in this exact cell, newest first - or null. */
 export function reportForCell(
   reports: FireReportOut[],
   h3Cell: string | null | undefined,
 ): FireReportOut | null {
-  return reportsInCell(reports, h3Cell)[0] ?? null
+  if (!h3Cell) return null
+  let newest: FireReportOut | null = null
+  for (const report of reports) {
+    if (report.h3_cell !== h3Cell) continue
+    if (newest === null || Date.parse(report.reported_at) > Date.parse(newest.reported_at)) {
+      newest = report
+    }
+  }
+  return newest
 }
 
 /** Minutes since a report was filed, floored at 0. */

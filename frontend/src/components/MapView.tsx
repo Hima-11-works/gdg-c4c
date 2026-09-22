@@ -7,7 +7,7 @@ import {
   Popup,
   setWorkerUrl,
 } from 'maplibre-gl'
-import type { FilterSpecification, RasterSourceSpecification } from 'maplibre-gl'
+import type { FilterSpecification } from 'maplibre-gl'
 import { cellToBoundary } from 'h3-js'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
@@ -43,10 +43,8 @@ import {
   GIBS_AOD_ATTRIBUTION,
   GIBS_AOD_OPACITY,
   GIBS_MAX_ZOOM,
-  GIBS_NO2_MAX_ZOOM,
   GIBS_TILE_SIZE,
   NO2_ATTRIBUTION,
-  NO2_USES_WMS,
   gibsAerosolTileUrl,
   gibsTrueColorTileUrl,
   no2TileUrl,
@@ -279,11 +277,11 @@ const LAYER_GIBS = 'gibs-true-color-raster'
 // NASA FIRMS active thermal anomalies — a real near-real-time feed, kept
 // separate from the illustrative `satellite-fires-*` layers above so the
 // two can never be mistaken for one another. Deep red/magenta with a
-// blurred halo reads as glowing heat, and the colour/scale of both the halo
-// and the core come from the detection's FRP (see the layer paint below).
+// blurred halo reads as glowing heat.
 const SOURCE_ACTIVE_FIRES = 'active-fires'
 const LAYER_ACTIVE_FIRES_GLOW = 'active-fires-glow'
 const LAYER_ACTIVE_FIRES_CORE = 'active-fires-core'
+const ACTIVE_FIRE_COLOR = '#FF0055'
 const ACTIVE_FIRE_GLOW_OPACITY = 0.45
 const ACTIVE_FIRE_CORE_OPACITY = 0.9
 
@@ -758,27 +756,27 @@ export function MapView({
             paint: { 'raster-opacity': GIBS_AOD_OPACITY, 'raster-fade-duration': 0 },
           })
 
-          // Industrial emissions - Sentinel-5P TROPOMI NO2, drawn as a
-          // semi-transparent raster so the hex grid stays readable. Real
-          // tiles with no key by default (NASA GIBS republishes the ESA
-          // product); VITE_NO2_WMS_URL swaps in a WMS GetMap endpoint
-          // instead. The GIBS tile matrix stops at level 6, so that path
-          // caps the zoom and lets MapLibre overzoom rather than 404.
-          const no2Source: RasterSourceSpecification = {
-            type: 'raster',
-            tiles: [no2TileUrl()],
-            tileSize: GIBS_TILE_SIZE,
-            attribution: NO2_ATTRIBUTION,
+          // Industrial emissions — Sentinel-5P NO2 over WMS. Only added when
+          // a GetMap endpoint is configured (VITE_NO2_WMS_URL); otherwise the
+          // toggle stays inert rather than drawing invented heat. The source
+          // is skipped entirely so MapLibre never requests a URL that can't
+          // resolve, and the toggle effect below no-ops on the absent layer.
+          const no2Tiles = no2TileUrl()
+          if (no2Tiles !== null) {
+            map!.addSource(SOURCE_NO2, {
+              type: 'raster',
+              tiles: [no2Tiles],
+              tileSize: GIBS_TILE_SIZE,
+              attribution: NO2_ATTRIBUTION,
+            })
+            map!.addLayer({
+              id: LAYER_NO2,
+              type: 'raster',
+              source: SOURCE_NO2,
+              layout: { visibility: 'none' },
+              paint: { 'raster-opacity': NO2_OPACITY, 'raster-fade-duration': 0 },
+            })
           }
-          if (!NO2_USES_WMS) no2Source.maxzoom = GIBS_NO2_MAX_ZOOM
-          map!.addSource(SOURCE_NO2, no2Source)
-          map!.addLayer({
-            id: LAYER_NO2,
-            type: 'raster',
-            source: SOURCE_NO2,
-            layout: { visibility: 'none' },
-            paint: { 'raster-opacity': NO2_OPACITY, 'raster-fade-duration': 0 },
-          })
 
           // India country outline — dissolved from geoBoundaries ADM1.
           map!.addSource(SOURCE_INDIA_OUTLINE, { type: 'geojson', data: INDIA_OUTLINE_URL })
@@ -1138,34 +1136,8 @@ export function MapView({
             source: SOURCE_ACTIVE_FIRES,
             layout: { visibility: 'none' },
             paint: {
-              // Intensity comes from the detection's own FRP, which
-              // lib/activeFires turns into `severity` (1 minor / 2 elevated /
-              // 3 critical). A stronger fire gets a wider, hotter halo, on the
-              // same palette the triage layers use - so the two fire layers
-              // read as one system. Unknown severity falls back to critical:
-              // fail loud on a triage screen.
-              'circle-color': [
-                'match',
-                ['get', 'severity'],
-                1,
-                FIRE_MINOR_COLOR,
-                2,
-                FIRE_ELEVATED_COLOR,
-                3,
-                FIRE_CRITICAL_COLOR,
-                FIRE_CRITICAL_COLOR,
-              ],
-              'circle-radius': [
-                'interpolate',
-                ['linear'],
-                ['zoom'],
-                3,
-                ['match', ['get', 'severity'], 1, 4, 2, 6, 3, 8, 8],
-                8,
-                ['match', ['get', 'severity'], 1, 8, 2, 13, 3, 18, 13],
-                12,
-                ['match', ['get', 'severity'], 1, 14, 2, 20, 3, 26, 20],
-              ],
+              'circle-color': ACTIVE_FIRE_COLOR,
+              'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 5, 8, 12, 12, 18],
               'circle-blur': 1,
               'circle-opacity': ACTIVE_FIRE_GLOW_OPACITY,
             },
@@ -1176,32 +1148,10 @@ export function MapView({
             source: SOURCE_ACTIVE_FIRES,
             layout: { visibility: 'none' },
             paint: {
-              // Same FRP-driven scale as the halo, sized so the dot itself
-              // reads at a glance and stays an easy click target.
-              'circle-color': [
-                'match',
-                ['get', 'severity'],
-                1,
-                FIRE_MINOR_COLOR,
-                2,
-                FIRE_ELEVATED_COLOR,
-                3,
-                FIRE_CRITICAL_COLOR,
-                FIRE_CRITICAL_COLOR,
-              ],
-              'circle-radius': [
-                'interpolate',
-                ['linear'],
-                ['zoom'],
-                3,
-                ['match', ['get', 'severity'], 1, 3, 2, 4.5, 3, 6, 4.5],
-                8,
-                ['match', ['get', 'severity'], 1, 5, 2, 8, 3, 11, 8],
-                12,
-                ['match', ['get', 'severity'], 1, 9, 2, 13, 3, 17, 13],
-              ],
-              'circle-stroke-color': ['match', ['get', 'severity'], 3, '#FECDD3', '#FFD1E0'],
-              'circle-stroke-width': ['match', ['get', 'severity'], 3, 1.6, 1],
+              'circle-color': ACTIVE_FIRE_COLOR,
+              'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 2.5, 8, 4.5, 12, 7],
+              'circle-stroke-color': '#FFD1E0',
+              'circle-stroke-width': 1,
               'circle-opacity': ACTIVE_FIRE_CORE_OPACITY,
             },
           })
