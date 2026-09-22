@@ -25,6 +25,10 @@ type PersistedMapUi = Pick<
   | 'showFireHotspots'
   | 'showCitizenSensors'
   | 'showFreightCorridors'
+  | 'showSatelliteImagery'
+  | 'showActiveFires'
+  | 'showSeasonalSmog'
+  | 'showIndustrialEmissions'
   | 'legendOpen'
   | 'settingsOpen'
 >
@@ -35,6 +39,10 @@ const BOOLEAN_FIELDS = [
   'showFireHotspots',
   'showCitizenSensors',
   'showFreightCorridors',
+  'showSatelliteImagery',
+  'showActiveFires',
+  'showSeasonalSmog',
+  'showIndustrialEmissions',
   'legendOpen',
   'settingsOpen',
 ] as const satisfies ReadonlyArray<keyof PersistedMapUi>
@@ -85,6 +93,10 @@ export function persistMapUi(state: MapUiState): void {
       showFireHotspots: state.showFireHotspots,
       showCitizenSensors: state.showCitizenSensors,
       showFreightCorridors: state.showFreightCorridors,
+      showSatelliteImagery: state.showSatelliteImagery,
+      showActiveFires: state.showActiveFires,
+      showSeasonalSmog: state.showSeasonalSmog,
+      showIndustrialEmissions: state.showIndustrialEmissions,
       legendOpen: state.legendOpen,
       settingsOpen: state.settingsOpen,
     }

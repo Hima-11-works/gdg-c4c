@@ -34,6 +34,22 @@ import {
   fireAnomalyFeatureCollection,
 } from '../lib/fireAnomalies'
 import {
+  activeFirePopupHtml,
+  activeFiresFeatureCollection,
+} from '../lib/activeFires'
+import type { ActiveFire } from '../lib/activeFires'
+import {
+  GIBS_ATTRIBUTION,
+  GIBS_AOD_ATTRIBUTION,
+  GIBS_AOD_OPACITY,
+  GIBS_MAX_ZOOM,
+  GIBS_TILE_SIZE,
+  NO2_ATTRIBUTION,
+  gibsAerosolTileUrl,
+  gibsTrueColorTileUrl,
+  no2TileUrl,
+} from '../lib/satelliteImagery'
+import {
   cellCenter,
   cellsToFeatureCollection,
   EMPTY_FEATURE_COLLECTION,
@@ -251,6 +267,33 @@ const firePulseImageName = (frame: number): string => `${FIRE_PULSE_IMAGE_PREFIX
 const FIRE_PULSE_IMAGES = Array.from({ length: FIRE_PULSE_FRAME_COUNT }, (_, i) =>
   firePulseImageName(i),
 )
+
+// NASA GIBS True Color satellite raster — a real daily VIIRS composite laid
+// under the hex grid but above the vector basemap, so the pollution fill
+// still reads on top of the imagery. Hidden until its toggle turns it on.
+const SOURCE_GIBS = 'gibs-true-color'
+const LAYER_GIBS = 'gibs-true-color-raster'
+
+// NASA FIRMS active thermal anomalies — a real near-real-time feed, kept
+// separate from the illustrative `satellite-fires-*` layers above so the
+// two can never be mistaken for one another. Deep red/magenta with a
+// blurred halo reads as glowing heat.
+const SOURCE_ACTIVE_FIRES = 'active-fires'
+const LAYER_ACTIVE_FIRES_GLOW = 'active-fires-glow'
+const LAYER_ACTIVE_FIRES_CORE = 'active-fires-core'
+const ACTIVE_FIRE_COLOR = '#FF0055'
+const ACTIVE_FIRE_GLOW_OPACITY = 0.45
+const ACTIVE_FIRE_CORE_OPACITY = 0.9
+
+// Seasonal smog (GIBS Deep Blue AOD) and industrial emissions (Sentinel-5P
+// NO2 WMS) — two more raster overlays, both added in the same early block as
+// True Color so the whole raster group stays under the hex grid. See
+// lib/satelliteImagery.ts for the tile templates.
+const SOURCE_AOD = 'gibs-aerosol-aod'
+const LAYER_AOD = 'gibs-aerosol-aod-raster'
+const SOURCE_NO2 = 'sentinel5p-no2'
+const LAYER_NO2 = 'sentinel5p-no2-raster'
+const NO2_OPACITY = 0.6
 
 // Place-scope mask: the veil drawn over everything outside a searched place.
 // Near-background rather than pure grey so it reads as "not in scope" instead
@@ -534,6 +577,8 @@ interface MapViewProps {
   forecastGrid: AsyncResource<ForecastOut[]>
   weather: AsyncResource<WeatherReadingOut[]>
   citizenReports: AsyncResource<FireReportOut[]>
+  /** Real NASA FIRMS detections, fetched by MapPage. */
+  activeFires: AsyncResource<ActiveFire[]>
 }
 
 /** Full-screen MapLibre map. Owns the map instance imperatively (MapLibre
@@ -548,6 +593,7 @@ export function MapView({
   forecastGrid,
   weather,
   citizenReports,
+  activeFires,
 }: MapViewProps) {
   const { state, dispatch } = useMapUi()
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -671,6 +717,67 @@ export function MapView({
         map.on('moveend', reportViewport)
 
         map.on('load', () => {
+          // NASA GIBS True Color satellite imagery — added FIRST among the
+          // overlays so it sits under every data layer but above the vector
+          // basemap. `maxzoom` caps requests at the deepest GIBS tile
+          // matrix; MapLibre overzooms level-9 tiles past it rather than
+          // requesting tiles GIBS doesn't have. `raster-fade-duration: 0`
+          // keeps a freshly toggled tile from fading in half-drawn.
+          map!.addSource(SOURCE_GIBS, {
+            type: 'raster',
+            tiles: [gibsTrueColorTileUrl()],
+            tileSize: GIBS_TILE_SIZE,
+            maxzoom: GIBS_MAX_ZOOM,
+            attribution: GIBS_ATTRIBUTION,
+          })
+          map!.addLayer({
+            id: LAYER_GIBS,
+            type: 'raster',
+            source: SOURCE_GIBS,
+            layout: { visibility: 'none' },
+            paint: { 'raster-opacity': 1, 'raster-fade-duration': 0 },
+          })
+
+          // Seasonal smog — VIIRS Deep Blue AOD at 0.6 opacity, so the smog
+          // reads but the hex grid underneath stays legible. Same GIBS
+          // conventions as True Color (overzoom-capable, no fade-in).
+          map!.addSource(SOURCE_AOD, {
+            type: 'raster',
+            tiles: [gibsAerosolTileUrl()],
+            tileSize: GIBS_TILE_SIZE,
+            maxzoom: GIBS_MAX_ZOOM,
+            attribution: GIBS_AOD_ATTRIBUTION,
+          })
+          map!.addLayer({
+            id: LAYER_AOD,
+            type: 'raster',
+            source: SOURCE_AOD,
+            layout: { visibility: 'none' },
+            paint: { 'raster-opacity': GIBS_AOD_OPACITY, 'raster-fade-duration': 0 },
+          })
+
+          // Industrial emissions — Sentinel-5P NO2 over WMS. Only added when
+          // a GetMap endpoint is configured (VITE_NO2_WMS_URL); otherwise the
+          // toggle stays inert rather than drawing invented heat. The source
+          // is skipped entirely so MapLibre never requests a URL that can't
+          // resolve, and the toggle effect below no-ops on the absent layer.
+          const no2Tiles = no2TileUrl()
+          if (no2Tiles !== null) {
+            map!.addSource(SOURCE_NO2, {
+              type: 'raster',
+              tiles: [no2Tiles],
+              tileSize: GIBS_TILE_SIZE,
+              attribution: NO2_ATTRIBUTION,
+            })
+            map!.addLayer({
+              id: LAYER_NO2,
+              type: 'raster',
+              source: SOURCE_NO2,
+              layout: { visibility: 'none' },
+              paint: { 'raster-opacity': NO2_OPACITY, 'raster-fade-duration': 0 },
+            })
+          }
+
           // India country outline — dissolved from geoBoundaries ADM1.
           map!.addSource(SOURCE_INDIA_OUTLINE, { type: 'geojson', data: INDIA_OUTLINE_URL })
           map!.addLayer({
@@ -1016,6 +1123,39 @@ export function MapView({
             },
           })
 
+          // NASA FIRMS active fires — real near-real-time detections, drawn
+          // above the illustrative thermal layer. A blurred magenta halo
+          // under a solid core reads as glowing heat. Hidden until toggled.
+          map!.addSource(SOURCE_ACTIVE_FIRES, {
+            type: 'geojson',
+            data: EMPTY_FEATURE_COLLECTION,
+          })
+          map!.addLayer({
+            id: LAYER_ACTIVE_FIRES_GLOW,
+            type: 'circle',
+            source: SOURCE_ACTIVE_FIRES,
+            layout: { visibility: 'none' },
+            paint: {
+              'circle-color': ACTIVE_FIRE_COLOR,
+              'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 5, 8, 12, 12, 18],
+              'circle-blur': 1,
+              'circle-opacity': ACTIVE_FIRE_GLOW_OPACITY,
+            },
+          })
+          map!.addLayer({
+            id: LAYER_ACTIVE_FIRES_CORE,
+            type: 'circle',
+            source: SOURCE_ACTIVE_FIRES,
+            layout: { visibility: 'none' },
+            paint: {
+              'circle-color': ACTIVE_FIRE_COLOR,
+              'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 2.5, 8, 4.5, 12, 7],
+              'circle-stroke-color': '#FFD1E0',
+              'circle-stroke-width': 1,
+              'circle-opacity': ACTIVE_FIRE_CORE_OPACITY,
+            },
+          })
+
           // Place scope mask — added last so it sits over every data layer.
           // The geometry is the whole world with the scoped place punched out
           // as a hole (lib/scope.ts), so a hexagon straddling the boundary is
@@ -1054,6 +1194,35 @@ export function MapView({
             map!.getCanvas().style.cursor = 'pointer'
           })
           map!.on('mouseleave', LAYER_FIRE_CORE, () => {
+            map!.getCanvas().style.cursor = ''
+          })
+
+          // FIRMS active-fire popups — query the clicked feature's FIRMS
+          // properties (FRP and friends), log them, and surface them in a
+          // popup. The properties also ride along on a window event so the
+          // inspection drawer can pick a clicked detection up.
+          map!.on('click', LAYER_ACTIVE_FIRES_CORE, (event) => {
+            const feature = event.features?.[0]
+            const props = feature?.properties as Record<string, unknown> | undefined
+            if (!feature || !props) return
+            // eslint-disable-next-line no-console
+            console.log('NASA FIRMS active fire:', props)
+            window.dispatchEvent(
+              new CustomEvent('air-health:firms-fire-selected', { detail: props }),
+            )
+            const geometry = feature.geometry as unknown as { coordinates: [number, number] }
+            togglePopup(
+              `firms:${props.id}`,
+              geometry.coordinates,
+              'fire-anomaly-popup firms-fire-popup',
+              activeFirePopupHtml(props),
+              10,
+            )
+          })
+          map!.on('mouseenter', LAYER_ACTIVE_FIRES_CORE, () => {
+            map!.getCanvas().style.cursor = 'pointer'
+          })
+          map!.on('mouseleave', LAYER_ACTIVE_FIRES_CORE, () => {
             map!.getCanvas().style.cursor = ''
           })
 
@@ -1241,6 +1410,62 @@ export function MapView({
       state.showCitizenSensors ? 'visible' : 'none',
     )
   }, [mapReady, state.showCitizenSensors])
+
+  // NASA GIBS True Color raster toggle — visibility only, same rule as the
+  // other overlays. No data is fetched until the tiles are actually
+  // requested by a visible layer, so an off toggle costs nothing.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    mapRef.current.setLayoutProperty(
+      LAYER_GIBS,
+      'visibility',
+      state.showSatelliteImagery ? 'visible' : 'none',
+    )
+  }, [mapReady, state.showSatelliteImagery])
+
+  // Seasonal smog (AOD) raster toggle — visibility only.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    mapRef.current.setLayoutProperty(
+      LAYER_AOD,
+      'visibility',
+      state.showSeasonalSmog ? 'visible' : 'none',
+    )
+  }, [mapReady, state.showSeasonalSmog])
+
+  // Industrial emissions (NO2) raster toggle. The layer only exists when a
+  // WMS endpoint is configured, so the guard skips the toggle cleanly when
+  // it isn't — no error, no phantom layer.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    const map = mapRef.current
+    if (map.getLayer(LAYER_NO2) === undefined) return
+    map.setLayoutProperty(
+      LAYER_NO2,
+      'visibility',
+      state.showIndustrialEmissions ? 'visible' : 'none',
+    )
+  }, [mapReady, state.showIndustrialEmissions])
+
+  // NASA FIRMS active-fire toggle — visibility-based hiding on both layers.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    const map = mapRef.current
+    const visibility: 'visible' | 'none' = state.showActiveFires ? 'visible' : 'none'
+    map.setLayoutProperty(LAYER_ACTIVE_FIRES_GLOW, 'visibility', visibility)
+    map.setLayoutProperty(LAYER_ACTIVE_FIRES_CORE, 'visibility', visibility)
+  }, [mapReady, state.showActiveFires])
+
+  // Feed the map the real FIRMS detections MapPage fetched. A failed or
+  // absent fetch leaves the source empty rather than falling back to
+  // anything invented — the illustrative layer is a separate toggle.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    const source = mapRef.current.getSource(SOURCE_ACTIVE_FIRES)
+    if (!(source instanceof GeoJSONSource)) return
+    const fires = activeFires.status === 'success' ? activeFires.data : []
+    source.setData(activeFiresFeatureCollection(fires) as never)
+  }, [mapReady, activeFires])
 
   // Feed the map the reports the backend actually returned. Only real
   // submitted reports become pins; a failed/absent fetch leaves the source

@@ -45,6 +45,14 @@ export interface MapUiState {
   showCitizenSensors: boolean
   /** Major economic freight corridors overlay (DMIC / DFC). */
   showFreightCorridors: boolean
+  /** NASA GIBS True Color satellite raster (VIIRS S-NPP daily imagery). */
+  showSatelliteImagery: boolean
+  /** NASA FIRMS active thermal anomalies (near-real-time satellite feed). */
+  showActiveFires: boolean
+  /** NASA GIBS Deep Blue Aerosol Optical Depth (seasonal smog rage). */
+  showSeasonalSmog: boolean
+  /** Sentinel-5P NO2 industrial-emissions raster (WMS). */
+  showIndustrialEmissions: boolean
   /** Whether the legend panel is popped out (top right) or collapsed to its
    *  arrow button. A preference, so it is persisted (see lib/persistedMapUi). */
   legendOpen: boolean
@@ -94,6 +102,10 @@ export type MapUiAction =
   | { type: 'TOGGLE_FIRE_HOTSPOTS' }
   | { type: 'TOGGLE_CITIZEN_SENSORS' }
   | { type: 'TOGGLE_FREIGHT_CORRIDORS' }
+  | { type: 'TOGGLE_SATELLITE_IMAGERY' }
+  | { type: 'TOGGLE_ACTIVE_FIRES' }
+  | { type: 'TOGGLE_SEASONAL_SMOG' }
+  | { type: 'TOGGLE_INDUSTRIAL_EMISSIONS' }
   | { type: 'TOGGLE_LEGEND' }
   | { type: 'TOGGLE_SETTINGS' }
   | { type: 'SELECT_CELL'; cell: string | null; resolution?: number }
@@ -113,6 +125,10 @@ export const initialMapUiState: MapUiState = {
   showFireHotspots: false,
   showCitizenSensors: false,
   showFreightCorridors: false,
+  showSatelliteImagery: false,
+  showActiveFires: false,
+  showSeasonalSmog: false,
+  showIndustrialEmissions: false,
   legendOpen: true,
   settingsOpen: true,
   scope: null,
@@ -205,6 +221,14 @@ export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState
       return { ...state, showCitizenSensors: !state.showCitizenSensors }
     case 'TOGGLE_FREIGHT_CORRIDORS':
       return { ...state, showFreightCorridors: !state.showFreightCorridors }
+    case 'TOGGLE_SATELLITE_IMAGERY':
+      return { ...state, showSatelliteImagery: !state.showSatelliteImagery }
+    case 'TOGGLE_ACTIVE_FIRES':
+      return { ...state, showActiveFires: !state.showActiveFires }
+    case 'TOGGLE_SEASONAL_SMOG':
+      return { ...state, showSeasonalSmog: !state.showSeasonalSmog }
+    case 'TOGGLE_INDUSTRIAL_EMISSIONS':
+      return { ...state, showIndustrialEmissions: !state.showIndustrialEmissions }
     case 'TOGGLE_LEGEND':
       return { ...state, legendOpen: !state.legendOpen }
     case 'TOGGLE_SETTINGS':
