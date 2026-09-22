@@ -18,10 +18,12 @@ from app.db.repositories import fire_report as fire_report_repo
 from app.db.repositories import forecast as forecast_repo
 from app.db.repositories import grid_state as grid_state_repo
 from app.db.repositories import ingestion_run as run_repo
+from app.db.repositories import model_version as model_version_repo
 from app.db.repositories import sensor_reading as sensor_reading_repo
 from app.db.repositories import weather_reading as weather_reading_repo
 from app.domain.features import CellFeatureVector, FeatureSnapshot, InputKind
 from app.domain.scenario import DatasetVersion, IngestionRun, IngestionRunStatus
+from app.domain.training import ModelStatus, ModelVersion
 from app.domain.types import (
     Alert,
     AlertSeverity,
@@ -283,3 +285,32 @@ def test_feature_snapshot_statements() -> None:
         for value in params.values()
     )
     assert "FROM cell_feature_snapshot" in _sql(feature_repo._list_for_run_stmt("run-1"))
+
+
+def test_model_version_statements() -> None:
+    version = ModelVersion(
+        model_id="candidate-1h",
+        artifact_uri="models/candidate.json",
+        artifact_sha256="a" * 64,
+        feature_schema_version="environmental-v1",
+        feature_names=("rain_1h_mm", "wind_speed_ms"),
+        trained_at=NOW,
+        training_start=NOW,
+        training_end=LATER,
+        region="delhi-ncr",
+        horizon_hours=1.0,
+        metrics={"mae": 12.3},
+        synthetic_only=True,
+        status=ModelStatus.CANDIDATE,
+    )
+    upsert = _sql(model_version_repo._upsert_stmt(version))
+
+    assert "INSERT INTO model_version" in upsert
+    assert "ON CONFLICT (id) DO UPDATE" in upsert
+    assert "feature_schema_version" in upsert
+    assert "synthetic_only" in upsert
+    assert "FROM model_version" in _sql(model_version_repo._get_stmt("candidate-1h"))
+    listing = _sql(model_version_repo._list_stmt("delhi-ncr", 1.0, "candidate"))
+    assert "model_version.region = 'delhi-ncr'" in listing
+    assert "model_version.horizon_hours = 1.0" in listing
+    assert "model_version.status = 'candidate'" in listing

@@ -13,6 +13,7 @@ from typing import Protocol
 
 from app.domain.features import FeatureSnapshot
 from app.domain.scenario import DatasetVersion, IngestionRun
+from app.domain.training import ModelVersion
 from app.domain.types import Alert, FireReport, Forecast, GridState, SensorReading, WeatherReading
 
 
@@ -160,3 +161,17 @@ class FeatureSnapshotRepository(Protocol):
     ) -> list[FeatureSnapshot]: ...
 
     def list_for_run(self, run_id: str) -> list[FeatureSnapshot]: ...
+
+
+class ModelVersionRepository(Protocol):
+    def upsert(self, model: ModelVersion) -> ModelVersion: ...
+
+    def get(self, model_id: str) -> ModelVersion | None: ...
+
+    def list(
+        self,
+        *,
+        region: str | None = None,
+        horizon_hours: float | None = None,
+        status: str | None = None,
+    ) -> list[ModelVersion]: ...

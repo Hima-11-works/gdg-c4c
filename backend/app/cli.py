@@ -38,10 +38,13 @@ from app.core.config import get_settings
 from app.db.repositories import (
     SqlForecastRepository,
     SqlGridStateRepository,
+    SqlModelVersionRepository,
     SqlSensorReadingRepository,
     SqlWeatherReadingRepository,
 )
 from app.db.session import get_session_factory
+from app.domain.features import DataMode
+from app.domain.training import ModelStatus, ModelVersion
 from app.domain.types import BoundingBox
 from app.ingestion.demo_scenarios import ScenarioGenerator
 from app.ingestion.factory import build_pollution_provider, build_weather_provider
@@ -50,6 +53,14 @@ from app.services.forecasting import ForecastingResult, ForecastingService
 from app.services.features import FeatureBuilder, feature_snapshot_to_dict
 from app.services.geospatial import GeospatialService
 from app.services.ingestion import IngestionResult, SensorIngestionService, WeatherIngestionService
+from app.services.model_training import evaluate_artifact, train_candidate
+from app.services.training_data import (
+    export_training_dataset,
+    generate_synthetic_training_dataset,
+    parse_utc,
+    read_records,
+    write_json,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +198,158 @@ def _parse_utc_argument(value: str) -> datetime:
     if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
         raise ValueError("time must be an RFC 3339 UTC timestamp, for example 2025-01-15T12:00:00Z")
     return parsed.astimezone(UTC)
+
+
+def _parse_utc_date_boundary(value: str) -> datetime:
+    """Accept a UTC date or timestamp for inclusive-start/exclusive-end filters."""
+
+    if len(value) == 10:
+        value = f"{value}T00:00:00Z"
+    return parse_utc(value)
+
+
+async def _run_training_export(args: argparse.Namespace) -> int:
+    mode = DataMode(args.mode)
+    records = read_records(Path(args.input))
+    dataset = export_training_dataset(
+        records,
+        mode=mode,
+        start=_parse_utc_date_boundary(args.start) if args.start else None,
+        end=_parse_utc_date_boundary(args.end) if args.end else None,
+    )
+    changed = write_json(Path(args.out), dataset)
+    print(
+        f"Training export {'wrote' if changed else 'unchanged'}: mode={mode.value} "
+        f"examples={dataset['example_count']} stations={dataset['station_count']} "
+        f"path={args.out}"
+    )
+    return 0
+
+
+async def _run_training_smoke_data(args: argparse.Namespace) -> int:
+    dataset = generate_synthetic_training_dataset(
+        hours=args.hours,
+        station_count=args.stations,
+        anchor_utc=_parse_utc_argument(args.anchor),
+    )
+    changed = write_json(Path(args.out), dataset)
+    print(
+        f"Synthetic training data {'wrote' if changed else 'unchanged'}: "
+        f"examples={dataset['example_count']} stations={dataset['station_count']} "
+        f"path={args.out}; not for scientific validation"
+    )
+    return 0
+
+
+def _registry_rows(artifact: dict, artifact_path: Path) -> list[ModelVersion]:
+    trained_at = datetime.now(UTC)
+    versions = []
+    for horizon, model in sorted(artifact["models"].items(), key=lambda item: float(item[0])):
+        training_range = artifact["training_ranges_by_horizon"][horizon]
+        versions.append(
+            ModelVersion(
+                model_id=f"{artifact['artifact_sha256'][:40]}-h{horizon.replace('.', '_')}",
+                artifact_uri=str(artifact_path),
+                artifact_sha256=artifact["artifact_sha256"],
+                feature_schema_version=artifact["feature_schema_version"],
+                feature_names=tuple(model["feature_names"]),
+                trained_at=trained_at,
+                training_start=parse_utc(training_range["start"]),
+                training_end=parse_utc(training_range["end"]),
+                region=artifact["region"],
+                horizon_hours=float(horizon),
+                metrics=artifact["evaluation"][horizon]["temporal"]["metrics"],
+                synthetic_only=artifact["synthetic_only"],
+                status=ModelStatus.CANDIDATE,
+            )
+        )
+    return versions
+
+
+async def _run_train(args: argparse.Namespace) -> int:
+    dataset_path = Path(args.dataset)
+    dataset = json.loads(dataset_path.read_text(encoding="utf-8"))
+    if not isinstance(dataset, dict) or dataset.get("schema_version") != "training-dataset-v1":
+        raise ValueError("--dataset must be a training-dataset-v1 manifest from training-export")
+    artifact = train_candidate(
+        dataset,
+        ridge_alpha=args.ridge_alpha,
+        allow_synthetic=args.allow_synthetic,
+    )
+    artifact_dir = Path(args.artifact_dir)
+    artifact_path = artifact_dir / f"{artifact['artifact_sha256']}.json"
+    if artifact_path.exists():
+        existing_artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+        evaluate_artifact(existing_artifact, dataset)
+        if existing_artifact != artifact:
+            raise ValueError("existing artifact at the content-addressed path is not identical")
+    else:
+        write_json(artifact_path, artifact)
+
+    versions = _registry_rows(artifact, artifact_path)
+    registry_path = Path(args.registry)
+    if registry_path.exists():
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        if not isinstance(registry, dict) or not isinstance(registry.get("models"), list):
+            raise ValueError("registry file must contain a models array")
+    else:
+        registry = {"schema_version": "model-registry-v1", "models": []}
+    by_id = {row["model_id"]: row for row in registry["models"]}
+    for version in versions:
+        existing = by_id.get(version.model_id)
+        if existing is not None:
+            if existing.get("artifact_sha256") != version.artifact_sha256:
+                raise ValueError(f"registry model id collision: {version.model_id}")
+            continue
+        by_id[version.model_id] = {
+            "model_id": version.model_id,
+            "artifact_uri": version.artifact_uri,
+            "artifact_sha256": version.artifact_sha256,
+            "feature_schema_version": version.feature_schema_version,
+            "feature_names": list(version.feature_names),
+            "trained_at": version.trained_at.isoformat().replace("+00:00", "Z"),
+            "training_start": version.training_start.isoformat().replace("+00:00", "Z"),
+            "training_end": version.training_end.isoformat().replace("+00:00", "Z"),
+            "region": version.region,
+            "horizon_hours": version.horizon_hours,
+            "metrics": dict(version.metrics),
+            "synthetic_only": version.synthetic_only,
+            "status": version.status.value,
+        }
+    registry["models"] = [by_id[key] for key in sorted(by_id)]
+    write_json(registry_path, registry)
+
+    if args.register_db:
+        session = get_session_factory()()
+        try:
+            repository = SqlModelVersionRepository(session)
+            for version in versions:
+                existing = repository.get(version.model_id)
+                if existing is not None:
+                    if existing.artifact_sha256 != version.artifact_sha256:
+                        raise ValueError(f"registry model id collision: {version.model_id}")
+                    continue
+                repository.upsert(version)
+        finally:
+            session.close()
+    print(
+        f"Candidate {'synthetic-only ' if artifact['synthetic_only'] else ''}training complete: "
+        f"sha256={artifact['artifact_sha256']} horizons={','.join(artifact['models'])} "
+        f"artifact={artifact_path} registry={registry_path}"
+    )
+    return 0
+
+
+async def _run_evaluate(args: argparse.Namespace) -> int:
+    artifact = json.loads(Path(args.model).read_text(encoding="utf-8"))
+    dataset = json.loads(Path(args.split).read_text(encoding="utf-8"))
+    report = evaluate_artifact(artifact, dataset)
+    changed = write_json(Path(args.out), report)
+    print(
+        f"Evaluation {'wrote' if changed else 'unchanged'}: sha256={report['artifact_sha256']} "
+        f"horizons={len(report['horizons'])} path={args.out}"
+    )
+    return 0
 
 
 async def _run_demo_snapshot(args: argparse.Namespace) -> int:
@@ -342,6 +505,52 @@ def main(argv: list[str] | None = None) -> int:
     _add_demo_snapshot_parser(subparsers, "demo-generate")
     _add_demo_snapshot_parser(subparsers, "demo-replay")
     _add_demo_features_parser(subparsers)
+
+    export_parser = subparsers.add_parser(
+        "training-export",
+        help="Normalize prejoined historical station labels and as-of features.",
+    )
+    export_parser.add_argument("--input", required=True, help="JSON or JSONL joined examples.")
+    export_parser.add_argument("--mode", choices=("live", "demo"), required=True)
+    export_parser.add_argument("--start", default=None, help="UTC date/timestamp, inclusive.")
+    export_parser.add_argument("--end", default=None, help="UTC date/timestamp, exclusive.")
+    export_parser.add_argument("--out", default="training-dataset.json")
+    export_parser.set_defaults(func=_run_training_export)
+
+    smoke_parser = subparsers.add_parser(
+        "training-smoke-data",
+        help="Generate fictional labeled examples for pipeline smoke tests only.",
+    )
+    smoke_parser.add_argument("--hours", type=int, default=24)
+    smoke_parser.add_argument("--stations", type=int, default=6)
+    smoke_parser.add_argument("--anchor", default="2025-01-01T00:00:00Z")
+    smoke_parser.add_argument("--out", default="training-smoke-dataset.json")
+    smoke_parser.set_defaults(func=_run_training_smoke_data)
+
+    train_parser = subparsers.add_parser(
+        "train", help="Train and register a reproducible residual-model candidate."
+    )
+    train_parser.add_argument("--dataset", required=True)
+    train_parser.add_argument("--artifact-dir", default="models/candidates")
+    train_parser.add_argument("--registry", default="models/registry.json")
+    train_parser.add_argument("--ridge-alpha", type=float, default=1.0)
+    train_parser.add_argument(
+        "--allow-synthetic",
+        action="store_true",
+        help="Allow synthetic smoke-test training; it remains ineligible for live promotion.",
+    )
+    train_parser.add_argument(
+        "--register-db", action="store_true", help="Also upsert candidate metadata into Postgres."
+    )
+    train_parser.set_defaults(func=_run_train)
+
+    evaluate_parser = subparsers.add_parser(
+        "evaluate", help="Evaluate a pinned model artifact against a labeled split."
+    )
+    evaluate_parser.add_argument("--model", required=True)
+    evaluate_parser.add_argument("--split", required=True)
+    evaluate_parser.add_argument("--out", default="evaluation-report.json")
+    evaluate_parser.set_defaults(func=_run_evaluate)
 
     args = parser.parse_args(argv)
     logging.basicConfig(level=get_settings().log_level)

@@ -14,6 +14,10 @@ venv/
 .mypy_cache/
 build/
 dist/
+/backend/models/
+/backend/training-dataset.json
+/backend/training-smoke-dataset.json
+/backend/evaluation-report.json
 
 # Node / frontend
 node_modules/

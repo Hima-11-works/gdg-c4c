@@ -12,6 +12,7 @@ from __future__ import annotations
 from geoalchemy2 import Geography
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     Column,
     DateTime,
@@ -98,6 +99,32 @@ cell_feature_snapshot = Table(
     ),
     Index("ix_feature_snapshot_run_valid", "run_id", "valid_at"),
     Index("ix_feature_snapshot_cell_valid", "h3_cell", "valid_at"),
+)
+
+model_version = Table(
+    "model_version",
+    metadata,
+    Column("id", String(180), primary_key=True),
+    Column("artifact_uri", String(500), nullable=False),
+    Column("artifact_sha256", String(64), nullable=False),
+    Column("feature_schema_version", String(60), nullable=False),
+    Column("feature_names", JSONB, nullable=False),
+    Column("trained_at", DateTime(timezone=True), nullable=False),
+    Column("training_start", DateTime(timezone=True), nullable=False),
+    Column("training_end", DateTime(timezone=True), nullable=False),
+    Column("region", String(80), nullable=False),
+    Column("horizon_hours", Float, nullable=False),
+    Column("metrics", JSONB, nullable=False),
+    Column("synthetic_only", Boolean, nullable=False),
+    Column("status", String(20), nullable=False),
+    CheckConstraint("horizon_hours > 0", name="ck_model_version_horizon_positive"),
+    CheckConstraint("training_end >= training_start", name="ck_model_training_range_order"),
+    CheckConstraint(
+        "status IN ('candidate', 'validated', 'promoted', 'rejected', 'retired')",
+        name="ck_model_version_status",
+    ),
+    Index("ix_model_version_region_horizon_status", "region", "horizon_hours", "status"),
+    Index("ix_model_version_trained_at", "trained_at"),
 )
 
 sensor_reading = Table(

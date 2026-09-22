@@ -16,6 +16,7 @@ from app.models.tables import (
     grid_state,
     ingestion_run,
     metadata,
+    model_version,
     sensor_reading,
     weather_reading,
 )
@@ -87,6 +88,9 @@ def test_environmental_run_metadata_columns_are_present() -> None:
     assert ingestion_run.c.simulation_id.nullable is True
     assert cell_feature_snapshot.c.vector.nullable is False
     assert cell_feature_snapshot.c.quality.nullable is False
+    assert model_version.c.artifact_sha256.type.length == 64
+    assert model_version.c.synthetic_only.nullable is False
+    assert model_version.c.status.nullable is False
 
 
 def test_metadata_creates_tables_in_dependency_order_without_error() -> None:
@@ -103,4 +107,5 @@ def test_metadata_creates_tables_in_dependency_order_without_error() -> None:
         "dataset_version",
         "ingestion_run",
         "cell_feature_snapshot",
+        "model_version",
     }

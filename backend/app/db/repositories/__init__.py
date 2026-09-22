@@ -7,6 +7,7 @@ from app.db.repositories.fire_report import SqlFireReportRepository
 from app.db.repositories.forecast import SqlForecastRepository
 from app.db.repositories.grid_state import SqlGridStateRepository
 from app.db.repositories.ingestion_run import SqlIngestionRunRepository
+from app.db.repositories.model_version import SqlModelVersionRepository
 from app.db.repositories.sensor_reading import SqlSensorReadingRepository
 from app.db.repositories.weather_reading import SqlWeatherReadingRepository
 
@@ -18,6 +19,7 @@ __all__ = [
     "SqlForecastRepository",
     "SqlGridStateRepository",
     "SqlIngestionRunRepository",
+    "SqlModelVersionRepository",
     "SqlSensorReadingRepository",
     "SqlWeatherReadingRepository",
 ]
