@@ -294,6 +294,31 @@ export interface FireReportOut {
   reported_at: string
 }
 
+/** One stored NASA FIRMS detection, as GET /api/v1/fires returns it.
+ *
+ *  The backend ingests and parses the feed (app.ingestion.firms), so this is
+ *  what the browser reads instead of NASA's CSV. `confidence_raw` is the
+ *  raw FIRMS token ('l'/'n'/'h', or a 0-100 string for MODIS) and
+ *  `confidence_class` its normalized form; `daynight` is null when the feed
+ *  didn't say. */
+export interface FireHotspotOut {
+  detection_id: string
+  /** The H3 cell the detection was snapped to at ingest time. */
+  h3_cell: string
+  latitude: number
+  longitude: number
+  /** Fire Radiative Power, megawatts. */
+  frp_mw: number
+  /** Brightness temperature (4 µm band), kelvin. */
+  brightness_ti4_k: number | null
+  confidence_raw: string
+  confidence_class: string
+  /** Satellite overpass time, UTC. */
+  acquired_at: string
+  satellite: string
+  daynight: string | null
+}
+
 /** Request body for POST /api/v1/reports - the same bounds the backend
  *  validates (intensity 1-5, duration 0-24h, notes <= 280 chars). */
 export interface FireReportSubmit {

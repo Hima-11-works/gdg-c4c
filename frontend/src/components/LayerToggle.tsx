@@ -92,7 +92,7 @@ export function LayerToggle() {
 
           <label
             className="layer-toggle-option"
-            title="Real NASA FIRMS active thermal anomalies (VIIRS NRT, last 24h) - fetched live from the public FIRMS feed and clipped to the India view"
+            title="Real NASA FIRMS active thermal anomalies (VIIRS NRT, last 24h) - ingested by the backend and read from GET /api/v1/fires"
           >
             <input
               type="checkbox"

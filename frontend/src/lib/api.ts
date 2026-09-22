@@ -9,6 +9,7 @@ import type {
   BoundingBox,
   CellDetailOut,
   Envelope,
+  FireHotspotOut,
   FireReportOut,
   FireReportSubmit,
   ForecastOut,
@@ -21,6 +22,8 @@ import type {
   WeatherV2Out,
   WeatherReadingOut,
 } from './types'
+import { activeFireFromHotspot } from './activeFires'
+import type { ActiveFire } from './activeFires'
 
 // `||` (not `??`) so an empty VITE_API_BASE_URL — which a host may inject
 // when auto-importing env files — still falls back, and any trailing slash is
@@ -269,6 +272,24 @@ export function fetchAlerts(runId?: string): Promise<Envelope<AlertOut[]>> {
 
 export function fetchReports(): Promise<Envelope<FireReportOut[]>> {
   return apiGet('/api/v1/reports')
+}
+
+/** NASA FIRMS detections the backend has ingested (GET /api/v1/fires),
+ *  mapped to the map's own ActiveFire view model so the layers and popup
+ *  don't care where the rows came from.
+ *
+ *  `query` is the same level-of-detail pair grid/weather take. Omit it for
+ *  the whole stored set - which is what the fires layer does, since it covers
+ *  all of India and the endpoint filters by H3 cell at the resolution the
+ *  detections were stored at (a viewport-scoped request would have to match
+ *  that resolution exactly; see backend/app/services/fires.py). */
+export function fetchActiveFires(query: LodQuery = {}): Promise<Envelope<ActiveFire[]>> {
+  return apiGet<Envelope<FireHotspotOut[]>>(
+    `/api/v1/fires${buildQuery(lodParams(query))}`,
+  ).then((envelope) => ({
+    ...envelope,
+    data: envelope.data.map(activeFireFromHotspot),
+  }))
 }
 
 export function submitReport(
