@@ -79,7 +79,7 @@ import {
   SELECTED_CELL_BORDER_WIDTH,
 } from '../lib/visualConfig'
 import { useMapUi } from '../state/MapUiContext'
-import type { MapMetric, MapViewMode } from '../state/mapUiReducer'
+import type { MapViewMode } from '../state/mapUiReducer'
 import type { AsyncResource } from '../hooks/useApiResource'
 import { useStateBoundaries } from '../hooks/useStateBoundaries'
 import type { BoundingBox, FireReportOut, ForecastOut, GridStateOut, WeatherReadingOut } from '../lib/types'
@@ -608,7 +608,6 @@ export function MapView({
   // the visible set — so a stale-while-revalidate frame (same array) is a
   // no-op instead of a pointless dissolve.
   const paintedDataRef = useRef<unknown>(null)
-  const paintedMetricRef = useRef<MapMetric>(state.mapMetric)
   // Handle of any in-flight layer animation (dissolve or PDI fade), so a new
   // one can finalize the previous before it starts.
   const animationFinishRef = useRef<PaintAnimation | null>(null)
@@ -1564,7 +1563,7 @@ export function MapView({
         ? (currentGrid as Extract<typeof currentGrid, { status: 'success' }>).data
         : (forecastGrid as Extract<typeof forecastGrid, { status: 'success' }>).data
 
-    if (cellsData === paintedDataRef.current && state.mapMetric === paintedMetricRef.current) return
+    if (cellsData === paintedDataRef.current) return
 
     // One source of truth for the frame's (cell, value) pairs, shared by both
     // renderings.
@@ -1572,17 +1571,11 @@ export function MapView({
       state.forecastMinutes === 0
         ? (currentGrid as Extract<typeof currentGrid, { status: 'success' }>).data.map((cell) => ({
             h3Cell: cell.h3_cell,
-            value:
-              state.mapMetric === 'populationExposure'
-                ? (cell.exposure?.population_weighted_pm25 ?? null)
-                : cell.pm25,
+            value: cell.pm25,
           }))
         : (forecastGrid as Extract<typeof forecastGrid, { status: 'success' }>).data.map((forecast) => ({
             h3Cell: forecast.h3_cell,
-            value:
-              state.mapMetric === 'populationExposure'
-                ? (forecast.exposure?.population_weighted_pm25 ?? null)
-                : forecast.predicted_pm25,
+            value: forecast.predicted_pm25,
           }))
 
     const hasPainted = paintedDataRef.current !== null
@@ -1685,7 +1678,6 @@ export function MapView({
     }
 
     paintedDataRef.current = cellsData
-    paintedMetricRef.current = state.mapMetric
   }, [
     mapReady,
     state.forecastMinutes,
@@ -1696,7 +1688,6 @@ export function MapView({
     currentGrid,
     forecastGrid,
     state.showPdi,
-    state.mapMetric,
     reducedMotion,
   ])
 
