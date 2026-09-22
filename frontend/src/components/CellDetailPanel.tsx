@@ -4,6 +4,8 @@ import { PDI_LABEL, PDI_TOOLTIP, compassLabel, formatNumber, pdiFactorLabel } fr
 import { cellCenter } from '../lib/h3Geometry'
 import { regionTitle } from '../lib/regionName'
 import { FIRE_KIND_LABELS, minutesAgo, reportForCell, smokeLabel } from '../lib/citizenReports'
+import { DataFusionSection } from './DataFusionSection'
+import type { ActiveFire } from '../lib/activeFires'
 import {
   anomaliesInCell,
   priorityForSeverity,
@@ -425,9 +427,11 @@ function InterventionActionBar({
 export function CellDetailPanel({
   publishedRunId,
   citizenReports,
+  activeFires,
 }: {
   publishedRunId?: string
   citizenReports: AsyncResource<FireReportOut[]>
+  activeFires: AsyncResource<ActiveFire[]>
 }) {
   const { state, dispatch } = useMapUi()
   const selectedCell = state.selectedCell
@@ -508,6 +512,11 @@ export function CellDetailPanel({
                   )
                 : null
             }
+          />
+          <DataFusionSection
+            h3Cell={selectedCell}
+            activeFires={activeFires}
+            citizenReports={citizenReports}
           />
           <InterventionActionBar h3Cell={selectedCell} detail={resource.data} anomaly={anomaly} />
         </>

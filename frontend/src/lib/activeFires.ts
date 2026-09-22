@@ -1,23 +1,27 @@
 // NASA FIRMS active thermal anomalies (VIIRS / MODIS near-real-time).
 //
-// FIRMS exposes two relevant shapes:
+// Two sources, in priority order:
 //
-//  - The "area" API (`/api/area/csv/{MAP_KEY}/{SOURCE}/{AREA}/{DAYS}`),
-//    which needs a free MAP_KEY. Used automatically when
-//    `VITE_FIRMS_MAP_KEY` is set.
-//  - The open 24-hour global CSV archives under `/data/active_fire/...`,
-//    which need no key at all. This is the default, prototyping endpoint.
+//  1. Our own backend, `GET /api/v1/fires` (the default). The backend owns
+//     the FIRMS ingest (app.ingestion.firms -> the fire_hotspot table), so
+//     the browser gets the same immutable detections without needing a
+//     MAP_KEY, without depending on NASA's CORS behaviour, and without
+//     re-parsing CSV. This is the path the map uses.
+//  2. NASA directly, as a CSV: the open 24-hour global archive (no key), or
+//     the keyed "area" API when `VITE_FIRMS_MAP_KEY` is set. Used only when
+//     `VITE_FIRMS_ENDPOINT` or `VITE_FIRMS_MAP_KEY` is configured - handy
+//     when running the frontend with no backend, or against a proxy that
+//     returns the same CSV schema.
 //
-// Either way the response is the same CSV schema, and the browser calls it
-// directly. A self-hosted proxy can be dropped in without touching this
-// file's callers by setting `VITE_FIRMS_ENDPOINT` to a URL that returns the
-// same CSV (see README's deployment notes).
-//
-// The global archive is large and covers the whole planet, so the parse
-// below filters to the India bounding box the map is scoped to and caps the
-// feature count — both purely to keep the browser renderable, not as a
-// data product claim.
+// Both paths produce the same `ActiveFire[]`, so callers don't care which
+// ran. The CSV archive covers the whole planet and can hold tens of
+// thousands of rows, so that path filters to the India bounding box and caps
+// the feature count - purely to keep the browser renderable, not as a data
+// product claim. The API path asks the backend for the India box instead, so
+// the filter and cap are enforced server-side.
 
+import { API_BASE_URL } from './api'
+import { cellForPoint, resolutionOfCell } from './h3Geometry'
 import { INDIA_BBOX } from './lod'
 import { severityForFrp } from './fireAnomalies'
 import type { FireSeverity } from './fireAnomalies'
@@ -31,10 +35,21 @@ const FIRMS_OPEN_24H_URL =
 /** Filter margin around INDIA_BBOX (degrees) so fires just over a border
  *  still register against nearby Indian cells. */
 const BBOX_MARGIN_DEG = 2
-/** Hard cap on rendered detections — a busy stubble season can put tens of
+/** Hard cap on rendered detections - a busy stubble season can put tens of
  *  thousands of points in the archive, which no browser circle layer
- *  should be handed in one go. */
+ *  should be handed in one go. The backend applies the same cap. */
 const MAX_FEATURES = 2000
+
+/** Window the map asks for, matching the backend's default. */
+const SINCE_HOURS = 24
+
+/** True when the frontend should talk to NASA itself instead of our API. */
+export function usesDirectFirms(): boolean {
+  return (
+    (import.meta.env.VITE_FIRMS_ENDPOINT ?? '') !== '' ||
+    (import.meta.env.VITE_FIRMS_MAP_KEY ?? '') !== ''
+  )
+}
 
 /** Resolved FIRMS CSV endpoint: an explicit override wins, then the keyed
  *  area API if a key is configured, then the open global archive. */
@@ -53,6 +68,9 @@ export function firmsCsvEndpoint(): string {
 
 export interface ActiveFire {
   id: string
+  /** The H3 cell the backend snapped this detection to at ingest time.
+   *  Undefined on the direct-CSV path, which has no cell of its own. */
+  h3Cell?: string
   latitude: number
   longitude: number
   /** Fire Radiative Power, MW — null when the row omits it. */
@@ -190,11 +208,97 @@ export function parseFirmsCsv(text: string): ActiveFire[] {
   return fires.slice(0, MAX_FEATURES)
 }
 
-/** Fetch and parse the 24-hour FIRMS feed as an `Envelope` so it drops
+/** One detection as `GET /api/v1/fires` returns it (see the backend's
+ *  FireHotspotOut). Field names follow the domain object there, so they
+ *  carry their units. */
+interface FireHotspotRow {
+  detection_id: string
+  h3_cell: string
+  latitude: number
+  longitude: number
+  frp_mw: number
+  brightness_ti4_k: number | null
+  confidence_raw: string
+  confidence_class: string
+  acquired_at: string
+  satellite: string
+  daynight: string | null
+}
+
+/** Split an ISO UTC timestamp into the date and HHMM pair the popup shows,
+ *  matching what the CSV path gets from FIRMS' acq_date/acq_time columns. */
+function acquiredParts(acquiredAt: string): { date: string; time: string } {
+  const parsed = new Date(acquiredAt)
+  if (Number.isNaN(parsed.getTime())) return { date: '', time: '' }
+  const iso = parsed.toISOString()
+  return { date: iso.slice(0, 10), time: `${iso.slice(11, 13)}${iso.slice(14, 16)}` }
+}
+
+/** Turn the API's rows into the same `ActiveFire` shape the CSV path
+ *  produces. Confidence is normalised by the same parser, so a raw token
+ *  ('l'/'n'/'h' or a 0-100 string) means the same thing either way. */
+export function activeFiresFromApi(rows: FireHotspotRow[]): ActiveFire[] {
+  const fires = rows.map((row) => {
+    const confidence = parseConfidence(row.confidence_raw ?? '')
+    const { date, time } = acquiredParts(row.acquired_at)
+    const frp = Number.isFinite(row.frp_mw) ? row.frp_mw : null
+    return {
+      id: row.detection_id,
+      h3Cell: row.h3_cell,
+      latitude: row.latitude,
+      longitude: row.longitude,
+      frp,
+      brightness: row.brightness_ti4_k ?? null,
+      confidence: confidence.value,
+      confidenceLabel: confidence.label,
+      acqDate: date,
+      acqTime: time,
+      satellite: row.satellite ?? '',
+      daynight: row.daynight ?? '',
+      severity: severityForFrp(frp ?? 0),
+    }
+  })
+
+  fires.sort((a, b) => (b.frp ?? 0) - (a.frp ?? 0))
+  return fires.slice(0, MAX_FEATURES)
+}
+
+/** Read the backend's stored FIRMS detections.
+ *
+ *  Deliberately asks for the whole window with no bbox: the endpoint turns a
+ *  bbox into H3 cells at the backend's resolution and refuses a box that
+ *  covers too many of them (the same GRID_QUERY_MAX_CELLS guard grid/weather
+ *  use), which a country-sized box at a fine resolution always trips. FIRMS
+ *  ingestion is already bounded by INGEST_BBOX_*, so the stored set is the
+ *  India feed; the client-side filter below is the safety net, exactly as on
+ *  the CSV path. */
+async function fetchActiveFiresFromApi(): Promise<Envelope<ActiveFire[]>> {
+  const params = new URLSearchParams({ since_hours: String(SINCE_HOURS) })
+  const response = await fetch(`${API_BASE_URL}/api/v1/fires?${params.toString()}`)
+  if (!response.ok) {
+    throw new Error(`GET /api/v1/fires failed with status ${response.status}`)
+  }
+  const body = (await response.json()) as Envelope<FireHotspotRow[]>
+  const inIndia = (body.data ?? []).filter((row) => inIndiaBbox(row.latitude, row.longitude))
+  return {
+    generated_at: body.generated_at,
+    // The backend only serves rows a real FIRMS ingest wrote, so this is a
+    // real satellite product - never the illustrative mock layer.
+    is_demo: false,
+    data: activeFiresFromApi(inIndia),
+  }
+}
+
+/** Fetch the last 24h of FIRMS detections as an `Envelope` so it drops
  *  straight into `useApiResource`, the same hook every backend read uses.
- *  `is_demo: false` is deliberate: this is a real satellite product, not
- *  the illustrative mock layer. */
+ *
+ *  Default: our own API (see the module docstring). Set VITE_FIRMS_ENDPOINT
+ *  or VITE_FIRMS_MAP_KEY to talk to NASA directly instead. `is_demo: false`
+ *  is deliberate on both paths: this is a real satellite product, not the
+ *  illustrative mock layer. */
 export async function fetchActiveFires(): Promise<Envelope<ActiveFire[]>> {
+  if (!usesDirectFirms()) return fetchActiveFiresFromApi()
+
   const response = await fetch(firmsCsvEndpoint())
   if (!response.ok) {
     throw new Error(`NASA FIRMS request failed with status ${response.status}`)
@@ -233,9 +337,27 @@ export function activeFiresFeatureCollection(
   }
 }
 
+/** Detections whose coordinates fall inside `h3Cell`, worst FRP first.
+ *
+ *  Matched by point-in-cell, not by cell-string equality: the backend snaps
+ *  a detection to its own H3_RESOLUTION at ingest time, which is finer than
+ *  the cell the drawer selects (a level-of-detail resolution), so the two
+ *  strings rarely match. Testing each detection's coordinates at the
+ *  selected cell's own resolution is exact and needs no shared resolution. */
+export function activeFiresInCell(
+  fires: ActiveFire[],
+  h3Cell: string | null | undefined,
+): ActiveFire[] {
+  if (!h3Cell) return []
+  const resolution = resolutionOfCell(h3Cell)
+  if (resolution === undefined) return []
+  return fires
+    .filter((fire) => cellForPoint(fire.latitude, fire.longitude, resolution) === h3Cell)
+    .sort((a, b) => (b.frp ?? 0) - (a.frp ?? 0))
+}
+
 /** Popup body for a clicked FIRMS detection — the raw FIRMS properties,
- *  which is what the brief asks the click to surface. */
-export function activeFirePopupHtml(props: Record<string, unknown>): string {
+ *  which is what the brief asks the click to surface. */export function activeFirePopupHtml(props: Record<string, unknown>): string {
   const frp = typeof props.frp === 'number' ? `${props.frp.toFixed(1)} MW` : 'n/a'
   const brightness =
     typeof props.brightness === 'number' ? `${props.brightness.toFixed(1)} K` : 'n/a'
