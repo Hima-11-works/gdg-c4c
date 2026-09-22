@@ -12,7 +12,13 @@ import type {
   FireReportOut,
   FireReportSubmit,
   ForecastOut,
+  ForecastV2Out,
+  GridCurrentV2Out,
   GridStateOut,
+  MetaV2Out,
+  V2Envelope,
+  CellDetailV2Out,
+  WeatherV2Out,
   WeatherReadingOut,
 } from './types'
 
@@ -90,6 +96,116 @@ async function apiGet<T>(path: string): Promise<T> {
   return response.json() as Promise<T>
 }
 
+let cachedPublishedMeta: MetaV2Out | null = null
+let publishedRunExpiresAt = 0
+let publishedRunRequest: Promise<MetaV2Out> | null = null
+
+/** Resolve one published run id for all map and cell reads. Refreshing the
+ * pointer every few minutes lets hourly publications appear without allowing
+ * independently-polled resources to jump between runs mid-refresh. */
+async function publishedMeta(): Promise<MetaV2Out> {
+  if (cachedPublishedMeta !== null && Date.now() < publishedRunExpiresAt) {
+    return cachedPublishedMeta
+  }
+  if (publishedRunRequest !== null) return publishedRunRequest
+  publishedRunRequest = apiGet<MetaV2Out>('/api/v2/meta')
+    .then((meta) => {
+      cachedPublishedMeta = meta
+      publishedRunExpiresAt = Date.now() + 5 * 60 * 1000
+      return meta
+    })
+    .finally(() => {
+      publishedRunRequest = null
+    })
+  return publishedRunRequest
+}
+
+async function publishedRunId(): Promise<string> {
+  return (await publishedMeta()).latest_run_id
+}
+
+export async function fetchPublishedMeta(): Promise<Envelope<MetaV2Out>> {
+  const meta = await publishedMeta()
+  return {
+    generated_at: meta.generated_at,
+    is_demo: meta.data_mode === 'demo',
+    run_id: meta.latest_run_id,
+    mode: meta.data_mode,
+    data: meta,
+  }
+}
+
+async function apiGetV2<T>(path: string, pinnedRunId?: string): Promise<V2Envelope<T>> {
+  const runId = pinnedRunId ?? (await publishedRunId())
+  const [pathname, queryString] = path.split('?', 2)
+  const query = new URLSearchParams(queryString ?? '')
+  query.set('run_id', runId)
+  return apiGet<V2Envelope<T>>(`${pathname}?${query.toString()}`)
+}
+
+function preserveV2Envelope<T, U>(envelope: V2Envelope<T>, data: U): Envelope<U> {
+  return {
+    generated_at: envelope.generated_at,
+    is_demo: envelope.is_demo,
+    data,
+    run_id: envelope.run_id,
+    mode: envelope.mode,
+    attribution: envelope.attribution,
+    coverage: envelope.coverage,
+  }
+}
+
+function fromCurrentV2(cell: GridCurrentV2Out): GridStateOut {
+  return {
+    h3_cell: cell.h3_cell,
+    timestamp: cell.valid_at,
+    confidence: cell.confidence,
+    pm25: cell.pm25,
+    pdi: cell.pdi,
+    wind_speed: cell.wind_speed_ms,
+    wind_direction: cell.wind_direction_deg,
+    latitude: cell.latitude,
+    longitude: cell.longitude,
+    metadata: cell.metadata,
+    exposure: cell.exposure,
+  }
+}
+
+function fromForecastV2(forecast: ForecastV2Out): ForecastOut {
+  return {
+    h3_cell: forecast.h3_cell,
+    generated_at: forecast.generated_at,
+    forecast_time: forecast.forecast_time,
+    forecast_hours: forecast.forecast_hours,
+    forecast_minutes: Math.round(forecast.forecast_hours * 60),
+    predicted_pm25: forecast.predicted_pm25,
+    confidence: forecast.confidence,
+    lower_pm25: forecast.lower_pm25,
+    upper_pm25: forecast.upper_pm25,
+    metadata: forecast.metadata,
+    exposure: forecast.exposure,
+  }
+}
+
+function fromWeatherV2(weather: WeatherV2Out): WeatherReadingOut {
+  return {
+    h3_cell: weather.h3_cell,
+    latitude: weather.latitude,
+    longitude: weather.longitude,
+    wind_speed: weather.wind_speed_ms,
+    wind_direction: weather.wind_direction_deg,
+    precipitation: weather.precipitation_mm,
+    boundary_layer_height: weather.boundary_layer_height_m,
+    temperature: weather.temperature_c,
+    humidity: weather.relative_humidity_pct,
+    measured_at: weather.valid_at,
+    wind_u_ms: weather.wind_u_ms,
+    wind_v_ms: weather.wind_v_ms,
+    issued_at: weather.issued_at,
+    valid_at: weather.valid_at,
+  }
+}
+
 /** The app's only write call: POST /api/v1/reports (citizen fire reports). */
 async function apiPost<T>(path: string, payload: unknown): Promise<T> {
   let response: Response
@@ -115,23 +231,40 @@ async function apiPost<T>(path: string, payload: unknown): Promise<T> {
   return response.json() as Promise<T>
 }
 
-export function fetchGridCurrent(query: LodQuery = {}): Promise<Envelope<GridStateOut[]>> {
-  return apiGet(`/api/v1/grid/current${buildQuery(lodParams(query))}`)
+export function fetchGridCurrent(
+  query: LodQuery = {},
+  runId?: string,
+): Promise<Envelope<GridStateOut[]>> {
+  return apiGetV2<GridCurrentV2Out[]>(
+    `/api/v2/grid/current${buildQuery(lodParams(query))}`,
+    runId,
+  ).then((envelope) => preserveV2Envelope(envelope, envelope.data.map(fromCurrentV2)))
 }
 
 export function fetchGridForecast(
   minutes: number,
   query: LodQuery = {},
+  runId?: string,
 ): Promise<Envelope<ForecastOut[]>> {
-  return apiGet(`/api/v1/grid/forecast${buildQuery({ minutes, ...lodParams(query) })}`)
+  return apiGetV2<ForecastV2Out[]>(
+    `/api/v2/grid/forecast${buildQuery({ hours: minutes / 60, ...lodParams(query) })}`,
+    runId,
+  ).then((envelope) => preserveV2Envelope(envelope, envelope.data.map(fromForecastV2)))
 }
 
-export function fetchWeather(query: LodQuery = {}): Promise<Envelope<WeatherReadingOut[]>> {
-  return apiGet(`/api/v1/weather${buildQuery(lodParams(query))}`)
+export function fetchWeather(
+  query: LodQuery = {},
+  runId?: string,
+): Promise<Envelope<WeatherReadingOut[]>> {
+  return apiGetV2<WeatherV2Out[]>(`/api/v2/weather${buildQuery(lodParams(query))}`, runId).then(
+    (envelope) => preserveV2Envelope(envelope, envelope.data.map(fromWeatherV2)),
+  )
 }
 
-export function fetchAlerts(): Promise<Envelope<AlertOut[]>> {
-  return apiGet('/api/v1/alerts')
+export function fetchAlerts(runId?: string): Promise<Envelope<AlertOut[]>> {
+  return apiGetV2<AlertOut[]>('/api/v2/alerts', runId).then((envelope) =>
+    preserveV2Envelope(envelope, envelope.data),
+  )
 }
 
 export function fetchReports(): Promise<Envelope<FireReportOut[]>> {
@@ -147,6 +280,26 @@ export function submitReport(
 export function fetchCellDetail(
   h3Cell: string,
   resolution?: number,
+  runId?: string,
 ): Promise<Envelope<CellDetailOut>> {
-  return apiGet(`/api/v1/cells/${encodeURIComponent(h3Cell)}${buildQuery({ resolution })}`)
+  return apiGetV2<CellDetailV2Out>(
+    `/api/v2/cells/${encodeURIComponent(h3Cell)}${buildQuery({ resolution })}`,
+    runId,
+  ).then((envelope) => {
+    const detail = envelope.data
+    return preserveV2Envelope(envelope, {
+      h3_cell: detail.h3_cell,
+      current: detail.current === null ? null : fromCurrentV2(detail.current),
+      forecasts: detail.forecasts.map(fromForecastV2),
+      weather: detail.weather === null ? null : fromWeatherV2(detail.weather),
+      pdi_factors: detail.pdi_factors,
+      environmental: {
+        run_id: envelope.run_id,
+        mode: envelope.mode,
+        metadata: detail.current?.metadata ?? detail.forecasts[0]?.metadata ?? null,
+        exposure: detail.exposure,
+        static_features: detail.static_features,
+      },
+    })
+  })
 }

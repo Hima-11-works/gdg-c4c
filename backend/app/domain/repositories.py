@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Protocol
 
 from app.domain.features import FeatureSnapshot
+from app.domain.prediction import PredictionResult, PredictionRun
 from app.domain.scenario import DatasetVersion, IngestionRun
 from app.domain.training import ModelVersion
 from app.domain.types import Alert, FireReport, Forecast, GridState, SensorReading, WeatherReading
@@ -175,3 +176,15 @@ class ModelVersionRepository(Protocol):
         horizon_hours: float | None = None,
         status: str | None = None,
     ) -> list[ModelVersion]: ...
+
+
+class PredictionPublicationRepository(Protocol):
+    def publish(self, run: PredictionRun, results: list[PredictionResult]) -> None:
+        """Atomically persist one immutable run and all of its cell results."""
+        ...
+
+    def get_run(self, run_id: str) -> PredictionRun | None: ...
+
+    def latest_run(self, *, region: str | None = None) -> PredictionRun | None: ...
+
+    def list_results(self, run_id: str) -> list[PredictionResult]: ...

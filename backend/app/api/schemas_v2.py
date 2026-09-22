@@ -1,8 +1,7 @@
 """Version 2 environmental prediction contracts.
 
-These schemas are intentionally not wired into the v1 router in Milestone 0.
-They define the versioned shape that later persistence and services must
-produce, while v1 remains stable for the existing web and Flutter clients.
+These schemas are served by the versioned v2 router. The v1 schemas and
+routes remain stable for existing clients during the publication migration.
 """
 
 from __future__ import annotations
@@ -72,7 +71,7 @@ class ExposureOut(BaseModel):
     residents_above_threshold: float | None = Field(default=None, ge=0)
     threshold_pm25: float | None = Field(default=None, ge=0)
     covered_population: float = Field(ge=0)
-    unknown_population: float = Field(ge=0)
+    unknown_population: float | None = Field(default=None, ge=0)
     population_dataset_version: str | None = None
     scope: str = Field(min_length=1)
 
@@ -82,11 +81,17 @@ class GridCurrentV2Out(BaseModel):
 
     h3_cell: str = Field(min_length=1)
     valid_at: datetime
+    latitude: float
+    longitude: float
     pm25: float | None = Field(default=None, ge=0)
     pm25_unit: str = "ug/m3"
     pdi: float | None = None
     pdi_version: str | None = None
+    confidence: float = Field(ge=0, le=1)
+    wind_speed_ms: float | None = Field(default=None, ge=0)
+    wind_direction_deg: float | None = Field(default=None, ge=0, lt=360)
     metadata: PredictionMetadataOut
+    exposure: ExposureOut | None = None
 
     _validate_valid_at = field_validator("valid_at")(_utc)
 
@@ -101,10 +106,12 @@ class ForecastV2Out(BaseModel):
     upper_pm25: float | None = Field(default=None, ge=0)
     forecast_hours: float = Field(gt=0)
     forecast_time: datetime
+    generated_at: datetime
+    confidence: float = Field(ge=0, le=1)
     metadata: PredictionMetadataOut
     exposure: ExposureOut | None = None
 
-    _validate_forecast_time = field_validator("forecast_time")(_utc)
+    _validate_forecast_time = field_validator("forecast_time", "generated_at")(_utc)
 
 
 class WeatherV2Out(BaseModel):
@@ -153,6 +160,21 @@ class CellDetailV2Out(BaseModel):
     weather: WeatherV2Out | None
     static_features: StaticFeaturesV2Out | None
     exposure: ExposureOut | None
+    pdi_factors: dict[str, float] | None = None
+
+
+class AlertV2Out(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    h3_cell: str
+    severity: str
+    message: str
+    created_at: datetime
+    current_pm25: float | None = Field(default=None, ge=0)
+    forecast_pm25: float | None = Field(default=None, ge=0)
+    forecast_hours: float | None = Field(default=None, gt=0)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    forecast_time: datetime | None = None
 
 
 class CoverageOut(BaseModel):
@@ -186,9 +208,13 @@ class MetaV2Out(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     region: str
+    latest_run_id: str
+    generated_at: datetime
     native_resolution: int = Field(ge=0, le=15)
     supported_display_resolutions: list[int]
     supported_horizons_hours: list[float]
     feature_schema_version: str
     model_version: str | None
     data_mode: DataMode
+
+    _validate_generated_at = field_validator("generated_at")(_utc)

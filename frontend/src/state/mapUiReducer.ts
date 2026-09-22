@@ -17,19 +17,20 @@ import type { BoundingBox } from '../lib/types'
 /** How the pollution field is drawn: discrete H3 hexagons, or a smooth
  *  continuous raster (Gaussian-smoothed value field). */
 export type MapViewMode = 'hex' | 'smooth'
+export type MapMetric = 'concentration' | 'populationExposure'
 
 /** How far clearing a place scope is allowed to zoom back out to. One step
  *  per clear, and never past a slightly-wider-than-country framing. */
 const MIN_ZOOM_OUT = 4
 
 export interface MapUiState {
-  /** Forecast horizon in minutes. 0 = current conditions ("Now"),
-   *  15–720 = forecast at that many minutes ahead. Snaps to 15-min
-   *  keyframes (0, 15, 30, …, 720). This is the single canonical
-   *  timeline state — no separate button/slider/hour states. */
+  /** Forecast horizon in minutes. 0 = current conditions; in-between frames
+   *  are interpolated from the selected publication's forecast anchors. */
   forecastMinutes: number
   /** Hexagon cells vs. smooth raster rendering of the same field. */
   viewMode: MapViewMode
+  /** Pollution fill metric: cell concentration or population-weighted concentration. */
+  mapMetric: MapMetric
   /** Contrast mode: draw a border on the boundary between PM2.5 bands so
    *  same-range regions read as separated blocks (hex view only). */
   contrast: boolean
@@ -77,6 +78,7 @@ export interface MapUiState {
 export type MapUiAction =
   | { type: 'SELECT_FORECAST'; minutes: number }
   | { type: 'SET_VIEW_MODE'; mode: MapViewMode }
+  | { type: 'SET_MAP_METRIC'; metric: MapMetric }
   | { type: 'TOGGLE_CONTRAST' }
   | {
       type: 'SELECT_PLACE'
@@ -104,6 +106,7 @@ export type MapUiAction =
 export const initialMapUiState: MapUiState = {
   forecastMinutes: 0,
   viewMode: 'hex',
+  mapMetric: 'concentration',
   contrast: false,
   focus: null,
   showPdi: false,
@@ -148,6 +151,8 @@ export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState
       return { ...state, forecastMinutes: action.minutes }
     case 'SET_VIEW_MODE':
       return { ...state, viewMode: action.mode }
+    case 'SET_MAP_METRIC':
+      return { ...state, mapMetric: action.metric }
     case 'TOGGLE_CONTRAST':
       return { ...state, contrast: !state.contrast }
     case 'SELECT_PLACE': {

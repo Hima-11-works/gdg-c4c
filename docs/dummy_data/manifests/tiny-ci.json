@@ -14,7 +14,7 @@
   "weather_sample_count": 4,
   "history_hours": 48,
   "replay_hours": 24,
-  "forecast_hours": [1, 3, 6],
+  "forecast_hours": [1, 2, 3, 4, 5, 6],
   "data_mode": "demo",
   "input_kind": "synthetic",
   "expected_events": ["stagnant_accumulation", "critical_hotspot"],

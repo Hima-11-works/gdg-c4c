@@ -17,17 +17,17 @@ class PollutionDataUnavailable implements Exception {
 
 /// [PollutionDataProvider] backed by the platform's grid API.
 ///
-/// This is the app-side half of the integration: it speaks the real
-/// `/api/v1/...` contract (unauthenticated, H3 cells, PM2.5/PDI) and maps
+/// This is the app-side half of the integration: it speaks the published
+/// `/api/v2/...` contract (H3 cells, PM2.5/PDI, run id and provenance) and maps
 /// it onto the app's domain models, so nothing above the data layer changes.
 ///
 /// Mapping notes — the backend and the app describe different things:
-///  - The app is single-location; the API is a grid. Grid cells have no
-///    coordinates, so this joins `/weather` (lat/lon) with `/grid/current`
-///    (PM2.5) on `h3_cell` and picks the cell nearest the user.
+///  - The app is single-location; the API is a grid. It picks the nearest
+///    published cell using coordinates attached to `/grid/current`, falling
+///    back to `/weather` only when a snapshot omits them.
 ///  - The app's AQI is derived from the cell's PM2.5 via [pm25ToCpcbAqi].
-///  - `/grid/forecast` returns one horizon per request, so a forecast series
-///    is assembled from several calls (hourly up to the 6-hour API cap).
+///  - `/grid/forecast` returns one supported horizon per request, so a
+///    forecast series is assembled from the exact horizons in `/meta`.
 ///  - "Nearby areas" are the nearest cells in a slightly larger box.
 ///  - "Pollution events" are `/alerts` for the user's cell.
 class GridApiPollutionDataProvider implements PollutionDataProvider {
@@ -55,10 +55,11 @@ class GridApiPollutionDataProvider implements PollutionDataProvider {
 
   DateTime? _lastGeneratedAt;
   bool _lastIsDemo = false;
+  String? _lastMode;
+  String? _lastRunId;
 
   /// Whether the most recent response was backend demo data. Surfaced for
-  /// callers that want to reflect it; the domain [DataFreshness] has no
-  /// demo flag of its own.
+  /// callers that want to reflect it.
   bool get isDemo => _lastIsDemo;
 
   // ── PollutionDataProvider ────────────────────────────────────────────
@@ -76,15 +77,21 @@ class GridApiPollutionDataProvider implements PollutionDataProvider {
     LocationPoint location,
     Duration horizon,
   ) async {
-    final snapshot = await _nearestCell(location);
-    final steps = _forecastSteps(horizon);
+    final publication = await _client.latestPublication();
+    final snapshot = await _nearestCell(location, publication: publication);
+    final supported = publication.supportedForecastMinutes;
+    final steps = _forecastSteps(horizon, supported);
     if (steps.isEmpty) return const [];
 
     final bounds = GeoBounds.around(location, cellRadiusDeg);
     final points = <ForecastPoint>[];
     for (final minutes in steps) {
-      final envelope = await _client.forecast(minutes: minutes, bounds: bounds);
-      _record(envelope.generatedAt, envelope.isDemo);
+      final envelope = await _client.forecast(
+        minutes: minutes,
+        bounds: bounds,
+        runId: publication.runId,
+      );
+      _recordEnvelope(envelope);
       for (final f in envelope.data) {
         if (f.h3Cell != snapshot.h3Cell) continue;
         points.add(ForecastPoint(
@@ -101,30 +108,54 @@ class GridApiPollutionDataProvider implements PollutionDataProvider {
 
   @override
   Future<List<NearbyArea>> getNearbyAreas(LocationPoint location) async {
+    final publication = await _client.latestPublication();
     final bounds = GeoBounds.around(location, nearbyRadiusDeg);
-    final current = await _client.current(bounds: bounds);
-    final weather = await _client.weather(bounds: bounds);
-    final forecast =
-        await _client.forecast(minutes: nearbyForecastMinutes, bounds: bounds);
-    _record(current.generatedAt, current.isDemo);
+    final current = await _client.current(
+      bounds: bounds,
+      runId: publication.runId,
+    );
+    final fallbackWeather = await _fallbackWeather(
+      current.data,
+      bounds,
+      runId: publication.runId,
+    );
+    final supported = publication.supportedForecastMinutes;
+    final eligibleHorizons = supported
+        .where((minutes) => minutes <= nearbyForecastMinutes)
+        .toList();
+    final forecastMinutes = eligibleHorizons.isNotEmpty
+        ? eligibleHorizons.last
+        : (supported.isNotEmpty ? supported.first : null);
+    final forecast = forecastMinutes == null
+        ? null
+        : await _client.forecast(
+            minutes: forecastMinutes,
+            bounds: bounds,
+            runId: publication.runId,
+          );
+    _recordEnvelope(current);
+    if (forecast != null) _recordEnvelope(forecast);
 
-    final states = {for (final s in current.data) s.h3Cell: s};
     final forecastByCell = <String, ForecastDto>{};
-    for (final f in forecast.data) {
+    for (final f in forecast?.data ?? const <ForecastDto>[]) {
       forecastByCell.putIfAbsent(f.h3Cell, () => f);
     }
 
     final snapshots = <_CellSnapshot>[];
-    for (final w in weather.data) {
-      final state = states[w.h3Cell];
-      if (state == null || state.pm25 == null) continue;
+    for (final state in current.data) {
+      if (state.pm25 == null) continue;
+      final weather = fallbackWeather[state.h3Cell];
+      final latitude = state.latitude ?? weather?.latitude;
+      final longitude = state.longitude ?? weather?.longitude;
+      if (latitude == null || longitude == null) continue;
       final point = LocationPoint(
-        latitude: w.latitude,
-        longitude: w.longitude,
-        label: w.h3Cell,
+        latitude: latitude,
+        longitude: longitude,
+        label: state.h3Cell,
       );
       snapshots.add(_CellSnapshot(
-        h3Cell: w.h3Cell,
+        h3Cell: state.h3Cell,
+        runId: publication.runId,
         pm25: state.pm25!,
         confidence: state.confidence,
         location: point,
@@ -157,8 +188,8 @@ class GridApiPollutionDataProvider implements PollutionDataProvider {
     LocationPoint location,
   ) async {
     final snapshot = await _nearestCell(location);
-    final alerts = await _client.alerts();
-    _record(alerts.generatedAt, alerts.isDemo);
+    final alerts = await _client.alerts(runId: snapshot.runId);
+    _recordEnvelope(alerts);
 
     return alerts.data
         .where((a) => a.h3Cell == snapshot.h3Cell)
@@ -180,38 +211,56 @@ class GridApiPollutionDataProvider implements PollutionDataProvider {
     if (_lastGeneratedAt == null) {
       // No location argument, and we haven't fetched anything yet — the
       // alerts endpoint is the cheapest way to obtain a `generated_at`.
-      final envelope = await _client.alerts();
-      _record(envelope.generatedAt, envelope.isDemo);
+      final publication = await _client.latestPublication();
+      final envelope = await _client.alerts(runId: publication.runId);
+      _recordEnvelope(envelope);
     }
     return DataFreshness(
       retrievedAt: _lastGeneratedAt!,
       quality: DataQuality.full,
+      isDemo: _lastIsDemo,
+      mode: _lastMode,
+      runId: _lastRunId,
     );
   }
 
   // ── Internals ────────────────────────────────────────────────────────
 
   /// The cell nearest [location] that has a PM2.5 estimate.
-  Future<_CellSnapshot> _nearestCell(LocationPoint location) async {
+  Future<_CellSnapshot> _nearestCell(
+    LocationPoint location, {
+    GridPublication? publication,
+  }) async {
+    final pinnedPublication = publication ?? await _client.latestPublication();
     final bounds = GeoBounds.around(location, cellRadiusDeg);
-    final current = await _client.current(bounds: bounds);
-    final weather = await _client.weather(bounds: bounds);
-    _record(current.generatedAt, current.isDemo);
+    final current = await _client.current(
+      bounds: bounds,
+      runId: pinnedPublication.runId,
+    );
+    final fallbackWeather = await _fallbackWeather(
+      current.data,
+      bounds,
+      runId: pinnedPublication.runId,
+    );
+    _recordEnvelope(current);
 
-    final states = {for (final s in current.data) s.h3Cell: s};
     _CellSnapshot? best;
-    for (final w in weather.data) {
-      final state = states[w.h3Cell];
-      if (state == null || state.pm25 == null) continue;
+    for (final state in current.data) {
+      if (state.pm25 == null) continue;
+      final weather = fallbackWeather[state.h3Cell];
+      final latitude = state.latitude ?? weather?.latitude;
+      final longitude = state.longitude ?? weather?.longitude;
+      if (latitude == null || longitude == null) continue;
       final point = LocationPoint(
-        latitude: w.latitude,
-        longitude: w.longitude,
-        label: w.h3Cell,
+        latitude: latitude,
+        longitude: longitude,
+        label: state.h3Cell,
       );
       final distance = location.distanceTo(point);
       if (best == null || distance < best.distanceKm) {
         best = _CellSnapshot(
-          h3Cell: w.h3Cell,
+          h3Cell: state.h3Cell,
+          runId: pinnedPublication.runId,
           pm25: state.pm25!,
           confidence: state.confidence,
           location: point,
@@ -230,24 +279,33 @@ class GridApiPollutionDataProvider implements PollutionDataProvider {
     return best;
   }
 
-  void _record(DateTime generatedAt, bool isDemo) {
-    _lastGeneratedAt = generatedAt;
-    _lastIsDemo = isDemo;
+  Future<Map<String, WeatherDto>> _fallbackWeather(
+    List<GridStateDto> states,
+    GeoBounds bounds, {
+    required String runId,
+  }) async {
+    if (!states.any((state) => state.latitude == null || state.longitude == null)) {
+      return const <String, WeatherDto>{};
+    }
+    final envelope = await _client.weather(bounds: bounds, runId: runId);
+    return {for (final row in envelope.data) row.h3Cell: row};
   }
 
-  /// Forecast horizons to request: hourly up to the API's 6-hour cap, plus
-  /// the horizon itself when it isn't a whole hour.
-  static List<int> _forecastSteps(Duration horizon) {
+  void _recordEnvelope<T>(GridEnvelope<T> envelope) {
+    _lastGeneratedAt = envelope.generatedAt;
+    _lastIsDemo = envelope.isDemo;
+    _lastMode = envelope.mode;
+    _lastRunId = envelope.runId;
+  }
+
+  /// Select only horizons actually published by the pinned run.
+  static List<int> _forecastSteps(Duration horizon, List<int> supported) {
     final capped = horizon.inMinutes > 360 ? 360 : horizon.inMinutes;
     if (capped <= 0) return const [];
-
-    final steps = <int>[];
-    for (var m = 60; m <= capped; m += 60) {
-      steps.add(m);
-    }
-    final rounded = (capped ~/ 15) * 15;
-    if (rounded > (steps.isEmpty ? 0 : steps.last)) steps.add(rounded);
-    return steps;
+    final selected =
+        supported.where((minutes) => minutes > 0 && minutes <= capped).toSet().toList();
+    selected.sort();
+    return selected;
   }
 
   static List<ForecastPoint> _areaForecast(
@@ -288,6 +346,7 @@ class GridApiPollutionDataProvider implements PollutionDataProvider {
 class _CellSnapshot {
   const _CellSnapshot({
     required this.h3Cell,
+    required this.runId,
     required this.pm25,
     required this.confidence,
     required this.location,
@@ -297,6 +356,7 @@ class _CellSnapshot {
   });
 
   final String h3Cell;
+  final String runId;
   final double pm25;
   final double confidence;
   final LocationPoint location;

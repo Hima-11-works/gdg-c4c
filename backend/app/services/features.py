@@ -21,6 +21,7 @@ from app.domain.features import (
     DatasetRef,
     FeatureQuality,
     FeatureSnapshot,
+    InputKind,
     WeatherFeature,
 )
 from app.domain.h3_grid import average_cell_area_km2, cell_center, cell_for
@@ -94,6 +95,64 @@ def feature_snapshot_to_dict(snapshot: FeatureSnapshot) -> dict[str, Any]:
             for ref in snapshot.dataset_refs
         ],
     }
+
+
+def feature_snapshot_from_dict(value: Mapping[str, Any]) -> FeatureSnapshot:
+    """Validate and restore one feature-export-v1 snapshot from JSON data."""
+    required = {
+        "h3_cell",
+        "issued_at",
+        "valid_at",
+        "horizon_hours",
+        "feature_schema_version",
+        "vector",
+        "quality",
+        "dataset_refs",
+    }
+    missing = required - set(value)
+    if missing:
+        raise ValueError(f"feature snapshot is missing fields: {', '.join(sorted(missing))}")
+    quality = value["quality"]
+    if not isinstance(quality, Mapping):
+        raise ValueError("feature snapshot quality must be an object")
+    vector = value["vector"]
+    if not isinstance(vector, Mapping):
+        raise ValueError("feature snapshot vector must be an object")
+    refs = value["dataset_refs"]
+    if not isinstance(refs, list):
+        raise ValueError("feature snapshot dataset_refs must be an array")
+    return FeatureSnapshot(
+        h3_cell=str(value["h3_cell"]),
+        issued_at=_parse_datetime(value["issued_at"]),
+        valid_at=_parse_datetime(value["valid_at"]),
+        horizon_hours=float(value["horizon_hours"]),
+        feature_schema_version=str(value["feature_schema_version"]),
+        vector=CellFeatureVector(**vector),
+        quality=FeatureQuality(
+            coverage_fraction=float(quality.get("coverage_fraction", 1.0)),
+            observed_station_count=int(quality.get("observed_station_count", 0)),
+            max_observation_age_hours=(
+                float(quality["max_observation_age_hours"])
+                if quality.get("max_observation_age_hours") is not None
+                else None
+            ),
+            missing_fields=tuple(quality.get("missing_fields", ())),
+            warnings=tuple(quality.get("warnings", ())),
+        ),
+        dataset_refs=tuple(
+            DatasetRef(
+                dataset_id=str(ref["dataset_id"]),
+                source=str(ref["source"]),
+                product=str(ref["product"]),
+                version=str(ref["version"]),
+                kind=InputKind(ref["kind"]),
+                region=str(ref["region"]),
+                attribution=str(ref["attribution"]),
+                license=str(ref["license"]),
+            )
+            for ref in refs
+        ),
+    )
 
 
 class FeatureBuilder:

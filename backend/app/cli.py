@@ -29,6 +29,7 @@ import asyncio
 import json
 import logging
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -36,24 +37,31 @@ import httpx
 
 from app.core.config import get_settings
 from app.db.repositories import (
+    SqlFeatureSnapshotRepository,
     SqlForecastRepository,
     SqlGridStateRepository,
     SqlModelVersionRepository,
+    SqlPredictionPublicationRepository,
     SqlSensorReadingRepository,
     SqlWeatherReadingRepository,
 )
 from app.db.session import get_session_factory
-from app.domain.features import DataMode
+from app.domain.features import DataMode, WeatherFeature
 from app.domain.training import ModelStatus, ModelVersion
 from app.domain.types import BoundingBox
 from app.ingestion.demo_scenarios import ScenarioGenerator
 from app.ingestion.factory import build_pollution_provider, build_weather_provider
 from app.services.dispersion import DeterministicH3DispersionModel
 from app.services.forecasting import ForecastingResult, ForecastingService
-from app.services.features import FeatureBuilder, feature_snapshot_to_dict
+from app.services.features import (
+    FeatureBuilder,
+    feature_snapshot_from_dict,
+    feature_snapshot_to_dict,
+)
 from app.services.geospatial import GeospatialService
 from app.services.ingestion import IngestionResult, SensorIngestionService, WeatherIngestionService
 from app.services.model_training import evaluate_artifact, train_candidate
+from app.services.prediction_publication import PredictionPublicationService
 from app.services.training_data import (
     export_training_dataset,
     generate_synthetic_training_dataset,
@@ -391,17 +399,33 @@ async def _run_demo_features(args: argparse.Namespace) -> int:
     sensor_readings = [reading for snapshot in history for reading in snapshot.sensor_readings]
     weather_features = [sample for snapshot in history for sample in snapshot.weather]
     builder = FeatureBuilder(resolution=8)
-    snapshots = builder.build(
-        cells=target.cells,
-        issued_at=target.replay_at,
-        valid_at=target.replay_at,
-        sensor_readings=sensor_readings,
-        weather_features=weather_features,
-        static_features=target.static_features,
-        traffic_observations=target.roads,
-        fire_detections=target.fires,
-        dataset_refs=target.dataset_refs,
-    )
+    snapshots = []
+    for horizon in (0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0):
+        valid_at = target.replay_at + timedelta(hours=horizon)
+        forecast_weather: list[WeatherFeature] = []
+        if horizon > 0:
+            # Future weather in this demo is generated as a synthetic forecast
+            # issued at the replay clock. Live inference must use an actual
+            # provider forecast whose issue time is no later than that clock.
+            future = generator.generate(args.replay_hour + int(horizon))
+            forecast_weather = [
+                replace(sample, issued_at=target.replay_at, valid_at=valid_at)
+                for sample in future.weather
+            ]
+        snapshots.extend(
+            builder.build(
+                cells=target.cells,
+                issued_at=target.replay_at,
+                valid_at=valid_at,
+                horizon_hours=horizon,
+                sensor_readings=sensor_readings,
+                weather_features=[*weather_features, *forecast_weather],
+                static_features=target.static_features,
+                traffic_observations=target.roads,
+                fire_detections=target.fires,
+                dataset_refs=target.dataset_refs,
+            )
+        )
     payload = {
         "schema_version": "feature-export-v1",
         "profile": target.profile,
@@ -420,6 +444,60 @@ async def _run_demo_features(args: argparse.Namespace) -> int:
     print(
         f"Feature export {'wrote' if changed else 'unchanged'}: profile={target.profile} "
         f"scenario={target.scenario_id} features={len(snapshots)} path={output_path}"
+    )
+    return 0
+
+
+async def _run_prediction_publish(args: argparse.Namespace) -> int:
+    payload = json.loads(Path(args.input).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or payload.get("schema_version") != "feature-export-v1":
+        raise ValueError("--input must be a feature-export-v1 file from demo-features")
+    raw_features = payload.get("features")
+    if not isinstance(raw_features, list) or not raw_features:
+        raise ValueError("feature-export-v1 must contain a non-empty features array")
+    snapshots = [feature_snapshot_from_dict(item) for item in raw_features]
+    generated_at = _parse_utc_argument(args.generated_at) if args.generated_at else parse_utc(
+        payload.get("replay_at", snapshots[0].issued_at.isoformat())
+    )
+    feature_run_id = args.feature_run_id
+    run_id = args.run_id or f"prediction-{feature_run_id}"
+    mode = DataMode(args.mode)
+
+    session = get_session_factory()()
+    try:
+        SqlFeatureSnapshotRepository(session).upsert_many(feature_run_id, snapshots)
+        forecasts = SqlForecastRepository(session)
+        baselines: dict[tuple[str, float], float] = {}
+        for horizon in sorted({item.horizon_hours for item in snapshots if item.horizon_hours > 0}):
+            for forecast in forecasts.latest_for_horizon(horizon):
+                if abs((forecast.generated_at - generated_at).total_seconds()) <= 3_600:
+                    baselines[(forecast.h3_cell, horizon)] = forecast.predicted_pm25
+        pdi = {
+            state.h3_cell: state.pdi
+            for state in SqlGridStateRepository(session).latest()
+            if state.pdi is not None and state.timestamp >= generated_at - timedelta(hours=3)
+        }
+        publisher = PredictionPublicationService(
+            SqlPredictionPublicationRepository(session), SqlModelVersionRepository(session)
+        )
+        run, results = publisher.publish(
+            run_id=run_id,
+            feature_run_id=feature_run_id,
+            region=args.region,
+            mode=mode,
+            generated_at=generated_at,
+            snapshots=snapshots,
+            baseline_by_cell_horizon=baselines,
+            pdi_by_cell=pdi,
+            scenario_id=args.scenario_id or payload.get("scenario_id"),
+        )
+    finally:
+        session.close()
+
+    print(
+        f"Prediction run published: run_id={run.run_id} mode={run.mode.value} "
+        f"cells={len({result.h3_cell for result in results})} results={len(results)} "
+        f"models={','.join(run.model_versions) or 'baseline-only'}"
     )
     return 0
 
@@ -505,6 +583,19 @@ def main(argv: list[str] | None = None) -> int:
     _add_demo_snapshot_parser(subparsers, "demo-generate")
     _add_demo_snapshot_parser(subparsers, "demo-replay")
     _add_demo_features_parser(subparsers)
+
+    publish_parser = subparsers.add_parser(
+        "prediction-publish",
+        help="Publish one immutable v2 prediction run from a feature-export-v1 file.",
+    )
+    publish_parser.add_argument("--input", required=True)
+    publish_parser.add_argument("--feature-run-id", required=True)
+    publish_parser.add_argument("--run-id", default=None)
+    publish_parser.add_argument("--mode", choices=("live", "demo", "mixed"), required=True)
+    publish_parser.add_argument("--region", default="india")
+    publish_parser.add_argument("--scenario-id", default=None)
+    publish_parser.add_argument("--generated-at", default=None)
+    publish_parser.set_defaults(func=_run_prediction_publish)
 
     export_parser = subparsers.add_parser(
         "training-export",

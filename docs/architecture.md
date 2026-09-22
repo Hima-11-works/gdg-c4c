@@ -177,8 +177,8 @@ level can actually show — see `app.services.grid_query.resolve_cells` and
 `frontend/src/lib/lod.ts`'s zoom→resolution mapping — rather than always
 reading the whole configured region at full detail.
 
-**Source-agnostic contract.** No response field, at any endpoint, ever
-names where a value came from — not "openaq", "open-meteo", "demo", nor
+**Legacy v1 source-agnostic contract.** The v1 map/grid responses do not
+name where a value came from — not "openaq", "open-meteo", "demo", nor
 any future source (satellite retrievals, government sensor feeds, ...).
 `is_demo` is the one exception, and it answers a different question
 ("is this illustrative or measured?"), not "which system produced this?".
@@ -189,8 +189,44 @@ part of the map/grid contract, and the frontend never calls it. Swapping
 requires a frontend change: `app.services.demo_data` and every real
 `*Provider` implementation both terminate in the exact same domain types
 (`GridState`, `Forecast`, `WeatherReading`), which `app/api/schemas.py`
-serializes identically regardless of which one produced them. See
-`tests/test_api_contract.py` for the tests that pin this down.
+serializes identically regardless of which one produced them. V2 adds the
+explicit provenance contract described below. See `tests/test_api_contract.py`
+for tests pinning the legacy v1 contract.
+
+**Environmental publication API (M4):** the versioned /api/v2 routes serve
+immutable prediction runs alongside the unchanged legacy routes. Collection
+and detail envelopes carry run_id, mode, is_demo, attribution, and coverage
+where applicable. Clients resolve GET /api/v2/meta once, then pass
+latest_run_id to current, forecast, weather, alert, and cell-detail reads so
+those views cannot drift onto different hourly publications during refresh.
+
+| Endpoint | Returns |
+|---|---|
+| GET /api/v2/meta?run_id= | Run identity, mode, resolution and forecast anchors |
+| GET /api/v2/grid/current?run_id=&resolution=&bbox | Concentration, centroid, provenance and population exposure |
+| GET /api/v2/grid/forecast?hours=&run_id=&resolution=&bbox | Published anchors and 15-minute interpolations |
+| GET /api/v2/cells/{h3_cell}?run_id=&resolution= | Current, anchor forecasts, weather, static features and exposure |
+| GET /api/v2/weather?hours=&run_id=&resolution=&bbox | Run-pinned weather and source versions |
+| GET /api/v2/alerts?run_id= | Alerts derived from that publication |
+| GET /api/v2/exposure?hours=&threshold_pm25=&run_id=&resolution=&bbox | Population-weighted concentration and covered/unknown population |
+
+Forecast requests may use 15-minute steps. Values between stored anchors
+are linearly interpolated and identify interpolated-between-published-anchors
+in metadata; calibrated intervals are null for those values. Concentration
+is area-weighted when aggregating native cells to parents; exposure is
+population-weighted separately. The API rejects upscaling above native
+resolution and does not invent missing native-cell coverage.
+
+The command python -m app.cli demo-features --profile tiny-ci --out
+feature-snapshot.json creates a deterministic fixture with current plus
+hourly anchors through six hours. The command python -m app.cli
+prediction-publish --input feature-snapshot.json --feature-run-id
+hourly-2026-09-22T10Z --mode demo stores the feature run and atomically
+publishes its immutable prediction run. Invoke this one-shot publisher from
+an external hourly scheduler with a fresh feature export. Synthetic
+provenance is rejected for live mode; production must supply real, as-of
+feature exports rather than relabeling demo data. The command does not
+install or manage a scheduler.
 
 **Demo-data fallback.** Every endpoint falls back to small, deterministic
 seed data (`app/services/demo_data.py`) whenever its repository query

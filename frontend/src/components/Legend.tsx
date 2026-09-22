@@ -17,7 +17,17 @@ export function Legend() {
     >
       <div className="panel legend">
         <section>
-          <h3>PM2.5 (µg/m³)</h3>
+          <h3>
+            {state.mapMetric === 'populationExposure'
+              ? 'Population-weighted PM2.5 (µg/m³)'
+              : 'PM2.5 (µg/m³)'}
+          </h3>
+          {state.mapMetric === 'populationExposure' && (
+            <p className="muted legend-note">
+              Population-weighted concentration, not individual dose. Unavailable where population
+              is unknown.
+            </p>
+          )}
           {PM25_COLOR_SCALE.map((stop) => (
             <div className="legend-row" key={stop.value}>
               <span className="swatch" style={{ backgroundColor: stop.color }} />

@@ -17,6 +17,154 @@ export interface Envelope<T> {
   generated_at: string
   is_demo: boolean
   data: T
+  run_id?: string
+  mode?: DataMode
+  attribution?: DatasetRefOut[]
+  coverage?: CoverageOut | null
+}
+
+export type DataMode = 'live' | 'demo' | 'mixed'
+export type InputKind = 'observed' | 'modeled' | 'synthetic' | 'derived'
+
+export interface DatasetRefOut {
+  dataset_id: string
+  source: string
+  product: string
+  version: string
+  kind: InputKind
+  region: string
+  attribution: string
+  license: string
+}
+
+export interface QualityFlagsOut {
+  coverage_fraction: number
+  observed_station_count: number
+  max_observation_age_hours: number | null
+  missing_fields: string[]
+  warnings: string[]
+}
+
+export interface PredictionMetadataOut {
+  input_kind: InputKind
+  prediction_method: string
+  model_version: string | null
+  feature_schema_version: string
+  dataset_versions: DatasetRefOut[]
+  observed_at: string | null
+  issued_at: string | null
+  valid_at: string
+  synthetic: boolean
+  quality: QualityFlagsOut
+}
+
+export interface ExposureOut {
+  population_weighted_pm25: number | null
+  residents_above_threshold: number | null
+  threshold_pm25: number | null
+  covered_population: number
+  unknown_population: number | null
+  population_dataset_version: string | null
+  scope: string
+}
+
+export interface CoverageOut {
+  region: string
+  resolution: number
+  requested_cells: number
+  returned_cells: number
+  covered_fraction: number
+  unsupported_cells: number
+}
+
+export interface StaticFeaturesV2Out {
+  h3_cell: string
+  population_count: number | null
+  population_density_per_km2: number | null
+  road_length_km_by_class: Record<string, number>
+  major_road_distance_km: number | null
+  built_up_fraction: number | null
+  vegetation_fraction: number | null
+  bare_soil_fraction: number | null
+  industrial_fraction: number | null
+  dataset_versions: DatasetRefOut[]
+}
+
+export interface V2Envelope<T> extends Envelope<T> {
+  run_id: string
+  mode: DataMode
+  attribution: DatasetRefOut[]
+  coverage: CoverageOut | null
+}
+
+export interface MetaV2Out {
+  region: string
+  latest_run_id: string
+  generated_at: string
+  native_resolution: number
+  supported_display_resolutions: number[]
+  supported_horizons_hours: number[]
+  feature_schema_version: string
+  model_version: string | null
+  data_mode: DataMode
+}
+
+export interface GridCurrentV2Out {
+  h3_cell: string
+  valid_at: string
+  latitude: number
+  longitude: number
+  pm25: number | null
+  pm25_unit: string
+  pdi: number | null
+  pdi_version: string | null
+  confidence: number
+  wind_speed_ms: number | null
+  wind_direction_deg: number | null
+  metadata: PredictionMetadataOut
+  exposure: ExposureOut | null
+}
+
+export interface ForecastV2Out {
+  h3_cell: string
+  baseline_pm25: number | null
+  predicted_pm25: number
+  lower_pm25: number | null
+  upper_pm25: number | null
+  forecast_hours: number
+  forecast_time: string
+  generated_at: string
+  confidence: number
+  metadata: PredictionMetadataOut
+  exposure: ExposureOut | null
+}
+
+export interface WeatherV2Out {
+  h3_cell: string
+  latitude: number
+  longitude: number
+  issued_at: string
+  valid_at: string
+  wind_u_ms: number | null
+  wind_v_ms: number | null
+  wind_speed_ms: number | null
+  wind_direction_deg: number | null
+  precipitation_mm: number | null
+  boundary_layer_height_m: number | null
+  temperature_c: number | null
+  relative_humidity_pct: number | null
+  input_kind: InputKind
+  dataset_versions: DatasetRefOut[]
+}
+
+export interface CellDetailV2Out {
+  h3_cell: string
+  current: GridCurrentV2Out | null
+  forecasts: ForecastV2Out[]
+  weather: WeatherV2Out | null
+  static_features: StaticFeaturesV2Out | null
+  exposure: ExposureOut | null
+  pdi_factors: Record<string, number> | null
 }
 
 /** A map viewport, sent as min_lat/min_lon/max_lat/max_lon query params —
@@ -45,6 +193,10 @@ export interface GridStateOut {
   pdi: number | null
   wind_speed: number | null
   wind_direction: number | null
+  latitude?: number
+  longitude?: number
+  metadata?: PredictionMetadataOut
+  exposure?: ExposureOut | null
 }
 
 export interface ForecastOut {
@@ -55,19 +207,29 @@ export interface ForecastOut {
   forecast_minutes: number
   predicted_pm25: number
   confidence: number
+  lower_pm25?: number | null
+  upper_pm25?: number | null
+  lower_pm25?: number | null
+  upper_pm25?: number | null
+  metadata?: PredictionMetadataOut
+  exposure?: ExposureOut | null
 }
 
 export interface WeatherReadingOut {
   h3_cell: string
   latitude: number
   longitude: number
-  wind_speed: number
-  wind_direction: number
-  precipitation: number
+  wind_speed: number | null
+  wind_direction: number | null
+  precipitation: number | null
   boundary_layer_height: number | null
   temperature: number | null
   humidity: number | null
   measured_at: string
+  wind_u_ms?: number | null
+  wind_v_ms?: number | null
+  issued_at?: string
+  valid_at?: string
 }
 
 export type AlertSeverity = 'watch' | 'warning' | 'critical'
@@ -98,6 +260,13 @@ export interface CellDetailOut {
   // available for this reading (a row written before migration 0005, or a
   // PDI model that returns none). The pipeline persists it now.
   pdi_factors: Record<string, number> | null
+  environmental?: {
+    run_id: string
+    mode: DataMode
+    metadata: PredictionMetadataOut | null
+    exposure: ExposureOut | null
+    static_features: StaticFeaturesV2Out | null
+  }
 }
 
 /** What a citizen reported burning. Wire values match the backend's

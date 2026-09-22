@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import __version__
 from app.api.errors import register_exception_handlers
 from app.api.router import api_v1_router
+from app.api.routes.predictions_v2 import router as api_v2_router
 from app.api.routes.health import router as health_router
 from app.core.config import get_settings
 
@@ -31,6 +32,7 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(api_v1_router)
+    app.include_router(api_v2_router)
 
     return app
 

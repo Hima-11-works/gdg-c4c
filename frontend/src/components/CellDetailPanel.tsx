@@ -91,8 +91,18 @@ function CellDetailContent({
   const current = detail.current
   const windSpeed = detail.weather?.wind_speed ?? current?.wind_speed ?? null
   const windDirection = detail.weather?.wind_direction ?? current?.wind_direction ?? null
+  const environmental = detail.environmental
+  const provenance = environmental?.metadata ?? current?.metadata ?? null
+  const staticFeatures = environmental?.static_features ?? null
+  const exposure = environmental?.exposure ?? current?.exposure ?? null
 
-  if (current === null && detail.forecasts.length === 0 && detail.weather === null) {
+  if (
+    current === null &&
+    detail.forecasts.length === 0 &&
+    detail.weather === null &&
+    environmental?.static_features == null &&
+    environmental?.exposure == null
+  ) {
     return <p>No data for this cell yet.</p>
   }
 
@@ -142,6 +152,66 @@ function CellDetailContent({
         <dd>{current === null ? '—' : `${Math.round(current.confidence * 100)}%`}</dd>
       </dl>
 
+      <h3>Environmental context</h3>
+      <dl className="cell-detail-grid">
+        <dt>Population</dt>
+        <dd>{formatNumber(staticFeatures?.population_count ?? null, 0)}</dd>
+
+        <dt>Population density</dt>
+        <dd>
+          {formatNumber(staticFeatures?.population_density_per_km2 ?? null, 0)} people/km²
+        </dd>
+
+        <dt>Road length</dt>
+        <dd>
+          {staticFeatures === null
+            ? '—'
+            : `${formatNumber(Object.values(staticFeatures.road_length_km_by_class).reduce((a, b) => a + b, 0))} km`}
+        </dd>
+
+        <dt>Built-up land</dt>
+        <dd>
+          {staticFeatures?.built_up_fraction == null
+            ? '—'
+            : `${Math.round(staticFeatures.built_up_fraction * 100)}%`}
+        </dd>
+
+        <dt>Vegetation cover</dt>
+        <dd>
+          {staticFeatures?.vegetation_fraction == null
+            ? '—'
+            : `${Math.round(staticFeatures.vegetation_fraction * 100)}%`}
+        </dd>
+
+        <dt>Population-weighted PM2.5</dt>
+        <dd>
+          {formatNumber(exposure?.population_weighted_pm25 ?? null)} µg/m³
+        </dd>
+
+        <dt>Residents over threshold</dt>
+        <dd>
+          {exposure?.residents_above_threshold == null
+            ? 'Unknown'
+            : `${formatNumber(exposure.residents_above_threshold, 0)} above ${formatNumber(exposure.threshold_pm25)} µg/m³`}
+        </dd>
+
+        <dt>Population covered</dt>
+        <dd>
+          {exposure === null
+            ? 'Unknown'
+            : `${formatNumber(exposure.covered_population, 0)} residents`}
+        </dd>
+      </dl>
+
+      {provenance !== null && (
+        <p className="muted cell-provenance">
+          {provenance.prediction_method}
+          {provenance.model_version ? ` · model ${provenance.model_version}` : ''}
+          {` · ${provenance.input_kind} inputs · ${Math.round(provenance.quality.coverage_fraction * 100)}% feature coverage`}
+          {environmental?.run_id ? ` · run ${environmental.run_id}` : ''}
+        </p>
+      )}
+
 
       <h3>Forecast</h3>
       {detail.forecasts.length === 0 ? (
@@ -151,7 +221,12 @@ function CellDetailContent({
           {detail.forecasts.map((forecast) => (
             <li key={forecast.forecast_hours}>
               +{forecast.forecast_hours}h: {formatNumber(forecast.predicted_pm25)} µg/m³
-              <span className="muted"> ({Math.round(forecast.confidence * 100)}% confidence)</span>
+              {forecast.lower_pm25 != null && forecast.upper_pm25 != null && (
+                <span className="muted">
+                  {' '}(80% interval {formatNumber(forecast.lower_pm25)}–{formatNumber(forecast.upper_pm25)})
+                </span>
+              )}
+              <span className="muted"> ({forecast.metadata?.prediction_method ?? `${Math.round(forecast.confidence * 100)}% feature coverage`})</span>
             </li>
           ))}
         </ul>
@@ -349,8 +424,10 @@ function InterventionActionBar({
 }
 
 export function CellDetailPanel({
+  publishedRunId,
   citizenReports,
 }: {
+  publishedRunId?: string
   citizenReports: AsyncResource<FireReportOut[]>
 }) {
   const { state, dispatch } = useMapUi()
@@ -375,9 +452,9 @@ export function CellDetailPanel({
   }
 
   const { resource, refetch } = useApiResource(
-    () => fetchCellDetail(selectedCell ?? '', resolution),
-    [selectedCell, resolution],
-    { enabled: selectedCell !== null },
+    () => fetchCellDetail(selectedCell ?? '', resolution, publishedRunId),
+    [selectedCell, resolution, publishedRunId],
+    { enabled: selectedCell !== null && publishedRunId !== undefined },
   )
 
   if (selectedCell === null) return null

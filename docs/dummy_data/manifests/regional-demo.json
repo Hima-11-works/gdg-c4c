@@ -14,7 +14,7 @@
   "weather_sample_count": 16,
   "history_hours": 48,
   "replay_hours": 72,
-  "forecast_hours": [1, 3, 6],
+  "forecast_hours": [1, 2, 3, 4, 5, 6],
   "data_mode": "demo",
   "input_kind": "synthetic",
   "supported_scenarios": [

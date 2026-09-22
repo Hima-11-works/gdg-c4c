@@ -1,15 +1,14 @@
-/// App-side adapter for the platform's grid API (`/api/v1/...`).
+/// App-side adapter for the platform's published grid API (`/api/v2/...`).
 ///
 /// The backend is unauthenticated and serves H3-cell data:
-///   GET /api/v1/grid/current   → [{h3_cell, timestamp, confidence, pm25, pdi, ...}]
-///   GET /api/v1/grid/forecast  → [{h3_cell, forecast_time, predicted_pm25, ...}]
-///   GET /api/v1/weather        → [{h3_cell, latitude, longitude, ...}]
-///   GET /api/v1/alerts         → [{h3_cell, severity, message, ...}]
+///   GET /api/v2/grid/current   → {run_id, mode, data: [{h3_cell, valid_at, ...}]}
+///   GET /api/v2/grid/forecast  → {run_id, mode, data: [{forecast_time, ...}]}
+///   GET /api/v2/weather        → {run_id, mode, data: [{latitude, longitude, ...}]}
+///   GET /api/v2/alerts         → {run_id, mode, data: [{severity, message, ...}]}
 ///
-/// Every response is `{generated_at, is_demo, data}`. Note that grid cells
-/// carry no coordinates: `/weather` is the only endpoint that reports a
-/// cell's lat/lon, so the provider joins the two on `h3_cell` to locate a
-/// point. [GridApiClient] is an interface so the mapping in
+/// Every response is a run-pinned envelope. Grid cells include coordinates;
+/// `/weather` is retained as a fallback for older or partial snapshots.
+/// [GridApiClient] is an interface so the mapping in
 /// `GridApiPollutionDataProvider` can be tested with an in-memory fake.
 library;
 
@@ -55,11 +54,32 @@ class GridEnvelope<T> {
     required this.generatedAt,
     required this.isDemo,
     required this.data,
+    this.runId,
+    this.mode,
   });
 
   final DateTime generatedAt;
   final bool isDemo;
   final T data;
+  final String? runId;
+  final String? mode;
+}
+
+/// Metadata for one immutable published scenario.
+class GridPublication {
+  const GridPublication({
+    required this.runId,
+    required this.generatedAt,
+    required this.mode,
+    required this.isDemo,
+    required this.supportedForecastMinutes,
+  });
+
+  final String runId;
+  final DateTime generatedAt;
+  final String mode;
+  final bool isDemo;
+  final List<int> supportedForecastMinutes;
 }
 
 /// One cell's current state (`/grid/current`).
@@ -72,6 +92,8 @@ class GridStateDto {
     this.pdi,
     this.windSpeed,
     this.windDirection,
+    this.latitude,
+    this.longitude,
   });
 
   final String h3Cell;
@@ -81,15 +103,19 @@ class GridStateDto {
   final double? pdi;
   final double? windSpeed;
   final double? windDirection;
+  final double? latitude;
+  final double? longitude;
 
   factory GridStateDto.fromJson(Map<String, dynamic> json) => GridStateDto(
         h3Cell: json['h3_cell'] as String,
-        timestamp: DateTime.parse(json['timestamp'] as String),
+        timestamp: DateTime.parse(json['valid_at'] as String),
         confidence: (json['confidence'] as num).toDouble(),
         pm25: (json['pm25'] as num?)?.toDouble(),
         pdi: (json['pdi'] as num?)?.toDouble(),
-        windSpeed: (json['wind_speed'] as num?)?.toDouble(),
-        windDirection: (json['wind_direction'] as num?)?.toDouble(),
+        windSpeed: (json['wind_speed_ms'] as num?)?.toDouble(),
+        windDirection: (json['wind_direction_deg'] as num?)?.toDouble(),
+        latitude: (json['latitude'] as num?)?.toDouble(),
+        longitude: (json['longitude'] as num?)?.toDouble(),
       );
 }
 
@@ -112,10 +138,8 @@ class ForecastDto {
   final double confidence;
 
   factory ForecastDto.fromJson(Map<String, dynamic> json) {
-    final hours = (json['forecast_hours'] as num?)?.toDouble();
-    final minutes = json['forecast_minutes'] != null
-        ? (json['forecast_minutes'] as num).toInt()
-        : ((hours ?? 0) * 60).round();
+    final hours = (json['forecast_hours'] as num).toDouble();
+    final minutes = (hours * 60).round();
     return ForecastDto(
       h3Cell: json['h3_cell'] as String,
       generatedAt: DateTime.parse(json['generated_at'] as String),
@@ -157,13 +181,13 @@ class WeatherDto {
         h3Cell: json['h3_cell'] as String,
         latitude: (json['latitude'] as num).toDouble(),
         longitude: (json['longitude'] as num).toDouble(),
-        measuredAt: DateTime.parse(json['measured_at'] as String),
-        windSpeed: (json['wind_speed'] as num?)?.toDouble(),
-        windDirection: (json['wind_direction'] as num?)?.toDouble(),
-        precipitation: (json['precipitation'] as num?)?.toDouble(),
-        boundaryLayerHeight: (json['boundary_layer_height'] as num?)?.toDouble(),
-        temperature: (json['temperature'] as num?)?.toDouble(),
-        humidity: (json['humidity'] as num?)?.toDouble(),
+        measuredAt: DateTime.parse(json['valid_at'] as String),
+        windSpeed: (json['wind_speed_ms'] as num?)?.toDouble(),
+        windDirection: (json['wind_direction_deg'] as num?)?.toDouble(),
+        precipitation: (json['precipitation_mm'] as num?)?.toDouble(),
+        boundaryLayerHeight: (json['boundary_layer_height_m'] as num?)?.toDouble(),
+        temperature: (json['temperature_c'] as num?)?.toDouble(),
+        humidity: (json['relative_humidity_pct'] as num?)?.toDouble(),
       );
 }
 
@@ -209,40 +233,89 @@ class AlertDto {
 /// The grid API surface the adapter needs. Implemented by [DioGridApiClient]
 /// and by in-memory fakes in tests.
 abstract class GridApiClient {
+  /// Resolve one publication pointer and its supported forecast horizons.
+  Future<GridPublication> latestPublication();
+
   Future<GridEnvelope<List<GridStateDto>>> current({
     GeoBounds? bounds,
     int? resolution,
+    String? runId,
   });
 
   Future<GridEnvelope<List<ForecastDto>>> forecast({
     required int minutes,
     GeoBounds? bounds,
     int? resolution,
+    String? runId,
   });
 
   Future<GridEnvelope<List<WeatherDto>>> weather({
     GeoBounds? bounds,
     int? resolution,
+    String? runId,
   });
 
-  Future<GridEnvelope<List<AlertDto>>> alerts();
+  Future<GridEnvelope<List<AlertDto>>> alerts({String? runId});
 }
 
 /// Dio-backed [GridApiClient]. [dio]'s base URL is the API origin
-/// (e.g. `http://localhost:8000`); this class adds the `/api/v1` prefix.
+/// (e.g. `http://localhost:8000`); this class adds the `/api/v2` prefix.
 class DioGridApiClient implements GridApiClient {
   DioGridApiClient({required Dio dio}) : _dio = dio;
 
   final Dio _dio;
 
-  static const _apiPrefix = '/api/v1';
+  static const _apiPrefix = '/api/v2';
+  GridPublication? _cachedPublication;
+  DateTime? _publicationFetchedAt;
+  Future<GridPublication>? _publicationRequest;
+
+  @override
+  Future<GridPublication> latestPublication() async {
+    final fetchedAt = _publicationFetchedAt;
+    if (_cachedPublication != null &&
+        fetchedAt != null &&
+        DateTime.now().difference(fetchedAt) < const Duration(minutes: 5)) {
+      return _cachedPublication!;
+    }
+    final pending = _publicationRequest;
+    if (pending != null) return pending;
+    final request = _get('$_apiPrefix/meta', const <String, dynamic>{}).then((json) {
+      final forecastMinutes = (json['supported_horizons_hours'] as List<dynamic>)
+          .map((hours) => ((hours as num).toDouble() * 60).round())
+          .toSet()
+          .toList();
+      forecastMinutes.sort();
+      final publication = GridPublication(
+        runId: json['latest_run_id'] as String,
+        generatedAt: DateTime.parse(json['generated_at'] as String),
+        mode: (json['data_mode'] as String).toLowerCase(),
+        isDemo: json['data_mode'] == 'demo',
+        supportedForecastMinutes: List<int>.unmodifiable(forecastMinutes),
+      );
+      _cachedPublication = publication;
+      _publicationFetchedAt = DateTime.now();
+      return publication;
+    });
+    _publicationRequest = request;
+    try {
+      return await request;
+    } finally {
+      _publicationRequest = null;
+    }
+  }
 
   @override
   Future<GridEnvelope<List<GridStateDto>>> current({
     GeoBounds? bounds,
     int? resolution,
+    String? runId,
   }) async {
-    final json = await _get('$_apiPrefix/grid/current', _query(bounds, resolution));
+    final json = await _getPinned(
+      '$_apiPrefix/grid/current',
+      _query(bounds, resolution),
+      runId: runId,
+    );
     return _parseEnvelope(
       json,
       (data) => (data as List<dynamic>)
@@ -256,9 +329,10 @@ class DioGridApiClient implements GridApiClient {
     required int minutes,
     GeoBounds? bounds,
     int? resolution,
+    String? runId,
   }) async {
-    final query = _query(bounds, resolution)..['minutes'] = minutes;
-    final json = await _get('$_apiPrefix/grid/forecast', query);
+    final query = _query(bounds, resolution)..['hours'] = minutes / 60;
+    final json = await _getPinned('$_apiPrefix/grid/forecast', query, runId: runId);
     return _parseEnvelope(
       json,
       (data) => (data as List<dynamic>)
@@ -271,8 +345,13 @@ class DioGridApiClient implements GridApiClient {
   Future<GridEnvelope<List<WeatherDto>>> weather({
     GeoBounds? bounds,
     int? resolution,
+    String? runId,
   }) async {
-    final json = await _get('$_apiPrefix/weather', _query(bounds, resolution));
+    final json = await _getPinned(
+      '$_apiPrefix/weather',
+      _query(bounds, resolution),
+      runId: runId,
+    );
     return _parseEnvelope(
       json,
       (data) => (data as List<dynamic>)
@@ -282,8 +361,12 @@ class DioGridApiClient implements GridApiClient {
   }
 
   @override
-  Future<GridEnvelope<List<AlertDto>>> alerts() async {
-    final json = await _get('$_apiPrefix/alerts', const <String, dynamic>{});
+  Future<GridEnvelope<List<AlertDto>>> alerts({String? runId}) async {
+    final json = await _getPinned(
+      '$_apiPrefix/alerts',
+      const <String, dynamic>{},
+      runId: runId,
+    );
     return _parseEnvelope(
       json,
       (data) => (data as List<dynamic>)
@@ -303,6 +386,15 @@ class DioGridApiClient implements GridApiClient {
     return response.data!;
   }
 
+  Future<Map<String, dynamic>> _getPinned(
+    String path,
+    Map<String, dynamic> query, {
+    String? runId,
+  ) async {
+    final pinnedRunId = runId ?? (await latestPublication()).runId;
+    return _get(path, <String, dynamic>{...query, 'run_id': pinnedRunId});
+  }
+
   static Map<String, dynamic> _query(GeoBounds? bounds, int? resolution) {
     return <String, dynamic>{
       if (resolution != null) 'resolution': resolution,
@@ -317,6 +409,8 @@ class DioGridApiClient implements GridApiClient {
     return GridEnvelope<T>(
       generatedAt: DateTime.parse(json['generated_at'] as String),
       isDemo: json['is_demo'] as bool? ?? false,
+      runId: json['run_id'] as String?,
+      mode: json['mode'] as String?,
       data: parseData(json['data']),
     );
   }
