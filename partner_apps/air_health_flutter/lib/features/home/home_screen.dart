@@ -24,7 +24,7 @@ import '../../theme/widgets/widgets.dart';
 /// 4. Trend
 /// 5. Sensitivity note (if non-standard)
 /// 6. Expected AQI change
-/// 7. 12-hour forecast chart
+/// 7. 6-hour forecast chart
 /// 8. Pollution events (if any)
 /// 9. Data freshness (footer)
 class HomeScreen extends ConsumerWidget {
@@ -160,8 +160,8 @@ class HomeScreen extends ConsumerWidget {
                   },
                 ),
 
-                // ── 12-hour forecast chart ─────────────────────────
-                const SectionHeader(title: '12-Hour Forecast'),
+                // ── 6-hour forecast chart ──────────────────────────
+                const SectionHeader(title: '6-Hour Forecast'),
                 forecast.when(
                   loading: () => const Padding(
                     padding: EdgeInsets.all(AppSpacing.xl),
@@ -310,6 +310,14 @@ class _FreshnessBanner extends StatelessWidget {
       DataQuality.forecastUnavailable => Icons.info_outline,
       DataQuality.stale => Icons.warning_amber_outlined,
     };
+    final demo = freshness.mode == 'demo' ||
+        (freshness.mode == null && freshness.isDemo);
+    final modeLabel = demo
+        ? 'Demo simulation'
+        : freshness.mode == 'mixed'
+            ? 'Mixed observed and modeled inputs'
+            : '';
+    final prefix = modeLabel.isEmpty ? '' : '$modeLabel · ';
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
@@ -319,7 +327,7 @@ class _FreshnessBanner extends StatelessWidget {
           const SizedBox(width: AppSpacing.sm),
           Expanded(
             child: Text(
-              '${quality.label} · Updated ${Formatters.relativeDuration(freshness.age)}',
+              '$prefix${quality.label} · Updated ${Formatters.relativeDuration(freshness.age)}',
               style: AppTypography.labelSmall.copyWith(color: color),
               overflow: TextOverflow.ellipsis,
             ),

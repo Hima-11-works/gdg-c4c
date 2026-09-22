@@ -89,15 +89,20 @@ function AlertItem({
   )
 }
 
-export function AlertsPanel() {
+export function AlertsPanel({ publishedRunId }: { publishedRunId?: string }) {
   const [open, setOpen] = useState(false)
   // The checklist is per-alert and lives here (not inside AlertItem) so a
   // 60s poll re-rendering the list cannot wipe what an operator ticked.
   const [checked, setChecked] = useState<Set<string>>(new Set())
   const { dispatch } = useMapUi()
-  const { resource, refetch } = useApiResource(fetchAlerts, [], {
-    pollIntervalMs: POLL_INTERVAL_MS,
-  })
+  const { resource, refetch } = useApiResource(
+    () => fetchAlerts(publishedRunId),
+    [publishedRunId],
+    {
+      pollIntervalMs: POLL_INTERVAL_MS,
+      enabled: publishedRunId !== undefined,
+    },
+  )
 
   const count = resource.status === 'success' ? resource.data.length : 0
 

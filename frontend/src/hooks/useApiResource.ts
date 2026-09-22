@@ -6,12 +6,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { DependencyList } from 'react'
 import { ApiError } from '../lib/api'
-import type { Envelope } from '../lib/types'
+import type { DataMode, Envelope } from '../lib/types'
 
 export type AsyncResource<T> =
   | { status: 'idle' }
   | { status: 'loading' }
-  | { status: 'success'; data: T; isDemo: boolean }
+  | {
+      status: 'success'
+      data: T
+      isDemo: boolean
+      runId?: string
+      mode?: DataMode
+      generatedAt?: string
+    }
   | { status: 'error'; message: string }
 
 interface UseApiResourceOptions {
@@ -59,7 +66,14 @@ export function useApiResource<T>(
         .current()
         .then((envelope) => {
           if (!cancelled)
-            setResource({ status: 'success', data: envelope.data, isDemo: envelope.is_demo })
+            setResource({
+              status: 'success',
+              data: envelope.data,
+              isDemo: envelope.is_demo,
+              runId: envelope.run_id,
+              mode: envelope.mode,
+              generatedAt: envelope.generated_at,
+            })
         })
         .catch((error: unknown) => {
           // A failed background refresh keeps showing the last good data
