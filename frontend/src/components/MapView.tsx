@@ -60,7 +60,7 @@ import {
 } from '../lib/h3Geometry'
 import { renderSmoothField } from '../lib/smoothField'
 import { buildRangeContours } from '../lib/pm25Contours'
-import { INDIA_BBOX, lodBbox, MAX_ZOOM, PDI_MIN_ZOOM } from '../lib/lod'
+import { INDIA_BBOX, lodBbox, MAX_ZOOM } from '../lib/lod'
 import { scopeContains, scopeMask } from '../lib/scope'
 import { INDIA_OUTLINE_URL, STATE_BOUNDARIES_URL } from '../lib/stateBoundaries'
 import { BASE_STYLE_URL, OVERLAY, WIND, BASEMAP, patchBasemapStyle } from '../lib/mapTheme'
@@ -875,14 +875,17 @@ export function MapView({
             })
           }
 
-          // PDI — state-tier-and-finer, hidden below PDI_MIN_ZOOM. Starts
-          // fully transparent; the toggle effect drives its opacity.
+          // PDI — available at every tier, including the country view: the
+          // backend area-weights the per-cell score for coarser reads, so a
+          // level-1 cell carries an aggregated PDI rather than nothing. This
+          // layer used to carry `minzoom: PDI_MIN_ZOOM`, which hid it below
+          // zoom 6 — a gate that predated that aggregation. Starts fully
+          // transparent; the toggle effect drives its opacity.
           map!.addSource(SOURCE_PDI, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
           map!.addLayer({
             id: LAYER_PDI_FILL,
             type: 'fill',
             source: SOURCE_PDI,
-            minzoom: PDI_MIN_ZOOM,
             paint: {
               'fill-color': colorScaleExpression(PDI_COLOR_SCALE, 'value'),
               'fill-opacity': 0,
@@ -1343,7 +1346,7 @@ export function MapView({
   // PDI layer data — always from current state; there is no forecasted PDI.
   // Declared BEFORE the toggle effect below so the source is populated before
   // that effect waits on it to load. Skipped entirely while the layer is
-  // hidden (transparent by default, and below PDI_MIN_ZOOM regardless):
+  // hidden (transparent by default):
   // building a ~800+ cell FeatureCollection on every poll tick for a layer
   // nobody can see is pure waste.
   useEffect(() => {

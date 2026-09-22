@@ -67,12 +67,6 @@ export function lodForZoom(zoom: number): Lod {
   return { tier: 'state', resolution: MAX_RESOLUTION, scopedToViewport: true }
 }
 
-/** The zoom at which PDI (part of "medium"/state-tier detail and up, not
- * the bare country overview) starts being available — re-exported so
- * components/MapView.tsx's layer setup can't drift from lodForZoom's own
- * country/state breakpoint. */
-export const PDI_MIN_ZOOM = COUNTRY_MAX_ZOOM
-
 // The wind-arrow layer only ever displays a thinned-down, sparse subset
 // of whatever weather points come back (see MapView's thinBySpatialGrid
 // — at most ~100 on screen at once), so fetching the country tier's full

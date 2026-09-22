@@ -855,9 +855,11 @@ the data comes from today" below) plus wind currents — "generalized"
 because the resolution itself is coarse, not because anything is
 hidden. Zoom into a region and the same hex/wind/PDI layers this README
 describes elsewhere start rendering denser, finer cells for just that
-area, up to level 3. PDI is level-2-and-finer only (`PDI_MIN_ZOOM` in
-`frontend/src/lib/lod.ts`, tied to the same zoom-6 breakpoint above) —
-not part of the bare country overview. Clicking any hex opens the same
+area, up to level 3. PDI renders at every tier, the bare country overview
+included: the backend area-weights the per-cell score when a read is
+coarser than the published native resolution (see
+`app/services/prediction_queries.py`), so a level-1 cell carries an
+aggregated PDI rather than no value. Clicking any hex opens the same
 full detail panel (location, PM2.5, PDI + its factor breakdown, wind,
 weather, forecast, confidence) regardless of tier.
 
