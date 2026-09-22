@@ -147,8 +147,8 @@ later, it's just not what exists today.
 
 | Endpoint | Returns | Called by |
 |---|---|---|
-| `GET /health` | API liveness — never touches the database | infra (web + app health checks) |
-| `GET /health/ready` | PostgreSQL + PostGIS readiness, 200/503 | infra |
+| `GET /health` | API liveness — never touches the database | infra only — `docker-compose.yml`'s healthcheck and the deploy smoke tests; no client calls it |
+| `GET /health/ready` | PostgreSQL + PostGIS readiness, 200/503 | infra only — `docker-compose.yml` waits on this, and `docs/GO_LIVE.md` checks it after a deploy |
 | `GET /api/v1/sensors` | Latest reading per sensor | **nothing** - raw ingestion audit trail, see below |
 | `GET /api/v1/weather?resolution=&min_lat=&min_lon=&max_lat=&max_lon=` | Latest weather per cell | **nothing** - superseded by `GET /api/v2/weather` |
 | `GET /api/v1/grid/current?resolution=&min_lat=&min_lon=&max_lat=&max_lon=` | Current `GridState` per cell | **nothing** - superseded by `GET /api/v2/grid/current` |

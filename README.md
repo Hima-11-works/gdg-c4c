@@ -987,8 +987,8 @@ reports and by the web for the FIRMS layer.
 
 | Endpoint | Returns | Called by |
 |---|---|---|
-| `GET /health` | Liveness - process up, never touches the DB | infra |
-| `GET /health/ready` | Readiness - PostgreSQL reachable + PostGIS installed | infra |
+| `GET /health` | Liveness - process up, never touches the DB | infra only (compose healthcheck, deploy smoke tests) |
+| `GET /health/ready` | Readiness - PostgreSQL reachable + PostGIS installed | infra only (compose waits on it, go-live checks it) |
 | `GET /api/v1/sensors` | Latest reading per sensor (raw ingestion audit trail - the only endpoint that names a `source`) | **nothing** - see below |
 | `GET /api/v1/weather?resolution=&min_lat=&min_lon=&max_lat=&max_lon=` | Latest weather per H3 cell | **nothing** - superseded by `/api/v2/weather` |
 | `GET /api/v1/grid/current?resolution=&min_lat=&min_lon=&max_lat=&max_lon=` | Current PM2.5 + PDI per cell | **nothing** - superseded by `/api/v2/grid/current` |

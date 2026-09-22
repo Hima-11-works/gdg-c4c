@@ -1,8 +1,15 @@
-// The ONLY module allowed to call `fetch`. Every export here corresponds
-// to one documented backend endpoint (docs/architecture.md's "API"
-// section) and does nothing beyond typing the response — no pollution
-// math, no derived/aggregated values. That logic lives in the backend;
-// this module (and the rest of the frontend) only displays what it returns.
+// Every read and write of our own backend API lives here. Each export
+// corresponds to one documented backend route (docs/architecture.md's "API"
+// section) and returns it typed for the UI; where a response's row shape
+// differs from the view model the map and drawer already consume, the small
+// adapter sits with the export that needs it (see fetchActiveFires). No
+// pollution math and no aggregation: derived values come from the backend,
+// and this module - like the rest of the frontend - only displays them.
+//
+// `fetch` does appear outside this module, but never for API reads:
+// components/MapView.tsx fetches the basemap style, and lib/locations.ts +
+// lib/stateBoundaries.ts fetch the bundled /data/* assets. Anything that
+// talks to the backend API belongs here instead.
 
 import type {
   AlertOut,
