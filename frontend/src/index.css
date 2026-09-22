@@ -1043,6 +1043,17 @@ body,
   font-weight: 600;
 }
 
+/* Real NASA FIRMS detections share the anomaly popup's layout but tint it
+   magenta, so a satellite detection can't be mistaken for the illustrative
+   amber one at a glance. */
+.firms-fire-popup .maplibregl-popup-content {
+  border-color: #ff005566;
+}
+
+.firms-fire-popup strong {
+  color: #ff5c8a;
+}
+
 /* --- rapid intervention dispatch bar (drawer bottom) --- */
 
 /* Sticky at the bottom of the scrolling drawer so the intervention CTA is

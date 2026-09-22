@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { fetchGridCurrent, fetchPublishedMeta, fetchReports, fetchWeather } from '../lib/api'
+import { fetchActiveFires } from '../lib/activeFires'
 import { useApiResource } from '../hooks/useApiResource'
 import {
   ensureForecastFrame,
@@ -26,6 +27,10 @@ import type { ForecastOut } from '../lib/types'
 
 const POLL_INTERVAL_MS = 60_000
 const FALLBACK_SUPPORTED_HOURS = [1, 3, 6]
+// FIRMS publishes a new global 24h archive roughly hourly; polling on the
+// same 60s cadence as the rest of the app would hammer a large public CSV
+// for no new data, so it refreshes far more slowly.
+const FIRMS_POLL_INTERVAL_MS = 10 * 60 * 1000
 
 export function MapPage() {
   const { state } = useMapUi()
@@ -115,6 +120,15 @@ export function MapPage() {
     pollIntervalMs: POLL_INTERVAL_MS,
   })
 
+  // NASA FIRMS active fires. Only fetched while the layer is switched on —
+  // a several-MB public CSV has no business downloading for a user who
+  // never turns the layer on. Enabling the toggle flips `enabled` and the
+  // hook fetches immediately.
+  const activeFires = useApiResource(fetchActiveFires, [state.showActiveFires], {
+    pollIntervalMs: FIRMS_POLL_INTERVAL_MS,
+    enabled: state.showActiveFires,
+  })
+
   // A view change (new queryKey) invalidates the forecast cache for this
   // view: warm the current position plus the next WARM_WINDOW keyframes so
   // playback is smooth from the moment it starts. The warm-up is an explicit
@@ -159,6 +173,7 @@ export function MapPage() {
         forecastGrid={forecastGrid.resource}
         weather={weather.resource}
         citizenReports={reports.resource}
+        activeFires={activeFires.resource}
       />
 
       <div className="overlay overlay-top-left">
