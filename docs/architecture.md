@@ -49,11 +49,11 @@ requested for the scaffold) maps onto it as follows:
 | Directory | Responsibility | May import |
 |---|---|---|
 | `app/core` | Settings, cross-cutting config | nothing internal |
-| `app/domain` | Pure domain types (`SensorReading`, `WeatherReading`, `GridState`, `Forecast`, `Alert`), repository/provider/estimator/PDI/dispersion Protocols (ports), H3 helpers. No I/O. | `app/core` |
+| `app/domain` | Pure domain types (`SensorReading`, `WeatherReading`, `GridState`, `Forecast`, `Alert`, fire hotspots and traffic observations), repository/provider/estimator/PDI/dispersion Protocols (ports), H3 helpers. No I/O. | `app/core` |
 | `app/models` | SQLAlchemy Core table definitions (the schema) | `app/core`, `app/domain` (only for the `AlertSeverity` column type) |
 | `app/db` | Engine/session management, and `app/db/repositories/*` — concrete SQLAlchemy implementations of the domain repository Protocols | `app/core`, `app/domain`, `app/models` |
-| `app/ingestion` | Source adapters implementing `app.domain.providers.PollutionDataProvider` or `WeatherProvider`: `OpenAQProvider` and `OpenMeteoProvider` (both implemented); a shared retry policy in `http.py` | `app/core`, `app/domain` |
-| `app/services` | Business logic: per-resource read services (`SensorService`, `GridService`, `CellService`, `AlertService`, …) plus the demo-data fallback, `SensorIngestionService` / `WeatherIngestionService` (fetch → persist, skip duplicates), `GeospatialService` (the H3 facade), `IDWPollutionEstimator`, `HeuristicPDIModel`, `DeterministicH3DispersionModel`, and `ForecastingService` (runs the dispersion model, persists results — see below) | `app/core`, `app/domain`, `app/ingestion`, `app/models`, `app/db` |
+| `app/ingestion` | OpenAQ/Open-Meteo adapters, NASA FIRMS VIIRS NRT adapter, and a normalized, license-explicit traffic sample importer; shared retry policy in `http.py` | `app/core`, `app/domain` |
+| `app/services` | Business logic: per-resource read services (`SensorService`, `GridService`, `CellService`, `AlertService`, …) plus demo fallback, sensor/weather ingestion, M5 environmental-source ingestion, `GeospatialService`, pollution estimators/models, and `ForecastingService` | `app/core`, `app/domain`, `app/ingestion`, `app/models`, `app/db` |
 | `app/api` | FastAPI routes (thin — call a service, shape the response), Pydantic schemas, error handling, dependency wiring | `app/core`, `app/domain`, `app/db` (dependency wiring only, see `app/api/deps.py`), `app/services` |
 | `app/pipeline` | `python -m app.pipeline.run`: the composition root for the full OpenAQ→...→alerts pipeline (see below). A second composition root alongside `app/main.py`/`app/cli.py`, but a real directory (unlike those two files), so it's a genuine layer here, not exempt | `app/core`, `app/domain`, `app/models`, `app/db`, `app/ingestion`, `app/services` |
 
@@ -227,6 +227,18 @@ an external hourly scheduler with a fresh feature export. Synthetic
 provenance is rejected for live mode; production must supply real, as-of
 feature exports rather than relabeling demo data. The command does not
 install or manage a scheduler.
+
+**Environmental source ingestion (M5):** `python -m app.cli ingest-fires`
+fetches bounded NASA FIRMS VIIRS NRT detections, stores raw/versioned events,
+and records per-run completeness, freshness, duplicate and invalid-row
+metrics. A successful complete empty feed is distinct from a failed or
+malformed request. `ingest-traffic` accepts normalized JSONL samples only
+with explicit source, version, attribution and license metadata; no paid or
+unlicensed traffic vendor is assumed. Both sources remain disabled as
+prediction inputs. `evaluate-feature-group` compares fire or traffic
+predictors against a control using the same observed-label temporal split and
+never promotes automatically. See [M5 ingestion and evaluation](M5_FIRES_AND_TRAFFIC.md)
+for feed fields and operator steps.
 
 **Demo-data fallback.** Every endpoint falls back to small, deterministic
 seed data (`app/services/demo_data.py`) whenever its repository query

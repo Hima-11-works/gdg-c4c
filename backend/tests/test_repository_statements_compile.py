@@ -265,6 +265,7 @@ def test_environmental_metadata_statements() -> None:
     assert "ON CONFLICT" in run_sql
     assert "DO UPDATE SET" in run_sql
     assert params["errors"] == []
+    assert params["metrics"] == {}
 
 
 def test_feature_snapshot_statements() -> None:

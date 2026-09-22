@@ -21,6 +21,7 @@ def _row_to_domain(row: Row) -> IngestionRun:
         status=IngestionRunStatus(row.status),
         errors=tuple(row.errors or ()),
         simulation_id=row.simulation_id,
+        metrics=dict(row.metrics or {}),
     )
 
 
@@ -33,6 +34,7 @@ def _upsert_stmt(run: IngestionRun):
         "fetched_at": run.fetched_at,
         "status": run.status.value,
         "errors": list(run.errors),
+        "metrics": run.metrics,
         "simulation_id": run.simulation_id,
     }
     insert = pg_insert(ingestion_run_table).values(**values)

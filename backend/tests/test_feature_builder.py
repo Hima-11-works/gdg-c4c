@@ -83,6 +83,57 @@ def test_as_of_cutoff_excludes_future_observations_and_computes_lags() -> None:
     assert "pollution" not in snapshot.quality.missing_fields
 
 
+def test_traffic_ratio_is_observed_over_free_flow_and_zero_speed_is_valid() -> None:
+    snapshots = FeatureBuilder().build(
+        cells=[CELL],
+        issued_at=NOW,
+        valid_at=NOW,
+        weather_features=[_weather()],
+        static_features=[_static()],
+        traffic_observations=[
+            {"h3_cell": CELL, "valid_at": NOW, "speed_kph": 30.0, "free_flow_kph": 60.0}
+        ],
+        fire_detections=[],
+    )
+    standstill = FeatureBuilder().build(
+        cells=[CELL],
+        issued_at=NOW,
+        valid_at=NOW,
+        weather_features=[_weather()],
+        static_features=[_static()],
+        traffic_observations=[
+            {"h3_cell": CELL, "valid_at": NOW, "speed_kph": 0.0, "free_flow_kph": 60.0}
+        ],
+        fire_detections=[],
+    )
+
+    assert snapshots[0].vector.traffic_congestion_ratio == 0.5
+    assert standstill[0].vector.traffic_congestion_ratio == 0.0
+
+
+def test_traffic_observation_unavailable_at_issue_time_is_not_used() -> None:
+    snapshot = FeatureBuilder().build(
+        cells=[CELL],
+        issued_at=NOW,
+        valid_at=NOW,
+        weather_features=[_weather()],
+        static_features=[_static()],
+        traffic_observations=[
+            {
+                "h3_cell": CELL,
+                "valid_at": NOW,
+                "available_at": NOW + timedelta(minutes=10),
+                "speed_kph": 10.0,
+                "free_flow_kph": 60.0,
+            }
+        ],
+        fire_detections=[],
+    )[0]
+
+    assert snapshot.vector.traffic_congestion_ratio is None
+    assert "traffic" in snapshot.quality.missing_fields
+
+
 def test_zero_rain_is_observed_but_missing_weather_stays_null() -> None:
     builder = FeatureBuilder()
     observed = builder.build(

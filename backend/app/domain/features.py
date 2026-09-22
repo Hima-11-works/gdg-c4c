@@ -17,7 +17,7 @@ from typing import Mapping
 
 from app.domain.types import _require_utc, _require_finite
 
-FEATURE_SCHEMA_VERSION = "environmental-v1"
+FEATURE_SCHEMA_VERSION = "environmental-v2"
 
 
 class DataMode(StrEnum):

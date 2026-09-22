@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from copy import deepcopy
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Sequence
@@ -614,8 +615,115 @@ def evaluate_artifact(artifact: dict[str, Any], dataset: dict[str, Any]) -> dict
     }
 
 
+INCREMENTAL_FEATURE_GROUPS = {
+    "fires": ("fire_frp_upwind_mw", "fire_count_upwind", "fire_age_hours_min"),
+    "traffic": ("traffic_congestion_ratio",),
+}
+
+
+def evaluate_incremental_feature_group(
+    dataset: dict[str, Any],
+    *,
+    group: str,
+    as_of_verified: bool,
+    ridge_alpha: float = 1.0,
+) -> dict[str, Any]:
+    """Compare a feature group against an otherwise identical live-label run.
+
+    This is an offline diagnostic only: it refuses synthetic labels, requires
+    explicit as-of verification, uses the same rows and deterministic held-out
+    windows, and never changes registry or promotion state.
+    """
+    if group not in INCREMENTAL_FEATURE_GROUPS:
+        raise ValueError(f"unsupported incremental feature group: {group}")
+    if not as_of_verified:
+        raise ValueError("incremental evaluation requires explicit as-of feature verification")
+    if (
+        dataset.get("data_mode") != "live"
+        or dataset.get("target_kind") != "observed"
+        or dataset.get("synthetic_only") is not False
+    ):
+        raise ValueError("incremental evaluation requires live, observed PM2.5 labels")
+    if dataset.get("label_unit") != "ug/m3":
+        raise ValueError("incremental evaluation requires PM2.5 labels in ug/m3")
+    rows = dataset.get("examples")
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("incremental evaluation requires non-empty training examples")
+    group_features = set(INCREMENTAL_FEATURE_GROUPS[group])
+    present = sorted(
+        name
+        for name in group_features
+        if any(
+            isinstance(row, dict)
+            and isinstance(row.get("features"), dict)
+            and row["features"].get(name) is not None
+            for row in rows
+        )
+    )
+    if not present:
+        raise ValueError(f"dataset has no observed values for the {group} feature group")
+
+    without_group = deepcopy(dataset)
+    for row in without_group["examples"]:
+        if isinstance(row.get("features"), dict):
+            row["features"] = {
+                key: value
+                for key, value in row["features"].items()
+                if key not in group_features
+            }
+    with_group_artifact = train_candidate(dataset, ridge_alpha=ridge_alpha)
+    without_group_artifact = train_candidate(without_group, ridge_alpha=ridge_alpha)
+    by_horizon: dict[str, Any] = {}
+    for horizon in sorted(with_group_artifact["evaluation"], key=float):
+        with_report = with_group_artifact["evaluation"][horizon]
+        without_report = without_group_artifact["evaluation"].get(horizon)
+        if without_report is None:
+            by_horizon[horizon] = {"supported": False, "reason": "control artifact lacks horizon"}
+            continue
+        with_metrics = with_report["temporal"]["metrics"]
+        without_metrics = without_report["temporal"]["metrics"]
+        delta_mae = with_metrics["mae"] - without_metrics["mae"]
+        delta_rmse = with_metrics["rmse"] - without_metrics["rmse"]
+        improved = delta_mae < 0
+        review_eligible = bool(with_report["promotion_eligible"] and improved)
+        by_horizon[horizon] = {
+            "supported": True,
+            "test_rows_with_group": with_report["temporal"]["test_count"],
+            "test_rows_without_group": without_report["temporal"]["test_count"],
+            "same_test_rows": (
+                with_report["temporal"]["test_count"]
+                == without_report["temporal"]["test_count"]
+            ),
+            "with_group_metrics": with_metrics,
+            "without_group_metrics": without_metrics,
+            "delta_mae_ugm3": delta_mae,
+            "delta_rmse_ugm3": delta_rmse,
+            "mae_improved": improved,
+            "candidate_promotion_eligible": with_report["promotion_eligible"],
+            "eligible_for_manual_review": review_eligible,
+        }
+    return {
+        "report_schema_version": "incremental-feature-evaluation-v1",
+        "feature_group": group,
+        "feature_names": present,
+        "dataset_ids": sorted(dataset.get("dataset_ids", [])),
+        "feature_group_dataset_ids": sorted(
+            dataset.get("feature_group_dataset_ids", {}).get(group, [])
+        ),
+        "data_mode": "live",
+        "target_kind": "observed",
+        "as_of_verified": True,
+        "same_rows_and_temporal_splits": True,
+        "with_group_artifact_sha256": with_group_artifact["artifact_sha256"],
+        "without_group_artifact_sha256": without_group_artifact["artifact_sha256"],
+        "auto_promoted": False,
+        "horizons": by_horizon,
+    }
+
+
 __all__ = [
     "evaluate_artifact",
+    "evaluate_incremental_feature_group",
     "predict_residual",
     "prediction_interval",
     "train_candidate",

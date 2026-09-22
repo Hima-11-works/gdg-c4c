@@ -512,8 +512,12 @@ class FeatureBuilder:
             ):
                 continue
             ratio = record.get("congestion_ratio")
-            if ratio is None and record.get("speed_kph") not in (None, 0):
-                ratio = float(record["free_flow_kph"]) / float(record["speed_kph"])
+            # Plan convention: observed speed / free-flow speed (lower is
+            # slower). A measured standstill is a valid zero, not missing.
+            if ratio is None and record.get("speed_kph") is not None:
+                free_flow = record.get("free_flow_kph")
+                if free_flow not in (None, 0):
+                    ratio = float(record["speed_kph"]) / float(free_flow)
             if ratio is not None:
                 values.append(float(ratio))
         return _mean(values)

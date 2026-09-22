@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Protocol
 
 from app.domain.features import FeatureSnapshot
+from app.domain.environmental_observations import FireHotspot, TrafficObservation
 from app.domain.prediction import PredictionResult, PredictionRun
 from app.domain.scenario import DatasetVersion, IngestionRun
 from app.domain.training import ModelVersion
@@ -138,6 +139,36 @@ class FireReportRepository(Protocol):
         ...
 
     def list_active(self, *, since: datetime) -> list[FireReport]: ...
+
+
+class FireHotspotRepository(Protocol):
+    def save_many(self, hotspots: list[FireHotspot]) -> tuple[int, int]:
+        """Insert idempotently; return (inserted, already_seen)."""
+        ...
+
+    def list_for_window(
+        self,
+        *,
+        acquired_from: datetime,
+        acquired_to: datetime,
+        available_by: datetime,
+        h3_cells: list[str] | None = None,
+    ) -> list[FireHotspot]: ...
+
+
+class TrafficObservationRepository(Protocol):
+    def save_many(self, observations: list[TrafficObservation]) -> tuple[int, int]:
+        """Insert idempotently; return (inserted, already_seen)."""
+        ...
+
+    def list_for_window(
+        self,
+        *,
+        observed_from: datetime,
+        observed_to: datetime,
+        available_by: datetime,
+        h3_cells: list[str] | None = None,
+    ) -> list[TrafficObservation]: ...
 
 
 class DatasetVersionRepository(Protocol):

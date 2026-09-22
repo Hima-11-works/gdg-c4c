@@ -10,7 +10,13 @@ from typing import Mapping
 import h3
 
 from app.core.config import get_settings
-from app.domain.features import DataMode, DatasetRef, FeatureQuality, InputKind
+from app.domain.features import (
+    FEATURE_SCHEMA_VERSION,
+    DataMode,
+    DatasetRef,
+    FeatureQuality,
+    InputKind,
+)
 from app.domain.h3_grid import cell_center
 from app.domain.prediction import PredictionResult, PredictionRun
 from app.domain.repositories import PredictionPublicationRepository
@@ -293,7 +299,7 @@ class PredictionQueryService:
                 region=self.region,
                 mode=DataMode.DEMO,
                 feature_run_id="legacy-demo-field",
-                feature_schema_version="environmental-v1",
+                feature_schema_version=FEATURE_SCHEMA_VERSION,
                 dataset_refs=(_DEMO_DATASET,),
                 scenario_id="legacy-illustrative-field",
             )
@@ -348,7 +354,7 @@ class PredictionQueryService:
                         predicted_pm25=value,
                         pdi=current.pdi if horizon == 0 else None,
                         prediction_method=method,
-                        feature_schema_version="environmental-v1",
+                        feature_schema_version=FEATURE_SCHEMA_VERSION,
                         input_kind=InputKind.SYNTHETIC,
                         synthetic=True,
                         quality=quality,

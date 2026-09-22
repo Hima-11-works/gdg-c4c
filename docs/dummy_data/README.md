@@ -7,7 +7,7 @@ network or database access. Paths, counts, timestamps, scenario names and
 expected behavior remain stable inputs to implementation and review.
 
 All profiles use `seed: 42`, UTC timestamps, fictional observations and the
-`environmental-v1` feature schema. Synthetic observations must never enter a
+`environmental-v2` feature schema. Synthetic observations must never enter a
 live training export or a promoted model artifact.
 
 Profiles:

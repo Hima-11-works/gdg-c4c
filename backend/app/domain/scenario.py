@@ -8,9 +8,10 @@ cannot be mistaken for a live training input later in the pipeline.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 from app.domain.features import InputKind
 from app.domain.types import _require_utc
@@ -81,6 +82,7 @@ class IngestionRun:
     fetched_at: datetime | None = None
     errors: tuple[str, ...] = ()
     simulation_id: str | None = None
+    metrics: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         _required_text(self.run_id, "run_id")

@@ -37,12 +37,16 @@ import httpx
 
 from app.core.config import get_settings
 from app.db.repositories import (
+    SqlDatasetVersionRepository,
     SqlFeatureSnapshotRepository,
+    SqlFireHotspotRepository,
     SqlForecastRepository,
     SqlGridStateRepository,
+    SqlIngestionRunRepository,
     SqlModelVersionRepository,
     SqlPredictionPublicationRepository,
     SqlSensorReadingRepository,
+    SqlTrafficObservationRepository,
     SqlWeatherReadingRepository,
 )
 from app.db.session import get_session_factory
@@ -51,7 +55,9 @@ from app.domain.training import ModelStatus, ModelVersion
 from app.domain.types import BoundingBox
 from app.ingestion.demo_scenarios import ScenarioGenerator
 from app.ingestion.factory import build_pollution_provider, build_weather_provider
+from app.ingestion.firms import FirmsProvider
 from app.services.dispersion import DeterministicH3DispersionModel
+from app.services.environmental_ingestion import EnvironmentalIngestionService
 from app.services.forecasting import ForecastingResult, ForecastingService
 from app.services.features import (
     FeatureBuilder,
@@ -60,7 +66,11 @@ from app.services.features import (
 )
 from app.services.geospatial import GeospatialService
 from app.services.ingestion import IngestionResult, SensorIngestionService, WeatherIngestionService
-from app.services.model_training import evaluate_artifact, train_candidate
+from app.services.model_training import (
+    evaluate_artifact,
+    evaluate_incremental_feature_group,
+    train_candidate,
+)
 from app.services.prediction_publication import PredictionPublicationService
 from app.services.training_data import (
     export_training_dataset,
@@ -140,6 +150,93 @@ async def _run_ingest_weather(args: argparse.Namespace) -> int:
         session.close()
 
     return _report(result)
+
+
+async def _run_ingest_fires(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    if settings.firms_map_key is None:
+        print(
+            "FIRMS_MAP_KEY is not set; request a free NASA FIRMS MAP_KEY and configure it in .env.",
+            file=sys.stderr,
+        )
+        return 1
+    session = get_session_factory()()
+    try:
+        async with httpx.AsyncClient() as client:
+            provider = FirmsProvider(
+                client,
+                map_key=settings.firms_map_key.get_secret_value(),
+                source=settings.firms_source,
+                base_url=settings.firms_base_url,
+                timeout_seconds=settings.firms_timeout_seconds,
+                max_retries=settings.firms_max_retries,
+                h3_resolution=settings.h3_resolution,
+                stale_after_hours=settings.firms_stale_after_hours,
+            )
+            service = EnvironmentalIngestionService(
+                fire_provider=provider,
+                fire_repository=SqlFireHotspotRepository(session),
+                traffic_repository=SqlTrafficObservationRepository(session),
+                dataset_repository=SqlDatasetVersionRepository(session),
+                run_repository=SqlIngestionRunRepository(session),
+            )
+            result = await service.ingest_firms(
+                _bbox_from_args(args),
+                day_range=args.days,
+                region=args.region,
+                source=settings.firms_source,
+                stale_after_hours=settings.firms_stale_after_hours,
+            )
+    finally:
+        session.close()
+    print(
+        "FIRMS ingestion "
+        f"{'complete' if result.succeeded else 'failed'}: run={result.run.run_id} "
+        f"fetched={result.run.metrics.get('fetched_records', 0)} saved={result.saved} "
+        f"duplicates={result.skipped_duplicates} stale={result.run.metrics.get('stale_records', 0)} "
+        f"complete_query={result.run.metrics.get('query_complete', False)}"
+    )
+    for error in result.run.errors:
+        print(f"  {error}", file=sys.stderr)
+    return 0 if result.succeeded else 1
+
+
+async def _run_ingest_traffic(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    payload = Path(args.input).read_text(encoding="utf-8")
+    session = get_session_factory()()
+    try:
+        service = EnvironmentalIngestionService(
+            fire_provider=None,  # This command imports only the supplied traffic feed.
+            fire_repository=SqlFireHotspotRepository(session),
+            traffic_repository=SqlTrafficObservationRepository(session),
+            dataset_repository=SqlDatasetVersionRepository(session),
+            run_repository=SqlIngestionRunRepository(session),
+        )
+        result = service.import_traffic_jsonl(
+            payload,
+            source=args.source,
+            product=args.product,
+            version=args.version,
+            region=args.region,
+            attribution=args.attribution,
+            license=args.license,
+            stale_after_hours=settings.traffic_stale_after_hours,
+            h3_resolution=settings.h3_resolution,
+        )
+    finally:
+        session.close()
+    print(
+        "Traffic import "
+        f"{'complete' if result.succeeded else 'failed'}: run={result.run.run_id} "
+        f"samples={result.run.metrics.get('sample_count', 0)} saved={result.saved} "
+        f"duplicates={result.skipped_duplicates} "
+        f"stale={result.run.metrics.get('stale_records', 0)} "
+        f"coverage={result.run.metrics.get('mean_sampled_road_coverage_fraction', 'unknown')}"
+    )
+    for error in result.run.errors:
+        print(f"  {error}", file=sys.stderr)
+    return 0 if result.succeeded else 1
 
 
 async def _run_export_grid(args: argparse.Namespace) -> int:
@@ -360,6 +457,28 @@ async def _run_evaluate(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _run_evaluate_feature_group(args: argparse.Namespace) -> int:
+    dataset = json.loads(Path(args.dataset).read_text(encoding="utf-8"))
+    report = evaluate_incremental_feature_group(
+        dataset,
+        group=args.group,
+        as_of_verified=args.as_of_verified,
+        ridge_alpha=args.ridge_alpha,
+    )
+    changed = write_json(Path(args.out), report)
+    improved = sum(
+        bool(item.get("mae_improved"))
+        for item in report["horizons"].values()
+        if item.get("supported")
+    )
+    print(
+        f"Incremental {args.group} evaluation {'wrote' if changed else 'unchanged'}: "
+        f"horizons={len(report['horizons'])} MAE_improved={improved} "
+        f"auto_promoted=false path={args.out}"
+    )
+    return 0
+
+
 async def _run_demo_snapshot(args: argparse.Namespace) -> int:
     generator = ScenarioGenerator.from_manifest(
         args.profile,
@@ -564,6 +683,29 @@ def main(argv: list[str] | None = None) -> int:
     weather_parser.add_argument("--max-lon", type=float, default=None)
     weather_parser.set_defaults(func=_run_ingest_weather)
 
+    fire_parser = subparsers.add_parser(
+        "ingest-fires", help="Fetch and retain NASA FIRMS VIIRS NRT detections."
+    )
+    fire_parser.add_argument("--days", type=int, choices=range(1, 6), default=2)
+    fire_parser.add_argument("--region", default="delhi-ncr")
+    fire_parser.add_argument("--min-lat", type=float, default=None)
+    fire_parser.add_argument("--min-lon", type=float, default=None)
+    fire_parser.add_argument("--max-lat", type=float, default=None)
+    fire_parser.add_argument("--max-lon", type=float, default=None)
+    fire_parser.set_defaults(func=_run_ingest_fires)
+
+    traffic_parser = subparsers.add_parser(
+        "ingest-traffic", help="Import a normalized, licensed sampled-traffic JSONL feed."
+    )
+    traffic_parser.add_argument("--input", required=True)
+    traffic_parser.add_argument("--source", required=True)
+    traffic_parser.add_argument("--product", required=True)
+    traffic_parser.add_argument("--version", required=True)
+    traffic_parser.add_argument("--region", required=True)
+    traffic_parser.add_argument("--attribution", required=True)
+    traffic_parser.add_argument("--license", required=True)
+    traffic_parser.set_defaults(func=_run_ingest_traffic)
+
     grid_parser = subparsers.add_parser(
         "export-grid", help="Export the configured region's H3 grid as GeoJSON."
     )
@@ -642,6 +784,21 @@ def main(argv: list[str] | None = None) -> int:
     evaluate_parser.add_argument("--split", required=True)
     evaluate_parser.add_argument("--out", default="evaluation-report.json")
     evaluate_parser.set_defaults(func=_run_evaluate)
+
+    feature_eval_parser = subparsers.add_parser(
+        "evaluate-feature-group",
+        help="Ablate fire/traffic predictors on identical live observed-label splits.",
+    )
+    feature_eval_parser.add_argument("--dataset", required=True)
+    feature_eval_parser.add_argument("--group", choices=("fires", "traffic"), required=True)
+    feature_eval_parser.add_argument(
+        "--as-of-verified",
+        action="store_true",
+        help="Assert that feature availability was checked against each issue time.",
+    )
+    feature_eval_parser.add_argument("--ridge-alpha", type=float, default=1.0)
+    feature_eval_parser.add_argument("--out", default="incremental-feature-report.json")
+    feature_eval_parser.set_defaults(func=_run_evaluate_feature_group)
 
     args = parser.parse_args(argv)
     logging.basicConfig(level=get_settings().log_level)

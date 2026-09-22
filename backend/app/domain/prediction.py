@@ -6,7 +6,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Mapping
 
-from app.domain.features import DataMode, DatasetRef, FeatureQuality, InputKind
+from app.domain.features import (
+    FEATURE_SCHEMA_VERSION,
+    DataMode,
+    DatasetRef,
+    FeatureQuality,
+    InputKind,
+)
 from app.domain.types import _require_finite, _require_utc
 
 
@@ -47,7 +53,7 @@ class PredictionResult:
     pdi: float | None = None
     prediction_method: str = "persistence-baseline"
     model_version: str | None = None
-    feature_schema_version: str = "environmental-v1"
+    feature_schema_version: str = FEATURE_SCHEMA_VERSION
     input_kind: InputKind = InputKind.MODELED
     synthetic: bool = False
     quality: FeatureQuality = field(default_factory=FeatureQuality)

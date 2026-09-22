@@ -12,7 +12,7 @@ from typing import Any, Iterable
 
 import h3
 
-from app.domain.features import CellFeatureVector, DataMode, InputKind
+from app.domain.features import FEATURE_SCHEMA_VERSION, CellFeatureVector, DataMode, InputKind
 from app.domain.training import TrainingExample
 
 SUPPORTED_FEATURES = frozenset(field.name for field in fields(CellFeatureVector))
@@ -205,7 +205,10 @@ def generate_synthetic_training_dataset(
         daily_phase = 2 * math.pi * issued_at.hour / 24.0
         latent = []
         for station_index in range(station_count):
-            traffic = 0.5 + ((hour * 7 + station_index * 3) % 12) / 10.0
+            # observed/free-flow speed ratio: low values represent slower,
+            # more congested traffic and therefore higher authored emissions.
+            traffic_ratio = 0.3 + ((hour * 7 + station_index * 3) % 12) / 20.0
+            traffic_pressure = 1.0 - traffic_ratio
             rain = max(0.0, 2.2 * math.sin(hour * 0.43 + station_index * 0.7))
             wind = 0.7 + ((hour + station_index * 2) % 9) * 0.35
             population_density = 2500.0 + station_index * 1150.0
@@ -214,12 +217,12 @@ def generate_synthetic_training_dataset(
                 2.0,
                 48.0
                 + station_index * 7.0
-                + traffic * 18.0
+                + traffic_pressure * 18.0
                 - wind * 2.4
                 - rain * 1.1
                 + 6.0 * math.cos(annual_phase),
             )
-            latent.append((current_pm25, traffic, rain, wind, population_density, industrial))
+            latent.append((current_pm25, traffic_ratio, rain, wind, population_density, industrial))
         spatial_background = sum(
             latent[station_ids.index(station)][0] for station in spatial_feature_stations
         ) / len(spatial_feature_stations)
@@ -229,7 +232,7 @@ def generate_synthetic_training_dataset(
             baseline_pm25 = max(0.0, spatial_background - wind * 0.6)
             target_pm25 = max(
                 0.0,
-                latent[station_index][0] + traffic * 3.8 - rain * 2.1 - wind * 0.9,
+                latent[station_index][0] + (1.0 - traffic) * 3.8 - rain * 2.1 - wind * 0.9,
             )
             features = {
                 "current_pm25": spatial_background,
@@ -283,7 +286,7 @@ def generate_synthetic_training_dataset(
                     "features": features,
                     "data_mode": DataMode.DEMO,
                     "target_kind": InputKind.SYNTHETIC,
-                    "feature_schema_version": "environmental-v1",
+                    "feature_schema_version": FEATURE_SCHEMA_VERSION,
                     "dataset_ids": ["synthetic-training-smoke-v1"],
                     "spatial_exclusion_verified": True,
                 }
