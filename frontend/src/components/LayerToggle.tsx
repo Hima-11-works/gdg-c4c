@@ -36,13 +36,12 @@ export function LayerToggle() {
         </div>
 
         <label
-          className={`layer-toggle-option ${state.viewMode === 'smooth' ? 'disabled' : ''}`}
-          title="Draw a border on the boundary between PM2.5 ranges (hex view)"
+          className="layer-toggle-option"
+          title="Draw a line on the boundary between PM2.5 ranges - hex edges in the hex view, iso-lines across the smooth field in the smooth view"
         >
           <input
             type="checkbox"
             checked={state.contrast}
-            disabled={state.viewMode === 'smooth'}
             onChange={() => dispatch({ type: 'TOGGLE_CONTRAST' })}
           />
           Contrast ranges

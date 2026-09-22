@@ -58,8 +58,8 @@ import {
   hexEdgeKm,
   windToFeatureCollection,
 } from '../lib/h3Geometry'
-import { renderSmoothField } from '../lib/smoothField'
-import { buildRangeContours } from '../lib/pm25Contours'
+import { buildSmoothFieldGrid, renderSmoothFieldFromGrid } from '../lib/smoothField'
+import { buildRangeContours, buildSmoothRangeContours } from '../lib/pm25Contours'
 import { INDIA_BBOX, lodBbox, MAX_ZOOM } from '../lib/lod'
 import { scopeContains, scopeMask } from '../lib/scope'
 import { INDIA_OUTLINE_URL, STATE_BOUNDARIES_URL } from '../lib/stateBoundaries'
@@ -83,7 +83,7 @@ import type { MapViewMode } from '../state/mapUiReducer'
 import type { AsyncResource } from '../hooks/useApiResource'
 import { useStateBoundaries } from '../hooks/useStateBoundaries'
 import type { BoundingBox, FireReportOut, ForecastOut, GridStateOut, WeatherReadingOut } from '../lib/types'
-import type { Position } from 'geojson'
+import type { MultiLineString, Position } from 'geojson'
 
 // The app is scoped to India: on load, fit the whole country in view
 // rather than centering on one city. Level of detail (which resolution
@@ -183,19 +183,30 @@ interface Pm25PaintLayer {
 }
 
 function pm25PaintLayers(viewMode: MapViewMode, contrast: boolean, set: Pm25Set): Pm25PaintLayer[] {
-  if (viewMode === 'smooth') {
-    return [{ layer: LAYER_PM25_RASTER[set], property: 'raster-opacity', base: PM25_FILL_OPACITY }]
-  }
-  const layers: Pm25PaintLayer[] = [
-    { layer: LAYER_PM25_FILL[set], property: 'fill-opacity', base: PM25_FILL_OPACITY },
-    { layer: LAYER_PM25_OUTLINE[set], property: 'line-opacity', base: 1 },
-  ]
-  // Contrast mode adds the range-boundary contour as part of this set, so it
-  // dissolves with the fills rather than popping between frames.
+  const layers: Pm25PaintLayer[] =
+    viewMode === 'smooth'
+      ? [{ layer: LAYER_PM25_RASTER[set], property: 'raster-opacity', base: PM25_FILL_OPACITY }]
+      : [
+          { layer: LAYER_PM25_FILL[set], property: 'fill-opacity', base: PM25_FILL_OPACITY },
+          { layer: LAYER_PM25_OUTLINE[set], property: 'line-opacity', base: 1 },
+        ]
+  // Contrast mode adds the range boundary as part of this set, so it dissolves
+  // with the field rather than popping between frames. Both views have one:
+  // hex edges between the hexagons, iso-lines across the smoothed surface.
   if (contrast) {
     layers.push({ layer: LAYER_PM25_CONTOUR[set], property: 'line-opacity', base: CONTRAST_LINE_OPACITY })
   }
   return layers
+}
+
+/** Write one contour geometry into a set's contour source, or clear it. The
+ *  geometry comes from whichever builder matches the active view. */
+function setContourData(source: GeoJSONSource, contours: MultiLineString | null): void {
+  source.setData(
+    contours
+      ? { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: contours }] }
+      : EMPTY_FEATURE_COLLECTION,
+  )
 }
 
 const SOURCE_PDI = 'cells-pdi'
@@ -1531,7 +1542,7 @@ export function MapView({
       map.setPaintProperty(
         LAYER_PM25_CONTOUR[set],
         'line-opacity',
-        showHex && state.contrast && on ? CONTRAST_LINE_OPACITY : 0,
+        state.contrast && on ? CONTRAST_LINE_OPACITY : 0,
       )
     }
   }, [mapReady, state.viewMode, state.contrast])
@@ -1612,20 +1623,24 @@ export function MapView({
             const [latitude, longitude] = cellCenter(cell.h3Cell)
             return { latitude, longitude, value: cell.value as number }
           })
-        const image = renderSmoothField(points, bbox, PM25_COLOR_SCALE, hexEdgeKm(state.lod.resolution))
-        rasterSource.updateImage({ image, coordinates: imageCoords(bbox) })
-      }
-
-      // Range contours (contrast mode) are only meaningful for the hex view.
-      if (viewMode === 'hex' && contrast) {
+        // One grid per frame, used twice: the raster colours it and contrast
+        // mode traces iso-lines across it, so the lines follow exactly the
+        // surface the raster shows instead of the hexagons underneath.
+        const grid = buildSmoothFieldGrid(points, bbox, hexEdgeKm(state.lod.resolution))
+        rasterSource.updateImage({
+          image: renderSmoothFieldFromGrid(grid, bbox, PM25_COLOR_SCALE),
+          coordinates: imageCoords(bbox),
+        })
+        if (contrast) {
+          const contourSource = map.getSource(SOURCE_PM25_CONTOUR[set])
+          if (contourSource instanceof GeoJSONSource) {
+            setContourData(contourSource, buildSmoothRangeContours(grid, bbox, PM25_COLOR_SCALE))
+          }
+        }
+      } else if (contrast) {
         const contourSource = map.getSource(SOURCE_PM25_CONTOUR[set])
         if (contourSource instanceof GeoJSONSource) {
-          const contours = buildRangeContours(cellValues, PM25_COLOR_SCALE)
-          contourSource.setData(
-            contours
-              ? { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: contours }] }
-              : EMPTY_FEATURE_COLLECTION,
-          )
+          setContourData(contourSource, buildRangeContours(cellValues, PM25_COLOR_SCALE))
         }
       }
       return true

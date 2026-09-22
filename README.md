@@ -965,10 +965,14 @@ so the legend is valid in either. Bands run Very Good → Hazardous at
 and that one array also drives the smooth field's sampling and contrast
 mode's band boundaries.
 
-**Contrast mode** (a checkbox; hex view only) draws a dark line on the
-boundary between different PM2.5 bands (`frontend/src/lib/pm25Contours.ts`),
-outlining each same-range region topologically rather than tracing every
-hexagon.
+**Contrast mode** (a checkbox, available in both views) draws a line on the
+boundary between different PM2.5 bands (`frontend/src/lib/pm25Contours.ts`).
+In the hex view it draws the shared hex edges whose two cells are in
+different bands, outlining each same-range region topologically rather than
+tracing every hexagon. In the smooth view it runs marching squares across
+the smoothed field's own grid, so the boundaries are smooth topographic
+iso-lines that follow the surface the raster draws - the two builders share
+one grid per frame, so the lines and the raster can't disagree.
 
 **Playback works identically in both views.** `components/MapView.tsx`
 double-buffers the field — two hex sources *and* two raster image sources

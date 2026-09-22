@@ -1,4 +1,4 @@
-// Smooth pollution field — renders the per-cell PM2.5 values as a continuous
+// Smooth pollution field - renders the per-cell PM2.5 values as a continuous
 // raster instead of discrete hexagons. A compact, Gaussian-like weighted
 // average over nearby cell centers gives a smooth, Perlin-like surface; the
 // result is colored with the exact same ramp as the hex view
@@ -8,10 +8,15 @@
 // upsampled to the output image, and the kernel is compact (no exp()), so a
 // per-frame render stays well under a few milliseconds during playback.
 //
+// The coarse grid is exposed separately from the rendering because contrast
+// mode draws iso-lines across it (lib/pm25Contours.ts's
+// buildSmoothRangeContours): one grid per frame, used twice, so the lines
+// trace exactly the surface the raster shows.
+//
 // Output is an ImageData meant for a MapLibre `image` source georeferenced to
 // `bbox`. Rows are mapped linearly in Web Mercator Y (not latitude), because
 // MapLibre textures an image source across the projected rectangle of its
-// corners — matching that mapping keeps the smooth field aligned with the
+// corners - matching that mapping keeps the smooth field aligned with the
 // hexagons and coastline instead of drifting at high latitudes.
 
 import type { ColorStop } from './colorScales'
@@ -22,6 +27,26 @@ export interface FieldPoint {
   longitude: number
   value: number
 }
+
+/** The smoothed field on its coarse evaluation grid.
+ *
+ *  `values` and `coverage` are row-major with row 0 on the *north* edge, the
+ *  same orientation the raster is textured in (see the module comment on the
+ *  Mercator Y mapping). `coverage` is the kernel weight that reached each
+ *  node: below MIN_COVERAGE there is no data near it, which is what both the
+ *  renderer and the contour builder use to leave an area empty rather than
+ *  treating "no data" as a value. */
+export interface SmoothFieldGrid {
+  width: number
+  height: number
+  values: Float32Array
+  coverage: Float32Array
+}
+
+/** Coverage below which a node counts as having no data. The raster leaves
+ *  those pixels transparent so the basemap shows through; the contour builder
+ *  skips any cell touching one, so iso-lines can't sprout in empty space. */
+export const MIN_COVERAGE = 0.02
 
 interface Rgb {
   r: number
@@ -55,51 +80,42 @@ function sampleColor(scale: ColorStop[], value: number): Rgb {
   return parseHex(scale[scale.length - 1].color)
 }
 
-const mercatorY = (lat: number): number =>
+export const mercatorY = (lat: number): number =>
   Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360))
-const inverseMercatorY = (y: number): number =>
+export const inverseMercatorY = (y: number): number =>
   ((2 * Math.atan(Math.exp(y)) - Math.PI / 2) * 180) / Math.PI
 
 const MAX_PIXELS = 320
 const COARSE = 96
 
 /**
- * Render the smoothed field over `bbox` to an ImageData. `sigmaKm` is the
- * kernel width (see h3Geometry.hexEdgeKm). Data pixels are opaque; where no
- * cell is near enough the pixel stays transparent, so the basemap shows
- * through exactly as it does between hexes.
+ * Evaluate the smoothed field over `bbox` on its coarse grid. `sigmaKm` is the
+ * kernel width (see h3Geometry.hexEdgeKm).
  */
-export function renderSmoothField(
+export function buildSmoothFieldGrid(
   points: FieldPoint[],
   bbox: BoundingBox,
-  scale: ColorStop[],
   sigmaKm: number,
-): ImageData {
+): SmoothFieldGrid {
   const lonSpan = Math.max(bbox.maxLon - bbox.minLon, 1e-6)
   const latSpan = Math.max(bbox.maxLat - bbox.minLat, 1e-6)
-  const pixelsPerDeg = MAX_PIXELS / Math.max(lonSpan, latSpan)
-  const width = Math.max(2, Math.round(lonSpan * pixelsPerDeg))
-  const height = Math.max(2, Math.round(latSpan * pixelsPerDeg))
 
-  const canvas = document.createElement('canvas')
-  canvas.width = width
-  canvas.height = height
-  const ctx = canvas.getContext('2d')!
-  const image = ctx.createImageData(width, height)
-  const data = image.data
-
-  if (points.length === 0) return image
+  const coarseW = Math.max(2, Math.round(lonSpan >= latSpan ? COARSE : (COARSE * lonSpan) / latSpan))
+  const coarseH = Math.max(2, Math.round(lonSpan >= latSpan ? (COARSE * latSpan) / lonSpan : COARSE))
+  const valueGrid = new Float32Array(coarseW * coarseH)
+  const coverageGrid = new Float32Array(coarseW * coarseH)
+  const grid: SmoothFieldGrid = {
+    width: coarseW,
+    height: coarseH,
+    values: valueGrid,
+    coverage: coverageGrid,
+  }
+  if (points.length === 0) return grid
 
   const yTop = mercatorY(bbox.maxLat)
   const yBottom = mercatorY(bbox.minLat)
   const midLat = (bbox.maxLat + bbox.minLat) / 2
   const kmPerLonDeg = Math.max(111.32 * Math.cos((midLat * Math.PI) / 180), 1)
-
-  // --- coarse grid of smoothed values + coverage ---
-  const coarseW = Math.max(2, Math.round(lonSpan >= latSpan ? COARSE : (COARSE * lonSpan) / latSpan))
-  const coarseH = Math.max(2, Math.round(lonSpan >= latSpan ? (COARSE * latSpan) / lonSpan : COARSE))
-  const valueGrid = new Float32Array(coarseW * coarseH)
-  const coverageGrid = new Float32Array(coarseW * coarseH)
 
   // Compact kernel: w = (1 - d²/R²)² for d < R, cheap and smooth. R is 2.5σ,
   // so a bucket of size R plus its 8 neighbours covers every contributing cell.
@@ -160,7 +176,34 @@ export function renderSmoothField(
     }
   }
 
-  // --- bilinear upsample + color ---
+  return grid
+}
+
+/**
+ * Colour a grid from buildSmoothFieldGrid into an ImageData, bilinearly
+ * upsampled. Data pixels are opaque; where coverage is below MIN_COVERAGE the
+ * pixel stays transparent, so the basemap shows through exactly as it does
+ * between hexes.
+ */
+export function renderSmoothFieldFromGrid(
+  grid: SmoothFieldGrid,
+  bbox: BoundingBox,
+  scale: ColorStop[],
+): ImageData {
+  const { width: coarseW, height: coarseH, values: valueGrid, coverage: coverageGrid } = grid
+  const lonSpan = Math.max(bbox.maxLon - bbox.minLon, 1e-6)
+  const latSpan = Math.max(bbox.maxLat - bbox.minLat, 1e-6)
+  const pixelsPerDeg = MAX_PIXELS / Math.max(lonSpan, latSpan)
+  const width = Math.max(2, Math.round(lonSpan * pixelsPerDeg))
+  const height = Math.max(2, Math.round(latSpan * pixelsPerDeg))
+
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext('2d')!
+  const image = ctx.createImageData(width, height)
+  const data = image.data
+
   for (let py = 0; py < height; py++) {
     const v = ((py / (height - 1)) * (coarseH - 1))
     const y0 = Math.floor(v)
@@ -184,7 +227,7 @@ export function renderSmoothField(
       const coverage =
         coverageGrid[i00] * w00 + coverageGrid[i10] * w10 + coverageGrid[i01] * w01 + coverageGrid[i11] * w11
       const offset = (py * width + px) * 4
-      if (coverage < 0.02) continue // transparent — no data nearby
+      if (coverage < MIN_COVERAGE) continue // transparent - no data nearby
 
       const value =
         valueGrid[i00] * w00 + valueGrid[i10] * w10 + valueGrid[i01] * w01 + valueGrid[i11] * w11
