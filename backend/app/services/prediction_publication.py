@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import fields
 from datetime import datetime
 from pathlib import Path
-from typing import Mapping
 
 from app.domain.features import DataMode, DatasetRef, FeatureSnapshot, InputKind
 from app.domain.prediction import PredictionResult, PredictionRun
@@ -62,6 +62,27 @@ def _input_kind(mode: DataMode, refs: tuple[DatasetRef, ...], horizon: float) ->
     return InputKind.DERIVED
 
 
+def assert_live_snapshots_available(mode: DataMode, snapshots: list[FeatureSnapshot]) -> None:
+    """Fail closed when a live publication is built from demo or absent observations."""
+
+    if mode is not DataMode.LIVE:
+        return
+    if any(
+        ref.kind is InputKind.SYNTHETIC for item in snapshots for ref in item.dataset_refs
+    ):
+        raise ValueError("synthetic feature inputs cannot be published as a live run")
+    has_observed_current = any(
+        item.horizon_hours == 0
+        and item.vector.current_pm25 is not None
+        and item.quality.observed_station_count > 0
+        for item in snapshots
+    )
+    if not has_observed_current:
+        raise ValueError(
+            "live publication unavailable: no current PM2.5 observation has supporting stations"
+        )
+
+
 class PredictionPublicationService:
     """Apply compatible residual models over a supplied baseline, then publish."""
 
@@ -93,10 +114,7 @@ class PredictionPublicationService:
         identities = [(item.h3_cell, item.horizon_hours) for item in snapshots]
         if len(set(identities)) != len(identities):
             raise ValueError("feature snapshots must be unique per cell and horizon")
-        if mode is DataMode.LIVE and any(
-            ref.kind is InputKind.SYNTHETIC for item in snapshots for ref in item.dataset_refs
-        ):
-            raise ValueError("synthetic feature inputs cannot be published as a live run")
+        assert_live_snapshots_available(mode, snapshots)
 
         baseline_by_cell_horizon = baseline_by_cell_horizon or {}
         pdi_by_cell = pdi_by_cell or {}

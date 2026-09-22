@@ -32,3 +32,7 @@ The JSON contains H3 cells, PM2.5 stations, weather, static population/road/
 land-cover features, traffic segments, optional fire events, provenance, an
 ingestion run id, and a SHA-256 checksum. Repeating a command with the same
 profile, scenario, seed, anchor, and replay time produces byte-identical JSON.
+
+`model-monitor-tiny.json` is an M6 demo-only monitoring-contract fixture. Its
+synthetic provenance is explicit; the example exercises error, coverage, and
+drift reporting but is not operational evidence or a promotion input.

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
-from typing import Mapping
+from datetime import UTC, datetime
 
 import h3
 
@@ -91,9 +91,13 @@ class PredictionQueryService:
     def run(self, run_id: str | None = None) -> PredictionRun:
         if run_id is not None:
             stored = self._repository.get_run(run_id)
-            if stored is None:
-                raise ValueError(f"published prediction run {run_id!r} was not found")
-            return stored
+            if stored is not None:
+                return stored
+            if run_id.startswith("demo-fallback-"):
+                demo_run = self._demo_publication(run_id=run_id)
+                if demo_run is not None:
+                    return demo_run[0]
+            raise ValueError(f"published prediction run {run_id!r} was not found")
         stored = self._repository.latest_run(region=self.region)
         if stored is not None:
             return stored
@@ -107,7 +111,7 @@ class PredictionQueryService:
         horizons: set[float] | None = None,
     ) -> list[PredictionResult]:
         if run.run_id.startswith("demo-fallback-"):
-            return self._demo_results(cells or [], horizons)
+            return self._demo_results(run, cells or [], horizons)
         results = self._repository.list_results(run.run_id)
         cell_set = None if cells is None else set(cells)
         return [
@@ -288,27 +292,45 @@ class PredictionQueryService:
             )
         return interpolated
 
-    def _demo_publication(self) -> tuple[PredictionRun, list[PredictionResult]]:
-        hour = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
-        run_id = f"demo-fallback-{hour:%Y%m%dT%H}Z"
-        if self._demo_run is None or self._demo_run.run_id != run_id:
-            self._demo_run = PredictionRun(
-                run_id=run_id,
-                generated_at=hour,
-                published_at=hour,
-                region=self.region,
-                mode=DataMode.DEMO,
-                feature_run_id="legacy-demo-field",
-                feature_schema_version=FEATURE_SCHEMA_VERSION,
-                dataset_refs=(_DEMO_DATASET,),
-                scenario_id="legacy-illustrative-field",
-            )
-        return self._demo_run, []
+    def _demo_publication(
+        self, *, run_id: str | None = None
+    ) -> tuple[PredictionRun, list[PredictionResult]] | None:
+        if run_id is None:
+            hour = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+            canonical_run_id = f"demo-fallback-{hour:%Y%m%dT%H}Z"
+        else:
+            prefix = "demo-fallback-"
+            try:
+                hour = datetime.strptime(run_id.removeprefix(prefix), "%Y%m%dT%HZ").replace(
+                    tzinfo=UTC
+                )
+            except ValueError:
+                return None
+            canonical_run_id = f"demo-fallback-{hour:%Y%m%dT%H}Z"
+            if run_id != canonical_run_id:
+                return None
+
+        if self._demo_run is not None and self._demo_run.run_id == canonical_run_id:
+            return self._demo_run, []
+
+        demo_run = PredictionRun(
+            run_id=canonical_run_id,
+            generated_at=hour,
+            published_at=hour,
+            region=self.region,
+            mode=DataMode.DEMO,
+            feature_run_id="legacy-demo-field",
+            feature_schema_version=FEATURE_SCHEMA_VERSION,
+            dataset_refs=(_DEMO_DATASET,),
+            scenario_id="legacy-illustrative-field",
+        )
+        if run_id is None:
+            self._demo_run = demo_run
+        return demo_run, []
 
     def _demo_results(
-        self, cells: list[str], horizons: set[float] | None
+        self, run: PredictionRun, cells: list[str], horizons: set[float] | None
     ) -> list[PredictionResult]:
-        run, _ = self._demo_publication()
         output: list[PredictionResult] = []
         requested = {0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0} if horizons is None else horizons
         for cell in cells:

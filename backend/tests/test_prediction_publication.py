@@ -1,4 +1,7 @@
+import asyncio
+import json
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import h3
 import pytest
@@ -12,7 +15,10 @@ from app.domain.features import (
     InputKind,
 )
 from app.domain.prediction import PredictionResult, PredictionRun
-from app.services.prediction_publication import PredictionPublicationService
+from app.services.prediction_publication import (
+    PredictionPublicationService,
+    assert_live_snapshots_available,
+)
 from app.services.prediction_queries import PredictionQueryService
 
 
@@ -92,6 +98,87 @@ def test_publication_carries_baseline_and_rejects_synthetic_live_inputs():
     assert rows[1].predicted_pm25 == 25.0
     assert rows[1].prediction_method == "deterministic-dispersion-baseline"
     assert rows[1].synthetic is True
+
+
+def test_demo_fallback_run_id_resolves_on_a_fresh_service():
+    repository = MemoryPublicationRepository()
+    service = PredictionQueryService(repository, native_resolution=8, region="india")
+
+    run = service.run("demo-fallback-20260922T07Z")
+    cell = h3.latlng_to_cell(28.6, 77.1, 8)
+    [result] = service.results(run, cells=[cell], horizons={0.0})
+
+    assert run.run_id == "demo-fallback-20260922T07Z"
+    assert run.generated_at == datetime(2026, 9, 22, 7, tzinfo=UTC)
+    assert result.run_id == run.run_id
+    assert result.valid_at == run.generated_at
+    assert result.synthetic is True
+
+
+def test_live_publication_fails_when_observed_current_input_is_unavailable():
+    now = datetime(2026, 9, 22, tzinfo=UTC)
+    snapshot = _snapshot("8861892e0dfffff", 0, now, pm25=None)
+    snapshot = FeatureSnapshot(
+        h3_cell=snapshot.h3_cell,
+        issued_at=snapshot.issued_at,
+        valid_at=snapshot.valid_at,
+        horizon_hours=snapshot.horizon_hours,
+        feature_schema_version=snapshot.feature_schema_version,
+        vector=snapshot.vector,
+        quality=FeatureQuality(coverage_fraction=0.0, observed_station_count=0),
+    )
+
+    with pytest.raises(ValueError, match="live publication unavailable"):
+        assert_live_snapshots_available(DataMode.LIVE, [snapshot])
+
+
+def test_live_cli_rejects_demo_features_before_opening_database(tmp_path, monkeypatch):
+    from app import cli
+    from app.services.features import feature_snapshot_to_dict
+
+    now = datetime(2026, 9, 22, tzinfo=UTC)
+    synthetic_ref = DatasetRef(
+        dataset_id="demo-source",
+        source="scenario",
+        product="weather",
+        version="1",
+        kind=InputKind.SYNTHETIC,
+        region="india",
+        attribution="Air Health",
+        license="project-generated",
+    )
+    snapshot = _snapshot("8861892e0dfffff", 0, now, refs=[synthetic_ref])
+    input_path = tmp_path / "features.json"
+    input_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "feature-export-v1",
+                "replay_at": now.isoformat().replace("+00:00", "Z"),
+                "features": [feature_snapshot_to_dict(snapshot)],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        cli,
+        "get_session_factory",
+        lambda: (_ for _ in ()).throw(AssertionError("database should not be opened")),
+    )
+
+    with pytest.raises(ValueError, match="synthetic feature inputs"):
+        asyncio.run(
+            cli._run_prediction_publish(
+                SimpleNamespace(
+                    input=str(input_path),
+                    feature_run_id="demo-features",
+                    run_id=None,
+                    mode="live",
+                    region="india",
+                    generated_at=None,
+                    scenario_id=None,
+                )
+            )
+        )
 
 
 def test_h3_parent_aggregation_keeps_partial_coverage_and_separate_exposure():

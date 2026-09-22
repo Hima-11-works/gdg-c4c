@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Row
 from sqlalchemy.orm import Session
@@ -83,6 +83,89 @@ class SqlModelVersionRepository:
         row = self._session.execute(_upsert_stmt(model)).one()
         self._session.commit()
         return _row_to_domain(row)
+
+    def set_status(
+        self,
+        model_id: str,
+        *,
+        expected: ModelStatus,
+        status: ModelStatus,
+    ) -> ModelVersion:
+        """Compare-and-set a lifecycle status, preventing stale operator writes."""
+
+        try:
+            row = self._session.execute(
+                update(model_version_table)
+                .where(
+                    model_version_table.c.id == model_id,
+                    model_version_table.c.status == expected.value,
+                )
+                .values(status=status.value)
+                .returning(model_version_table)
+            ).first()
+            if row is None:
+                raise ValueError(
+                    f"model {model_id!r} was not in expected status {expected.value!r}"
+                )
+            self._session.commit()
+            return _row_to_domain(row)
+        except Exception:
+            self._session.rollback()
+            raise
+
+    def activate(self, model_id: str, *, allow_retired: bool = False) -> ModelVersion:
+        """Atomically retire the active horizon version and activate a validated one."""
+
+        try:
+            identity = self._session.execute(
+                select(
+                    model_version_table.c.region,
+                    model_version_table.c.horizon_hours,
+                ).where(model_version_table.c.id == model_id)
+            ).first()
+            if identity is None:
+                raise ValueError(f"model {model_id!r} does not exist in the database registry")
+            # Serialize activations for this region/horizon, including the first
+            # activation when there is not yet a promoted row to lock.
+            lock_key = f"model-activation:{identity.region}:{identity.horizon_hours}"
+            self._session.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
+                {"lock_key": lock_key},
+            )
+            target_row = self._session.execute(
+                select(model_version_table)
+                .where(model_version_table.c.id == model_id)
+                .with_for_update()
+            ).first()
+            if target_row is None:
+                raise ValueError(f"model {model_id!r} does not exist in the database registry")
+            target = _row_to_domain(target_row)
+            allowed_statuses = {ModelStatus.VALIDATED, ModelStatus.PROMOTED}
+            if allow_retired:
+                allowed_statuses.add(ModelStatus.RETIRED)
+            if target.status not in allowed_statuses:
+                raise ValueError(f"{target.status.value} model cannot be activated")
+            self._session.execute(
+                update(model_version_table)
+                .where(
+                    model_version_table.c.region == target.region,
+                    model_version_table.c.horizon_hours == target.horizon_hours,
+                    model_version_table.c.status == ModelStatus.PROMOTED.value,
+                    model_version_table.c.id != model_id,
+                )
+                .values(status=ModelStatus.RETIRED.value)
+            )
+            row = self._session.execute(
+                update(model_version_table)
+                .where(model_version_table.c.id == model_id)
+                .values(status=ModelStatus.PROMOTED.value)
+                .returning(model_version_table)
+            ).one()
+            self._session.commit()
+            return _row_to_domain(row)
+        except Exception:
+            self._session.rollback()
+            raise
 
     def get(self, model_id: str) -> ModelVersion | None:
         row = self._session.execute(_get_stmt(model_id)).first()

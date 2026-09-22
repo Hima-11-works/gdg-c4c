@@ -58,20 +58,32 @@ from app.ingestion.factory import build_pollution_provider, build_weather_provid
 from app.ingestion.firms import FirmsProvider
 from app.services.dispersion import DeterministicH3DispersionModel
 from app.services.environmental_ingestion import EnvironmentalIngestionService
-from app.services.forecasting import ForecastingResult, ForecastingService
 from app.services.features import (
     FeatureBuilder,
     feature_snapshot_from_dict,
     feature_snapshot_to_dict,
 )
+from app.services.forecasting import ForecastingResult, ForecastingService
 from app.services.geospatial import GeospatialService
 from app.services.ingestion import IngestionResult, SensorIngestionService, WeatherIngestionService
+from app.services.model_operations import (
+    activate_registry_model,
+    assert_model_can_be_activated,
+    model_from_registry_row,
+    set_registry_model_status,
+    summarize_model_monitoring,
+    validate_candidate,
+    write_registry_atomic,
+)
 from app.services.model_training import (
     evaluate_artifact,
     evaluate_incremental_feature_group,
     train_candidate,
 )
-from app.services.prediction_publication import PredictionPublicationService
+from app.services.prediction_publication import (
+    PredictionPublicationService,
+    assert_live_snapshots_available,
+)
 from app.services.training_data import (
     export_training_dataset,
     generate_synthetic_training_dataset,
@@ -479,6 +491,128 @@ async def _run_evaluate_feature_group(args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_local_registry(path: Path) -> dict:
+    if not path.is_file():
+        raise ValueError(f"model registry does not exist: {path}")
+    registry = json.loads(path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(registry, dict)
+        or registry.get("schema_version") != "model-registry-v1"
+        or not isinstance(registry.get("models"), list)
+    ):
+        raise ValueError("registry file must contain a model-registry-v1 models array")
+    return registry
+
+
+def _read_incremental_reports(paths: list[str]) -> dict[str, dict]:
+    reports = {}
+    for path in paths:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError(f"incremental evaluation report must be an object: {path}")
+        group = payload.get("feature_group")
+        if group not in {"fires", "traffic"}:
+            raise ValueError(f"incremental evaluation report has an unsupported group: {path}")
+        if group in reports:
+            raise ValueError(f"more than one incremental report supplied for {group}")
+        reports[group] = payload
+    return reports
+
+
+async def _run_model_validate(args: argparse.Namespace) -> int:
+    reports = _read_incremental_reports(args.incremental_report)
+    if args.register_db:
+        session = get_session_factory()()
+        try:
+            repository = SqlModelVersionRepository(session)
+            model = repository.get(args.model_id)
+            if model is None:
+                raise ValueError(
+                    f"model {args.model_id!r} does not exist in the database registry"
+                )
+            if model.status is ModelStatus.VALIDATED:
+                print(f"Model already validated: model_id={model.model_id}")
+                return 0
+            artifact = json.loads(Path(model.artifact_uri).read_text(encoding="utf-8"))
+            validated = validate_candidate(model, artifact, reports)
+            repository.set_status(
+                model.model_id, expected=model.status, status=validated.status
+            )
+        finally:
+            session.close()
+    else:
+        path = Path(args.registry)
+        registry = _load_local_registry(path)
+        matches = [row for row in registry["models"] if row.get("model_id") == args.model_id]
+        if len(matches) != 1:
+            raise ValueError(f"model {args.model_id!r} must exist exactly once in the registry")
+        model = model_from_registry_row(matches[0])
+        if model.status is ModelStatus.VALIDATED:
+            print(f"Model already validated: model_id={model.model_id}")
+            return 0
+        artifact = json.loads(Path(model.artifact_uri).read_text(encoding="utf-8"))
+        validated = validate_candidate(model, artifact, reports)
+        set_registry_model_status(registry, model.model_id, validated.status)
+        write_registry_atomic(path, registry)
+    print(f"Model validated for manual promotion: model_id={args.model_id}")
+    return 0
+
+
+async def _run_model_activate(args: argparse.Namespace, *, rollback: bool = False) -> int:
+    if args.register_db:
+        session = get_session_factory()()
+        try:
+            repository = SqlModelVersionRepository(session)
+            model = repository.get(args.model_id)
+            if model is None:
+                raise ValueError(
+                    f"model {args.model_id!r} does not exist in the database registry"
+                )
+            artifact = json.loads(Path(model.artifact_uri).read_text(encoding="utf-8"))
+            expected = ModelStatus.RETIRED if rollback else ModelStatus.VALIDATED
+            if model.status not in {expected, ModelStatus.PROMOTED}:
+                raise ValueError(
+                    f"{model.status.value} model cannot be "
+                    f"{'rolled back to' if rollback else 'promoted'}"
+                )
+            assert_model_can_be_activated(model, artifact)
+            repository.activate(model.model_id, allow_retired=rollback)
+        finally:
+            session.close()
+    else:
+        path = Path(args.registry)
+        registry = _load_local_registry(path)
+        activate_registry_model(registry, args.model_id, rollback=rollback)
+        write_registry_atomic(path, registry)
+    verb = "rollback complete" if rollback else "promotion complete"
+    print(f"Model {verb}: model_id={args.model_id}; previous active version retired")
+    return 0
+
+
+async def _run_model_promote(args: argparse.Namespace) -> int:
+    return await _run_model_activate(args)
+
+
+async def _run_model_rollback(args: argparse.Namespace) -> int:
+    return await _run_model_activate(args, rollback=True)
+
+
+async def _run_model_monitor(args: argparse.Namespace) -> int:
+    payload = json.loads(Path(args.input).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("monitor input must be a JSON object")
+    report = summarize_model_monitoring(payload)
+    changed = write_json(Path(args.out), report)
+    metrics = report["metrics"]
+    print(
+        f"Model monitor {'wrote' if changed else 'unchanged'}: model_id={report['model_id']} "
+        f"labels={report['coverage']['labelled_prediction_count']} "
+        f"MAE={metrics['mae_ugm3']} drift_alerts={len(report['drift_alerts'])} "
+        f"status={report['status']} auto_promoted=false path={args.out}"
+    )
+    return 0
+
+
 async def _run_demo_snapshot(args: argparse.Namespace) -> int:
     generator = ScenarioGenerator.from_manifest(
         args.profile,
@@ -581,6 +715,7 @@ async def _run_prediction_publish(args: argparse.Namespace) -> int:
     feature_run_id = args.feature_run_id
     run_id = args.run_id or f"prediction-{feature_run_id}"
     mode = DataMode(args.mode)
+    assert_live_snapshots_available(mode, snapshots)
 
     session = get_session_factory()()
     try:
@@ -799,6 +934,52 @@ def main(argv: list[str] | None = None) -> int:
     feature_eval_parser.add_argument("--ridge-alpha", type=float, default=1.0)
     feature_eval_parser.add_argument("--out", default="incremental-feature-report.json")
     feature_eval_parser.set_defaults(func=_run_evaluate_feature_group)
+
+    validate_parser = subparsers.add_parser(
+        "model-validate",
+        help="Validate one live candidate against its pinned evaluation and M5 ablations.",
+    )
+    validate_parser.add_argument("--model-id", required=True)
+    validate_parser.add_argument("--registry", default="models/registry.json")
+    validate_parser.add_argument(
+        "--incremental-report",
+        action="append",
+        default=[],
+        help="M5 fire/traffic incremental report; repeat for each feature group used.",
+    )
+    validate_parser.add_argument(
+        "--register-db", action="store_true", help="Operate on the Postgres model registry."
+    )
+    validate_parser.set_defaults(func=_run_model_validate)
+
+    promote_parser = subparsers.add_parser(
+        "model-promote", help="Promote a validated live artifact; retire the previous version."
+    )
+    promote_parser.add_argument("--model-id", required=True)
+    promote_parser.add_argument("--registry", default="models/registry.json")
+    promote_parser.add_argument(
+        "--register-db", action="store_true", help="Operate on the Postgres model registry."
+    )
+    promote_parser.set_defaults(func=_run_model_promote)
+
+    rollback_parser = subparsers.add_parser(
+        "model-rollback", help="Restore a retired artifact for its region and horizon."
+    )
+    rollback_parser.add_argument("--model-id", required=True)
+    rollback_parser.add_argument("--registry", default="models/registry.json")
+    rollback_parser.add_argument(
+        "--register-db", action="store_true", help="Operate on the Postgres model registry."
+    )
+    rollback_parser.set_defaults(func=_run_model_rollback)
+
+    monitor_parser = subparsers.add_parser(
+        "model-monitor", help="Summarize labelled prediction errors, coverage, and feature drift."
+    )
+    monitor_parser.add_argument(
+        "--input", required=True, help="A model-monitor-v1 JSON report input."
+    )
+    monitor_parser.add_argument("--out", default="model-monitor-report.json")
+    monitor_parser.set_defaults(func=_run_model_monitor)
 
     args = parser.parse_args(argv)
     logging.basicConfig(level=get_settings().log_level)

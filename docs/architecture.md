@@ -240,6 +240,16 @@ predictors against a control using the same observed-label temporal split and
 never promotes automatically. See [M5 ingestion and evaluation](M5_FIRES_AND_TRAFFIC.md)
 for feed fields and operator steps.
 
+**Model operations (M6):** `model-validate` checks a live candidate's immutable
+artifact digest and M3 held-out promotion gates; when fire/traffic features are
+used, matching M5 incremental reports are mandatory. `model-promote` and
+`model-rollback` explicitly switch the active region/horizon artifact while
+retaining the previous version. `model-monitor` summarizes labelled prediction
+errors, input coverage, feature missingness, and standardized feature drift.
+Drift prompts investigation only and never triggers automatic replacement.
+See [M6 operations](M6_OPERATIONS.md) for the offline workflow and monitoring
+input contract.
+
 **Demo-data fallback.** Every endpoint falls back to small, deterministic
 seed data (`app/services/demo_data.py`) whenever its repository query
 returns nothing — before the pipeline has ever run, or for a region/cell
