@@ -998,6 +998,8 @@ reports and by the web for the FIRMS layer.
 | `POST /api/v1/reports` | Store a citizen report of an active fire/burning event (kind, location, smoke slider 1-5, duration estimate, optional note); returns it with the H3 cell it snapped to. Idempotent on `client_report_id`. | web + app |
 | `GET /api/v1/reports` | Fire/burning reports within `FIRE_REPORT_MAX_AGE_HOURS` (the same window the fire gradient model trusts a report for) | web + app |
 | `GET /api/v1/fires?since_hours=&min_lat=&min_lon=&max_lat=&max_lon=` | NASA FIRMS detections the backend has ingested, worst FRP first, capped at 2000 | web |
+| `GET /api/v1/tiles/gibs/{layer}/{z}/{y}/{x}?date=` | One NASA GIBS WMTS tile, proxied and cached by the backend (`layer` is `truecolor` or `aod`) | web |
+| `GET /api/v1/tiles/no2/{z}/{y}/{x}` | One Sentinel-5P NO2 WMS GetMap tile, proxied with the credential held server-side (404 while `NO2_WMS_URL` is unset) | web |
 | `GET /api/v2/meta` | Run identity, mode, resolution and forecast anchors | web + app |
 | `GET /api/v2/grid/current?run_id=&resolution=&bbox` | Concentration, centroid, provenance and per-cell exposure | web + app |
 | `GET /api/v2/grid/forecast?hours=&run_id=&resolution=&bbox` | Published anchors and 15-minute interpolations | web + app |

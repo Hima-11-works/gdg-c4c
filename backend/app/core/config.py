@@ -134,6 +134,40 @@ class Settings(BaseSettings):
     # contacted unless a separate provider is deliberately added.
     traffic_stale_after_hours: float = Field(default=2.0, gt=0)
 
+    # --- Satellite raster tile proxy (GET /api/v1/tiles/*, app.services.tiles) ---
+    # The web map's raster overlays used to point straight at NASA GIBS and at
+    # a NO2 WMS endpoint configured in the browser. They now come through the
+    # backend, so the browser only ever talks to this API and any credential
+    # stays server-side.
+    #
+    # GIBS WMTS base for the raster overlays. Overridable so a mirror or a
+    # self-hosted copy can be used instead of NASA's public endpoint.
+    gibs_base_url: str = "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best"
+    # Sentinel-5P NO2 WMS GetMap endpoint (CDSE / Sentinel Hub, or a Google
+    # Earth Engine WMS app). Unset means GET /api/v1/tiles/no2/* answers 404
+    # and the web's "Industrial Emissions" toggle stays inert - it never draws
+    # invented heat in place of real NO2.
+    no2_wms_url: str | None = None
+    # WMS layer name to request. Providers differ: "NO2" for a plain CDSE
+    # layer, a project-scoped layer path for GEE.
+    no2_wms_layer: str = "NO2"
+    # SecretStr like every other provider credential, so it can't reach a log
+    # line or a repr(settings). Sent upstream as the `token` query parameter -
+    # the helper logs only the base URL, never the merged one, so it stays out
+    # of logs. If a provider wants a different parameter name (GEE uses
+    # `key=`), put the credential in no2_wms_url's own query string instead and
+    # leave this unset.
+    no2_wms_token: SecretStr | None = None
+    # One upstream tile fetch, matching the other adapters' *_TIMEOUT_SECONDS.
+    tile_timeout_seconds: float = Field(default=15.0, gt=0)
+    tile_max_retries: int = Field(default=2, ge=1, le=10)
+    # In-process tile cache (TTL + LRU, per process - each Vercel instance has
+    # its own). A pan re-requests the same tiles immediately and a GIBS daily
+    # composite is immutable for a given date, so this is the one upstream
+    # response worth holding on to. 0 disables it.
+    tile_cache_max_entries: int = Field(default=512, ge=0)
+    tile_cache_ttl_seconds: float = Field(default=3600.0, ge=0)
+
     # Weather is sampled at this coarser resolution and fanned out to every
     # H3_RESOLUTION cell within each sampled cell — one API call covers many
     # fine cells, since weather varies far less over a city block than PM2.5

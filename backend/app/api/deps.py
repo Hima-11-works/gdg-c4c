@@ -15,6 +15,7 @@ from __future__ import annotations
 from fastapi import Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.db.repositories import (
     SqlAlertRepository,
     SqlFireHotspotRepository,
@@ -34,6 +35,7 @@ from app.services.grid import GridService
 from app.services.prediction_queries import PredictionQueryService
 from app.services.reports import FireReportService
 from app.services.sensors import SensorService
+from app.services.tiles import TileService
 from app.services.weather import WeatherService
 
 
@@ -97,3 +99,9 @@ def get_fire_report_service(session: Session = Depends(get_db)) -> FireReportSer
 
 def get_fire_hotspot_service(session: Session = Depends(get_db)) -> FireHotspotService:
     return FireHotspotService(SqlFireHotspotRepository(session))
+
+
+def get_tile_service() -> TileService:
+    """No session: the tile proxy reads settings and one upstream HTTP call,
+    never the database."""
+    return TileService(get_settings())

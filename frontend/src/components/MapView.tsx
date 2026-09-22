@@ -41,12 +41,14 @@ import type { ActiveFire } from '../lib/activeFires'
 import {
   GIBS_ATTRIBUTION,
   GIBS_AOD_ATTRIBUTION,
+  GIBS_AOD_MAX_ZOOM,
   GIBS_AOD_OPACITY,
   GIBS_MAX_ZOOM,
   GIBS_TILE_SIZE,
   NO2_ATTRIBUTION,
   gibsAerosolTileUrl,
   gibsTrueColorTileUrl,
+  no2Available,
   no2TileUrl,
 } from '../lib/satelliteImagery'
 import {
@@ -626,6 +628,10 @@ export function MapView({
   // out-of-scope click guard would never fire.
   const scopeRef = useRef(state.scope)
   const stateBoundariesRef = useRef(stateBoundaries)
+  // Same idea for the NO2 layer's initial visibility: it is added
+  // asynchronously (only once the backend confirms an endpoint is
+  // configured), by which time the toggle effect has already run.
+  const emissionsRef = useRef(state.showIndustrialEmissions)
   // The info popup currently on the map (a thermal anomaly or a freight node)
   // together with the key identifying its feature, so clicking that same
   // feature again closes it rather than stacking an identical popup, and so
@@ -652,7 +658,8 @@ export function MapView({
   useEffect(() => {
     scopeRef.current = state.scope
     stateBoundariesRef.current = stateBoundaries
-  }, [state.scope, stateBoundaries])
+    emissionsRef.current = state.showIndustrialEmissions
+  }, [state.scope, stateBoundaries, state.showIndustrialEmissions])
 
   // Escape closes whatever is open on the map: the info popup and the cell
   // drawer. On window rather than the canvas so it works wherever focus is,
@@ -739,13 +746,15 @@ export function MapView({
           })
 
           // Seasonal smog — VIIRS Deep Blue AOD at 0.6 opacity, so the smog
-          // reads but the hex grid underneath stays legible. Same GIBS
-          // conventions as True Color (overzoom-capable, no fade-in).
+          // reads but the hex grid underneath stays legible. Same proxy
+          // conventions as True Color, but its own (coarser) zoom ceiling:
+          // this product only publishes a level-6 pyramid, and asking for
+          // more is a 400 upstream.
           map!.addSource(SOURCE_AOD, {
             type: 'raster',
             tiles: [gibsAerosolTileUrl()],
             tileSize: GIBS_TILE_SIZE,
-            maxzoom: GIBS_MAX_ZOOM,
+            maxzoom: GIBS_AOD_MAX_ZOOM,
             attribution: GIBS_AOD_ATTRIBUTION,
           })
           map!.addLayer({
@@ -756,27 +765,42 @@ export function MapView({
             paint: { 'raster-opacity': GIBS_AOD_OPACITY, 'raster-fade-duration': 0 },
           })
 
-          // Industrial emissions — Sentinel-5P NO2 over WMS. Only added when
-          // a GetMap endpoint is configured (VITE_NO2_WMS_URL); otherwise the
-          // toggle stays inert rather than drawing invented heat. The source
-          // is skipped entirely so MapLibre never requests a URL that can't
-          // resolve, and the toggle effect below no-ops on the absent layer.
+          // Industrial emissions - Sentinel-5P NO2, proxied through the
+          // backend (GET /api/v1/tiles/no2/*) so the WMS endpoint and its token
+          // stay server-side. The proxy answers 404 while NO2_WMS_URL is unset,
+          // so ask once whether it exists and only then add the source - an
+          // unconfigured deployment keeps the toggle inert instead of firing a
+          // screenful of 404s. This resolves after the synchronous block below,
+          // so the layer is inserted *before* the India outline by id: without
+          // that it would land on top of the H3 grid rather than under it.
           const no2Tiles = no2TileUrl()
-          if (no2Tiles !== null) {
+          void no2Available().then((available) => {
+            if (!available) return
             map!.addSource(SOURCE_NO2, {
               type: 'raster',
               tiles: [no2Tiles],
               tileSize: GIBS_TILE_SIZE,
               attribution: NO2_ATTRIBUTION,
             })
-            map!.addLayer({
-              id: LAYER_NO2,
-              type: 'raster',
-              source: SOURCE_NO2,
-              layout: { visibility: 'none' },
-              paint: { 'raster-opacity': NO2_OPACITY, 'raster-fade-duration': 0 },
-            })
-          }
+            map!.addLayer(
+              {
+                id: LAYER_NO2,
+                type: 'raster',
+                source: SOURCE_NO2,
+                layout: { visibility: 'none' },
+                paint: { 'raster-opacity': NO2_OPACITY, 'raster-fade-duration': 0 },
+              },
+              LAYER_INDIA_OUTLINE_FILL,
+            )
+            // The toggle effect has already run by now (it skips a layer that
+            // does not exist yet), so apply the current setting here - the ref
+            // holds the live value, not the one this closure captured at load.
+            map!.setLayoutProperty(
+              LAYER_NO2,
+              'visibility',
+              emissionsRef.current ? 'visible' : 'none',
+            )
+          })
 
           // India country outline — dissolved from geoBoundaries ADM1.
           map!.addSource(SOURCE_INDIA_OUTLINE, { type: 'geojson', data: INDIA_OUTLINE_URL })
