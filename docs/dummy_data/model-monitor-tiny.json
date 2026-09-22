@@ -1,0 +1,52 @@
+{
+  "schema_version": "model-monitor-v1",
+  "model_id": "demo-model-1h",
+  "region": "delhi-ncr",
+  "horizon_hours": 1,
+  "data_mode": "demo",
+  "target_kind": "synthetic",
+  "synthetic_only": true,
+  "window": {
+    "start": "2026-01-10T10:00:00Z",
+    "end": "2026-01-10T11:00:00Z"
+  },
+  "expected_count": 3,
+  "reference_features": {
+    "rain_1h_mm": {
+      "mean": 0.8,
+      "stddev": 1.2
+    },
+    "wind_u_ms": {
+      "mean": -0.4,
+      "stddev": 1.5
+    },
+    "traffic_congestion_ratio": {
+      "mean": 0.62,
+      "stddev": 0.18
+    }
+  },
+  "rows": [
+    {
+      "predicted_pm25": 78,
+      "observed_pm25": 84,
+      "lower_pm25": 60,
+      "upper_pm25": 96,
+      "features": {
+        "rain_1h_mm": 0,
+        "wind_u_ms": -0.8,
+        "traffic_congestion_ratio": 0.7
+      }
+    },
+    {
+      "predicted_pm25": 112,
+      "observed_pm25": 104,
+      "lower_pm25": 91,
+      "upper_pm25": 133,
+      "features": {
+        "rain_1h_mm": null,
+        "wind_u_ms": -1.2,
+        "traffic_congestion_ratio": 0.91
+      }
+    }
+  ]
+}

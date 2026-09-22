@@ -24,7 +24,7 @@ final currentAirQualityProvider = FutureProvider<AirQualityReading>((ref) async 
 final forecastProvider = FutureProvider<List<ForecastPoint>>((ref) async {
   final provider = ref.watch(pollutionDataProvider);
   final location = await ref.watch(currentLocationProvider.future);
-  return provider.getForecast(location, const Duration(hours: 12));
+  return provider.getForecast(location, const Duration(hours: 6));
 });
 
 final nearbyAreasProvider = FutureProvider<List<NearbyArea>>((ref) async {

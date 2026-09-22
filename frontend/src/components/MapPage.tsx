@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { fetchGridCurrent, fetchReports, fetchWeather } from '../lib/api'
+import { fetchGridCurrent, fetchPublishedMeta, fetchReports, fetchWeather } from '../lib/api'
 import { useApiResource } from '../hooks/useApiResource'
 import {
   ensureForecastFrame,
@@ -25,6 +25,7 @@ import type { LodQuery } from '../lib/api'
 import type { ForecastOut } from '../lib/types'
 
 const POLL_INTERVAL_MS = 60_000
+const FALLBACK_SUPPORTED_HOURS = [1, 3, 6]
 
 export function MapPage() {
   const { state } = useMapUi()
@@ -47,12 +48,28 @@ export function MapPage() {
   // Padded by one cell radius (see lib/lod.ts's lodQueryFor) so cells that
   // straddle the viewport edge render instead of dropping out.
   const query: LodQuery = lodQueryFor(lod, bbox)
-  const queryKey = lodKey(query)
-
-  const currentGrid = useApiResource(() => fetchGridCurrent(query), [queryKey], {
-    pollIntervalMs: POLL_INTERVAL_MS,
-    enabled: viewportReady,
+  const viewKey = lodKey(query)
+  const publishedMeta = useApiResource(fetchPublishedMeta, [], {
+    pollIntervalMs: 5 * 60 * 1000,
   })
+  const supportedHours =
+    publishedMeta.resource.status === 'success'
+      ? publishedMeta.resource.data.supported_horizons_hours
+      : FALLBACK_SUPPORTED_HOURS
+  const publishedRunId =
+    publishedMeta.resource.status === 'success'
+      ? publishedMeta.resource.data.latest_run_id
+      : undefined
+
+  const currentGrid = useApiResource(
+    () => fetchGridCurrent(query, publishedRunId),
+    [viewKey, publishedRunId],
+    {
+      pollIntervalMs: POLL_INTERVAL_MS,
+      enabled: viewportReady && publishedRunId !== undefined,
+    },
+  )
+  const queryKey = `${viewKey}:${publishedRunId ?? 'pending'}:${supportedHours.join(',')}`
 
   const isNow = forecastMinutes === 0
 
@@ -61,22 +78,35 @@ export function MapPage() {
   // playback — no loading flip, no re-fetch, no jitter. Polling is NOT
   // enabled here (the store handles freshness via prefetch; a 60s poll
   // during playback would churn every cached frame).
-  const frame = useForecastFrame(forecastMinutes, queryKey, query, viewportReady && !isNow)
+  const frame = useForecastFrame(
+    forecastMinutes,
+    queryKey,
+    query,
+    viewportReady && !isNow && publishedRunId !== undefined,
+    publishedRunId,
+  )
   const forecastGrid = {
     resource: {
       status: frame.status,
       data: frame.data,
       isDemo: frame.isDemo,
+      runId: frame.runId,
+      mode: frame.mode,
+      generatedAt: frame.generatedAt,
       message: frame.message,
     } as AsyncResource<ForecastOut[]>,
-    refetch: () => ensureForecastFrame(forecastMinutes, queryKey, query),
+    refetch: () => ensureForecastFrame(forecastMinutes, queryKey, query, publishedRunId),
   }
 
   const weatherQuery: LodQuery = { ...query, resolution: weatherResolutionForLod(lod) }
-  const weather = useApiResource(() => fetchWeather(weatherQuery), [lodKey(weatherQuery)], {
-    pollIntervalMs: POLL_INTERVAL_MS,
-    enabled: viewportReady,
-  })
+  const weather = useApiResource(
+    () => fetchWeather(weatherQuery, publishedRunId),
+    [lodKey(weatherQuery), publishedRunId],
+    {
+      pollIntervalMs: POLL_INTERVAL_MS,
+      enabled: viewportReady && publishedRunId !== undefined,
+    },
+  )
 
   // Citizen fire/burning reports (POST/GET /api/v1/reports). Fetched once
   // here and shared by the map pins and the hex drawer, so the two can't
@@ -98,13 +128,14 @@ export function MapPage() {
     minutesRef.current = forecastMinutes
   })
   useEffect(() => {
-    if (!viewportReady) return
-    warmForecastWindow(queryKey, queryRef.current, minutesRef.current)
+    if (!viewportReady || publishedRunId === undefined) return
+    warmForecastWindow(queryKey, queryRef.current, minutesRef.current, supportedHours, publishedRunId)
     // Only re-warm on a view change (queryKey), not on every playback tick.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queryKey, viewportReady])
+  }, [queryKey, viewportReady, supportedHours, publishedRunId])
 
   const warming = useForecastWarming(queryKey)
+  const isInterpolated = forecastMinutes > 0 && !supportedHours.includes(forecastMinutes / 60)
 
   const activeBaseLayer = isNow ? currentGrid : forecastGrid
   const activeLabel = isNow
@@ -119,6 +150,7 @@ export function MapPage() {
           resource={activeBaseLayer.resource}
           onRetry={activeBaseLayer.refetch}
           warming={warming}
+          interpolated={!isNow && isInterpolated}
         />
       </div>
 
@@ -153,7 +185,7 @@ export function MapPage() {
       <div className="overlay overlay-top-right">
         <div className="top-right-row">
           <SearchBar />
-          <AlertsPanel />
+          <AlertsPanel publishedRunId={publishedRunId} />
         </div>
         <FederatedStatusPill />
       </div>
@@ -164,10 +196,13 @@ export function MapPage() {
 
       <div className="overlay overlay-bottom-center">
         <ScopeChip />
-        <TimelineControl />
+        <TimelineControl
+          publishedRunId={publishedRunId}
+          supportedHours={supportedHours}
+        />
       </div>
 
-      <CellDetailPanel citizenReports={reports.resource} />
+      <CellDetailPanel publishedRunId={publishedRunId} citizenReports={reports.resource} />
     </div>
   )
 }

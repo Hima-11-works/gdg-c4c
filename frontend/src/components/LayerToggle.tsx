@@ -20,6 +20,26 @@ export function LayerToggle() {
       label={state.settingsOpen ? 'Hide settings and layers' : 'Show settings and layers'}
     >
       <div className="panel layer-toggle">
+        <div className="view-mode" role="group" aria-label="Pollution metric">
+          <button
+            type="button"
+            className={`view-mode-option ${state.mapMetric === 'concentration' ? 'active' : ''}`}
+            aria-pressed={state.mapMetric === 'concentration'}
+            onClick={() => dispatch({ type: 'SET_MAP_METRIC', metric: 'concentration' })}
+          >
+            PM2.5
+          </button>
+          <button
+            type="button"
+            className={`view-mode-option ${state.mapMetric === 'populationExposure' ? 'active' : ''}`}
+            aria-pressed={state.mapMetric === 'populationExposure'}
+            title="Population-weighted PM2.5; cells without a population estimate are unfilled."
+            onClick={() => dispatch({ type: 'SET_MAP_METRIC', metric: 'populationExposure' })}
+          >
+            Exposure
+          </button>
+        </div>
+
         <div className="view-mode" role="group" aria-label="Pollution rendering">
           {VIEW_MODES.map((option) => (
             <button

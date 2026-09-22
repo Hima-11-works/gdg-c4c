@@ -20,6 +20,7 @@ from app.db.repositories import (
     SqlFireReportRepository,
     SqlForecastRepository,
     SqlGridStateRepository,
+    SqlPredictionPublicationRepository,
     SqlSensorReadingRepository,
     SqlWeatherReadingRepository,
 )
@@ -31,6 +32,7 @@ from app.services.grid import GridService
 from app.services.reports import FireReportService
 from app.services.sensors import SensorService
 from app.services.weather import WeatherService
+from app.services.prediction_queries import PredictionQueryService
 
 
 def get_bbox_query(
@@ -77,6 +79,10 @@ def get_cell_service(session: Session = Depends(get_db)) -> CellService:
         SqlForecastRepository(session),
         SqlWeatherReadingRepository(session),
     )
+
+
+def get_prediction_query_service(session: Session = Depends(get_db)) -> PredictionQueryService:
+    return PredictionQueryService(SqlPredictionPublicationRepository(session))
 
 
 def get_alert_service(session: Session = Depends(get_db)) -> AlertService:

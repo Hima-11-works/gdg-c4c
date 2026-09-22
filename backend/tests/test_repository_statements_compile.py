@@ -12,11 +12,18 @@ import h3
 from sqlalchemy.dialects import postgresql
 
 from app.db.repositories import alert as alert_repo
+from app.db.repositories import dataset_version as dataset_repo
+from app.db.repositories import feature_snapshot as feature_repo
 from app.db.repositories import fire_report as fire_report_repo
 from app.db.repositories import forecast as forecast_repo
 from app.db.repositories import grid_state as grid_state_repo
+from app.db.repositories import ingestion_run as run_repo
+from app.db.repositories import model_version as model_version_repo
 from app.db.repositories import sensor_reading as sensor_reading_repo
 from app.db.repositories import weather_reading as weather_reading_repo
+from app.domain.features import CellFeatureVector, FeatureSnapshot, InputKind
+from app.domain.scenario import DatasetVersion, IngestionRun, IngestionRunStatus
+from app.domain.training import ModelStatus, ModelVersion
 from app.domain.types import (
     Alert,
     AlertSeverity,
@@ -225,3 +232,86 @@ def test_fire_report_statements() -> None:
     assert "FROM fire_report" in _sql(fire_report_repo._list_active_stmt(NOW))
     by_client = _sql(fire_report_repo._by_client_report_id_stmt("client-123"))
     assert "client_report_id" in by_client
+
+
+def test_environmental_metadata_statements() -> None:
+    dataset = DatasetVersion(
+        dataset_id="synthetic-v1",
+        source="Air Health",
+        product="scenario",
+        version="m1-1",
+        kind=InputKind.SYNTHETIC,
+        region="delhi-ncr",
+        attribution="Air Health synthetic scenario",
+        license="test fixture",
+        available_at=NOW,
+    )
+    dataset_sql = _sql(dataset_repo._upsert_stmt(dataset))
+    assert "INSERT INTO dataset_version" in dataset_sql
+    assert "ON CONFLICT" in dataset_sql
+    assert "DO UPDATE SET" in dataset_sql
+
+    run = IngestionRun(
+        run_id="run-1",
+        dataset_id=dataset.dataset_id,
+        started_at=NOW,
+        finished_at=LATER,
+        fetched_at=LATER,
+        status=IngestionRunStatus.SUCCEEDED,
+        simulation_id="tiny-ci:winter_stagnation:42",
+    )
+    run_sql, params = _sql_and_params(run_repo._upsert_stmt(run))
+    assert "INSERT INTO ingestion_run" in run_sql
+    assert "ON CONFLICT" in run_sql
+    assert "DO UPDATE SET" in run_sql
+    assert params["errors"] == []
+    assert params["metrics"] == {}
+
+
+def test_feature_snapshot_statements() -> None:
+    snapshot = FeatureSnapshot(
+        h3_cell=CELL,
+        issued_at=NOW,
+        valid_at=LATER,
+        horizon_hours=3,
+        feature_schema_version="environmental-v1",
+        vector=CellFeatureVector(current_pm25=18.0, rain_1h_mm=0.0),
+    )
+    sql, params = _sql_and_params(feature_repo._upsert_stmt("run-1", [snapshot]))
+    assert "INSERT INTO cell_feature_snapshot" in sql
+    assert "ON CONFLICT" in sql
+    assert "ON CONFLICT (run_id, h3_cell, horizon_hours)" in sql
+    assert any(
+        isinstance(value, dict) and value.get("current_pm25") == 18.0
+        for value in params.values()
+    )
+    assert "FROM cell_feature_snapshot" in _sql(feature_repo._list_for_run_stmt("run-1"))
+
+
+def test_model_version_statements() -> None:
+    version = ModelVersion(
+        model_id="candidate-1h",
+        artifact_uri="models/candidate.json",
+        artifact_sha256="a" * 64,
+        feature_schema_version="environmental-v1",
+        feature_names=("rain_1h_mm", "wind_speed_ms"),
+        trained_at=NOW,
+        training_start=NOW,
+        training_end=LATER,
+        region="delhi-ncr",
+        horizon_hours=1.0,
+        metrics={"mae": 12.3},
+        synthetic_only=True,
+        status=ModelStatus.CANDIDATE,
+    )
+    upsert = _sql(model_version_repo._upsert_stmt(version))
+
+    assert "INSERT INTO model_version" in upsert
+    assert "ON CONFLICT (id) DO UPDATE" in upsert
+    assert "feature_schema_version" in upsert
+    assert "synthetic_only" in upsert
+    assert "FROM model_version" in _sql(model_version_repo._get_stmt("candidate-1h"))
+    listing = _sql(model_version_repo._list_stmt("delhi-ncr", 1.0, "candidate"))
+    assert "model_version.region = 'delhi-ncr'" in listing
+    assert "model_version.horizon_hours = 1.0" in listing
+    assert "model_version.status = 'candidate'" in listing

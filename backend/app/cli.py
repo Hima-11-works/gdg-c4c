@@ -4,6 +4,8 @@
     python -m app.cli ingest-weather [--min-lat --min-lon --max-lat --max-lon]
     python -m app.cli export-grid [--out grid.geojson] [--min-lat ...]
     python -m app.cli forecast
+    python -m app.cli demo-generate --profile tiny-ci --out demo.json
+    python -m app.cli demo-replay --profile regional-demo --at 2025-01-15T12:00:00Z
 
 Runs one ingestion pass against the bounding box from .env (overridable
 per-call with the flags above) and prints a summary. This is a manual
@@ -27,6 +29,7 @@ import asyncio
 import json
 import logging
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -34,18 +37,60 @@ import httpx
 
 from app.core.config import get_settings
 from app.db.repositories import (
+    SqlDatasetVersionRepository,
+    SqlFeatureSnapshotRepository,
+    SqlFireHotspotRepository,
     SqlForecastRepository,
     SqlGridStateRepository,
+    SqlIngestionRunRepository,
+    SqlModelVersionRepository,
+    SqlPredictionPublicationRepository,
     SqlSensorReadingRepository,
+    SqlTrafficObservationRepository,
     SqlWeatherReadingRepository,
 )
 from app.db.session import get_session_factory
+from app.domain.features import DataMode, WeatherFeature
+from app.domain.training import ModelStatus, ModelVersion
 from app.domain.types import BoundingBox
+from app.ingestion.demo_scenarios import ScenarioGenerator
 from app.ingestion.factory import build_pollution_provider, build_weather_provider
+from app.ingestion.firms import FirmsProvider
 from app.services.dispersion import DeterministicH3DispersionModel
+from app.services.environmental_ingestion import EnvironmentalIngestionService
+from app.services.features import (
+    FeatureBuilder,
+    feature_snapshot_from_dict,
+    feature_snapshot_to_dict,
+)
 from app.services.forecasting import ForecastingResult, ForecastingService
 from app.services.geospatial import GeospatialService
 from app.services.ingestion import IngestionResult, SensorIngestionService, WeatherIngestionService
+from app.services.model_operations import (
+    activate_registry_model,
+    assert_model_can_be_activated,
+    model_from_registry_row,
+    set_registry_model_status,
+    summarize_model_monitoring,
+    validate_candidate,
+    write_registry_atomic,
+)
+from app.services.model_training import (
+    evaluate_artifact,
+    evaluate_incremental_feature_group,
+    train_candidate,
+)
+from app.services.prediction_publication import (
+    PredictionPublicationService,
+    assert_live_snapshots_available,
+)
+from app.services.training_data import (
+    export_training_dataset,
+    generate_synthetic_training_dataset,
+    parse_utc,
+    read_records,
+    write_json,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +164,93 @@ async def _run_ingest_weather(args: argparse.Namespace) -> int:
     return _report(result)
 
 
+async def _run_ingest_fires(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    if settings.firms_map_key is None:
+        print(
+            "FIRMS_MAP_KEY is not set; request a free NASA FIRMS MAP_KEY and configure it in .env.",
+            file=sys.stderr,
+        )
+        return 1
+    session = get_session_factory()()
+    try:
+        async with httpx.AsyncClient() as client:
+            provider = FirmsProvider(
+                client,
+                map_key=settings.firms_map_key.get_secret_value(),
+                source=settings.firms_source,
+                base_url=settings.firms_base_url,
+                timeout_seconds=settings.firms_timeout_seconds,
+                max_retries=settings.firms_max_retries,
+                h3_resolution=settings.h3_resolution,
+                stale_after_hours=settings.firms_stale_after_hours,
+            )
+            service = EnvironmentalIngestionService(
+                fire_provider=provider,
+                fire_repository=SqlFireHotspotRepository(session),
+                traffic_repository=SqlTrafficObservationRepository(session),
+                dataset_repository=SqlDatasetVersionRepository(session),
+                run_repository=SqlIngestionRunRepository(session),
+            )
+            result = await service.ingest_firms(
+                _bbox_from_args(args),
+                day_range=args.days,
+                region=args.region,
+                source=settings.firms_source,
+                stale_after_hours=settings.firms_stale_after_hours,
+            )
+    finally:
+        session.close()
+    print(
+        "FIRMS ingestion "
+        f"{'complete' if result.succeeded else 'failed'}: run={result.run.run_id} "
+        f"fetched={result.run.metrics.get('fetched_records', 0)} saved={result.saved} "
+        f"duplicates={result.skipped_duplicates} stale={result.run.metrics.get('stale_records', 0)} "
+        f"complete_query={result.run.metrics.get('query_complete', False)}"
+    )
+    for error in result.run.errors:
+        print(f"  {error}", file=sys.stderr)
+    return 0 if result.succeeded else 1
+
+
+async def _run_ingest_traffic(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    payload = Path(args.input).read_text(encoding="utf-8")
+    session = get_session_factory()()
+    try:
+        service = EnvironmentalIngestionService(
+            fire_provider=None,  # This command imports only the supplied traffic feed.
+            fire_repository=SqlFireHotspotRepository(session),
+            traffic_repository=SqlTrafficObservationRepository(session),
+            dataset_repository=SqlDatasetVersionRepository(session),
+            run_repository=SqlIngestionRunRepository(session),
+        )
+        result = service.import_traffic_jsonl(
+            payload,
+            source=args.source,
+            product=args.product,
+            version=args.version,
+            region=args.region,
+            attribution=args.attribution,
+            license=args.license,
+            stale_after_hours=settings.traffic_stale_after_hours,
+            h3_resolution=settings.h3_resolution,
+        )
+    finally:
+        session.close()
+    print(
+        "Traffic import "
+        f"{'complete' if result.succeeded else 'failed'}: run={result.run.run_id} "
+        f"samples={result.run.metrics.get('sample_count', 0)} saved={result.saved} "
+        f"duplicates={result.skipped_duplicates} "
+        f"stale={result.run.metrics.get('stale_records', 0)} "
+        f"coverage={result.run.metrics.get('mean_sampled_road_coverage_fraction', 'unknown')}"
+    )
+    for error in result.run.errors:
+        print(f"  {error}", file=sys.stderr)
+    return 0 if result.succeeded else 1
+
+
 async def _run_export_grid(args: argparse.Namespace) -> int:
     settings = get_settings()
     bbox = _bbox_from_args(args)
@@ -178,6 +310,494 @@ async def _run_forecast(args: argparse.Namespace) -> int:
     return _report_forecast(result)
 
 
+def _parse_utc_argument(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+        raise ValueError("time must be an RFC 3339 UTC timestamp, for example 2025-01-15T12:00:00Z")
+    return parsed.astimezone(UTC)
+
+
+def _parse_utc_date_boundary(value: str) -> datetime:
+    """Accept a UTC date or timestamp for inclusive-start/exclusive-end filters."""
+
+    if len(value) == 10:
+        value = f"{value}T00:00:00Z"
+    return parse_utc(value)
+
+
+async def _run_training_export(args: argparse.Namespace) -> int:
+    mode = DataMode(args.mode)
+    records = read_records(Path(args.input))
+    dataset = export_training_dataset(
+        records,
+        mode=mode,
+        start=_parse_utc_date_boundary(args.start) if args.start else None,
+        end=_parse_utc_date_boundary(args.end) if args.end else None,
+    )
+    changed = write_json(Path(args.out), dataset)
+    print(
+        f"Training export {'wrote' if changed else 'unchanged'}: mode={mode.value} "
+        f"examples={dataset['example_count']} stations={dataset['station_count']} "
+        f"path={args.out}"
+    )
+    return 0
+
+
+async def _run_training_smoke_data(args: argparse.Namespace) -> int:
+    dataset = generate_synthetic_training_dataset(
+        hours=args.hours,
+        station_count=args.stations,
+        anchor_utc=_parse_utc_argument(args.anchor),
+    )
+    changed = write_json(Path(args.out), dataset)
+    print(
+        f"Synthetic training data {'wrote' if changed else 'unchanged'}: "
+        f"examples={dataset['example_count']} stations={dataset['station_count']} "
+        f"path={args.out}; not for scientific validation"
+    )
+    return 0
+
+
+def _registry_rows(artifact: dict, artifact_path: Path) -> list[ModelVersion]:
+    trained_at = datetime.now(UTC)
+    versions = []
+    for horizon, model in sorted(artifact["models"].items(), key=lambda item: float(item[0])):
+        training_range = artifact["training_ranges_by_horizon"][horizon]
+        versions.append(
+            ModelVersion(
+                model_id=f"{artifact['artifact_sha256'][:40]}-h{horizon.replace('.', '_')}",
+                artifact_uri=str(artifact_path),
+                artifact_sha256=artifact["artifact_sha256"],
+                feature_schema_version=artifact["feature_schema_version"],
+                feature_names=tuple(model["feature_names"]),
+                trained_at=trained_at,
+                training_start=parse_utc(training_range["start"]),
+                training_end=parse_utc(training_range["end"]),
+                region=artifact["region"],
+                horizon_hours=float(horizon),
+                metrics=artifact["evaluation"][horizon]["temporal"]["metrics"],
+                synthetic_only=artifact["synthetic_only"],
+                status=ModelStatus.CANDIDATE,
+            )
+        )
+    return versions
+
+
+async def _run_train(args: argparse.Namespace) -> int:
+    dataset_path = Path(args.dataset)
+    dataset = json.loads(dataset_path.read_text(encoding="utf-8"))
+    if not isinstance(dataset, dict) or dataset.get("schema_version") != "training-dataset-v1":
+        raise ValueError("--dataset must be a training-dataset-v1 manifest from training-export")
+    artifact = train_candidate(
+        dataset,
+        ridge_alpha=args.ridge_alpha,
+        allow_synthetic=args.allow_synthetic,
+    )
+    artifact_dir = Path(args.artifact_dir)
+    artifact_path = artifact_dir / f"{artifact['artifact_sha256']}.json"
+    if artifact_path.exists():
+        existing_artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+        evaluate_artifact(existing_artifact, dataset)
+        if existing_artifact != artifact:
+            raise ValueError("existing artifact at the content-addressed path is not identical")
+    else:
+        write_json(artifact_path, artifact)
+
+    versions = _registry_rows(artifact, artifact_path)
+    registry_path = Path(args.registry)
+    if registry_path.exists():
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        if not isinstance(registry, dict) or not isinstance(registry.get("models"), list):
+            raise ValueError("registry file must contain a models array")
+    else:
+        registry = {"schema_version": "model-registry-v1", "models": []}
+    by_id = {row["model_id"]: row for row in registry["models"]}
+    for version in versions:
+        existing = by_id.get(version.model_id)
+        if existing is not None:
+            if existing.get("artifact_sha256") != version.artifact_sha256:
+                raise ValueError(f"registry model id collision: {version.model_id}")
+            continue
+        by_id[version.model_id] = {
+            "model_id": version.model_id,
+            "artifact_uri": version.artifact_uri,
+            "artifact_sha256": version.artifact_sha256,
+            "feature_schema_version": version.feature_schema_version,
+            "feature_names": list(version.feature_names),
+            "trained_at": version.trained_at.isoformat().replace("+00:00", "Z"),
+            "training_start": version.training_start.isoformat().replace("+00:00", "Z"),
+            "training_end": version.training_end.isoformat().replace("+00:00", "Z"),
+            "region": version.region,
+            "horizon_hours": version.horizon_hours,
+            "metrics": dict(version.metrics),
+            "synthetic_only": version.synthetic_only,
+            "status": version.status.value,
+        }
+    registry["models"] = [by_id[key] for key in sorted(by_id)]
+    write_json(registry_path, registry)
+
+    if args.register_db:
+        session = get_session_factory()()
+        try:
+            repository = SqlModelVersionRepository(session)
+            for version in versions:
+                existing = repository.get(version.model_id)
+                if existing is not None:
+                    if existing.artifact_sha256 != version.artifact_sha256:
+                        raise ValueError(f"registry model id collision: {version.model_id}")
+                    continue
+                repository.upsert(version)
+        finally:
+            session.close()
+    print(
+        f"Candidate {'synthetic-only ' if artifact['synthetic_only'] else ''}training complete: "
+        f"sha256={artifact['artifact_sha256']} horizons={','.join(artifact['models'])} "
+        f"artifact={artifact_path} registry={registry_path}"
+    )
+    return 0
+
+
+async def _run_evaluate(args: argparse.Namespace) -> int:
+    artifact = json.loads(Path(args.model).read_text(encoding="utf-8"))
+    dataset = json.loads(Path(args.split).read_text(encoding="utf-8"))
+    report = evaluate_artifact(artifact, dataset)
+    changed = write_json(Path(args.out), report)
+    print(
+        f"Evaluation {'wrote' if changed else 'unchanged'}: sha256={report['artifact_sha256']} "
+        f"horizons={len(report['horizons'])} path={args.out}"
+    )
+    return 0
+
+
+async def _run_evaluate_feature_group(args: argparse.Namespace) -> int:
+    dataset = json.loads(Path(args.dataset).read_text(encoding="utf-8"))
+    report = evaluate_incremental_feature_group(
+        dataset,
+        group=args.group,
+        as_of_verified=args.as_of_verified,
+        ridge_alpha=args.ridge_alpha,
+    )
+    changed = write_json(Path(args.out), report)
+    improved = sum(
+        bool(item.get("mae_improved"))
+        for item in report["horizons"].values()
+        if item.get("supported")
+    )
+    print(
+        f"Incremental {args.group} evaluation {'wrote' if changed else 'unchanged'}: "
+        f"horizons={len(report['horizons'])} MAE_improved={improved} "
+        f"auto_promoted=false path={args.out}"
+    )
+    return 0
+
+
+def _load_local_registry(path: Path) -> dict:
+    if not path.is_file():
+        raise ValueError(f"model registry does not exist: {path}")
+    registry = json.loads(path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(registry, dict)
+        or registry.get("schema_version") != "model-registry-v1"
+        or not isinstance(registry.get("models"), list)
+    ):
+        raise ValueError("registry file must contain a model-registry-v1 models array")
+    return registry
+
+
+def _read_incremental_reports(paths: list[str]) -> dict[str, dict]:
+    reports = {}
+    for path in paths:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError(f"incremental evaluation report must be an object: {path}")
+        group = payload.get("feature_group")
+        if group not in {"fires", "traffic"}:
+            raise ValueError(f"incremental evaluation report has an unsupported group: {path}")
+        if group in reports:
+            raise ValueError(f"more than one incremental report supplied for {group}")
+        reports[group] = payload
+    return reports
+
+
+async def _run_model_validate(args: argparse.Namespace) -> int:
+    reports = _read_incremental_reports(args.incremental_report)
+    if args.register_db:
+        session = get_session_factory()()
+        try:
+            repository = SqlModelVersionRepository(session)
+            model = repository.get(args.model_id)
+            if model is None:
+                raise ValueError(
+                    f"model {args.model_id!r} does not exist in the database registry"
+                )
+            if model.status is ModelStatus.VALIDATED:
+                print(f"Model already validated: model_id={model.model_id}")
+                return 0
+            artifact = json.loads(Path(model.artifact_uri).read_text(encoding="utf-8"))
+            validated = validate_candidate(model, artifact, reports)
+            repository.set_status(
+                model.model_id, expected=model.status, status=validated.status
+            )
+        finally:
+            session.close()
+    else:
+        path = Path(args.registry)
+        registry = _load_local_registry(path)
+        matches = [row for row in registry["models"] if row.get("model_id") == args.model_id]
+        if len(matches) != 1:
+            raise ValueError(f"model {args.model_id!r} must exist exactly once in the registry")
+        model = model_from_registry_row(matches[0])
+        if model.status is ModelStatus.VALIDATED:
+            print(f"Model already validated: model_id={model.model_id}")
+            return 0
+        artifact = json.loads(Path(model.artifact_uri).read_text(encoding="utf-8"))
+        validated = validate_candidate(model, artifact, reports)
+        set_registry_model_status(registry, model.model_id, validated.status)
+        write_registry_atomic(path, registry)
+    print(f"Model validated for manual promotion: model_id={args.model_id}")
+    return 0
+
+
+async def _run_model_activate(args: argparse.Namespace, *, rollback: bool = False) -> int:
+    if args.register_db:
+        session = get_session_factory()()
+        try:
+            repository = SqlModelVersionRepository(session)
+            model = repository.get(args.model_id)
+            if model is None:
+                raise ValueError(
+                    f"model {args.model_id!r} does not exist in the database registry"
+                )
+            artifact = json.loads(Path(model.artifact_uri).read_text(encoding="utf-8"))
+            expected = ModelStatus.RETIRED if rollback else ModelStatus.VALIDATED
+            if model.status not in {expected, ModelStatus.PROMOTED}:
+                raise ValueError(
+                    f"{model.status.value} model cannot be "
+                    f"{'rolled back to' if rollback else 'promoted'}"
+                )
+            assert_model_can_be_activated(model, artifact)
+            repository.activate(model.model_id, allow_retired=rollback)
+        finally:
+            session.close()
+    else:
+        path = Path(args.registry)
+        registry = _load_local_registry(path)
+        activate_registry_model(registry, args.model_id, rollback=rollback)
+        write_registry_atomic(path, registry)
+    verb = "rollback complete" if rollback else "promotion complete"
+    print(f"Model {verb}: model_id={args.model_id}; previous active version retired")
+    return 0
+
+
+async def _run_model_promote(args: argparse.Namespace) -> int:
+    return await _run_model_activate(args)
+
+
+async def _run_model_rollback(args: argparse.Namespace) -> int:
+    return await _run_model_activate(args, rollback=True)
+
+
+async def _run_model_monitor(args: argparse.Namespace) -> int:
+    payload = json.loads(Path(args.input).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("monitor input must be a JSON object")
+    report = summarize_model_monitoring(payload)
+    changed = write_json(Path(args.out), report)
+    metrics = report["metrics"]
+    print(
+        f"Model monitor {'wrote' if changed else 'unchanged'}: model_id={report['model_id']} "
+        f"labels={report['coverage']['labelled_prediction_count']} "
+        f"MAE={metrics['mae_ugm3']} drift_alerts={len(report['drift_alerts'])} "
+        f"status={report['status']} auto_promoted=false path={args.out}"
+    )
+    return 0
+
+
+async def _run_demo_snapshot(args: argparse.Namespace) -> int:
+    generator = ScenarioGenerator.from_manifest(
+        args.profile,
+        manifest_path=Path(args.manifest) if args.manifest else None,
+        scenario_id=args.scenario,
+        seed=args.seed,
+        anchor_utc=_parse_utc_argument(args.anchor) if args.anchor else None,
+    )
+    if args.at:
+        snapshot = generator.generate_at(_parse_utc_argument(args.at))
+    else:
+        snapshot = generator.generate(args.replay_hour)
+    output_path = Path(args.out)
+    changed = snapshot.write_json(output_path)
+    state = "wrote" if changed else "unchanged"
+    print(
+        f"Demo snapshot {state}: profile={snapshot.profile} scenario={snapshot.scenario_id} "
+        f"replay_at={snapshot.replay_at.isoformat()} cells={len(snapshot.cells)} "
+        f"stations={len(snapshot.sensor_readings)} checksum={snapshot.checksum} path={output_path}"
+    )
+    return 0
+
+
+async def _run_demo_features(args: argparse.Namespace) -> int:
+    if args.replay_hour < 0 or args.history_hours < 0:
+        raise ValueError("replay-hour and history-hours must be >= 0")
+    generator = ScenarioGenerator.from_manifest(
+        args.profile,
+        manifest_path=Path(args.manifest) if args.manifest else None,
+        scenario_id=args.scenario,
+        seed=args.seed,
+        anchor_utc=_parse_utc_argument(args.anchor) if args.anchor else None,
+    )
+    target = generator.generate(args.replay_hour)
+    history_start = max(0, args.replay_hour - args.history_hours)
+    history = [generator.generate(hour) for hour in range(history_start, args.replay_hour + 1)]
+    sensor_readings = [reading for snapshot in history for reading in snapshot.sensor_readings]
+    weather_features = [sample for snapshot in history for sample in snapshot.weather]
+    builder = FeatureBuilder(resolution=8)
+    snapshots = []
+    for horizon in (0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0):
+        valid_at = target.replay_at + timedelta(hours=horizon)
+        forecast_weather: list[WeatherFeature] = []
+        if horizon > 0:
+            # Future weather in this demo is generated as a synthetic forecast
+            # issued at the replay clock. Live inference must use an actual
+            # provider forecast whose issue time is no later than that clock.
+            future = generator.generate(args.replay_hour + int(horizon))
+            forecast_weather = [
+                replace(sample, issued_at=target.replay_at, valid_at=valid_at)
+                for sample in future.weather
+            ]
+        snapshots.extend(
+            builder.build(
+                cells=target.cells,
+                issued_at=target.replay_at,
+                valid_at=valid_at,
+                horizon_hours=horizon,
+                sensor_readings=sensor_readings,
+                weather_features=[*weather_features, *forecast_weather],
+                static_features=target.static_features,
+                traffic_observations=target.roads,
+                fire_detections=target.fires,
+                dataset_refs=target.dataset_refs,
+            )
+        )
+    payload = {
+        "schema_version": "feature-export-v1",
+        "profile": target.profile,
+        "scenario_id": target.scenario_id,
+        "replay_at": target.replay_at.isoformat().replace("+00:00", "Z"),
+        "history_hours": args.history_hours,
+        "feature_count": len(snapshots),
+        "features": [feature_snapshot_to_dict(snapshot) for snapshot in snapshots],
+    }
+    output_path = Path(args.out)
+    content = json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
+    changed = not output_path.exists() or output_path.read_text(encoding="utf-8") != content
+    if changed:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(content, encoding="utf-8", newline="\n")
+    print(
+        f"Feature export {'wrote' if changed else 'unchanged'}: profile={target.profile} "
+        f"scenario={target.scenario_id} features={len(snapshots)} path={output_path}"
+    )
+    return 0
+
+
+async def _run_prediction_publish(args: argparse.Namespace) -> int:
+    payload = json.loads(Path(args.input).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or payload.get("schema_version") != "feature-export-v1":
+        raise ValueError("--input must be a feature-export-v1 file from demo-features")
+    raw_features = payload.get("features")
+    if not isinstance(raw_features, list) or not raw_features:
+        raise ValueError("feature-export-v1 must contain a non-empty features array")
+    snapshots = [feature_snapshot_from_dict(item) for item in raw_features]
+    generated_at = _parse_utc_argument(args.generated_at) if args.generated_at else parse_utc(
+        payload.get("replay_at", snapshots[0].issued_at.isoformat())
+    )
+    feature_run_id = args.feature_run_id
+    run_id = args.run_id or f"prediction-{feature_run_id}"
+    mode = DataMode(args.mode)
+    assert_live_snapshots_available(mode, snapshots)
+
+    session = get_session_factory()()
+    try:
+        SqlFeatureSnapshotRepository(session).upsert_many(feature_run_id, snapshots)
+        forecasts = SqlForecastRepository(session)
+        baselines: dict[tuple[str, float], float] = {}
+        for horizon in sorted({item.horizon_hours for item in snapshots if item.horizon_hours > 0}):
+            for forecast in forecasts.latest_for_horizon(horizon):
+                if abs((forecast.generated_at - generated_at).total_seconds()) <= 3_600:
+                    baselines[(forecast.h3_cell, horizon)] = forecast.predicted_pm25
+        pdi = {
+            state.h3_cell: state.pdi
+            for state in SqlGridStateRepository(session).latest()
+            if state.pdi is not None and state.timestamp >= generated_at - timedelta(hours=3)
+        }
+        publisher = PredictionPublicationService(
+            SqlPredictionPublicationRepository(session), SqlModelVersionRepository(session)
+        )
+        run, results = publisher.publish(
+            run_id=run_id,
+            feature_run_id=feature_run_id,
+            region=args.region,
+            mode=mode,
+            generated_at=generated_at,
+            snapshots=snapshots,
+            baseline_by_cell_horizon=baselines,
+            pdi_by_cell=pdi,
+            scenario_id=args.scenario_id or payload.get("scenario_id"),
+        )
+    finally:
+        session.close()
+
+    print(
+        f"Prediction run published: run_id={run.run_id} mode={run.mode.value} "
+        f"cells={len({result.h3_cell for result in results})} results={len(results)} "
+        f"models={','.join(run.model_versions) or 'baseline-only'}"
+    )
+    return 0
+
+
+def _add_demo_snapshot_parser(subparsers: argparse._SubParsersAction, command: str) -> None:
+    demo_parser = subparsers.add_parser(
+        command,
+        help="Generate a deterministic offline environmental scenario snapshot.",
+    )
+    demo_parser.add_argument(
+        "--profile",
+        choices=("tiny-ci", "regional-demo", "seasonal-training-smoke"),
+        default="tiny-ci",
+    )
+    demo_parser.add_argument("--scenario", default=None)
+    demo_parser.add_argument("--seed", type=int, default=None)
+    demo_parser.add_argument("--anchor", default=None, help="UTC anchor timestamp (RFC 3339).")
+    replay_group = demo_parser.add_mutually_exclusive_group()
+    replay_group.add_argument("--replay-hour", type=int, default=0)
+    replay_group.add_argument(
+        "--at", default=None, help="UTC replay timestamp; mutually exclusive with replay-hour."
+    )
+    demo_parser.add_argument("--manifest", default=None)
+    demo_parser.add_argument("--out", default="demo-snapshot.json")
+    demo_parser.set_defaults(func=_run_demo_snapshot)
+
+
+def _add_demo_features_parser(subparsers: argparse._SubParsersAction) -> None:
+    parser = subparsers.add_parser(
+        "demo-features", help="Build deterministic environmental features offline."
+    )
+    parser.add_argument(
+        "--profile",
+        choices=("tiny-ci", "regional-demo", "seasonal-training-smoke"),
+        default="tiny-ci",
+    )
+    parser.add_argument("--scenario", default=None)
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--anchor", default=None, help="UTC anchor timestamp (RFC 3339).")
+    parser.add_argument("--replay-hour", type=int, default=0)
+    parser.add_argument("--history-hours", type=int, default=24)
+    parser.add_argument("--manifest", default=None)
+    parser.add_argument("--out", default="feature-snapshot.json")
+    parser.set_defaults(func=_run_demo_features)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.cli", description="Development commands.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -198,6 +818,29 @@ def main(argv: list[str] | None = None) -> int:
     weather_parser.add_argument("--max-lon", type=float, default=None)
     weather_parser.set_defaults(func=_run_ingest_weather)
 
+    fire_parser = subparsers.add_parser(
+        "ingest-fires", help="Fetch and retain NASA FIRMS VIIRS NRT detections."
+    )
+    fire_parser.add_argument("--days", type=int, choices=range(1, 6), default=2)
+    fire_parser.add_argument("--region", default="delhi-ncr")
+    fire_parser.add_argument("--min-lat", type=float, default=None)
+    fire_parser.add_argument("--min-lon", type=float, default=None)
+    fire_parser.add_argument("--max-lat", type=float, default=None)
+    fire_parser.add_argument("--max-lon", type=float, default=None)
+    fire_parser.set_defaults(func=_run_ingest_fires)
+
+    traffic_parser = subparsers.add_parser(
+        "ingest-traffic", help="Import a normalized, licensed sampled-traffic JSONL feed."
+    )
+    traffic_parser.add_argument("--input", required=True)
+    traffic_parser.add_argument("--source", required=True)
+    traffic_parser.add_argument("--product", required=True)
+    traffic_parser.add_argument("--version", required=True)
+    traffic_parser.add_argument("--region", required=True)
+    traffic_parser.add_argument("--attribution", required=True)
+    traffic_parser.add_argument("--license", required=True)
+    traffic_parser.set_defaults(func=_run_ingest_traffic)
+
     grid_parser = subparsers.add_parser(
         "export-grid", help="Export the configured region's H3 grid as GeoJSON."
     )
@@ -213,6 +856,130 @@ def main(argv: list[str] | None = None) -> int:
         help="Run one forecast pipeline pass (DeterministicH3DispersionModel) and persist results.",
     )
     forecast_parser.set_defaults(func=_run_forecast)
+
+    _add_demo_snapshot_parser(subparsers, "demo-generate")
+    _add_demo_snapshot_parser(subparsers, "demo-replay")
+    _add_demo_features_parser(subparsers)
+
+    publish_parser = subparsers.add_parser(
+        "prediction-publish",
+        help="Publish one immutable v2 prediction run from a feature-export-v1 file.",
+    )
+    publish_parser.add_argument("--input", required=True)
+    publish_parser.add_argument("--feature-run-id", required=True)
+    publish_parser.add_argument("--run-id", default=None)
+    publish_parser.add_argument("--mode", choices=("live", "demo", "mixed"), required=True)
+    publish_parser.add_argument("--region", default="india")
+    publish_parser.add_argument("--scenario-id", default=None)
+    publish_parser.add_argument("--generated-at", default=None)
+    publish_parser.set_defaults(func=_run_prediction_publish)
+
+    export_parser = subparsers.add_parser(
+        "training-export",
+        help="Normalize prejoined historical station labels and as-of features.",
+    )
+    export_parser.add_argument("--input", required=True, help="JSON or JSONL joined examples.")
+    export_parser.add_argument("--mode", choices=("live", "demo"), required=True)
+    export_parser.add_argument("--start", default=None, help="UTC date/timestamp, inclusive.")
+    export_parser.add_argument("--end", default=None, help="UTC date/timestamp, exclusive.")
+    export_parser.add_argument("--out", default="training-dataset.json")
+    export_parser.set_defaults(func=_run_training_export)
+
+    smoke_parser = subparsers.add_parser(
+        "training-smoke-data",
+        help="Generate fictional labeled examples for pipeline smoke tests only.",
+    )
+    smoke_parser.add_argument("--hours", type=int, default=24)
+    smoke_parser.add_argument("--stations", type=int, default=6)
+    smoke_parser.add_argument("--anchor", default="2025-01-01T00:00:00Z")
+    smoke_parser.add_argument("--out", default="training-smoke-dataset.json")
+    smoke_parser.set_defaults(func=_run_training_smoke_data)
+
+    train_parser = subparsers.add_parser(
+        "train", help="Train and register a reproducible residual-model candidate."
+    )
+    train_parser.add_argument("--dataset", required=True)
+    train_parser.add_argument("--artifact-dir", default="models/candidates")
+    train_parser.add_argument("--registry", default="models/registry.json")
+    train_parser.add_argument("--ridge-alpha", type=float, default=1.0)
+    train_parser.add_argument(
+        "--allow-synthetic",
+        action="store_true",
+        help="Allow synthetic smoke-test training; it remains ineligible for live promotion.",
+    )
+    train_parser.add_argument(
+        "--register-db", action="store_true", help="Also upsert candidate metadata into Postgres."
+    )
+    train_parser.set_defaults(func=_run_train)
+
+    evaluate_parser = subparsers.add_parser(
+        "evaluate", help="Evaluate a pinned model artifact against a labeled split."
+    )
+    evaluate_parser.add_argument("--model", required=True)
+    evaluate_parser.add_argument("--split", required=True)
+    evaluate_parser.add_argument("--out", default="evaluation-report.json")
+    evaluate_parser.set_defaults(func=_run_evaluate)
+
+    feature_eval_parser = subparsers.add_parser(
+        "evaluate-feature-group",
+        help="Ablate fire/traffic predictors on identical live observed-label splits.",
+    )
+    feature_eval_parser.add_argument("--dataset", required=True)
+    feature_eval_parser.add_argument("--group", choices=("fires", "traffic"), required=True)
+    feature_eval_parser.add_argument(
+        "--as-of-verified",
+        action="store_true",
+        help="Assert that feature availability was checked against each issue time.",
+    )
+    feature_eval_parser.add_argument("--ridge-alpha", type=float, default=1.0)
+    feature_eval_parser.add_argument("--out", default="incremental-feature-report.json")
+    feature_eval_parser.set_defaults(func=_run_evaluate_feature_group)
+
+    validate_parser = subparsers.add_parser(
+        "model-validate",
+        help="Validate one live candidate against its pinned evaluation and M5 ablations.",
+    )
+    validate_parser.add_argument("--model-id", required=True)
+    validate_parser.add_argument("--registry", default="models/registry.json")
+    validate_parser.add_argument(
+        "--incremental-report",
+        action="append",
+        default=[],
+        help="M5 fire/traffic incremental report; repeat for each feature group used.",
+    )
+    validate_parser.add_argument(
+        "--register-db", action="store_true", help="Operate on the Postgres model registry."
+    )
+    validate_parser.set_defaults(func=_run_model_validate)
+
+    promote_parser = subparsers.add_parser(
+        "model-promote", help="Promote a validated live artifact; retire the previous version."
+    )
+    promote_parser.add_argument("--model-id", required=True)
+    promote_parser.add_argument("--registry", default="models/registry.json")
+    promote_parser.add_argument(
+        "--register-db", action="store_true", help="Operate on the Postgres model registry."
+    )
+    promote_parser.set_defaults(func=_run_model_promote)
+
+    rollback_parser = subparsers.add_parser(
+        "model-rollback", help="Restore a retired artifact for its region and horizon."
+    )
+    rollback_parser.add_argument("--model-id", required=True)
+    rollback_parser.add_argument("--registry", default="models/registry.json")
+    rollback_parser.add_argument(
+        "--register-db", action="store_true", help="Operate on the Postgres model registry."
+    )
+    rollback_parser.set_defaults(func=_run_model_rollback)
+
+    monitor_parser = subparsers.add_parser(
+        "model-monitor", help="Summarize labelled prediction errors, coverage, and feature drift."
+    )
+    monitor_parser.add_argument(
+        "--input", required=True, help="A model-monitor-v1 JSON report input."
+    )
+    monitor_parser.add_argument("--out", default="model-monitor-report.json")
+    monitor_parser.set_defaults(func=_run_model_monitor)
 
     args = parser.parse_args(argv)
     logging.basicConfig(level=get_settings().log_level)

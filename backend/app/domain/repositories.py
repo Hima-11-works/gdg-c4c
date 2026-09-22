@@ -11,6 +11,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol
 
+from app.domain.features import FeatureSnapshot
+from app.domain.environmental_observations import FireHotspot, TrafficObservation
+from app.domain.prediction import PredictionResult, PredictionRun
+from app.domain.scenario import DatasetVersion, IngestionRun
+from app.domain.training import ModelVersion
 from app.domain.types import Alert, FireReport, Forecast, GridState, SensorReading, WeatherReading
 
 
@@ -134,3 +139,83 @@ class FireReportRepository(Protocol):
         ...
 
     def list_active(self, *, since: datetime) -> list[FireReport]: ...
+
+
+class FireHotspotRepository(Protocol):
+    def save_many(self, hotspots: list[FireHotspot]) -> tuple[int, int]:
+        """Insert idempotently; return (inserted, already_seen)."""
+        ...
+
+    def list_for_window(
+        self,
+        *,
+        acquired_from: datetime,
+        acquired_to: datetime,
+        available_by: datetime,
+        h3_cells: list[str] | None = None,
+    ) -> list[FireHotspot]: ...
+
+
+class TrafficObservationRepository(Protocol):
+    def save_many(self, observations: list[TrafficObservation]) -> tuple[int, int]:
+        """Insert idempotently; return (inserted, already_seen)."""
+        ...
+
+    def list_for_window(
+        self,
+        *,
+        observed_from: datetime,
+        observed_to: datetime,
+        available_by: datetime,
+        h3_cells: list[str] | None = None,
+    ) -> list[TrafficObservation]: ...
+
+
+class DatasetVersionRepository(Protocol):
+    def upsert(self, dataset: DatasetVersion) -> DatasetVersion: ...
+
+    def get(self, dataset_id: str) -> DatasetVersion | None: ...
+
+    def list(self, *, source: str | None = None) -> list[DatasetVersion]: ...
+
+
+class IngestionRunRepository(Protocol):
+    def upsert(self, run: IngestionRun) -> IngestionRun: ...
+
+    def get(self, run_id: str) -> IngestionRun | None: ...
+
+    def list(self, *, dataset_id: str | None = None) -> list[IngestionRun]: ...
+
+
+class FeatureSnapshotRepository(Protocol):
+    def upsert_many(
+        self, run_id: str, snapshots: list[FeatureSnapshot]
+    ) -> list[FeatureSnapshot]: ...
+
+    def list_for_run(self, run_id: str) -> list[FeatureSnapshot]: ...
+
+
+class ModelVersionRepository(Protocol):
+    def upsert(self, model: ModelVersion) -> ModelVersion: ...
+
+    def get(self, model_id: str) -> ModelVersion | None: ...
+
+    def list(
+        self,
+        *,
+        region: str | None = None,
+        horizon_hours: float | None = None,
+        status: str | None = None,
+    ) -> list[ModelVersion]: ...
+
+
+class PredictionPublicationRepository(Protocol):
+    def publish(self, run: PredictionRun, results: list[PredictionResult]) -> None:
+        """Atomically persist one immutable run and all of its cell results."""
+        ...
+
+    def get_run(self, run_id: str) -> PredictionRun | None: ...
+
+    def latest_run(self, *, region: str | None = None) -> PredictionRun | None: ...
+
+    def list_results(self, run_id: str) -> list[PredictionResult]: ...

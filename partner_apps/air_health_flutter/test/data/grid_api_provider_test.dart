@@ -10,31 +10,52 @@ class FakeGridApiClient implements GridApiClient {
     this.weatherList = const [],
     this.forecastList = const [],
     this.alertList = const [],
+    this.supportedHorizons = const [60, 120, 180],
+    this.isDemo = false,
+    this.mode = 'live',
+    this.runId = 'test-run',
   });
 
   final List<GridStateDto> states;
   final List<WeatherDto> weatherList;
   final List<ForecastDto> forecastList;
   final List<AlertDto> alertList;
+  final List<int> supportedHorizons;
+  final bool isDemo;
+  final String mode;
+  final String runId;
 
   final DateTime generatedAt = DateTime.utc(2026, 9, 17, 10, 0);
+
+  @override
+  Future<GridPublication> latestPublication() async => GridPublication(
+        runId: runId,
+        generatedAt: generatedAt,
+        mode: mode,
+        isDemo: isDemo,
+        supportedForecastMinutes: supportedHorizons,
+      );
 
   @override
   Future<GridEnvelope<List<GridStateDto>>> current({
     GeoBounds? bounds,
     int? resolution,
+    String? runId,
   }) async =>
-      GridEnvelope(generatedAt: generatedAt, isDemo: false, data: states);
+      GridEnvelope(generatedAt: generatedAt, isDemo: isDemo, mode: mode, runId: runId, data: states);
 
   @override
   Future<GridEnvelope<List<ForecastDto>>> forecast({
     required int minutes,
     GeoBounds? bounds,
     int? resolution,
+    String? runId,
   }) async =>
       GridEnvelope(
         generatedAt: generatedAt,
-        isDemo: false,
+        isDemo: isDemo,
+        mode: mode,
+        runId: runId,
         data: forecastList.where((f) => f.forecastMinutes == minutes).toList(),
       );
 
@@ -42,12 +63,13 @@ class FakeGridApiClient implements GridApiClient {
   Future<GridEnvelope<List<WeatherDto>>> weather({
     GeoBounds? bounds,
     int? resolution,
+    String? runId,
   }) async =>
-      GridEnvelope(generatedAt: generatedAt, isDemo: false, data: weatherList);
+      GridEnvelope(generatedAt: generatedAt, isDemo: isDemo, mode: mode, runId: runId, data: weatherList);
 
   @override
-  Future<GridEnvelope<List<AlertDto>>> alerts() async =>
-      GridEnvelope(generatedAt: generatedAt, isDemo: false, data: alertList);
+  Future<GridEnvelope<List<AlertDto>>> alerts({String? runId}) async =>
+      GridEnvelope(generatedAt: generatedAt, isDemo: isDemo, mode: mode, runId: runId, data: alertList);
 }
 
 void main() {
@@ -137,6 +159,22 @@ void main() {
     expect(reading.recordedAt, t);
   });
 
+  test('uses coordinates embedded in the published current snapshot', () async {
+    final stateWithCoordinates = GridStateDto(
+      h3Cell: 'cellA',
+      timestamp: t,
+      confidence: 0.9,
+      pm25: 75,
+      latitude: 20.296,
+      longitude: 85.825,
+    );
+    final provider = providerWith(FakeGridApiClient(states: [stateWithCoordinates]));
+
+    final reading = await provider.getCurrentAirQuality(location);
+
+    expect(reading.pm25, 75);
+  });
+
   test('forecast assembles the requested horizons for the user cell only',
       () async {
     final provider = providerWith(
@@ -160,6 +198,20 @@ void main() {
       FakeGridApiClient(states: states, weatherList: weather),
     );
     expect(await provider.getForecast(location, Duration.zero), isEmpty);
+  });
+
+  test('forecast requests only horizons supported by the published run', () async {
+    final provider = providerWith(FakeGridApiClient(
+      states: states,
+      weatherList: weather,
+      forecastList: forecasts,
+      supportedHorizons: const [60, 180],
+    ));
+
+    final points = await provider.getForecast(location, const Duration(minutes: 150));
+
+    expect(points, hasLength(1));
+    expect(points.single.pm25, 90);
   });
 
   test('nearby areas exclude the user cell and derive a trend', () async {
@@ -204,6 +256,26 @@ void main() {
 
     expect(freshness.retrievedAt, t);
     expect(freshness.quality, DataQuality.full);
+    expect(freshness.runId, 'test-run');
+    expect(freshness.mode, 'live');
+    expect(freshness.isDemo, isFalse);
+  });
+
+  test('freshness preserves demo provenance', () async {
+    final provider = providerWith(FakeGridApiClient(
+      states: states,
+      weatherList: weather,
+      isDemo: true,
+      mode: 'demo',
+      runId: 'demo-scenario-2',
+    ));
+
+    await provider.getCurrentAirQuality(location);
+    final freshness = await provider.getDataFreshness();
+
+    expect(freshness.isDemo, isTrue);
+    expect(freshness.mode, 'demo');
+    expect(freshness.runId, 'demo-scenario-2');
   });
 
   test('throws when no cell with PM2.5 is near the location', () async {

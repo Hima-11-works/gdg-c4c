@@ -117,6 +117,23 @@ class Settings(BaseSettings):
     # single request — batches beyond it are split into multiple requests.
     open_meteo_max_locations_per_request: int = Field(default=100, ge=1, le=1000)
 
+    # --- NASA FIRMS hotspot ingestion (app.ingestion.firms) ---
+    firms_map_key: SecretStr | None = None
+    firms_base_url: str = "https://firms.modaps.eosdis.nasa.gov/api/area/csv"
+    firms_source: str = Field(
+        default="VIIRS_NOAA21_NRT",
+        pattern=r"^VIIRS_(NOAA21|NOAA20|SNPP)_NRT$",
+    )
+    firms_timeout_seconds: float = Field(default=20.0, gt=0)
+    firms_max_retries: int = Field(default=3, ge=1, le=10)
+    # A quality warning threshold only. Older valid detections are retained
+    # for history, but are never silently treated as current observations.
+    firms_stale_after_hours: float = Field(default=6.0, gt=0)
+
+    # Prepared, license-approved corridor samples; no traffic vendor is
+    # contacted unless a separate provider is deliberately added.
+    traffic_stale_after_hours: float = Field(default=2.0, gt=0)
+
     # Weather is sampled at this coarser resolution and fanned out to every
     # H3_RESOLUTION cell within each sampled cell — one API call covers many
     # fine cells, since weather varies far less over a city block than PM2.5

@@ -1,4 +1,4 @@
-// Forecast timeline slider (0–360 min, 15-min steps) with Play/Pause/
+// Forecast timeline slider (15-minute frames between published anchors) with Play/Pause/
 // Restart controls. One canonical state: forecastMinutes in the shared
 // MapUiContext. Upcoming keyframes are prefetched into the shared frame
 // store (lib/forecastFrames.ts) so playback never stalls on the network.
@@ -11,10 +11,9 @@ import type { LodQuery } from '../lib/api'
 
 // --- constants ---
 
-const STEP = 15
 const MAX_MINUTES = 360
-const KEYFRAMES = Array.from({ length: MAX_MINUTES / STEP + 1 }, (_, i) => i * STEP) // 0,15,…,360
 const PLAYBACK_INTERVAL_MS = 750
+const FALLBACK_SUPPORTED_HOURS = [1, 3, 6]
 
 // --- formatting ---
 
@@ -29,24 +28,45 @@ function formatHorizon(minutes: number): string {
 
 // --- slider helpers ---
 
-function minutesToPct(minutes: number): number {
-  return (minutes / MAX_MINUTES) * 100
+function minutesToPct(minutes: number, maxMinutes: number): number {
+  return maxMinutes === 0 ? 0 : (minutes / maxMinutes) * 100
 }
 
-function pctToMinutes(pct: number): number {
-  const raw = Math.round((pct / 100) * MAX_MINUTES / STEP) * STEP
-  return Math.max(0, Math.min(MAX_MINUTES, raw))
+function pctToMinutes(pct: number, keyframes: number[], maxMinutes: number): number {
+  const requested = Math.max(0, Math.min(maxMinutes, (pct / 100) * maxMinutes))
+  return keyframes.reduce((closest, value) =>
+    Math.abs(value - requested) < Math.abs(closest - requested) ? value : closest,
+  )
 }
 
 // --- component ---
 
-export function TimelineControl() {
+export function TimelineControl({
+  publishedRunId,
+  supportedHours = FALLBACK_SUPPORTED_HOURS,
+}: {
+  publishedRunId?: string
+  supportedHours?: number[]
+}) {
   const { state, dispatch } = useMapUi()
   const { forecastMinutes, lod, bbox } = state
   const trackRef = useRef<HTMLDivElement>(null)
   const [playing, setPlaying] = useState(false)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const positionRef = useRef(forecastMinutes)
+  const keyframes = useMemo(
+    () => {
+      const max = Math.max(
+        0,
+        ...supportedHours
+          .filter((hours) => hours > 0 && hours <= MAX_MINUTES / 60)
+          .map((hours) => Math.floor((hours * 60) / 15) * 15),
+      )
+      return Array.from({ length: max / 15 + 1 }, (_, index) => index * 15)
+    },
+    [supportedHours],
+  )
+  const maxMinutes = keyframes.at(-1) ?? 0
 
   // Keep positionRef in sync with external state changes.
   useEffect(() => {
@@ -57,12 +77,22 @@ export function TimelineControl() {
   // through lodQueryFor (same padded bbox/resolution), so the shared cache
   // key aligns and the prefetched frame is the data MapPage would have read.
   const query: LodQuery = useMemo(() => lodQueryFor(lod, bbox), [lod, bbox])
-  const queryKey = useMemo(() => lodKey(query), [query])
+  const queryKey = useMemo(
+    () => `${lodKey(query)}:${publishedRunId ?? 'pending'}:${supportedHours.join(',')}`,
+    [query, publishedRunId, supportedHours],
+  )
 
   // True while the current view's frames are being fetched into the cache
   // (a fresh map view, or a manual jump). Play/Restart are disabled until
   // it clears, so playback never starts on a cold cache and stutters.
   const warming = useForecastWarming(queryKey)
+
+  useEffect(() => {
+    if (publishedRunId === undefined) return
+    if (!keyframes.includes(forecastMinutes)) {
+      dispatch({ type: 'SELECT_FORECAST', minutes: 0 })
+    }
+  }, [forecastMinutes, keyframes, dispatch, publishedRunId])
 
   // Manual selection (slider drag, keyboard, tick click): pause playback and
   // warm the new position's window so a subsequent Play is smooth. Playback's
@@ -72,17 +102,19 @@ export function TimelineControl() {
     (minutes: number) => {
       setPlaying(false)
       dispatch({ type: 'SELECT_FORECAST', minutes })
-      warmForecastWindow(queryKey, query, minutes)
+      if (publishedRunId !== undefined) {
+        warmForecastWindow(queryKey, query, minutes, supportedHours, publishedRunId)
+      }
     },
-    [dispatch, queryKey, query],
+    [dispatch, queryKey, query, supportedHours, publishedRunId],
   )
 
   // Prefetch upcoming frames whenever position changes.
   useEffect(() => {
-    if (forecastMinutes > 0) {
-      prefetchUpcoming(forecastMinutes, queryKey, query)
+    if (forecastMinutes > 0 && publishedRunId !== undefined) {
+      prefetchUpcoming(forecastMinutes, queryKey, query, 5, supportedHours, publishedRunId)
     }
-  }, [forecastMinutes, queryKey, query])
+  }, [forecastMinutes, queryKey, query, supportedHours, publishedRunId])
 
   // --- playback ---
 
@@ -104,23 +136,23 @@ export function TimelineControl() {
 
   const advance = useCallback(() => {
     const current = positionRef.current
-    const idx = KEYFRAMES.indexOf(current)
-    if (idx < 0 || idx >= KEYFRAMES.length - 1) {
+    const idx = keyframes.indexOf(current)
+    if (idx < 0 || idx >= keyframes.length - 1) {
       // At end — stop.
       stopPlayback()
       setPlaying(false)
       return
     }
-    const next = KEYFRAMES[idx + 1]
+    const next = keyframes[idx + 1]
     positionRef.current = next
     dispatch({ type: 'SELECT_FORECAST', minutes: next })
-  }, [dispatch, stopPlayback])
+  }, [dispatch, keyframes, stopPlayback])
 
   // Start/stop timer when `playing` changes.
   useEffect(() => {
     if (playing) {
       // If at the end, restart from 0.
-      if (positionRef.current >= MAX_MINUTES) {
+      if (positionRef.current >= maxMinutes) {
         positionRef.current = 0
         dispatch({ type: 'SELECT_FORECAST', minutes: 0 })
       }
@@ -129,7 +161,7 @@ export function TimelineControl() {
       stopPlayback()
     }
     return stopPlayback
-  }, [playing, advance, stopPlayback, dispatch])
+  }, [playing, advance, stopPlayback, dispatch, maxMinutes])
 
   const handlePlayPause = useCallback(() => {
     setPlaying((p) => !p)
@@ -140,8 +172,10 @@ export function TimelineControl() {
     positionRef.current = 0
     dispatch({ type: 'SELECT_FORECAST', minutes: 0 })
     // Warm the frames a Play from Now would advance through.
-    warmForecastWindow(queryKey, query, 0)
-  }, [dispatch, queryKey, query])
+    if (publishedRunId !== undefined) {
+      warmForecastWindow(queryKey, query, 0, supportedHours, publishedRunId)
+    }
+  }, [dispatch, queryKey, query, supportedHours, publishedRunId])
 
   // --- pointer interaction (draggable slider) ---
 
@@ -156,26 +190,29 @@ export function TimelineControl() {
 
   const draggingRef = useRef(false)
 
-  const commitFromClientX = (clientX: number) => {
-    const track = trackRef.current
-    if (!track) return
-    const rect = track.getBoundingClientRect()
-    const pct = Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100))
-    commitRef.current(pctToMinutes(pct))
-  }
+  const commitFromClientX = useCallback(
+    (clientX: number) => {
+      const track = trackRef.current
+      if (!track) return
+      const rect = track.getBoundingClientRect()
+      const pct = Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100))
+      commitRef.current(pctToMinutes(pct, keyframes, maxMinutes))
+    },
+    [keyframes, maxMinutes],
+  )
 
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     draggingRef.current = true
     e.currentTarget.setPointerCapture(e.pointerId)
     commitFromClientX(e.clientX)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [commitFromClientX])
 
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (!draggingRef.current) return
     commitFromClientX(e.clientX)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [commitFromClientX])
 
   const handlePointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (!draggingRef.current) return
@@ -189,38 +226,37 @@ export function TimelineControl() {
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
-      const idx = KEYFRAMES.indexOf(forecastMinutes)
+      const idx = keyframes.indexOf(forecastMinutes)
       if (idx < 0) return
 
       let nextIdx = idx
       if (e.key === 'ArrowRight' || e.key === 'ArrowUp') {
-        nextIdx = Math.min(idx + 1, KEYFRAMES.length - 1)
+        nextIdx = Math.min(idx + 1, keyframes.length - 1)
       } else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') {
         nextIdx = Math.max(idx - 1, 0)
       } else if (e.key === 'Home') {
         nextIdx = 0
       } else if (e.key === 'End') {
-        nextIdx = KEYFRAMES.length - 1
+        nextIdx = keyframes.length - 1
       } else {
         return
       }
 
       e.preventDefault()
       if (nextIdx !== idx) {
-        selectManually(KEYFRAMES[nextIdx])
+        selectManually(keyframes[nextIdx])
       }
     },
-    [forecastMinutes, selectManually],
+    [forecastMinutes, keyframes, selectManually],
   )
 
   // Cleanup on unmount.
   useEffect(() => () => stopPlayback(), [stopPlayback])
 
-  // --- major ticks: every 60 min ---
+  // Mark every interpolated frame, but label only current and hourly anchors.
+  const majorTicks = keyframes.filter((minutes) => minutes % 60 === 0)
 
-  const majorTicks = KEYFRAMES.filter((m) => m % 60 === 0)
-
-  const currentPct = minutesToPct(forecastMinutes)
+  const currentPct = minutesToPct(forecastMinutes, maxMinutes)
 
   return (
     <div className="panel timeline-control" role="group" aria-label="Forecast timeline">
@@ -285,7 +321,7 @@ export function TimelineControl() {
             key={m}
             type="button"
             className={`timeline-tick ${m === forecastMinutes ? 'active' : ''}`}
-            style={{ left: `${minutesToPct(m)}%` }}
+            style={{ left: `${minutesToPct(m, maxMinutes)}%` }}
             onClick={() => selectManually(m)}
             aria-label={m === 0 ? 'Current conditions' : `Forecast +${m} minutes`}
           >
@@ -302,7 +338,7 @@ export function TimelineControl() {
         tabIndex={0}
         aria-label="Forecast horizon"
         aria-valuemin={0}
-        aria-valuemax={MAX_MINUTES}
+        aria-valuemax={maxMinutes}
         aria-valuenow={forecastMinutes}
         aria-valuetext={formatHorizon(forecastMinutes)}
         aria-keyshortcuts="ArrowLeft ArrowRight Home End"
@@ -319,12 +355,12 @@ export function TimelineControl() {
           <div className="timeline-track-fill" style={{ width: `${currentPct}%` }} />
         </div>
 
-        {/* Minor ticks (every 15 min) */}
-        {KEYFRAMES.map((m) => (
+        {/* Marks align with the 15-minute interpolation interval. */}
+        {keyframes.map((m) => (
           <div
             key={m}
             className={`timeline-mark ${m % 60 === 0 ? 'major' : ''} ${m === forecastMinutes ? 'active' : ''}`}
-            style={{ left: `${minutesToPct(m)}%` }}
+            style={{ left: `${minutesToPct(m, maxMinutes)}%` }}
           />
         ))}
 

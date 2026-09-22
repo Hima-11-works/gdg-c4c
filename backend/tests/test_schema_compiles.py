@@ -8,7 +8,18 @@ surface when the migration is actually run.
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.schema import CreateTable
 
-from app.models.tables import alert, forecast, grid_state, metadata, sensor_reading, weather_reading
+from app.models.tables import (
+    alert,
+    cell_feature_snapshot,
+    dataset_version,
+    forecast,
+    grid_state,
+    ingestion_run,
+    metadata,
+    model_version,
+    sensor_reading,
+    weather_reading,
+)
 
 DIALECT = postgresql.dialect()
 
@@ -70,6 +81,18 @@ def test_alert_context_columns_are_nullable() -> None:
         assert alert.c[column_name].nullable is True
 
 
+def test_environmental_run_metadata_columns_are_present() -> None:
+    assert dataset_version.c.kind.nullable is False
+    assert dataset_version.c.coverage_start.nullable is True
+    assert ingestion_run.c.errors.nullable is False
+    assert ingestion_run.c.simulation_id.nullable is True
+    assert cell_feature_snapshot.c.vector.nullable is False
+    assert cell_feature_snapshot.c.quality.nullable is False
+    assert model_version.c.artifact_sha256.type.length == 64
+    assert model_version.c.synthetic_only.nullable is False
+    assert model_version.c.status.nullable is False
+
+
 def test_metadata_creates_tables_in_dependency_order_without_error() -> None:
     # sorted_tables raises CircularDependencyError if foreign keys formed a
     # cycle; none are expected here, but this guards against a future one.
@@ -81,4 +104,8 @@ def test_metadata_creates_tables_in_dependency_order_without_error() -> None:
         "forecast",
         "alert",
         "fire_report",
+        "dataset_version",
+        "ingestion_run",
+        "cell_feature_snapshot",
+        "model_version",
     }

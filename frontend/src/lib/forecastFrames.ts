@@ -11,7 +11,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { fetchGridForecast } from './api'
 import type { LodQuery } from './api'
-import type { Envelope, ForecastOut } from './types'
+import type { DataMode, Envelope, ForecastOut } from './types'
 
 export interface FrameState {
   status: 'loading' | 'success' | 'error'
@@ -20,12 +20,24 @@ export interface FrameState {
    * Undefined only on first load or after a failure with no prior data. */
   data: ForecastOut[] | undefined
   isDemo: boolean
+  runId?: string
+  mode?: DataMode
+  generatedAt?: string
   message?: string
 }
 
-const STEP = 15
 const MAX_MINUTES = 360
-const KEYFRAMES = Array.from({ length: MAX_MINUTES / STEP + 1 }, (_, i) => i * STEP)
+const DEFAULT_HORIZONS_HOURS = [1, 3, 6]
+
+function keyframesFor(horizonsHours: number[] = DEFAULT_HORIZONS_HOURS): number[] {
+  const maxMinutes = Math.max(
+    0,
+    ...horizonsHours
+      .filter((hours) => hours > 0 && hours <= MAX_MINUTES / 60)
+      .map((hours) => Math.floor((hours * 60) / 15) * 15),
+  )
+  return Array.from({ length: maxMinutes / 15 + 1 }, (_, index) => index * 15)
+}
 
 /** How many keyframes ahead of the current position a view warm-up caches.
  * At the 750ms playback cadence this is ~6s of buffered frames — enough
@@ -56,12 +68,13 @@ export function ensureForecastFrame(
   minutes: number,
   queryKey: string,
   query: LodQuery,
+  runId?: string,
 ): Promise<void> {
   const key = cacheKey(minutes, queryKey)
   if (cache.has(key)) return Promise.resolve()
   const existing = inFlight.get(key)
   if (existing) return existing
-  const promise = fetchGridForecast(minutes, query)
+  const promise = fetchGridForecast(minutes, query, runId)
     .then((envelope) => {
       cache.set(key, envelope)
       inFlight.delete(key)
@@ -88,10 +101,13 @@ export function warmForecastWindow(
   queryKey: string,
   query: LodQuery,
   fromMinutes: number,
+  supportedHorizonsHours: number[] = DEFAULT_HORIZONS_HOURS,
+  runId?: string,
 ): void {
   if (warmups.has(queryKey)) return
 
-  const idx = KEYFRAMES.indexOf(fromMinutes)
+  const keyframes = keyframesFor(supportedHorizonsHours)
+  const idx = keyframes.indexOf(fromMinutes)
   if (idx < 0) return
 
   // minutes=0 is "Now", served by /grid/current, not a forecast frame — and
@@ -100,7 +116,7 @@ export function warmForecastWindow(
 
   const targets: number[] = []
   for (let i = startIdx; i <= idx + WARM_WINDOW; i++) {
-    const minutes = KEYFRAMES[i]
+    const minutes = keyframes[i]
     if (minutes === undefined) break
     targets.push(minutes)
   }
@@ -113,7 +129,7 @@ export function warmForecastWindow(
   notify()
 
   for (const minutes of missing) {
-    ensureForecastFrame(minutes, queryKey, query).finally(() => {
+    ensureForecastFrame(minutes, queryKey, query, runId).finally(() => {
       warmup.pending -= 1
       if (warmup.pending <= 0) {
         warmups.delete(queryKey)
@@ -151,18 +167,28 @@ export function prefetchUpcoming(
   queryKey: string,
   query: LodQuery,
   depth = 5,
+  supportedHorizonsHours: number[] = DEFAULT_HORIZONS_HOURS,
+  runId?: string,
 ): void {
-  const idx = KEYFRAMES.indexOf(currentMinutes)
+  const keyframes = keyframesFor(supportedHorizonsHours)
+  const idx = keyframes.indexOf(currentMinutes)
   if (idx < 0) return
   for (let i = 1; i <= depth; i++) {
     const nextIdx = idx + i
-    if (nextIdx >= KEYFRAMES.length) break
-    ensureForecastFrame(KEYFRAMES[nextIdx], queryKey, query)
+    if (nextIdx >= keyframes.length) break
+    ensureForecastFrame(keyframes[nextIdx], queryKey, query, runId)
   }
 }
 
 function stateFromEnvelope(envelope: Envelope<ForecastOut[]>): FrameState {
-  return { status: 'success', data: envelope.data, isDemo: envelope.is_demo }
+  return {
+    status: 'success',
+    data: envelope.data,
+    isDemo: envelope.is_demo,
+    runId: envelope.run_id,
+    mode: envelope.mode,
+    generatedAt: envelope.generated_at,
+  }
 }
 
 /**
@@ -175,6 +201,7 @@ export function useForecastFrame(
   queryKey: string,
   query: LodQuery,
   enabled: boolean,
+  runId?: string,
 ): FrameState {
   const memoQuery = useMemo(
     () => query,
@@ -184,21 +211,25 @@ export function useForecastFrame(
     [queryKey],
   )
 
-  // Latest known-good frame data, kept across keyframe changes.
-  const [latest, setLatest] = useState<FrameState>({ status: 'loading', data: undefined, isDemo: false })
+  // Keep stale data while moving between frames of one view, but never carry
+  // it across publication ids or spatial query keys.
+  const [latest, setLatest] = useState<{ queryKey: string; frame: FrameState }>(() => ({
+    queryKey,
+    frame: { status: 'loading', data: undefined, isDemo: false },
+  }))
 
   useEffect(() => {
     if (!enabled) return
     const key = cacheKey(minutes, queryKey)
     const cached = cache.get(key)
     if (cached) {
-      setLatest(stateFromEnvelope(cached))
+      setLatest({ queryKey, frame: stateFromEnvelope(cached) })
       return
     }
     // Not cached: keep showing whatever was last loaded (stale-while-
     // revalidate) and start the fetch.
-    ensureForecastFrame(minutes, queryKey, memoQuery)
-  }, [minutes, queryKey, enabled, memoQuery])
+    ensureForecastFrame(minutes, queryKey, memoQuery, runId)
+  }, [minutes, queryKey, enabled, memoQuery, runId])
 
   // Re-read on every store change (a frame resolved).
   useEffect(() => {
@@ -207,14 +238,23 @@ export function useForecastFrame(
       const key = cacheKey(minutes, queryKey)
       const cached = cache.get(key)
       if (cached) {
-        setLatest(stateFromEnvelope(cached))
+        setLatest({ queryKey, frame: stateFromEnvelope(cached) })
       } else if (!inFlight.has(key)) {
         // A fetch failed with no prior data for this frame.
-        setLatest((prev) =>
-          prev.data
-            ? prev // keep stale data, no error banner mid-playback
-            : { status: 'error', data: undefined, isDemo: false, message: 'Could not load forecast frame' },
-        )
+        setLatest((previous) => {
+          if (previous.queryKey === queryKey && previous.frame.data) {
+            return previous // keep stale data while remaining within one pinned view
+          }
+          return {
+            queryKey,
+            frame: {
+              status: 'error',
+              data: undefined,
+              isDemo: false,
+              message: 'Could not load forecast frame',
+            },
+          }
+        })
       }
     }
     listeners.add(onNotify)
@@ -223,5 +263,7 @@ export function useForecastFrame(
     }
   }, [minutes, queryKey, enabled])
 
-  return latest
+  return latest.queryKey === queryKey
+    ? latest.frame
+    : { status: 'loading', data: undefined, isDemo: false }
 }

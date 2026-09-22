@@ -7,7 +7,7 @@ import '../app_colors.dart';
 import '../app_spacing.dart';
 import '../app_typography.dart';
 
-/// 12-hour AQI forecast chart.
+/// Published-horizon AQI forecast chart (up to the available 6-hour window).
 ///
 /// Shows current AQI as the starting point, forecast line, CPCB
 /// category background bands, time labels, and a marker for the
