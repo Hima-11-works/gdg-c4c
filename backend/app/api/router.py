@@ -7,6 +7,7 @@ from fastapi import APIRouter
 
 from app.api.routes.alerts import router as alerts_router
 from app.api.routes.cells import router as cells_router
+from app.api.routes.fires import router as fires_router
 from app.api.routes.grid import router as grid_router
 from app.api.routes.reports import router as reports_router
 from app.api.routes.sensors import router as sensors_router
@@ -21,3 +22,4 @@ api_v1_router.include_router(grid_router)
 api_v1_router.include_router(cells_router)
 api_v1_router.include_router(alerts_router)
 api_v1_router.include_router(reports_router)
+api_v1_router.include_router(fires_router)

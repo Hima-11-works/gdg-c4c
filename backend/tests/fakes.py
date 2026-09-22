@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime
 
+from app.domain.environmental_observations import FireHotspot
 from app.domain.providers import ProviderError
 from app.domain.repositories import DuplicateReadingError
 from app.domain.types import (
@@ -187,6 +188,50 @@ class FakeFireReportRepository:
 
     def list_active(self, *, since: datetime) -> list[FireReport]:
         return [r for r in self.reports if r.reported_at >= since]
+
+
+class FakeFireHotspotRepository:
+    """In-memory FireHotspotRepository.
+
+    Mirrors the SQL implementation's two behaviours the read endpoint
+    depends on: `save_many` is idempotent on detection_id (the SQL side is
+    ON CONFLICT DO NOTHING), and `list_for_window` filters by the acquired
+    window, by availability, and by cell membership - returning rows in the
+    same (acquired_at, detection_id) order, so the service's FRP ranking is
+    what a test actually observes.
+    """
+
+    def __init__(self) -> None:
+        self.hotspots: list[FireHotspot] = []
+
+    def save_many(self, hotspots: list[FireHotspot]) -> tuple[int, int]:
+        known = {h.detection_id for h in self.hotspots}
+        inserted = 0
+        for hotspot in hotspots:
+            if hotspot.detection_id in known:
+                continue
+            known.add(hotspot.detection_id)
+            self.hotspots.append(hotspot)
+            inserted += 1
+        return inserted, len(hotspots) - inserted
+
+    def list_for_window(
+        self,
+        *,
+        acquired_from: datetime,
+        acquired_to: datetime,
+        available_by: datetime,
+        h3_cells: list[str] | None = None,
+    ) -> list[FireHotspot]:
+        cell_set = None if h3_cells is None else set(h3_cells)
+        matches = [
+            h
+            for h in self.hotspots
+            if acquired_from <= h.acquired_at <= acquired_to
+            and h.available_at <= available_by
+            and (cell_set is None or h.h3_cell in cell_set)
+        ]
+        return sorted(matches, key=lambda h: (h.acquired_at, h.detection_id))
 
 
 class FakePollutionDataProvider:
