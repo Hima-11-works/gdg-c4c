@@ -1,5 +1,6 @@
 import { NO_DATA_COLOR, PDI_COLOR_SCALE, PM25_COLOR_SCALE } from '../lib/colorScales'
 import { BASEMAP, WIND } from '../lib/mapTheme'
+import { DISTRICT_BOUNDARY_COLOR, HIGHWAY_CORE_COLOR } from '../lib/visualConfig'
 import { PDI_LABEL, PDI_TOOLTIP } from '../lib/format'
 import { useMapUi } from '../state/MapUiContext'
 import { SidePanel } from './SidePanel'
@@ -59,6 +60,23 @@ export function Legend() {
             <span className="swatch" style={{ backgroundColor: BASEMAP.intlBorder }} />
             International boundary
           </div>
+          {/* Only listed once the map is deep enough to draw them, so the key
+              never claims a line that isn't there. */}
+          {state.lod.tier !== 'country' && (
+            <div className="legend-row" title="geoBoundaries ADM2 (ODbL) — from level 2">
+              <span className="swatch" style={{ backgroundColor: DISTRICT_BOUNDARY_COLOR }} />
+              District boundary
+            </div>
+          )}
+          {state.lod.resolution >= 5 && (
+            <div
+              className="legend-row"
+              title="Natural Earth 10m roads, major-highway class (public domain) — from level 3. Main corridors only, not the full National Highway network."
+            >
+              <span className="swatch" style={{ backgroundColor: HIGHWAY_CORE_COLOR }} />
+              Major highway
+            </div>
+          )}
         </section>
 
         <section>

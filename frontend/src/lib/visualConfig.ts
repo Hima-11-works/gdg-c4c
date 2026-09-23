@@ -27,6 +27,18 @@ export const CONTRAST_LINE_COLOR = '#05080c'
 export const CONTRAST_LINE_WIDTH = 1.6
 export const CONTRAST_LINE_OPACITY = 0.85
 
+/** District borders (level 2 and finer). Dimmer than the state/UT dashes they
+ *  sit under, so a dense district mesh never competes with them. */
+export const DISTRICT_BOUNDARY_COLOR = '#333944'
+
+/** Major highways (level 3 and finer). Drawn as a road does it: a dark casing
+ *  under a light core, because a single flat colour can't read over all eight
+ *  PM2.5 band colours at once - warm amber disappeared into the orange and red
+ *  bands. The casing carries the contrast, so the line is legible over green,
+ *  yellow, orange and red alike. */
+export const HIGHWAY_CORE_COLOR = '#ffd9a0'
+export const HIGHWAY_CASING_COLOR = '#241a0c'
+
 /** Duration (ms) of the opacity dissolve between forecast frames. Long
  *  enough to read as a continuous flow at the 750ms playback cadence (each
  *  frame dissolves into the next), short enough to leave a moment of hold. */

@@ -63,6 +63,7 @@ import { buildRangeContours, buildSmoothRangeContours } from '../lib/pm25Contour
 import { INDIA_BBOX, lodBbox, MAX_ZOOM } from '../lib/lod'
 import { scopeContains, scopeMask } from '../lib/scope'
 import { INDIA_OUTLINE_URL, STATE_BOUNDARIES_URL } from '../lib/stateBoundaries'
+import { DISTRICT_BOUNDARIES_URL, MAJOR_HIGHWAYS_URL } from '../lib/staticLayers'
 import { BASE_STYLE_URL, OVERLAY, WIND, BASEMAP, patchBasemapStyle } from '../lib/mapTheme'
 import {
   CELL_BORDER_COLOR,
@@ -70,6 +71,9 @@ import {
   CONTRAST_LINE_COLOR,
   CONTRAST_LINE_OPACITY,
   CONTRAST_LINE_WIDTH,
+  DISTRICT_BOUNDARY_COLOR,
+  HIGHWAY_CASING_COLOR,
+  HIGHWAY_CORE_COLOR,
   LAYER_CROSSFADE_DURATION_MS,
   PDI_FILL_OPACITY,
   PM25_DISSOLVE_DURATION_MS,
@@ -312,6 +316,19 @@ const LAYER_PLACE_LOCALITY = 'place-labels-locality'
 const PLACE_LABEL_FONT = ['Open Sans Semibold']
 const CITY_LABEL_MIN_ZOOM = 6
 const LOCALITY_LABEL_MIN_ZOOM = 7
+
+// Zoom-dependent reference geometry, both from bundled static files
+// (lib/staticLayers.ts): district borders from the state tier up, major
+// highways from the local tier up. Sources start empty and are filled with
+// their URL the first time the map reaches the tier that draws them, so a
+// country-only session never downloads either file.
+const SOURCE_DISTRICTS = 'district-boundaries'
+const LAYER_DISTRICTS = 'district-boundaries-line'
+const SOURCE_HIGHWAYS = 'major-highways'
+const LAYER_HIGHWAYS = 'major-highways-line'
+const LAYER_HIGHWAYS_CASING = 'major-highways-casing'
+const DISTRICT_BOUNDARY_MIN_ZOOM = 6
+const HIGHWAY_MIN_ZOOM = 7
 
 // Seasonal smog (GIBS Deep Blue AOD) and industrial emissions (Sentinel-5P
 // NO2 WMS) — two more raster overlays, both added in the same early block as
@@ -922,6 +939,51 @@ export function MapView({
             paint: {
               'fill-color': colorScaleExpression(PDI_COLOR_SCALE, 'value'),
               'fill-opacity': 0,
+            },
+          })
+
+          // District borders and major highways — reference geometry that
+          // appears as the map deepens. Added above the pollution field so it
+          // reads over the hexes, and below the state/UT dashes and the
+          // country border so those stay the dominant lines. Both sources
+          // start empty (see the lazy-load effects below) and each layer is
+          // gated by zoom, so nothing is drawn — or fetched — before its tier.
+          map!.addSource(SOURCE_DISTRICTS, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+          map!.addLayer({
+            id: LAYER_DISTRICTS,
+            type: 'line',
+            source: SOURCE_DISTRICTS,
+            minzoom: DISTRICT_BOUNDARY_MIN_ZOOM,
+            paint: {
+              'line-color': DISTRICT_BOUNDARY_COLOR,
+              'line-width': 0.6,
+              'line-opacity': 0.7,
+              'line-dasharray': [2, 2],
+            },
+          })
+          map!.addSource(SOURCE_HIGHWAYS, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+          map!.addLayer({
+            id: LAYER_HIGHWAYS_CASING,
+            type: 'line',
+            source: SOURCE_HIGHWAYS,
+            minzoom: HIGHWAY_MIN_ZOOM,
+            layout: { 'line-cap': 'round', 'line-join': 'round' },
+            paint: {
+              'line-color': HIGHWAY_CASING_COLOR,
+              'line-width': ['interpolate', ['linear'], ['zoom'], 7, 2.8, 10, 4.4],
+              'line-opacity': 0.6,
+            },
+          })
+          map!.addLayer({
+            id: LAYER_HIGHWAYS,
+            type: 'line',
+            source: SOURCE_HIGHWAYS,
+            minzoom: HIGHWAY_MIN_ZOOM,
+            layout: { 'line-cap': 'round', 'line-join': 'round' },
+            paint: {
+              'line-color': HIGHWAY_CORE_COLOR,
+              'line-width': ['interpolate', ['linear'], ['zoom'], 7, 1.2, 10, 2.6],
+              'line-opacity': 0.9,
             },
           })
 
@@ -1891,6 +1953,35 @@ export function MapView({
       source.setData(placeLabelsFeatureCollection(places) as never)
     }
   }, [mapReady, places])
+
+  // The two reference layers load the same way, and for the same reason: hand
+  // the source its URL only once the map has reached the tier that draws it,
+  // so the country view never downloads 543 KB of borders and roads it cannot
+  // show. setData takes the URL directly, so the fetch (and the caching of it)
+  // stays MapLibre's rather than a second one of ours.
+  const [districtsLoaded, setDistrictsLoaded] = useState(false)
+  useEffect(() => {
+    if (districtsLoaded || !mapReady || !mapRef.current) return
+    if (state.lod.tier === 'country') return
+    const source = mapRef.current.getSource(SOURCE_DISTRICTS)
+    if (source instanceof GeoJSONSource) {
+      source.setData(DISTRICT_BOUNDARIES_URL)
+      setDistrictsLoaded(true)
+    }
+  }, [districtsLoaded, mapReady, state.lod.tier])
+
+  const [highwaysLoaded, setHighwaysLoaded] = useState(false)
+  useEffect(() => {
+    if (highwaysLoaded || !mapReady || !mapRef.current) return
+    // Level 3 is the finest tier, so this is the most specific signal the
+    // level-of-detail state gives us: resolution 5 only appears there.
+    if (state.lod.resolution < 5) return
+    const source = mapRef.current.getSource(SOURCE_HIGHWAYS)
+    if (source instanceof GeoJSONSource) {
+      source.setData(MAJOR_HIGHWAYS_URL)
+      setHighwaysLoaded(true)
+    }
+  }, [highwaysLoaded, mapReady, state.lod.resolution])
 
   // Animate the thermal-anomaly pulse ring by cycling the icon frames —
   // same pattern as the wind streaks. Static under prefers-reduced-motion.
