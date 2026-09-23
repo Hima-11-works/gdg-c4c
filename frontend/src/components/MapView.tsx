@@ -82,6 +82,9 @@ import { useMapUi } from '../state/MapUiContext'
 import type { MapViewMode } from '../state/mapUiReducer'
 import type { AsyncResource } from '../hooks/useApiResource'
 import { useStateBoundaries } from '../hooks/useStateBoundaries'
+import { loadLocations } from '../lib/locations'
+import { placeLabelsFeatureCollection } from '../lib/placeLabels'
+import type { IndiaLocation } from '../lib/locations'
 import type { BoundingBox, FireReportOut, ForecastOut, GridStateOut, WeatherReadingOut } from '../lib/types'
 import type { MultiLineString, Position } from 'geojson'
 
@@ -297,6 +300,18 @@ const LAYER_ACTIVE_FIRES_CORE = 'active-fires-core'
 const ACTIVE_FIRE_COLOR = '#FF0055'
 const ACTIVE_FIRE_GLOW_OPACITY = 0.45
 const ACTIVE_FIRE_CORE_OPACITY = 0.9
+
+// Place labels — city and district names from the state tier up (level 2),
+// then localities at the local tier (level 3), so the map gains named detail
+// as it zooms. The dataset is points, not polygons: it can name where a
+// district is, not outline it. Same font stack the basemap style already
+// loads, so no extra glyph source.
+const SOURCE_PLACES = 'place-labels'
+const LAYER_PLACE_CITY = 'place-labels-city'
+const LAYER_PLACE_LOCALITY = 'place-labels-locality'
+const PLACE_LABEL_FONT = ['Open Sans Semibold']
+const CITY_LABEL_MIN_ZOOM = 6
+const LOCALITY_LABEL_MIN_ZOOM = 7
 
 // Seasonal smog (GIBS Deep Blue AOD) and industrial emissions (Sentinel-5P
 // NO2 WMS) — two more raster overlays, both added in the same early block as
@@ -1201,6 +1216,59 @@ export function MapView({
             },
           })
 
+          // Place labels — added after the data layers so names sit on top of
+          // the field, but before the scope mask so a greyed-out area greys
+          // its labels too. Two layers off one source, each gated by zoom:
+          // cities and districts from level 2, localities from level 3.
+          // Collision handling is MapLibre's (text-allow-overlap off), and
+          // symbol-sort-key puts cities ahead of districts ahead of
+          // localities, so the more significant name wins an overlap.
+          map!.addSource(SOURCE_PLACES, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+          map!.addLayer({
+            id: LAYER_PLACE_CITY,
+            type: 'symbol',
+            source: SOURCE_PLACES,
+            minzoom: CITY_LABEL_MIN_ZOOM,
+            filter: [
+              'any',
+              ['==', ['get', 'kind'], 'city'],
+              ['==', ['get', 'kind'], 'district'],
+            ],
+            layout: {
+              'text-field': ['get', 'name'],
+              'text-font': PLACE_LABEL_FONT,
+              'text-size': ['match', ['get', 'kind'], 'city', 12.5, 'district', 11, 11],
+              'text-padding': 4,
+              'text-allow-overlap': false,
+              'symbol-sort-key': ['match', ['get', 'kind'], 'city', 0, 'district', 1, 2],
+            },
+            paint: {
+              'text-color': '#eef1f5',
+              'text-halo-color': 'rgba(8, 10, 14, 0.9)',
+              'text-halo-width': 1.3,
+            },
+          })
+          map!.addLayer({
+            id: LAYER_PLACE_LOCALITY,
+            type: 'symbol',
+            source: SOURCE_PLACES,
+            minzoom: LOCALITY_LABEL_MIN_ZOOM,
+            filter: ['==', ['get', 'kind'], 'locality'],
+            layout: {
+              'text-field': ['get', 'name'],
+              'text-font': PLACE_LABEL_FONT,
+              'text-size': 10.5,
+              'text-padding': 3,
+              'text-allow-overlap': false,
+              'symbol-sort-key': 2,
+            },
+            paint: {
+              'text-color': '#c3c9d4',
+              'text-halo-color': 'rgba(8, 10, 14, 0.9)',
+              'text-halo-width': 1.2,
+            },
+          })
+
           // Place scope mask — added last so it sits over every data layer.
           // The geometry is the whole world with the scoped place punched out
           // as a hole (lib/scope.ts), so a hexagon straddling the boundary is
@@ -1794,6 +1862,35 @@ export function MapView({
     source.setData((mask ?? EMPTY_FEATURE_COLLECTION) as never)
     map.setLayoutProperty(LAYER_SCOPE_MASK, 'visibility', mask === null ? 'none' : 'visible')
   }, [mapReady, state.scope, stateBoundaries])
+
+  // Place labels are loaded the first time the map reaches the state tier,
+  // not on mount: the file is the same ~800 KB GeoNames list the search bar
+  // reads (lib/locations.ts caches the promise, so the two share one fetch),
+  // and a country-only session has no labels to draw with it anyway. Once
+  // loaded it stays, so zooming back out and in again costs nothing.
+  const [places, setPlaces] = useState<IndiaLocation[] | null>(null)
+  useEffect(() => {
+    if (places !== null || state.lod.tier === 'country') return
+    let cancelled = false
+    loadLocations()
+      .then((loaded) => {
+        if (!cancelled) setPlaces(loaded)
+      })
+      .catch(() => {
+        // Labels are supplementary: a failed load leaves the map as it was.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [places, state.lod.tier])
+
+  useEffect(() => {
+    if (!mapReady || !mapRef.current || places === null) return
+    const source = mapRef.current.getSource(SOURCE_PLACES)
+    if (source instanceof GeoJSONSource) {
+      source.setData(placeLabelsFeatureCollection(places) as never)
+    }
+  }, [mapReady, places])
 
   // Animate the thermal-anomaly pulse ring by cycling the icon frames —
   // same pattern as the wind streaks. Static under prefers-reduced-motion.
