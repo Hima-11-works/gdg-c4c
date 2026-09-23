@@ -84,6 +84,10 @@ from app.services.prediction_publication import (
     PredictionPublicationService,
     assert_live_snapshots_available,
 )
+from app.services.prediction_queries import (
+    DEFAULT_EXPOSURE_THRESHOLD_PM25,
+    PredictionQueryService,
+)
 from app.services.training_data import (
     export_training_dataset,
     generate_synthetic_training_dataset,
@@ -756,6 +760,60 @@ async def _run_prediction_publish(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _run_verify_publication(args: argparse.Namespace) -> int:
+    """Read the newest published v2 run exactly as /api/v2/* does, and report
+    what the web app will see. Non-zero exit if nothing resolves, so a
+    scheduled pipeline that failed to publish turns the workflow red.
+
+    Deliberately read-only and mode-agnostic: in demo mode it also prints the
+    population/exposure coverage (which should be non-null); in live mode a
+    degraded run is still reported honestly rather than treated as a failure
+    of this check — the pipeline run's own exit code already flags a failed
+    publication stage.
+    """
+    region = args.region
+    session = get_session_factory()()
+    try:
+        repository = SqlPredictionPublicationRepository(session)
+        publisher = PredictionQueryService(repository, region=region)
+        try:
+            run = publisher.run(args.run_id)
+        except ValueError as exc:
+            print(f"No published v2 run for region {region!r}: {exc}", file=sys.stderr)
+            return 1
+
+        horizons = sorted(publisher.horizons(run))
+        cells = {result.h3_cell for result in repository.list_results(run.run_id)}
+        print(
+            f"Published run resolved: run_id={run.run_id} region={run.region} "
+            f"mode={run.mode.value} cells={len(cells)} horizons={horizons}"
+        )
+        print(
+            f"  generated_at={run.generated_at.isoformat()} "
+            f"feature_run_id={run.feature_run_id} scenario_id={run.scenario_id or '-'}"
+        )
+
+        # Exposure over native-resolution cells, exactly as the route computes.
+        views = publisher.aggregate(
+            run,
+            target_cells=sorted(cells),
+            resolution=publisher.native_resolution,
+            horizon=0,
+            threshold_pm25=DEFAULT_EXPOSURE_THRESHOLD_PM25,
+        )
+        covered_population = sum(view.exposure.covered_population for view in views)
+        known = [
+            view for view in views if view.exposure.residents_above_threshold is not None
+        ]
+        print(
+            f"  exposure: covered_population={covered_population} "
+            f"cells_with_residents_above_threshold={len(known)}"
+        )
+        return 0
+    finally:
+        session.close()
+
+
 def _add_demo_snapshot_parser(subparsers: argparse._SubParsersAction, command: str) -> None:
     demo_parser = subparsers.add_parser(
         command,
@@ -980,6 +1038,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     monitor_parser.add_argument("--out", default="model-monitor-report.json")
     monitor_parser.set_defaults(func=_run_model_monitor)
+
+    verify_parser = subparsers.add_parser(
+        "verify-publication",
+        help="Read the newest published v2 run the way /api/v2/* does (CI check).",
+    )
+    verify_parser.add_argument("--region", default="india")
+    verify_parser.add_argument("--run-id", default=None)
+    verify_parser.set_defaults(func=_run_verify_publication)
 
     args = parser.parse_args(argv)
     logging.basicConfig(level=get_settings().log_level)
