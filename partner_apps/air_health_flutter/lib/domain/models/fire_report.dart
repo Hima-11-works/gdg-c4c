@@ -24,6 +24,79 @@ enum FireKind {
       );
 }
 
+/// The verification state of every resident submission.
+///
+/// Not a status the backend reports: the report response carries no
+/// verification field, and the published README states plainly that a citizen
+/// report is "subjective, often non-numeric, and unverified", with any trust or
+/// moderation layer explicitly unbuilt. So this is not a guess about a
+/// particular row — it is the only true description of every row the endpoint
+/// can hold, and the UI shows it wherever a resident's number or note appears
+/// so it is never read as a measurement.
+///
+/// If the backend ever grows a real verification field, this is the one place
+/// to replace with that field's value.
+class CitizenReportVerification {
+  const CitizenReportVerification._();
+
+  static const label = 'Unverified';
+  static const detail = 'resident submitted, not a measurement';
+  static const badge = '$label — $detail';
+  static const tooltip =
+      'Submitted by a resident, not a sensor or a satellite. Nothing checks it '
+      'before it is stored, and the backend reports no verification status for '
+      'these reports, so treat it as a concern raised rather than a measurement.';
+
+  /// What the report sheet says about the local reading: it is not
+  /// transmitted, because no endpoint accepts one.
+  static const localOnlyDetail =
+      'Kept on this device. There is no sensor upload endpoint, so this is not '
+      'sent anywhere.';
+}
+
+/// A reading the resident typed in from a monitor they own.
+///
+/// Local only: POST /api/v1/reports takes no sensor value and there is no
+/// sensor write route, so this never leaves the device. [tryCreate] returns
+/// null for anything that is not a non-negative finite number, which is what
+/// the form uses to decide whether the value can be shown at all.
+class LocalSensorReading {
+  const LocalSensorReading({required this.value, required this.unit});
+
+  final double value;
+  final String unit;
+
+  /// Units offered by the form. Free-text "other" is deliberately not a
+  /// separate unit — the value is a note to the resident, not a measurement.
+  static const units = <String>['µg/m³', 'ppm', 'AQI', 'other'];
+
+  static LocalSensorReading? tryCreate({
+    required String rawValue,
+    required String unit,
+  }) {
+    final parsed = double.tryParse(rawValue.trim());
+    if (parsed == null || !parsed.isFinite || parsed < 0) return null;
+    return LocalSensorReading(value: parsed, unit: unit);
+  }
+
+  /// "145 µg/m³" — whole numbers stay whole.
+  String get display {
+    final rounded = value == value.roundToDouble();
+    return '${rounded ? value.toStringAsFixed(0) : value.toStringAsFixed(1)} $unit';
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LocalSensorReading && value == other.value && unit == other.unit;
+
+  @override
+  int get hashCode => Object.hash(value, unit);
+
+  @override
+  String toString() => 'LocalSensorReading($display)';
+}
+
 /// How long the user estimates the burning has been going, as form options.
 ///
 /// A slider is wrong for this: the answer is fuzzy ("a couple of hours"),

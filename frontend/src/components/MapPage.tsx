@@ -225,14 +225,6 @@ export function MapPage() {
             Report a fire
           </button>
         )}
-        {reportOpen && reportCenter !== null && (
-          <ReportFireForm
-            latitude={reportCenter.latitude}
-            longitude={reportCenter.longitude}
-            onClose={() => setReportOpen(false)}
-            onSubmitted={reports.refetch}
-          />
-        )}
       </div>
 
       <div className="overlay overlay-top-right">
@@ -261,6 +253,27 @@ export function MapPage() {
       </div>
 
       <CellDetailPanel publishedRunId={publishedRunId} citizenReports={reports.resource} />
+
+      {/* The report form is a modal, and deliberately NOT inside an overlay:
+          every `.overlay` establishes its own stacking context, so a modal
+          rendered inside one could not rise above its sibling overlays and
+          their panels would intercept its clicks. As a direct child of the
+          page it covers all of them. */}
+      {reportOpen && reportCenter !== null && (
+        <div
+          className="report-modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Report a fire"
+        >
+          <ReportFireForm
+            latitude={reportCenter.latitude}
+            longitude={reportCenter.longitude}
+            onClose={() => setReportOpen(false)}
+            onSubmitted={reports.refetch}
+          />
+        </div>
+      )}
     </div>
   )
 }

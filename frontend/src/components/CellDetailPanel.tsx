@@ -3,7 +3,14 @@ import { fetchCellDetail } from '../lib/api'
 import { PDI_LABEL, PDI_TOOLTIP, compassLabel, formatNumber, pdiFactorLabel } from '../lib/format'
 import { cellCenter } from '../lib/h3Geometry'
 import { regionTitle } from '../lib/regionName'
-import { FIRE_KIND_LABELS, minutesAgo, reportForCell, smokeLabel } from '../lib/citizenReports'
+import {
+  CITIZEN_VERIFICATION_BADGE,
+  CITIZEN_VERIFICATION_TOOLTIP,
+  FIRE_KIND_LABELS,
+  minutesAgo,
+  reportForCell,
+  smokeLabel,
+} from '../lib/citizenReports'
 import {
   anomaliesInCell,
   priorityForSeverity,
@@ -41,6 +48,12 @@ function CitizenReportWidget({ report }: { report: FireReportOut }) {
           Cell {report.h3_cell} — the model treats this as an active source.
         </span>
       </div>
+      {/* The one thing a reader must not get wrong about this row: it is a
+          resident's concern, not a measurement. The backend reports no
+          verification status for these, so the honest label is the constant. */}
+      <p className="citizen-report-unverified" title={CITIZEN_VERIFICATION_TOOLTIP}>
+        {CITIZEN_VERIFICATION_BADGE}
+      </p>
     </section>
   )
 }

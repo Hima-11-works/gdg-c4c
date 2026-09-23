@@ -166,4 +166,43 @@ void main() {
       expect(await client.listActiveReports(), hasLength(1));
     });
   });
+
+  group('LocalSensorReading', () {
+    test('accepts a non-negative number and formats it', () {
+      final reading =
+          LocalSensorReading.tryCreate(rawValue: '145', unit: 'µg/m³');
+
+      expect(reading, isNotNull);
+      expect(reading!.value, 145);
+      expect(reading.display, '145 µg/m³');
+    });
+
+    test('trims input and keeps a fractional value to one place', () {
+      final reading =
+          LocalSensorReading.tryCreate(rawValue: ' 12.5 ', unit: 'ppm');
+
+      expect(reading!.display, '12.5 ppm');
+    });
+
+    test('rejects blank, non-numeric and negative input', () {
+      expect(LocalSensorReading.tryCreate(rawValue: '', unit: 'ppm'), isNull);
+      expect(LocalSensorReading.tryCreate(rawValue: 'abc', unit: 'ppm'), isNull);
+      expect(LocalSensorReading.tryCreate(rawValue: '-1', unit: 'ppm'), isNull);
+    });
+
+    test('offers each unit once', () {
+      expect(
+        LocalSensorReading.units.toSet(),
+        hasLength(LocalSensorReading.units.length),
+      );
+    });
+  });
+
+  group('CitizenReportVerification', () {
+    test('names the only true status of a resident submission', () {
+      expect(CitizenReportVerification.label, 'Unverified');
+      expect(CitizenReportVerification.badge, contains('Unverified'));
+      expect(CitizenReportVerification.localOnlyDetail, contains('not sent'));
+    });
+  });
 }

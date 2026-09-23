@@ -1426,11 +1426,40 @@ body,
   text-align: left;
 }
 
+/* The report button and its form share the top-left column with the legend,
+   whose body is absolutely positioned and therefore paints over later
+   siblings. Without a stacking context of their own the button was
+   unclickable whenever the legend was open, so the button sits above it. */
+.report-open {
+  position: relative;
+  z-index: 2;
+}
+
+/* The form itself is a modal: it is tall, and every overlay it could live in
+   shares space with an absolutely-positioned panel that would intercept its
+   clicks. Fixed and centred, it is reachable regardless of which panels are
+   open, and it scrolls on its own. */
+.report-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(6, 8, 12, 0.62);
+  overflow: auto;
+}
+
 .report-form {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
   max-width: 20rem;
+  /* Inside the modal backdrop: keep the whole form reachable on a short
+     viewport without the backdrop itself scrolling the page behind it. */
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
 }
 
 .report-form-header {
@@ -1491,4 +1520,162 @@ body,
   margin: 0;
   font-size: 0.78rem;
   color: #f87171;
+}
+
+/* --- report form: validation, local-only extras, confirmation --- */
+
+.report-field-error {
+  font-size: 0.74rem;
+  color: #f87171;
+}
+
+/* The photo and the local reading are grouped and visually set apart from the
+   fields that are actually transmitted, so "kept on this device" reads as a
+   property of the block rather than a footnote. */
+.report-local {
+  margin: 0;
+  padding: 0.4rem 0.5rem;
+  border: 1px dashed #3a3f4a;
+  border-radius: 6px;
+  font-size: 0.8rem;
+}
+
+.report-local legend {
+  padding: 0 0.3rem;
+  color: #9ca3af;
+  font-size: 0.76rem;
+}
+
+.report-local-note {
+  margin: 0 0 0.35rem;
+  font-size: 0.72rem;
+  line-height: 1.3;
+}
+
+.report-local input[type='file'] {
+  width: 100%;
+  font-size: 0.74rem;
+  color: #9ca3af;
+}
+
+.report-photo {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+
+.report-photo-preview {
+  width: 2.6rem;
+  height: 2.6rem;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid #3a3f4a;
+}
+
+.report-photo-remove {
+  margin-left: auto;
+  border: 1px solid #3a3f4a;
+  border-radius: 4px;
+  background: transparent;
+  color: #9ca3af;
+  font: inherit;
+  font-size: 0.72rem;
+  padding: 0.1rem 0.35rem;
+  cursor: pointer;
+}
+
+.report-reading-row {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.report-reading-value {
+  flex: 1;
+  min-width: 0;
+  padding: 0.3rem;
+  border: 1px solid #3a3f4a;
+  border-radius: 6px;
+  background: #12141a;
+  color: #e5e7eb;
+  font: inherit;
+}
+
+.report-reading-row select {
+  padding: 0.3rem;
+  border: 1px solid #3a3f4a;
+  border-radius: 6px;
+  background: #12141a;
+  color: #e5e7eb;
+  font: inherit;
+}
+
+.report-reading-include {
+  display: flex;
+  gap: 0.35rem;
+  align-items: flex-start;
+  margin-top: 0.4rem;
+  font-size: 0.72rem;
+  line-height: 1.3;
+  color: #9ca3af;
+}
+
+.report-retry-note {
+  margin: 0;
+  font-size: 0.74rem;
+  line-height: 1.3;
+}
+
+.report-result {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.2rem 0.6rem;
+  margin: 0;
+  font-size: 0.78rem;
+}
+
+.report-result dt {
+  color: #9ca3af;
+  white-space: nowrap;
+}
+
+.report-result dd {
+  margin: 0;
+  color: #e5e7eb;
+  line-height: 1.3;
+}
+
+.report-result-cell {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  word-break: break-all;
+}
+
+.report-result-note {
+  white-space: pre-wrap;
+}
+
+/* The unverified badge: amber, because it is a caution about provenance and
+   not an error, and used verbatim in the drawer row too. */
+.report-unverified,
+.citizen-report-unverified {
+  margin: 0;
+  padding: 0.2rem 0.45rem;
+  border-radius: 4px;
+  background: #2d2412;
+  color: #fcd34d;
+  border: 1px solid #5c4a1a;
+  font-size: 0.74rem;
+  align-self: flex-start;
+}
+
+.citizen-report-unverified {
+  display: inline-block;
+  margin-top: 0.35rem;
+}
+
+.report-local-only {
+  margin: 0;
+  font-size: 0.74rem;
+  line-height: 1.3;
 }

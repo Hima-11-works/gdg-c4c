@@ -29,18 +29,36 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
   int _smokeIntensity = 3;
   double _durationHours = FireDurationOption.justStarted.hours;
   final _notesController = TextEditingController();
+  final _readingController = TextEditingController();
+  String _readingUnit = LocalSensorReading.units.first;
   bool _submitting = false;
+  bool _failed = false;
+  String? _validationError;
 
   @override
   void dispose() {
     _notesController.dispose();
+    _readingController.dispose();
     super.dispose();
   }
 
   /// Idempotency id for this draft session: a retried submission carries the
   /// same id, so the backend's unique constraint keeps retries from stacking.
-  String get _clientReportId =>
+  ///
+  /// Minted once per sheet (a field, not a getter) — a getter would hand out a
+  /// fresh id on every attempt, which is exactly what makes a retry after a
+  /// timeout duplicate the report instead of returning the stored one.
+  late final String _clientReportId =
       'flutter-${DateTime.now().microsecondsSinceEpoch}';
+
+  /// The reading the resident typed, parsed — null until it is a usable
+  /// non-negative number. Purely local: it is shown back to them and never
+  /// sent, because no endpoint accepts a sensor value.
+  LocalSensorReading? get _reading =>
+      LocalSensorReading.tryCreate(
+        rawValue: _readingController.text,
+        unit: _readingUnit,
+      );
 
   Future<void> _refreshLocation() async {
     ref.invalidate(currentLocationProvider);
@@ -65,19 +83,30 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
         clientReportId: _clientReportId,
       );
     } catch (error) {
+      setState(() {
+        _validationError = '$error';
+        _failed = true;
+      });
       _showMessage('$error');
       return;
     }
 
     HapticFeedback.mediumImpact();
-    setState(() => _submitting = true);
+    setState(() {
+      _submitting = true;
+      _failed = false;
+      _validationError = null;
+    });
     try {
       final report = await client.submitReport(draft);
       if (!mounted) return;
       Navigator.of(context).pop(report);
     } catch (_) {
       if (!mounted) return;
-      setState(() => _submitting = false);
+      setState(() {
+        _submitting = false;
+        _failed = true;
+      });
       _showMessage(
         'Could not send the report — check your connection and try again.',
       );
@@ -157,6 +186,42 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
                 counterText: '',
               ),
             ),
+            const SizedBox(height: AppSpacing.lg),
+            _SectionLabel('Local reading (optional)'),
+            const SizedBox(height: AppSpacing.xs),
+            _LocalReadingRow(
+              controller: _readingController,
+              unit: _readingUnit,
+              onUnitChanged: (unit) => setState(() => _readingUnit = unit),
+              onChanged: () => setState(() {}),
+            ),
+            if (_reading != null) ...[
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                'Noted on this device: ${_reading!.display}',
+                style: AppTypography.bodySmall.copyWith(color: cs.primary),
+              ),
+            ],
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              CitizenReportVerification.localOnlyDetail,
+              style: AppTypography.bodySmall.copyWith(color: cs.onSurfaceVariant),
+            ),
+            const SizedBox(height: AppSpacing.lg),
+            const _UnverifiedNotice(),
+            if (_validationError != null) ...[
+              const SizedBox(height: AppSpacing.sm),
+              _InlineError(_validationError!),
+            ],
+            if (_failed) ...[
+              const SizedBox(height: AppSpacing.sm),
+              Text(
+                'Retrying reuses the same report id, so it cannot create a '
+                'duplicate — if the first attempt did reach the server, this '
+                'returns the report it already stored.',
+                style: AppTypography.bodySmall.copyWith(color: cs.onSurfaceVariant),
+              ),
+            ],
             const SizedBox(height: AppSpacing.xxl),
             SizedBox(
               width: double.infinity,
@@ -190,6 +255,107 @@ class _SectionLabel extends StatelessWidget {
     return Text(
       text,
       style: AppTypography.titleMedium.copyWith(color: cs.onSurface),
+    );
+  }
+}
+
+/// A resident's own monitor reading.
+///
+/// The value never leaves the device: POST /api/v1/reports accepts no sensor
+/// value and there is no sensor write route, so this is captured for the
+/// resident's benefit and labelled as not transmitted. The field accepts any
+/// text; whether it parses to a usable number is decided by
+/// [LocalSensorReading.tryCreate] when the reading is shown.
+class _LocalReadingRow extends StatelessWidget {
+  const _LocalReadingRow({
+    required this.controller,
+    required this.unit,
+    required this.onUnitChanged,
+    required this.onChanged,
+  });
+
+  final TextEditingController controller;
+  final String unit;
+  final ValueChanged<String> onUnitChanged;
+
+  /// Fired as the resident types, so the parsed reading can be shown back.
+  final VoidCallback onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: TextField(
+            controller: controller,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            onChanged: (_) => onChanged(),
+            decoration: const InputDecoration(
+              hintText: 'e.g. 145',
+              isDense: true,
+            ),
+          ),
+        ),
+        const SizedBox(width: AppSpacing.sm),
+        DropdownButton<String>(
+          value: unit,
+          onChanged: (value) {
+            if (value != null) onUnitChanged(value);
+          },
+          items: [
+            for (final option in LocalSensorReading.units)
+              DropdownMenuItem<String>(value: option, child: Text(option)),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// Says out loud what a resident submission is: unverified. Shown on the form
+/// itself, before submission, so the resident knows how their report will be
+/// treated rather than discovering it afterwards.
+class _UnverifiedNotice extends StatelessWidget {
+  const _UnverifiedNotice();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: AppColors.aqiModerate.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.info_outline, size: 18),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Text(
+              '${CitizenReportVerification.badge}. ${CitizenReportVerification.tooltip}',
+              style: AppTypography.bodySmall,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Inline validation failure — the same bounds the backend enforces, caught
+/// before the request so the user gets a message at the form instead of a 422.
+class _InlineError extends StatelessWidget {
+  const _InlineError(this.message);
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      'Please check this report: $message',
+      style: AppTypography.bodySmall.copyWith(color: Theme.of(context).colorScheme.error),
     );
   }
 }

@@ -78,7 +78,13 @@ void main() {
     expect(find.text('Just started'), findsOneWidget);
     expect(find.text('More than 6 hours'), findsOneWidget);
     expect(find.byType(Slider), findsOneWidget);
-    expect(find.byType(TextField), findsOneWidget);
+    // Two text fields now: the optional note, and the optional local reading.
+    // Neither the reading nor a photo is transmitted — there is no endpoint
+    // that accepts either — so the sheet labels them as device-local.
+    expect(find.byType(TextField), findsNWidgets(2));
+    expect(find.text('Local reading (optional)'), findsOneWidget);
+    // The sheet says out loud what a resident submission is.
+    expect(find.textContaining('Unverified'), findsWidgets);
     expect(find.text('Submit report'), findsOneWidget);
   });
 
