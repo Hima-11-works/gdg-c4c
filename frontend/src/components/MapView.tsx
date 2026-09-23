@@ -734,12 +734,27 @@ export function MapView({
         map.on('moveend', reportViewport)
 
         map.on('load', () => {
-          // NASA GIBS True Color satellite imagery — added FIRST among the
-          // overlays so it sits under every data layer but above the vector
-          // basemap. `maxzoom` caps requests at the deepest GIBS tile
-          // matrix; MapLibre overzooms level-9 tiles past it rather than
-          // requesting tiles GIBS doesn't have. `raster-fade-duration: 0`
-          // keeps a freshly toggled tile from fading in half-drawn.
+          // India country base fill — dissolved from geoBoundaries ADM1. Added
+          // first of all, *under* the satellite rasters: it is an opaque fill,
+          // so anywhere above them it would hide the imagery over India (which
+          // is exactly what it did — the raster showed everywhere except the
+          // country it is about). Its job is only to give India the same tint
+          // the basemap gives other countries when no raster is on, and it
+          // still does that from underneath. The border line stays up top.
+          map!.addSource(SOURCE_INDIA_OUTLINE, { type: 'geojson', data: INDIA_OUTLINE_URL })
+          map!.addLayer({
+            id: LAYER_INDIA_OUTLINE_FILL,
+            type: 'fill',
+            source: SOURCE_INDIA_OUTLINE,
+            paint: { 'fill-color': OVERLAY.indiaFill, 'fill-opacity': 1 },
+          })
+
+          // NASA GIBS True Color satellite imagery — the bottom raster, above
+          // the India fill and under every data layer. `maxzoom` caps requests
+          // at the deepest GIBS tile matrix; MapLibre overzooms level-9 tiles
+          // past it rather than requesting tiles GIBS doesn't have.
+          // `raster-fade-duration: 0` keeps a freshly toggled tile from fading
+          // in half-drawn.
           map!.addSource(SOURCE_GIBS, {
             type: 'raster',
             tiles: [gibsTrueColorTileUrl()],
@@ -781,8 +796,10 @@ export function MapView({
           // so ask once whether it exists and only then add the source - an
           // unconfigured deployment keeps the toggle inert instead of firing a
           // screenful of 404s. This resolves after the synchronous block below,
-          // so the layer is inserted *before* the India outline by id: without
-          // that it would land on top of the H3 grid rather than under it.
+          // so the layer is inserted by id rather than appended: *before* the
+          // PM2.5 field, so it lands under the H3 grid rather than on top of
+          // it, and above the India base fill, so it isn't hidden over India
+          // the way the other rasters were.
           const no2Tiles = no2TileUrl()
           void no2Available().then((available) => {
             if (!available) return
@@ -800,7 +817,7 @@ export function MapView({
                 layout: { visibility: 'none' },
                 paint: { 'raster-opacity': NO2_OPACITY, 'raster-fade-duration': 0 },
               },
-              LAYER_INDIA_OUTLINE_FILL,
+              LAYER_PM25_FILL.a,
             )
             // The toggle effect has already run by now (it skips a layer that
             // does not exist yet), so apply the current setting here - the ref
@@ -810,15 +827,6 @@ export function MapView({
               'visibility',
               emissionsRef.current ? 'visible' : 'none',
             )
-          })
-
-          // India country outline — dissolved from geoBoundaries ADM1.
-          map!.addSource(SOURCE_INDIA_OUTLINE, { type: 'geojson', data: INDIA_OUTLINE_URL })
-          map!.addLayer({
-            id: LAYER_INDIA_OUTLINE_FILL,
-            type: 'fill',
-            source: SOURCE_INDIA_OUTLINE,
-            paint: { 'fill-color': OVERLAY.indiaFill, 'fill-opacity': 1 },
           })
 
           // PM2.5 double buffer: set 'a' starts visible, 'b' starts empty and
