@@ -29,8 +29,12 @@ logger = logging.getLogger(__name__)
 _CODES_BY_STATUS = {
     400: "bad_request",
     404: "not_found",
+    409: "conflict",
+    413: "media_too_large",
+    415: "unsupported_media_type",
     422: "validation_error",
     500: "internal_error",
+    503: "media_unavailable",
 }
 
 

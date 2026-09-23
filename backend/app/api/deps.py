@@ -23,6 +23,7 @@ from app.db.repositories import (
     SqlForecastRepository,
     SqlGridStateRepository,
     SqlPredictionPublicationRepository,
+    SqlReportEvidenceRepository,
     SqlSensorReadingRepository,
     SqlWeatherReadingRepository,
 )
@@ -30,8 +31,14 @@ from app.db.session import get_db
 from app.domain.types import BoundingBox
 from app.services.alerts import AlertService
 from app.services.cells import CellService
+from app.services.citizen_intake import CitizenIntakeService
 from app.services.fires import FireHotspotService
 from app.services.grid import GridService
+from app.services.media_storage import (
+    DisabledMediaStore,
+    FilesystemMediaStore,
+    MediaStore,
+)
 from app.services.prediction_queries import PredictionQueryService
 from app.services.reports import FireReportService
 from app.services.sensors import SensorService
@@ -95,6 +102,34 @@ def get_alert_service(session: Session = Depends(get_db)) -> AlertService:
 
 def get_fire_report_service(session: Session = Depends(get_db)) -> FireReportService:
     return FireReportService(SqlFireReportRepository(session))
+
+
+def get_citizen_media_store() -> MediaStore:
+    """The media backend for citizen photos.
+
+    A configured ``CITIZEN_MEDIA_DIR`` uses the filesystem store; an empty
+    setting yields the disabled store, so the photo field fails loudly with
+    503 rather than pretending to store bytes. Object stores drop in here
+    without touching routes or services."""
+    settings = get_settings()
+    directory = settings.citizen_media_dir.strip()
+    if not directory:
+        return DisabledMediaStore()
+    from pathlib import Path
+
+    return FilesystemMediaStore(Path(directory))
+
+
+def get_citizen_intake_service(
+    session: Session = Depends(get_db),
+    media_store: MediaStore = Depends(get_citizen_media_store),
+) -> CitizenIntakeService:
+    return CitizenIntakeService(
+        evidence_repository=SqlReportEvidenceRepository(session),
+        report_repository=SqlFireReportRepository(session),
+        media_store=media_store,
+        settings=get_settings(),
+    )
 
 
 def get_fire_hotspot_service(session: Session = Depends(get_db)) -> FireHotspotService:

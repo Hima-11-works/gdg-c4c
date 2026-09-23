@@ -59,6 +59,8 @@ python-dotenv==1.2.3
     # via
     #   pydantic-settings
     #   uvicorn
+python-multipart==0.0.32
+    # via pollution-backend (pyproject.toml)
 pyyaml==6.0.3
     # via uvicorn
 sqlalchemy==2.0.52

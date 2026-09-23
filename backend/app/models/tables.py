@@ -375,6 +375,92 @@ fire_report = Table(
     Index("ix_fire_report_h3_cell", "h3_cell"),
 )
 
+# Citizen intake evidence: an optional photo and/or local sensor reading
+# attached to a fire report, with provenance and a moderation/verification
+# status. See docs/api/citizen-intake.md. One row per report (unique
+# report_id). The sensor columns are citizen-submitted evidence, NEVER
+# trusted station observations - they are not written to sensor_reading and
+# are never read by the pollution model.
+report_evidence = Table(
+    "report_evidence",
+    metadata,
+    Column("id", BigInteger, primary_key=True),
+    Column(
+        "report_id",
+        BigInteger,
+        ForeignKey("fire_report.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    # Moderation state: unverified by default; nothing in the intake path
+    # promotes its own evidence.
+    Column("verification_status", String(20), nullable=False, server_default="unverified"),
+    # --- photo (nullable: a sensor-only submission has no media) ---
+    Column("media_content_type", String(100), nullable=True),
+    Column("media_byte_size", BigInteger, nullable=True),
+    Column("media_sha256", String(64), nullable=True),
+    Column("media_key", String(200), nullable=True),
+    Column("media_is_placeholder", Boolean, nullable=False, server_default=text("false")),
+    # --- citizen sensor reading (nullable: a photo-only submission) ---
+    Column("sensor_pollutant", String(20), nullable=True),
+    Column("sensor_value", Float, nullable=True),
+    Column("sensor_unit", String(20), nullable=True),
+    Column("sensor_measured_at", DateTime(timezone=True), nullable=True),
+    Column("sensor_latitude", Float, nullable=True),
+    Column("sensor_longitude", Float, nullable=True),
+    Column("sensor_source", String(50), nullable=True),
+    Column("notes", String(280), nullable=True),
+    # Idempotency key for the evidence record, scoped to one report.
+    Column("client_report_id", String(64), nullable=True),
+    Column("submitted_at", DateTime(timezone=True), nullable=False),
+    # A record must carry evidence: a photo, a sensor reading, or both.
+    CheckConstraint(
+        "media_key IS NOT NULL OR sensor_value IS NOT NULL",
+        name="ck_report_evidence_has_payload",
+    ),
+    # Photo columns are all-or-nothing.
+    CheckConstraint(
+        "(media_key IS NULL) = (media_content_type IS NULL) "
+        "AND (media_key IS NULL) = (media_byte_size IS NULL) "
+        "AND (media_key IS NULL) = (media_sha256 IS NULL)",
+        name="ck_report_evidence_media_complete",
+    ),
+    # Sensor columns are all-or-nothing.
+    CheckConstraint(
+        "(sensor_value IS NULL) = (sensor_pollutant IS NULL) "
+        "AND (sensor_value IS NULL) = (sensor_unit IS NULL) "
+        "AND (sensor_value IS NULL) = (sensor_measured_at IS NULL) "
+        "AND (sensor_value IS NULL) = (sensor_latitude IS NULL) "
+        "AND (sensor_value IS NULL) = (sensor_longitude IS NULL)",
+        name="ck_report_evidence_sensor_complete",
+    ),
+    CheckConstraint(
+        "verification_status IN ('unverified', 'pending', 'verified', 'rejected')",
+        name="ck_report_evidence_verification_status",
+    ),
+    CheckConstraint(
+        "sensor_value IS NULL OR sensor_value >= 0",
+        name="ck_report_evidence_sensor_value_nonnegative",
+    ),
+    CheckConstraint(
+        "sensor_latitude IS NULL OR sensor_latitude BETWEEN -90 AND 90",
+        name="ck_report_evidence_sensor_latitude",
+    ),
+    CheckConstraint(
+        "sensor_longitude IS NULL OR sensor_longitude BETWEEN -180 AND 180",
+        name="ck_report_evidence_sensor_longitude",
+    ),
+    # One evidence record per report.
+    UniqueConstraint("report_id", name="uq_report_evidence_report_id"),
+    # Idempotent resubmission scoped to the report: the same client id on the
+    # same report must find the original record. Nullable (clients may omit
+    # it); Postgres treats NULLs as distinct in a unique index.
+    UniqueConstraint(
+        "report_id", "client_report_id", name="uq_report_evidence_report_client_id"
+    ),
+    Index("ix_report_evidence_submitted_at", "submitted_at"),
+    Index("ix_report_evidence_verification_status", "verification_status"),
+)
+
 fire_hotspot = Table(
     "fire_hotspot",
     metadata,

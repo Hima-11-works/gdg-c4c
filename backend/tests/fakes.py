@@ -12,6 +12,7 @@ from dataclasses import replace
 from datetime import datetime
 
 from app.domain.environmental_observations import FireHotspot
+from app.domain.citizen_intake import ReportEvidence
 from app.domain.providers import ProviderError
 from app.domain.repositories import DuplicateReadingError
 from app.domain.types import (
@@ -188,6 +189,63 @@ class FakeFireReportRepository:
 
     def list_active(self, *, since: datetime) -> list[FireReport]:
         return [r for r in self.reports if r.reported_at >= since]
+
+
+class FakeReportEvidenceRepository:
+    """In-memory ReportEvidenceRepository.
+
+    Mirrors the SQL implementation: at most one record per report, idempotent
+    on (report_id, client_report_id) for identical content, and a ValueError
+    when the same key is reused with different content."""
+
+    def __init__(self) -> None:
+        self.evidence: list[ReportEvidence] = []
+
+    def save(self, evidence: ReportEvidence) -> ReportEvidence:
+        existing = self.get_for_report(evidence.report_id)
+        if existing is not None:
+            same_key = (
+                evidence.client_report_id is not None
+                and existing.client_report_id == evidence.client_report_id
+            )
+            if same_key and _same_evidence_content(existing, evidence):
+                return existing
+            raise ValueError("a different evidence record already exists for this report")
+        stored = replace(evidence, id=len(self.evidence) + 1)
+        self.evidence.append(stored)
+        return stored
+
+    def get_for_report(self, report_id: int) -> ReportEvidence | None:
+        for item in self.evidence:
+            if item.report_id == report_id:
+                return item
+        return None
+
+
+def _same_evidence_content(a: ReportEvidence, b: ReportEvidence) -> bool:
+    """Whether two evidence records carry identical payload (a retry) or
+    differ (a genuine conflict)."""
+
+    def media_fp(item: ReportEvidence):
+        media = item.media
+        return None if media is None else (media.sha256, media.content_type, media.byte_size)
+
+    def sensor_fp(item: ReportEvidence):
+        sensor = item.sensor
+        return (
+            None
+            if sensor is None
+            else (
+                sensor.pollutant,
+                sensor.value,
+                sensor.unit,
+                sensor.measured_at,
+                sensor.latitude,
+                sensor.longitude,
+            )
+        )
+
+    return media_fp(a) == media_fp(b) and sensor_fp(a) == sensor_fp(b)
 
 
 class FakeFireHotspotRepository:

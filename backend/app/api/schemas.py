@@ -232,6 +232,52 @@ class FireHotspotOut(BaseModel):
     )
 
 
+class EvidenceMediaOut(BaseModel):
+    """A stored citizen photo. `url` is always the report-id media route, so
+    the storage backend stays replaceable behind a stable public URL."""
+
+    content_type: str
+    byte_size: int = Field(ge=1)
+    sha256: str
+    url: str = Field(description="Relative URL that streams the stored photo.")
+    is_placeholder: bool = Field(
+        description="True only if the bytes are a generated stand-in, never a real upload."
+    )
+
+
+class CitizenSensorOut(BaseModel):
+    """A citizen-submitted sensor value. Unverified evidence, not a station
+    observation: `verified` is false for every non-verified state, and this
+    value never feeds the pollution model."""
+
+    pollutant: str
+    value: float
+    unit: str
+    measured_at: datetime
+    latitude: float
+    longitude: float
+    source: str = Field(description="Always 'citizen' - never a station source.")
+    verified: bool = Field(
+        description="True only when the evidence record's moderation status is 'verified'."
+    )
+
+
+class ReportEvidenceOut(BaseModel):
+    """Response for the report evidence sub-resource. See
+    docs/api/citizen-intake.md."""
+
+    id: int
+    report_id: int
+    client_report_id: str | None
+    verification_status: str = Field(
+        description="Moderation state: unverified | pending | verified | rejected."
+    )
+    media: EvidenceMediaOut | None
+    sensor: CitizenSensorOut | None
+    notes: str | None
+    submitted_at: datetime
+
+
 class ErrorDetail(BaseModel):
     code: str
     message: str
