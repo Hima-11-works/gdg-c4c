@@ -1,10 +1,10 @@
 // The place-scope chip, pinned above the timeline: it names the place the
 // map is currently scoped to and clears the scope again. It is the one
-// surface that always explains what the grey mask means, including — for the
-// place kinds with no boundary dataset — that the area is an approximation.
+// surface that always explains what the grey mask means, including - for the
+// place kinds with no boundary dataset - that the area is an approximation.
 
 import { KIND_LABEL, KIND_PLURAL } from '../lib/locations'
-import { isApproximateScope } from '../lib/scope'
+import { isApproximateScope, SCOPE_AREA_LABEL } from '../lib/scope'
 import { useMapUi } from '../state/MapUiContext'
 
 export function ScopeChip() {
@@ -26,8 +26,8 @@ export function ScopeChip() {
         </div>
         <span className="scope-chip-note">
           {approximate
-            ? `Approximate area: the H3 hexagon covering this place at the current detail level — no official boundary data exists for ${KIND_PLURAL[scope.kind]}.`
-            : 'Showing only this state / UT — mask clipped to its official boundary.'}
+            ? `Approximate area: the H3 hexagon covering this place at the current detail level - no official boundary data exists for ${KIND_PLURAL[scope.kind]}.`
+            : `Showing only this ${SCOPE_AREA_LABEL[scope.kind]} - mask clipped to its official boundary.`}
         </span>
       </div>
       <button

@@ -16,8 +16,10 @@
 // India, ~1 GB) filtered to motorway/trunk and simplified with osmium or
 // tippecanoe, which is a build step rather than an asset.
 //
-// Both are draw-only: nothing here is parsed for point-in-polygon lookups, so
-// they stay plain URLs for MapLibre's GeoJSON sources.
+// Highways are draw-only: the URL goes straight to a MapLibre GeoJSON source.
+// The district file is both drawn and parsed - lib/stateBoundaries.ts loads it
+// on demand to clip a district-scoped search to a real border (via
+// hooks/useDistrictBoundaries), the same way it parses the ADM1 file.
 //
 // How they were built, so the assets can be regenerated:
 //

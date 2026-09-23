@@ -86,6 +86,8 @@ import { useMapUi } from '../state/MapUiContext'
 import type { MapViewMode } from '../state/mapUiReducer'
 import type { AsyncResource } from '../hooks/useApiResource'
 import { useStateBoundaries } from '../hooks/useStateBoundaries'
+import { useDistrictBoundaries } from '../hooks/useDistrictBoundaries'
+import type { ScopeBoundaries } from '../lib/scope'
 import { loadLocations } from '../lib/locations'
 import { placeLabelsFeatureCollection } from '../lib/placeLabels'
 import type { IndiaLocation } from '../lib/locations'
@@ -662,14 +664,24 @@ export function MapView({
   // Last PDI toggle state acted on, so the toggle effect skips its mount run.
   const showPdiRef = useRef(state.showPdi)
   // State/UT polygons, already loaded for the map's own boundary layers and
-  // reused here to clip the place-scope mask to a real border.
+  // reused here to clip the place-scope mask to a real border. District
+  // polygons are loaded on demand - only a district-scoped search needs them
+  // parsed - and both are handed to lib/scope as one bag, since which one a
+  // boundary scope needs is decided by the scope's own kind.
   const stateBoundaries = useStateBoundaries()
+  const districtBoundaries = useDistrictBoundaries(
+    state.scope?.area.type === 'boundary' && state.scope.area.dataset === 'district',
+  )
+  const scopeBoundaries: ScopeBoundaries = {
+    states: stateBoundaries,
+    districts: districtBoundaries,
+  }
+  const scopeBoundariesRef = useRef(scopeBoundaries)
   // Live mirrors of the place scope for the map's click handlers. Those are
   // registered once when the map is created, so reading the state directly
   // would freeze whatever it was at creation (no scope at all) and the
   // out-of-scope click guard would never fire.
   const scopeRef = useRef(state.scope)
-  const stateBoundariesRef = useRef(stateBoundaries)
   // Same idea for the NO2 layer's initial visibility: it is added
   // asynchronously (only once the backend confirms an endpoint is
   // configured), by which time the toggle effect has already run.
@@ -699,9 +711,9 @@ export function MapView({
   // Keep the click handlers' mirrors of the scope current (see scopeRef).
   useEffect(() => {
     scopeRef.current = state.scope
-    stateBoundariesRef.current = stateBoundaries
+    scopeBoundariesRef.current = { states: stateBoundaries, districts: districtBoundaries }
     emissionsRef.current = state.showIndustrialEmissions
-  }, [state.scope, stateBoundaries, state.showIndustrialEmissions])
+  }, [state.scope, stateBoundaries, districtBoundaries, state.showIndustrialEmissions])
 
   // Escape closes whatever is open on the map: the info popup and the cell
   // drawer. On window rather than the canvas so it works wherever focus is,
@@ -1412,7 +1424,7 @@ export function MapView({
             const scope = scopeRef.current
             if (
               scope !== null &&
-              !scopeContains(scope, stateBoundariesRef.current, event.lngLat.lat, event.lngLat.lng)
+              !scopeContains(scope, scopeBoundariesRef.current, event.lngLat.lat, event.lngLat.lng)
             ) {
               return
             }
@@ -1920,10 +1932,15 @@ export function MapView({
     const source = map.getSource(SOURCE_SCOPE_MASK) as GeoJSONSource | undefined
     if (source === undefined) return
 
-    const mask = state.scope === null ? null : scopeMask(state.scope, stateBoundaries)
+    // Built here rather than from the render-scope bag so the effect's
+    // dependencies stay exactly the two collections that matter.
+    const mask =
+      state.scope === null
+        ? null
+        : scopeMask(state.scope, { states: stateBoundaries, districts: districtBoundaries })
     source.setData((mask ?? EMPTY_FEATURE_COLLECTION) as never)
     map.setLayoutProperty(LAYER_SCOPE_MASK, 'visibility', mask === null ? 'none' : 'visible')
-  }, [mapReady, state.scope, stateBoundaries])
+  }, [mapReady, state.scope, stateBoundaries, districtBoundaries])
 
   // Place labels are loaded the first time the map reaches the state tier,
   // not on mount: the file is the same ~800 KB GeoNames list the search bar

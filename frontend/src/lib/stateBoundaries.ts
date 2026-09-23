@@ -22,13 +22,21 @@
 // Attribution: geoBoundaries, William & Mary geoLab
 
 import type { Feature, FeatureCollection, MultiPolygon, Polygon, Position } from 'geojson'
+import { DISTRICT_BOUNDARIES_URL } from './staticLayers'
 
 export const STATE_BOUNDARIES_URL = '/data/india_states.geojson'
 export const INDIA_OUTLINE_URL = '/data/india_country.geojson'
 
-export type StateBoundaries = FeatureCollection<Polygon | MultiPolygon, { name: string }>
+/** A boundary collection from either level: ADM1 states/UTs or ADM2
+ *  districts. Both are polygons with a single `name` property, so one set of
+ *  lookups serves the drawer's "which state is this" label and the place
+ *  scope's mask at either level. */
+export type Boundaries = FeatureCollection<Polygon | MultiPolygon, { name: string }>
+export type StateBoundaries = Boundaries
+export type DistrictBoundaries = Boundaries
 
 let cache: Promise<StateBoundaries> | null = null
+let districtCache: Promise<DistrictBoundaries> | null = null
 
 /** Fetches and parses the boundaries once per session; every caller
  * (MapView's point-in-polygon lookups, CellDetailPanel) shares the one
@@ -44,6 +52,20 @@ export function loadStateBoundaries(): Promise<StateBoundaries> {
     return response.json() as Promise<StateBoundaries>
   })
   return cache
+}
+
+/** The ADM2 district polygons, loaded on demand: the map draws them from
+ *  level 2 (still straight from the URL, through MapLibre) but only a
+ *  district-scoped search needs them parsed, so this stays a separate cache
+ *  that most sessions never touch. */
+export function loadDistrictBoundaries(): Promise<DistrictBoundaries> {
+  districtCache ??= fetch(DISTRICT_BOUNDARIES_URL).then((response) => {
+    if (!response.ok) {
+      throw new Error(`Failed to load district boundaries: HTTP ${response.status}`)
+    }
+    return response.json() as Promise<DistrictBoundaries>
+  })
+  return districtCache
 }
 
 // Standard ray-casting point-in-polygon test. GeoJSON rings are
@@ -78,14 +100,35 @@ function featureContains(feature: Feature<Polygon | MultiPolygon>, lat: number, 
   return geometry.coordinates.some((polygonRings) => pointInPolygon(lon, lat, polygonRings))
 }
 
-/** The state/UT name whose polygon contains (latitude, longitude), or
- * null if it falls outside every polygon in `boundaries` (open water, a
- * territory this simplified dataset dropped, or just outside India). */
+/** The boundary name whose polygon contains (latitude, longitude), or null if
+ * it falls outside every polygon in `boundaries` (open water, an area this
+ * simplified dataset dropped, or just outside India). Works on either level -
+ * states/UTs or districts - because both are name-tagged polygons. */
+export function findBoundaryForPoint(
+  latitude: number,
+  longitude: number,
+  boundaries: Boundaries,
+): string | null {
+  const match = boundaries.features.find((feature) => featureContains(feature, latitude, longitude))
+  return match?.properties.name ?? null
+}
+
+/** The feature named `name`, or undefined when neither dataset spells it that
+ *  way (the two publishers don't always agree). */
+export function findBoundaryByName(
+  boundaries: Boundaries,
+  name: string,
+): Feature<Polygon | MultiPolygon, { name: string }> | undefined {
+  return boundaries.features.find((feature) => feature.properties.name === name)
+}
+
+/** The state/UT name whose polygon contains (latitude, longitude). Kept as
+ *  the drawer's own entry point so its "which state is this" label reads the
+ *  same as it always did. */
 export function findStateForPoint(
   latitude: number,
   longitude: number,
   boundaries: StateBoundaries,
 ): string | null {
-  const match = boundaries.features.find((feature) => featureContains(feature, latitude, longitude))
-  return match?.properties.name ?? null
+  return findBoundaryForPoint(latitude, longitude, boundaries)
 }

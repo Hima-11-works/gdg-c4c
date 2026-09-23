@@ -79,6 +79,15 @@ use, with names normalized from diacritical forms to standard ASCII.
   boundaries), `frontend/public/data/india_country.geojson` (country
   outline, dissolved from the same data)
 
+**District boundaries** come from the same publisher's ADM2 release:
+735 districts, simplified with mapshaper (5% keep-shapes) to 439 KB in
+`frontend/public/data/india_districts.geojson`, on the same ODC-ODbL
+terms. The file is drawn from level 2 up (`lib/staticLayers.ts` records
+the exact build command), and it is also the polygon a district-scoped
+search is masked to. The two publishers spell ~23% of district names
+differently, so a scope resolves by name first and then by which polygon
+contains the searched point.
+
 The boundary layers are rendered as separate MapLibre sources, independent
 of the basemap provider. See `frontend/src/lib/stateBoundaries.ts` for
 the data source documentation and `frontend/src/components/MapView.tsx`

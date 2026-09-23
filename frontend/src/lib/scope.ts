@@ -3,19 +3,20 @@
 // place and clears the scope again.
 //
 // Where the area comes from — this is the only interesting decision here.
-// States and UTs have a real polygon in public/data/india_states.geojson
-// (geoBoundaries ADM1), so their scope is that boundary, holes and all.
-// Districts, cities and localities have no boundary data anywhere in this
-// repo — the places file is 10k+ points with no geometry — so their scope is
-// the H3 hexagon covering the place at the detail level the map flies to,
-// and every surface that shows it says "approximate". Nothing is invented:
-// the area is either a real administrative boundary or a named hexagon, and
-// the chip tells the user which one they are looking at.
+// States/UTs have a real polygon in public/data/india_states.geojson
+// (geoBoundaries ADM1) and districts have one in india_districts.geojson
+// (geoBoundaries ADM2), so both scope to that boundary, holes and all. Cities
+// and localities have no boundary data anywhere in this repo — the places file
+// is 10k+ points with no geometry — so their scope is the H3 hexagon covering
+// the place at the detail level the map flies to, and every surface that shows
+// it says "approximate". Nothing is invented: the area is either a real
+// administrative boundary or a named hexagon, and the chip tells the user
+// which one they are looking at.
 
 import { cellBoundaryRing, cellForPoint } from './h3Geometry'
 import { lodForZoom } from './lod'
-import { findStateForPoint } from './stateBoundaries'
-import type { StateBoundaries } from './stateBoundaries'
+import { findBoundaryByName, findBoundaryForPoint } from './stateBoundaries'
+import type { Boundaries, StateBoundaries } from './stateBoundaries'
 import type { LocationKind } from './locations'
 import type { FeatureCollection, Polygon, Position } from 'geojson'
 
@@ -31,12 +32,27 @@ export interface PlaceSelection {
 
 /** The area a scope masks down to. */
 export type ScopeArea =
-  /** A real ADM1 boundary, resolved by name (or, failing that, by which
-   *  polygon contains the place). */
-  | { type: 'boundary'; name: string }
+  /** A real administrative boundary, resolved by name against the right
+   *  dataset and (failing that) by which polygon contains the place. */
+  | { type: 'boundary'; dataset: 'state' | 'district'; name: string }
   /** The hexagon covering the place, for kinds with no boundary dataset.
    *  `resolution` is recorded so the chip can name the cell's size honestly. */
   | { type: 'cell'; h3Cell: string; resolution: number }
+
+/** Both boundary collections a scope might need. Each is loaded only while a
+ *  scope of that kind is active, so neither is fetched speculatively. */
+export interface ScopeBoundaries {
+  states: StateBoundaries | null
+  districts: Boundaries | null
+}
+
+/** How the chip names a scoped area, per place kind. */
+export const SCOPE_AREA_LABEL: Record<LocationKind, string> = {
+  state: 'state / UT',
+  district: 'district',
+  city: 'city',
+  locality: 'locality',
+}
 
 export interface MapScope extends PlaceSelection {
   area: ScopeArea
@@ -47,8 +63,11 @@ export interface MapScope extends PlaceSelection {
  *  kinds scoped by hexagon, so the scope matches the detail the user is
  *  about to be looking at. */
 export function scopeForPlace(place: PlaceSelection, zoom: number): MapScope {
-  if (place.kind === 'state') {
-    return { ...place, area: { type: 'boundary', name: place.name } }
+  if (place.kind === 'state' || place.kind === 'district') {
+    return {
+      ...place,
+      area: { type: 'boundary', dataset: place.kind, name: place.name },
+    }
   }
   const resolution = lodForZoom(zoom).resolution
   return {
@@ -81,26 +100,27 @@ const WORLD_RING: Position[] = [
   [-180, -85],
 ]
 
-/** The ADM1 feature a boundary scope resolved to, by name and then (if the
- *  publishers ever disagree) by which polygon contains the place. */
-function resolveBoundaryFeature(scope: MapScope, boundaries: StateBoundaries) {
+/** The feature a boundary scope resolved to, from the dataset its kind names:
+ *  by name first, then (if the two publishers spell it differently — they
+ *  disagree on ~23% of district names) by which polygon contains the place. */
+function resolveBoundaryFeature(scope: MapScope, boundaries: ScopeBoundaries) {
   const area = scope.area
   if (area.type !== 'boundary') return undefined
-  const byName = boundaries.features.find((c) => c.properties.name === area.name)
+  const collection = area.dataset === 'district' ? boundaries.districts : boundaries.states
+  if (collection === null) return undefined
+  const byName = findBoundaryByName(collection, area.name)
   if (byName !== undefined) return byName
-  const containingName = findStateForPoint(scope.latitude, scope.longitude, boundaries)
-  return boundaries.features.find((c) => c.properties.name === containingName)
+  const containingName = findBoundaryForPoint(scope.latitude, scope.longitude, collection)
+  return collection.features.find((feature) => feature.properties.name === containingName)
 }
 
 /** The rings that become holes in the mask. Only outer rings are used:
  *  an enclave inside a state polygon is *outside* the state, so it stays
  *  greyed (masked) rather than being punched back out. */
-function scopeHoleRings(scope: MapScope, boundaries: StateBoundaries | null): Position[][] | null {
+function scopeHoleRings(scope: MapScope, boundaries: ScopeBoundaries): Position[][] | null {
   if (scope.area.type === 'cell') {
     return [cellBoundaryRing(scope.area.h3Cell)]
   }
-
-  if (boundaries === null) return null
 
   const feature = resolveBoundaryFeature(scope, boundaries)
   if (feature === undefined) return null
@@ -118,7 +138,7 @@ function scopeHoleRings(scope: MapScope, boundaries: StateBoundaries | null): Po
  */
 export function scopeMask(
   scope: MapScope,
-  boundaries: StateBoundaries | null,
+  boundaries: ScopeBoundaries,
 ): FeatureCollection<Polygon> | null {
   const holes = scopeHoleRings(scope, boundaries)
   if (holes === null) return null
@@ -148,15 +168,16 @@ export function scopeMask(
  */
 export function scopeContains(
   scope: MapScope,
-  boundaries: StateBoundaries | null,
+  boundaries: ScopeBoundaries,
   latitude: number,
   longitude: number,
 ): boolean {
   if (scope.area.type === 'cell') {
     return cellForPoint(latitude, longitude, scope.area.resolution) === scope.area.h3Cell
   }
-  if (boundaries === null) return true
   const feature = resolveBoundaryFeature(scope, boundaries)
   if (feature === undefined) return true
-  return findStateForPoint(latitude, longitude, boundaries) === feature.properties.name
+  const collection = scope.area.dataset === 'district' ? boundaries.districts : boundaries.states
+  if (collection === null) return true
+  return findBoundaryForPoint(latitude, longitude, collection) === feature.properties.name
 }
