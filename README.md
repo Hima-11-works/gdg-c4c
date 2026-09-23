@@ -836,21 +836,30 @@ worth stating plainly:
 
 The app is scoped to **India**, and never loads fine-resolution data for
 the whole country at once. What's on screen is driven entirely by the
-current **zoom level**, via `frontend/src/lib/lod.ts`'s `lodForZoom`.
-Detail is capped at **level 3**, counting the country-wide view as
-level 1:
+current **zoom level**, via `frontend/src/lib/lod.ts`'s `lodForZoom`:
 
 | Level | Zoom | H3 resolution | ~Cell area | Scope of the request |
 |---|---|---|---|---|
-| 1 (country) | < 6 | 3 | ~12,400 km² | Always all of India (`INDIA_BBOX`) — always ~800 cells, too small to bother scoping to viewport |
-| 2 (state) | 6 – 7 | 4 | ~1,770 km² | The current map viewport |
-| 3 (state) | ≥ 7 | 5 | ~253 km² | The current map viewport |
+| 1 (country) | < 6 | 3 | ~12,400 km² | Always all of India (`INDIA_BBOX`) - always ~800 cells, too small to bother scoping to viewport |
+| 2 (state) | 6 - 7 | 4 | ~1,770 km² | The current map viewport |
+| 3 (state) | 7 - 8 | 5 | ~253 km² | The current map viewport |
+| 4 (state) | ≥ 9 | 6 | ~36 km² | The current map viewport |
 
-Finer H3 resolutions (6–8) are deliberately **not** generated, so the
-map's zoom is capped at `MAX_ZOOM` (= 8, the zoom at which level 3 is
-reached) — zooming in further would only enlarge the same cells without
-revealing anything new. Resolution steps up by exactly one H3 level per
-tier (each step is already a ~7x jump in cell density). Weather (wind
+Resolution steps up by exactly one H3 level per tier (a ~7x jump in cell
+density each time), and the ceiling is `MAX_ZOOM` (= 10).
+
+**Why level 4 needs no new data.** A published run carries a native
+resolution (8 in this deployment) and the v2 read aggregates its native
+cells up into whatever display resolution is asked for, refusing only a
+resolution *finer* than native. Res 6 is therefore the same measurements
+averaged into smaller parents than res 5 - genuinely finer detail, not
+interpolation. The ceiling sits at res 6 because that is what a viewport
+read can serve: res 7 is ~1,340 cells for a city-sized viewport and res 8
+times out. `GET /api/v2/meta` reports the range as
+`supported_display_resolutions`, which is every resolution from 3 to the
+run's native one.
+
+Weather (wind
 arrows) uses this same resolution at every tier *except* country, where
 it deliberately requests a coarser resolution (2, not 3) than the PM2.5
 grid — the map only ever renders a thinned-down, sparse subset of wind
@@ -864,7 +873,7 @@ the data comes from today" below) plus wind currents — "generalized"
 because the resolution itself is coarse, not because anything is
 hidden. Zoom into a region and the same hex/wind/PDI layers this README
 describes elsewhere start rendering denser, finer cells for just that
-area, up to level 3. PDI renders at every tier, the bare country overview
+area, up to level 4. PDI renders at every tier, the bare country overview
 included: the backend area-weights the per-cell score when a read is
 coarser than the published native resolution (see
 `app/services/prediction_queries.py`), so a level-1 cell carries an

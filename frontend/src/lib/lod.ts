@@ -36,26 +36,34 @@ export interface Lod {
   scopedToViewport: boolean
 }
 
-// Level of detail is capped at "level 3", counting the country-wide view as
-// level 1:
+// Level of detail, counting the country-wide view as level 1:
 //   level 1 — H3 res 3, whole country (zoom < 6)
 //   level 2 — H3 res 4, viewport-scoped (zoom 6–7)
-//   level 3 — H3 res 5, viewport-scoped (zoom >= 7)   ← finest
-// Finer resolutions (res 6–8) are deliberately not generated, so the map's
-// zoom is capped at MAX_ZOOM to match: zooming in past level 3 would only
-// enlarge the same cells without revealing anything new. Each step is a H3
-// resolution step (~7x cell density), and every tier stays well under
-// GRID_QUERY_MAX_CELLS for an ordinary desktop viewport.
+//   level 3 — H3 res 5, viewport-scoped (zoom 7–8)
+//   level 4 — H3 res 6, viewport-scoped (zoom >= 9)   ← finest
+// Each step is one H3 resolution (~7x cell density), and every tier stays well
+// under GRID_QUERY_MAX_CELLS for an ordinary desktop viewport.
+//
+// Level 4 needs no new data to exist. A published run has a native resolution
+// (8 in this deployment) and the v2 read aggregates its native cells up into
+// whatever display resolution is asked for, refusing only a resolution *finer*
+// than native — so res 6 is the same measurements averaged into smaller
+// parents than res 5, which is exactly the extra detail. That is also why the
+// zoom ceiling stops here rather than going deeper: res 7 is 1,340 cells for a
+// city-sized viewport and res 8 times out, so those two are past what a
+// viewport read can serve, not past what the data holds.
 const COUNTRY_MAX_ZOOM = 6
 const LEVEL3_MIN_ZOOM = 7
+const LEVEL4_MIN_ZOOM = 9
 const COUNTRY_RESOLUTION = 3
 const LEVEL2_RESOLUTION = 4
-const MAX_RESOLUTION = 5
+const LEVEL3_RESOLUTION = 5
+const LEVEL4_RESOLUTION = 6
 
-/** Hard zoom ceiling on the map — the zoom at which level 3 (res 5) is
- *  reached. Beyond it there is no finer detail to reveal. Consumed by
- *  MapView's `maxZoom` and by the search bar's per-location zoom. */
-export const MAX_ZOOM = 8
+/** Hard zoom ceiling on the map — the zoom at which level 4 (res 6) is
+ *  reached, plus a little range inside it. Consumed by MapView's `maxZoom`
+ *  and by the search bar's per-location zoom. */
+export const MAX_ZOOM = 10
 
 export function lodForZoom(zoom: number): Lod {
   if (zoom < COUNTRY_MAX_ZOOM) {
@@ -64,7 +72,10 @@ export function lodForZoom(zoom: number): Lod {
   if (zoom < LEVEL3_MIN_ZOOM) {
     return { tier: 'state', resolution: LEVEL2_RESOLUTION, scopedToViewport: true }
   }
-  return { tier: 'state', resolution: MAX_RESOLUTION, scopedToViewport: true }
+  if (zoom < LEVEL4_MIN_ZOOM) {
+    return { tier: 'state', resolution: LEVEL3_RESOLUTION, scopedToViewport: true }
+  }
+  return { tier: 'state', resolution: LEVEL4_RESOLUTION, scopedToViewport: true }
 }
 
 // The wind-arrow layer only ever displays a thinned-down, sparse subset

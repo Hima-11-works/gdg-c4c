@@ -495,7 +495,13 @@ def get_meta_v2(
         latest_run_id=run.run_id,
         generated_at=run.generated_at,
         native_resolution=service.native_resolution,
-        supported_display_resolutions=sorted({3, 4, 5, service.native_resolution}),
+        # Every resolution from the coarsest display tier up to the run's own
+        # native one is servable: the read aggregates native cells into
+        # whatever parent resolution it is asked for and refuses only a
+        # resolution *finer* than native. The set used to stop at 5, which
+        # understated what a client can ask for (and would still have claimed 5
+        # for a run whose native resolution is 4).
+        supported_display_resolutions=list(range(3, service.native_resolution + 1)),
         supported_horizons_hours=service.horizons(run),
         feature_schema_version=run.feature_schema_version,
         model_version=", ".join(run.model_versions) if run.model_versions else None,
