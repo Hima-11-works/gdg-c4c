@@ -39,6 +39,12 @@ export const DISTRICT_BOUNDARY_COLOR = '#333944'
 export const HIGHWAY_CORE_COLOR = '#ffd9a0'
 export const HIGHWAY_CASING_COLOR = '#241a0c'
 
+/** Major roads (level 4 and finer). Deliberately quieter than a highway: one
+ *  thin line instead of a cased pair, so a dense local road mesh reads as
+ *  context under the highways rather than competing with them. Still light
+ *  enough to sit legibly over every PM2.5 band. */
+export const MAJOR_ROAD_COLOR = '#f0e4cd'
+
 /** Duration (ms) of the opacity dissolve between forecast frames. Long
  *  enough to read as a continuous flow at the 750ms playback cadence (each
  *  frame dissolves into the next), short enough to leave a moment of hold. */

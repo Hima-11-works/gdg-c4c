@@ -93,6 +93,15 @@ of the basemap provider. See `frontend/src/lib/stateBoundaries.ts` for
 the data source documentation and `frontend/src/components/MapView.tsx`
 for the layer setup.
 
+**Roads** come from **Natural Earth 10m roads** (public domain), clipped to
+the same outline. Two classes are bundled: `india_highways.geojson`
+(NE's `Major Highway` class, 111 corridors, 104 KB) drawn from level 3 up,
+and `india_major_roads.geojson` (its `Road` class — the same scaleranks,
+one class down, 155 lines, 56 KB) drawn from level 4 up. Both are coarse
+selections that name the main corridors; neither is the full Indian
+National Highway network, so expect the major routes you know and not the
+local ones.
+
 ### Location search data
 
 The top-right search bar searches states/UTs, districts, cities, and

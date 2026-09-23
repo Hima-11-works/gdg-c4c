@@ -63,7 +63,7 @@ import { buildRangeContours, buildSmoothRangeContours } from '../lib/pm25Contour
 import { INDIA_BBOX, lodBbox, MAX_ZOOM } from '../lib/lod'
 import { scopeContains, scopeMask } from '../lib/scope'
 import { INDIA_OUTLINE_URL, STATE_BOUNDARIES_URL } from '../lib/stateBoundaries'
-import { DISTRICT_BOUNDARIES_URL, MAJOR_HIGHWAYS_URL } from '../lib/staticLayers'
+import { DISTRICT_BOUNDARIES_URL, MAJOR_HIGHWAYS_URL, MAJOR_ROADS_URL } from '../lib/staticLayers'
 import { BASE_STYLE_URL, OVERLAY, WIND, BASEMAP, patchBasemapStyle } from '../lib/mapTheme'
 import {
   CELL_BORDER_COLOR,
@@ -75,6 +75,7 @@ import {
   HIGHWAY_CASING_COLOR,
   HIGHWAY_CORE_COLOR,
   LAYER_CROSSFADE_DURATION_MS,
+  MAJOR_ROAD_COLOR,
   PDI_FILL_OPACITY,
   PM25_DISSOLVE_DURATION_MS,
   PM25_FILL_OPACITY,
@@ -329,8 +330,11 @@ const LAYER_DISTRICTS = 'district-boundaries-line'
 const SOURCE_HIGHWAYS = 'major-highways'
 const LAYER_HIGHWAYS = 'major-highways-line'
 const LAYER_HIGHWAYS_CASING = 'major-highways-casing'
+const SOURCE_ROADS = 'major-roads'
+const LAYER_ROADS = 'major-roads-line'
 const DISTRICT_BOUNDARY_MIN_ZOOM = 6
 const HIGHWAY_MIN_ZOOM = 7
+const MAJOR_ROAD_MIN_ZOOM = 9
 
 // Seasonal smog (GIBS Deep Blue AOD) and industrial emissions (Sentinel-5P
 // NO2 WMS) — two more raster overlays, both added in the same early block as
@@ -971,6 +975,23 @@ export function MapView({
               'line-width': 0.6,
               'line-opacity': 0.7,
               'line-dasharray': [2, 2],
+            },
+          })
+          // Major roads — the highways' quieter companion, and the one layer
+          // that waits for level 4. Added before the highways so their cased
+          // line reads on top of the road mesh, and before the state borders
+          // like everything else here.
+          map!.addSource(SOURCE_ROADS, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+          map!.addLayer({
+            id: LAYER_ROADS,
+            type: 'line',
+            source: SOURCE_ROADS,
+            minzoom: MAJOR_ROAD_MIN_ZOOM,
+            layout: { 'line-cap': 'round', 'line-join': 'round' },
+            paint: {
+              'line-color': MAJOR_ROAD_COLOR,
+              'line-width': ['interpolate', ['linear'], ['zoom'], 9, 1, 12, 1.8],
+              'line-opacity': 0.6,
             },
           })
           map!.addSource(SOURCE_HIGHWAYS, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
@@ -1999,6 +2020,17 @@ export function MapView({
       setHighwaysLoaded(true)
     }
   }, [highwaysLoaded, mapReady, state.lod.resolution])
+
+  const [roadsLoaded, setRoadsLoaded] = useState(false)
+  useEffect(() => {
+    if (roadsLoaded || !mapReady || !mapRef.current) return
+    if (state.lod.resolution < 6) return
+    const source = mapRef.current.getSource(SOURCE_ROADS)
+    if (source instanceof GeoJSONSource) {
+      source.setData(MAJOR_ROADS_URL)
+      setRoadsLoaded(true)
+    }
+  }, [roadsLoaded, mapReady, state.lod.resolution])
 
   // Animate the thermal-anomaly pulse ring by cycling the icon frames —
   // same pattern as the wind streaks. Static under prefers-reduced-motion.

@@ -16,6 +16,12 @@
 // India, ~1 GB) filtered to motorway/trunk and simplified with osmium or
 // tippecanoe, which is a build step rather than an asset.
 //
+// Major roads - the same source's next class down (`type == "Road"`), same
+// clip: 155 lines in 56 KB. NE's Road class sits at the same scaleranks as its
+// Major Highways (3-4), which is what makes "major roads" a fair description;
+// its unranked entries are the ones this deliberately leaves out. Like the
+// highways, this is a coarse selection, not a secondary-road network.
+//
 // Highways are draw-only: the URL goes straight to a MapLibre GeoJSON source.
 // The district file is both drawn and parsed - lib/stateBoundaries.ts loads it
 // on demand to clip a district-scoped search to a real border (via
@@ -29,6 +35,11 @@
 //
 //   npx mapshaper ne_10m_roads.shp -filter 'type == "Major Highway"' \
 //     -clip india_country.geojson -o india_highways.geojson precision=0.0001
+//
+//   npx mapshaper ne_10m_roads.shp -filter 'type == "Road"' \
+//     -clip india_country.geojson -simplify 60% keep-shapes \
+//     -filter-fields name,type -o india_major_roads.geojson precision=0.0001
 
 export const DISTRICT_BOUNDARIES_URL = '/data/india_districts.geojson'
 export const MAJOR_HIGHWAYS_URL = '/data/india_highways.geojson'
+export const MAJOR_ROADS_URL = '/data/india_major_roads.geojson'

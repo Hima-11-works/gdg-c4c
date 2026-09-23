@@ -1,6 +1,6 @@
 import { NO_DATA_COLOR, PDI_COLOR_SCALE, PM25_COLOR_SCALE } from '../lib/colorScales'
 import { BASEMAP, WIND } from '../lib/mapTheme'
-import { DISTRICT_BOUNDARY_COLOR, HIGHWAY_CORE_COLOR } from '../lib/visualConfig'
+import { DISTRICT_BOUNDARY_COLOR, HIGHWAY_CORE_COLOR, MAJOR_ROAD_COLOR } from '../lib/visualConfig'
 import { PDI_LABEL, PDI_TOOLTIP } from '../lib/format'
 import { useMapUi } from '../state/MapUiContext'
 import { SidePanel } from './SidePanel'
@@ -75,6 +75,15 @@ export function Legend() {
             >
               <span className="swatch" style={{ backgroundColor: HIGHWAY_CORE_COLOR }} />
               Major highway
+            </div>
+          )}
+          {state.lod.resolution >= 6 && (
+            <div
+              className="legend-row"
+              title="Natural Earth 10m roads, 'Road' class (public domain) — from level 4. The same source's next class down, not a full secondary-road network."
+            >
+              <span className="swatch" style={{ backgroundColor: MAJOR_ROAD_COLOR }} />
+              Major road
             </div>
           )}
         </section>
