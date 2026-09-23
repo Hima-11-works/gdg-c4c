@@ -42,6 +42,27 @@ export const PDI_COLOR_SCALE: ColorStop[] = [
   { value: 100, color: '#dc2626', label: 'High pressure (100)' },
 ]
 
+/** Population-weighted PM2.5 — the exposure map mode.
+ *
+ *  The value is still a PM2.5 concentration in µg/m³, so it keeps the same
+ *  CPCB band boundaries as PM25_COLOR_SCALE above: the two layers are directly
+ *  comparable, and a reader moving between them is looking at the same
+ *  thresholds. What changes is where the number comes from — this one is
+ *  averaged with each cell's resident population as the weight (see
+ *  ExposureOut.population_weighted_pm25), so a cell nobody lives in counts for
+ *  nothing and a crowded one dominates. The ramp is deliberately a different
+ *  family (cool cyan → violet) from PM2.5's green → maroon, for the same reason
+ *  PDI has its own: a layer that is *not* the plain area-average must never be
+ *  mistaken for it at a glance. */
+export const EXPOSURE_COLOR_SCALE: ColorStop[] = [
+  { value: 0, color: '#22d3ee', label: 'Good (0–30)' },
+  { value: 31, color: '#38bdf8', label: 'Satisfactory (31–60)' },
+  { value: 61, color: '#60a5fa', label: 'Moderate (61–90)' },
+  { value: 91, color: '#818cf8', label: 'Poor (91–120)' },
+  { value: 121, color: '#a78bfa', label: 'Very Poor (121–250)' },
+  { value: 251, color: '#e879f9', label: 'Severe (250+)' },
+]
+
 /** Color used for a cell whose value is null (no estimate yet) — distinct
  * from every ramp so "no data" is never confused with "measured zero". */
 export const NO_DATA_COLOR = '#2a2e36'

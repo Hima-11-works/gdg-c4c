@@ -19,6 +19,7 @@ const STORAGE_KEY = 'air-health:map-ui'
  *  deliberately rather than being persisted by accident. */
 type PersistedMapUi = Pick<
   MapUiState,
+  | 'mapMetric'
   | 'viewMode'
   | 'contrast'
   | 'showPdi'
@@ -30,6 +31,7 @@ type PersistedMapUi = Pick<
   | 'showSeasonalSmog'
   | 'showIndustrialEmissions'
   | 'legendOpen'
+  | 'runPanelOpen'
   | 'settingsOpen'
 >
 
@@ -44,6 +46,7 @@ const BOOLEAN_FIELDS = [
   'showSeasonalSmog',
   'showIndustrialEmissions',
   'legendOpen',
+  'runPanelOpen',
   'settingsOpen',
 ] as const satisfies ReadonlyArray<keyof PersistedMapUi>
 
@@ -79,6 +82,12 @@ export function readPersistedMapUi(): Partial<PersistedMapUi> {
     restored.viewMode = record.viewMode
   }
 
+  // Same reasoning as viewMode: a metric this build doesn't know falls back to
+  // the reducer's default rather than reaching the map as an unknown string.
+  if (record.mapMetric === 'pm25' || record.mapMetric === 'exposure') {
+    restored.mapMetric = record.mapMetric
+  }
+
   return restored
 }
 
@@ -87,6 +96,7 @@ export function readPersistedMapUi(): Partial<PersistedMapUi> {
 export function persistMapUi(state: MapUiState): void {
   try {
     const persisted: PersistedMapUi = {
+      mapMetric: state.mapMetric,
       viewMode: state.viewMode,
       contrast: state.contrast,
       showPdi: state.showPdi,
@@ -98,6 +108,7 @@ export function persistMapUi(state: MapUiState): void {
       showSeasonalSmog: state.showSeasonalSmog,
       showIndustrialEmissions: state.showIndustrialEmissions,
       legendOpen: state.legendOpen,
+      runPanelOpen: state.runPanelOpen,
       settingsOpen: state.settingsOpen,
     }
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted))

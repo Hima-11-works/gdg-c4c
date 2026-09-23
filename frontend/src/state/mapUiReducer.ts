@@ -12,6 +12,7 @@ import { scopeForPlace } from '../lib/scope'
 import type { Lod } from '../lib/lod'
 import type { MapScope } from '../lib/scope'
 import type { LocationKind } from '../lib/locations'
+import type { MapMetric } from '../lib/format'
 import type { BoundingBox } from '../lib/types'
 
 /** How the pollution field is drawn: discrete H3 hexagons, or a smooth
@@ -26,6 +27,10 @@ export interface MapUiState {
   /** Forecast horizon in minutes. 0 = current conditions; in-between frames
    *  are interpolated from the selected publication's forecast anchors. */
   forecastMinutes: number
+  /** Which measure the field is drawn from: the area-averaged PM2.5, or the
+   *  population-weighted exposure. Both come from the same published run and
+   *  the same cells — only the value each cell is coloured by changes. */
+  mapMetric: MapMetric
   /** Hexagon cells vs. smooth raster rendering of the same field. */
   viewMode: MapViewMode
   /** Contrast mode: draw a border on the boundary between PM2.5 bands so
@@ -53,6 +58,8 @@ export interface MapUiState {
   /** Whether the legend panel is popped out (top right) or collapsed to its
    *  arrow button. A preference, so it is persisted (see lib/persistedMapUi). */
   legendOpen: boolean
+  /** Same, for the published-run status panel (top left, under the legend). */
+  runPanelOpen: boolean
   /** Same, for the settings & layer checklist panel (bottom left). */
   settingsOpen: boolean
   /** The searched place the map is scoped to: cells outside its area are
@@ -82,6 +89,7 @@ export interface MapUiState {
 
 export type MapUiAction =
   | { type: 'SELECT_FORECAST'; minutes: number }
+  | { type: 'SET_MAP_METRIC'; metric: MapMetric }
   | { type: 'SET_VIEW_MODE'; mode: MapViewMode }
   | { type: 'TOGGLE_CONTRAST' }
   | {
@@ -103,6 +111,7 @@ export type MapUiAction =
   | { type: 'TOGGLE_SEASONAL_SMOG' }
   | { type: 'TOGGLE_INDUSTRIAL_EMISSIONS' }
   | { type: 'TOGGLE_LEGEND' }
+  | { type: 'TOGGLE_RUN_PANEL' }
   | { type: 'TOGGLE_SETTINGS' }
   | { type: 'SELECT_CELL'; cell: string | null; resolution?: number }
   | { type: 'TOGGLE_CELL'; cell: string }
@@ -113,6 +122,7 @@ export type MapUiAction =
 // guessing a zoom before the map has told us its real one.
 export const initialMapUiState: MapUiState = {
   forecastMinutes: 0,
+  mapMetric: 'pm25',
   viewMode: 'hex',
   contrast: false,
   focus: null,
@@ -125,6 +135,7 @@ export const initialMapUiState: MapUiState = {
   showSeasonalSmog: false,
   showIndustrialEmissions: false,
   legendOpen: true,
+  runPanelOpen: true,
   settingsOpen: true,
   scope: null,
   // Corrected by the map's first SET_VIEWPORT; only read if a scope is
@@ -160,6 +171,8 @@ export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState
   switch (action.type) {
     case 'SELECT_FORECAST':
       return { ...state, forecastMinutes: action.minutes }
+    case 'SET_MAP_METRIC':
+      return { ...state, mapMetric: action.metric }
     case 'SET_VIEW_MODE':
       return { ...state, viewMode: action.mode }
     case 'TOGGLE_CONTRAST':
@@ -224,6 +237,8 @@ export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState
       return { ...state, showIndustrialEmissions: !state.showIndustrialEmissions }
     case 'TOGGLE_LEGEND':
       return { ...state, legendOpen: !state.legendOpen }
+    case 'TOGGLE_RUN_PANEL':
+      return { ...state, runPanelOpen: !state.runPanelOpen }
     case 'TOGGLE_SETTINGS':
       return { ...state, settingsOpen: !state.settingsOpen }
     case 'SELECT_CELL':

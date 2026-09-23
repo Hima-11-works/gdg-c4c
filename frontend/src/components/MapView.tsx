@@ -17,7 +17,7 @@ import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&ur
 // this the worker 404s and the map never renders. `?worker&url` makes Vite
 // bundle the worker (with its shared chunk) and hand back a real URL.
 setWorkerUrl(maplibreWorkerUrl)
-import { colorScaleExpression, PDI_COLOR_SCALE, PM25_COLOR_SCALE } from '../lib/colorScales'
+import { colorScaleExpression, EXPOSURE_COLOR_SCALE, PDI_COLOR_SCALE, PM25_COLOR_SCALE } from '../lib/colorScales'
 import {
   FREIGHT_LINE_COLOR,
   freightLinesFeatureCollection,
@@ -85,6 +85,8 @@ import {
 } from '../lib/visualConfig'
 import { useMapUi } from '../state/MapUiContext'
 import type { MapViewMode } from '../state/mapUiReducer'
+import type { MapMetric } from '../lib/format'
+import type { ColorStop } from '../lib/colorScales'
 import type { AsyncResource } from '../hooks/useApiResource'
 import { useStateBoundaries } from '../hooks/useStateBoundaries'
 import { useDistrictBoundaries } from '../hooks/useDistrictBoundaries'
@@ -92,7 +94,14 @@ import type { ScopeBoundaries } from '../lib/scope'
 import { loadLocations } from '../lib/locations'
 import { placeLabelsFeatureCollection } from '../lib/placeLabels'
 import type { IndiaLocation } from '../lib/locations'
-import type { BoundingBox, FireReportOut, ForecastOut, GridStateOut, WeatherReadingOut } from '../lib/types'
+import type {
+  BoundingBox,
+  ExposureOut,
+  FireReportOut,
+  ForecastOut,
+  GridStateOut,
+  WeatherReadingOut,
+} from '../lib/types'
 import type { MultiLineString, Position } from 'geojson'
 
 // The app is scoped to India: on load, fit the whole country in view
@@ -217,6 +226,22 @@ function setContourData(source: GeoJSONSource, contours: MultiLineString | null)
       ? { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: contours }] }
       : EMPTY_FEATURE_COLLECTION,
   )
+}
+
+/** The colour ramp a metric is drawn with. PM2.5 keeps the CPCB ramp; exposure
+ *  gets its own cool ramp over the same band boundaries (see colorScales.ts),
+ *  so the two layers are never mistaken for each other. */
+function metricColorScale(metric: MapMetric): ColorStop[] {
+  return metric === 'exposure' ? EXPOSURE_COLOR_SCALE : PM25_COLOR_SCALE
+}
+
+/** The population-weighted value the exposure metric colours by. Null — which
+ *  the colour expression renders as "no estimate", never as zero — whenever
+ *  the run has no population estimate for that cell or the exposure block is
+ *  absent entirely. This is the backend's own field; the frontend never
+ *  derives an exposure value itself. */
+function exposureValue(exposure: ExposureOut | null | undefined): number | null {
+  return exposure?.population_weighted_pm25 ?? null
 }
 
 const SOURCE_PDI = 'cells-pdi'
@@ -657,6 +682,10 @@ export function MapView({
   // the visible set — so a stale-while-revalidate frame (same array) is a
   // no-op instead of a pointless dissolve.
   const paintedDataRef = useRef<unknown>(null)
+  // Which measure that array was painted as. The same cells carry both
+  // values, so the data array alone can't tell a metric switch from a
+  // stale-while-revalidate no-op.
+  const paintedMetricRef = useRef<MapMetric>(state.mapMetric)
   // Handle of any in-flight layer animation (dissolve or PDI fade), so a new
   // one can finalize the previous before it starts.
   const animationFinishRef = useRef<PaintAnimation | null>(null)
@@ -1745,19 +1774,31 @@ export function MapView({
         ? (currentGrid as Extract<typeof currentGrid, { status: 'success' }>).data
         : (forecastGrid as Extract<typeof forecastGrid, { status: 'success' }>).data
 
-    if (cellsData === paintedDataRef.current) return
+    // A metric switch is a repaint even though the cell array is identical:
+    // the same cells are coloured by a different field, so the guard has to
+    // compare the metric too (otherwise switching to exposure would be a
+    // no-op until the next poll happened to return a new array).
+    if (cellsData === paintedDataRef.current && state.mapMetric === paintedMetricRef.current) {
+      return
+    }
 
     // One source of truth for the frame's (cell, value) pairs, shared by both
-    // renderings.
+    // renderings. Which value a cell carries is the only thing the metric
+    // changes: the cells, their geometry and the run are the same either way.
+    const metric = state.mapMetric
+    const colorScale = metricColorScale(metric)
     const cellValues =
       state.forecastMinutes === 0
         ? (currentGrid as Extract<typeof currentGrid, { status: 'success' }>).data.map((cell) => ({
             h3Cell: cell.h3_cell,
-            value: cell.pm25,
+            value: metric === 'exposure' ? exposureValue(cell.exposure) : cell.pm25,
           }))
         : (forecastGrid as Extract<typeof forecastGrid, { status: 'success' }>).data.map((forecast) => ({
             h3Cell: forecast.h3_cell,
-            value: forecast.predicted_pm25,
+            value:
+              metric === 'exposure'
+                ? exposureValue(forecast.exposure)
+                : forecast.predicted_pm25,
           }))
 
     const hasPainted = paintedDataRef.current !== null
@@ -1799,19 +1840,19 @@ export function MapView({
         // surface the raster shows instead of the hexagons underneath.
         const grid = buildSmoothFieldGrid(points, bbox, hexEdgeKm(state.lod.resolution))
         rasterSource.updateImage({
-          image: renderSmoothFieldFromGrid(grid, bbox, PM25_COLOR_SCALE),
+          image: renderSmoothFieldFromGrid(grid, bbox, colorScale),
           coordinates: imageCoords(bbox),
         })
         if (contrast) {
           const contourSource = map.getSource(SOURCE_PM25_CONTOUR[set])
           if (contourSource instanceof GeoJSONSource) {
-            setContourData(contourSource, buildSmoothRangeContours(grid, bbox, PM25_COLOR_SCALE))
+            setContourData(contourSource, buildSmoothRangeContours(grid, bbox, colorScale))
           }
         }
       } else if (contrast) {
         const contourSource = map.getSource(SOURCE_PM25_CONTOUR[set])
         if (contourSource instanceof GeoJSONSource) {
-          setContourData(contourSource, buildRangeContours(cellValues, PM25_COLOR_SCALE))
+          setContourData(contourSource, buildRangeContours(cellValues, colorScale))
         }
       }
       return true
@@ -1864,9 +1905,11 @@ export function MapView({
     }
 
     paintedDataRef.current = cellsData
+    paintedMetricRef.current = state.mapMetric
   }, [
     mapReady,
     state.forecastMinutes,
+    state.mapMetric,
     state.viewMode,
     state.contrast,
     state.lod,
@@ -1876,6 +1919,18 @@ export function MapView({
     state.showPdi,
     reducedMotion,
   ])
+
+  // Switching measure repaints the *colours* without touching the data: the
+  // hex fills' `fill-color` is baked in at layer creation, so it has to be
+  // rewritten here. Both buffer sets are updated because either can be the
+  // visible one, and the dissolve that follows carries the old set out.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    const expression = colorScaleExpression(metricColorScale(state.mapMetric), 'value')
+    for (const set of PM25_SETS) {
+      mapRef.current.setPaintProperty(LAYER_PM25_FILL[set], 'fill-color', expression)
+    }
+  }, [mapReady, state.mapMetric])
 
   // Wind currents — thinned to at most one per cell of a fixed-size grid
   // over the current viewport (see thinBySpatialGrid), so "generalized

@@ -1,6 +1,7 @@
 // A floating panel that pops in and out from a single arrow button, used by
-// the legend (top left, collapses to the left) and the settings & layer
-// checklist (bottom left, collapses downwards).
+// the legend (top left, collapses to the left), the settings & layer
+// checklist (bottom left, collapses downwards) and the published-run status
+// (top right, collapses to the right).
 //
 // The body is absolutely positioned against the button rather than sitting
 // next to it in the flow, so collapsing slides the panel away without
@@ -10,7 +11,7 @@
 
 import type { ReactNode } from 'react'
 
-export type SidePanelSide = 'left' | 'up'
+export type SidePanelSide = 'left' | 'right' | 'up'
 
 interface SidePanelProps {
   id: string
@@ -23,10 +24,11 @@ interface SidePanelProps {
 }
 
 /** The chevron points the way the panel will move when the button is
- *  clicked: left when the panel is out (it will be pushed away), right when
- *  it is away (it will be pulled back out). */
+ *  clicked: away from its edge when the panel is out (it will be pushed
+ *  back), toward the edge when it is away (it will be pulled back out). */
 const CHEVRON: Record<SidePanelSide, { open: string; closed: string }> = {
   left: { open: 'M15 5l-7 7 7 7', closed: 'M9 5l7 7-7 7' },
+  right: { open: 'M9 5l7 7-7 7', closed: 'M15 5l-7 7 7 7' },
   up: { open: 'M5 9l7 7 7-7', closed: 'M5 15l7-7 7 7' },
 }
 
