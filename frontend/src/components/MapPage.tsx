@@ -170,6 +170,19 @@ export function MapPage() {
     ? 'current conditions'
     : `the +${forecastMinutes >= 60 ? `${Math.floor(forecastMinutes / 60)}h ` : ''}${forecastMinutes % 60 ? `${forecastMinutes % 60}m ` : ''}forecast`.trim()
 
+  // A forecast frame from a different published run than the one the status
+  // panel describes would put two runs' facts and two runs' values on one
+  // screen. The cache key already contains the run id, so this should never
+  // fire — but if it ever does, the honest response is to show neither rather
+  // than a map painted from one run beside a panel describing another.
+  const currentRunId = currentGrid.resource.status === 'success' ? currentGrid.resource.runId : undefined
+  const frameRunId = forecastGrid.resource.status === 'success' ? forecastGrid.resource.runId : undefined
+  const runIdMismatch =
+    !isNow && currentRunId !== undefined && frameRunId !== undefined && currentRunId !== frameRunId
+  const shownBaseLayer = runIdMismatch
+    ? { resource: { status: 'loading' as const }, refetch: forecastGrid.refetch }
+    : activeBaseLayer
+
   // Run-level facts come from the current-conditions read, which is always
   // fetched and always pinned to the same published run as the forecast
   // frames — so the status panel describes the run the map is drawing even
@@ -186,15 +199,21 @@ export function MapPage() {
   }, [currentGrid.resource])
   const runStaleness = useMemo(() => staleness(runFacts), [runFacts])
   const activeHasData =
-    activeBaseLayer.resource.status === 'success' && activeBaseLayer.resource.data.length > 0
+    shownBaseLayer.resource.status === 'success' && shownBaseLayer.resource.data.length > 0
 
   return (
     <div className="map-page">
       <div className="banner-stack">
+        {runIdMismatch && (
+          <div className="banner banner-stale" role="alert">
+            <strong>Two different runs.</strong> The forecast frame on screen is from {frameRunId}{' '}
+            while this panel describes {currentRunId}. Nothing is drawn until they agree.
+          </div>
+        )}
         <StatusBanner
           label={activeLabel}
-          resource={activeBaseLayer.resource}
-          onRetry={activeBaseLayer.refetch}
+          resource={shownBaseLayer.resource}
+          onRetry={shownBaseLayer.refetch}
           warming={warming}
           interpolated={!isNow && isInterpolated}
         />
@@ -208,7 +227,7 @@ export function MapPage() {
 
       <MapView
         currentGrid={currentGrid.resource}
-        forecastGrid={forecastGrid.resource}
+        forecastGrid={runIdMismatch ? { status: 'loading' } : forecastGrid.resource}
         weather={weather.resource}
         citizenReports={reports.resource}
         activeFires={activeFires.resource}

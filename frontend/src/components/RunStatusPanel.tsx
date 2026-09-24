@@ -1,4 +1,5 @@
 import { formatCount, formatPercent, relativeTime, STALE_SOURCE_HOURS } from '../lib/format'
+import { coverageSentence, missingInputs, sourceAgeNote, warningLines } from '../lib/runQuality'
 import { SidePanel } from './SidePanel'
 import { useMapUi } from '../state/MapUiContext'
 import type { RunFacts, Staleness } from '../lib/runFacts'
@@ -43,6 +44,8 @@ export function RunStatusPanel({
   const loading = resource.status === 'loading' || resource.status === 'idle'
   const mode = modeLabel(facts)
   const published = relativeTime(facts.generatedAt)
+  const missing = missingInputs(facts)
+  const warnings = warningLines(facts)
 
   return (
     <SidePanel
@@ -91,9 +94,12 @@ export function RunStatusPanel({
                   {facts.sourceAgeHours === null
                     ? 'Not reported'
                     : `${facts.sourceAgeHours.toFixed(1)}h`}
+                  {sourceAgeNote(facts) !== '' && (
+                    <span className="muted run-fact-note"> · {sourceAgeNote(facts)}</span>
+                  )}
                 </dd>
 
-                <dt>Coverage</dt>
+                <dt title="How much of the requested view this run actually covers.">Coverage</dt>
                 <dd>
                   {facts.coverage === null ? (
                     'Not reported'
@@ -105,6 +111,9 @@ export function RunStatusPanel({
                         · {formatCount(facts.coverage.returned_cells)}/
                         {formatCount(facts.coverage.requested_cells)} cells at res{' '}
                         {facts.coverage.resolution}
+                        {facts.coverage.unsupported_cells > 0 && (
+                          <> · {formatCount(facts.coverage.unsupported_cells)} outside the run</>
+                        )}
                       </span>
                     </>
                   )}
@@ -159,6 +168,37 @@ export function RunStatusPanel({
                 <p className="muted run-attribution">
                   {facts.attribution.map((ref) => ref.attribution || ref.dataset_id).join(' · ')}
                 </p>
+              )}
+
+              {coverageSentence(facts) !== null && (
+                <p className="muted run-coverage-note">{coverageSentence(facts)}</p>
+              )}
+
+              {missing.length > 0 && (
+                <div className="run-inputs" role="note">
+                  <h4>Missing inputs</h4>
+                  <p className="muted">
+                    This run has no value for the following, so nothing was substituted for them:
+                  </p>
+                  <ul className="run-input-list">
+                    {missing.map((item) => (
+                      <li key={item.field} title={item.field}>
+                        {item.label}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {warnings.length > 0 && (
+                <div className="run-warnings" role="note">
+                  <h4>Backend warnings</h4>
+                  <ul className="run-warning-list">
+                    {warnings.map((warning) => (
+                      <li key={warning}>{warning}</li>
+                    ))}
+                  </ul>
+                </div>
               )}
 
               {staleness.stale && (

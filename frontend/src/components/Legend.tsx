@@ -1,4 +1,10 @@
-import { EXPOSURE_COLOR_SCALE, NO_DATA_COLOR, PDI_COLOR_SCALE, PM25_COLOR_SCALE } from '../lib/colorScales'
+import {
+  EXPOSURE_COLOR_SCALE,
+  NO_DATA_COLOR,
+  NO_DATA_SWATCH_BACKGROUND,
+  PDI_COLOR_SCALE,
+  PM25_COLOR_SCALE,
+} from '../lib/colorScales'
 import { BASEMAP, WIND } from '../lib/mapTheme'
 import { DISTRICT_BOUNDARY_COLOR, HIGHWAY_CORE_COLOR, MAJOR_ROAD_COLOR } from '../lib/visualConfig'
 import {
@@ -44,12 +50,20 @@ export function Legend() {
               {stop.label}
             </div>
           ))}
-          {exposure && (
-            <div className="legend-row">
-              <span className="swatch" style={{ backgroundColor: NO_DATA_COLOR }} />
-              No population estimate
-            </div>
-          )}
+          {/* The hatch, not a flat patch: this is the one entry in the key that
+              means "the run has nothing here", and it must not read as a dark
+              low reading. The swatch repeats the map's own stripe. */}
+          <div className="legend-row">
+            <span
+              className="swatch"
+              style={{ backgroundColor: NO_DATA_COLOR, backgroundImage: NO_DATA_SWATCH_BACKGROUND }}
+            />
+            {exposure ? 'No population-weighted estimate here' : 'No estimate here'}
+          </div>
+          <p className="muted legend-note">
+            Striped cells are inside the run but carry no estimate — they are not a low reading.
+            Area outside the run is not drawn at all; the run panel says how much that is.
+          </p>
         </section>
 
         {state.showPdi && (
@@ -66,10 +80,6 @@ export function Legend() {
         )}
 
         <section>
-          <div className="legend-row">
-            <span className="swatch" style={{ backgroundColor: NO_DATA_COLOR }} />
-            No estimate
-          </div>
           <div className="legend-row">
             <span className="swatch" style={{ backgroundColor: WIND.pulse }} />
             Wind current (flows downwind)

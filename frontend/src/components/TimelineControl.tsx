@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { prefetchUpcoming, useForecastWarming, warmForecastWindow } from '../lib/forecastFrames'
 import { lodKey, lodQueryFor } from '../lib/lod'
+import { unavailableHorizonNote } from '../lib/runQuality'
 import { useMapUi } from '../state/MapUiContext'
 import type { LodQuery } from '../lib/api'
 
@@ -266,6 +267,14 @@ export function TimelineControl({
   // what a reader looks at while dragging, so it says it too.
   const interpolated = forecastMinutes > 0 && !supportedHours.includes(forecastMinutes / 60)
 
+  // "Not reported" and a real empty list are different: the first is a run
+  // that has not said, the second is a run with no future horizons at all.
+  const publishedHours = supportedHours.filter((hours) => hours > 0)
+  const horizonNote =
+    publishedHours.length > 0
+      ? unavailableHorizonNote(publishedHours)
+      : 'This run published no future horizons, so there is nothing to play.'
+
   return (
     <div className="panel timeline-control" role="group" aria-label="Forecast timeline">
       {/* Header: horizon on the left, play/pause centered, reset on the right */}
@@ -283,6 +292,18 @@ export function TimelineControl({
           {formatHorizon(forecastMinutes)}
           {interpolated && <span className="timeline-interpolated"> interpolated</span>}
         </div>
+
+        {/* The published range, stated. A horizon the run did not forecast is
+            not an error, but it must be visible that the timeline simply stops
+            at the last published anchor rather than that +9h is unavailable
+            for some unstated reason. When /meta has not answered yet the range
+            is unknown, and saying "unknown" beats offering a fallback range
+            that may name horizons this run never had. */}
+        <p className="timeline-range" aria-live="polite">
+          {publishedHours.length === 0
+            ? 'Published forecast range: not reported by this run yet.'
+            : horizonNote ?? 'Only published anchors are available.'}
+        </p>
 
         <button
           type="button"

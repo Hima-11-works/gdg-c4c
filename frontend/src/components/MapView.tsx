@@ -17,7 +17,15 @@ import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&ur
 // this the worker 404s and the map never renders. `?worker&url` makes Vite
 // bundle the worker (with its shared chunk) and hand back a real URL.
 setWorkerUrl(maplibreWorkerUrl)
-import { colorScaleExpression, EXPOSURE_COLOR_SCALE, PDI_COLOR_SCALE, PM25_COLOR_SCALE } from '../lib/colorScales'
+import {
+  colorScaleExpression,
+  EXPOSURE_COLOR_SCALE,
+  NO_DATA_COLOR,
+  NO_DATA_PATTERN,
+  noEstimateHatchImage,
+  PDI_COLOR_SCALE,
+  PM25_COLOR_SCALE,
+} from '../lib/colorScales'
 import {
   FREIGHT_LINE_COLOR,
   freightLinesFeatureCollection,
@@ -152,6 +160,15 @@ const LAYER_PM25_OUTLINE: Record<Pm25Set, string> = {
   a: 'cells-pm25-outline-a',
   b: 'cells-pm25-outline-b',
 }
+// The "no estimate" hatch. A separate layer filtered to null-valued cells
+// rather than a per-feature `fill-pattern` on the main fill, because MapLibre
+// resolves a pattern expression to an image and rejects `null` outright — a
+// null in that expression does not mean "no pattern", it fails the whole layer
+// and the map goes blank.
+const LAYER_PM25_NOESTIMATE: Record<Pm25Set, string> = {
+  a: 'cells-pm25-noestimate-a',
+  b: 'cells-pm25-noestimate-b',
+}
 const otherSet = (set: Pm25Set): Pm25Set => (set === 'a' ? 'b' : 'a')
 
 // The smooth view double-buffer: each set is a MapLibre `image` source (a
@@ -207,6 +224,7 @@ function pm25PaintLayers(viewMode: MapViewMode, contrast: boolean, set: Pm25Set)
       ? [{ layer: LAYER_PM25_RASTER[set], property: 'raster-opacity', base: PM25_FILL_OPACITY }]
       : [
           { layer: LAYER_PM25_FILL[set], property: 'fill-opacity', base: PM25_FILL_OPACITY },
+          { layer: LAYER_PM25_NOESTIMATE[set], property: 'fill-opacity', base: PM25_FILL_OPACITY },
           { layer: LAYER_PM25_OUTLINE[set], property: 'line-opacity', base: 1 },
         ]
   // Contrast mode adds the range boundary as part of this set, so it dissolves
@@ -909,6 +927,15 @@ export function MapView({
           // PM2.5 double buffer: set 'a' starts visible, 'b' starts empty and
           // transparent. Each fill uses a CONSTANT color expression — the
           // only thing that ever changes per frame is opacity.
+          //
+          // A cell the run has no estimate for must not read as a dark low
+          // reading, so it gets a hatch from a second, filtered layer. It is a
+          // separate layer because MapLibre resolves `fill-pattern` to an
+          // image: a per-feature expression cannot return "no pattern" for the
+          // valued cells, and getting that wrong blanks the whole layer.
+          if (!map!.hasImage(NO_DATA_PATTERN)) {
+            map!.addImage(NO_DATA_PATTERN, noEstimateHatchImage())
+          }
           for (const set of PM25_SETS) {
             map!.addSource(SOURCE_PM25[set], { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
             map!.addLayer({
@@ -917,6 +944,19 @@ export function MapView({
               source: SOURCE_PM25[set],
               paint: {
                 'fill-color': colorScaleExpression(PM25_COLOR_SCALE, 'value'),
+                'fill-opacity': set === 'a' ? PM25_FILL_OPACITY : 0,
+              },
+            })
+            map!.addLayer({
+              id: LAYER_PM25_NOESTIMATE[set],
+              type: 'fill',
+              source: SOURCE_PM25[set],
+              // Only the cells with no value; the value ramp above already
+              // painted them, this one re-paints them striped.
+              filter: ['==', ['get', 'value'], null],
+              paint: {
+                'fill-color': NO_DATA_COLOR,
+                'fill-pattern': NO_DATA_PATTERN,
                 'fill-opacity': set === 'a' ? PM25_FILL_OPACITY : 0,
               },
             })
@@ -1738,6 +1778,7 @@ export function MapView({
     for (const set of PM25_SETS) {
       const on = set === 'a' && !pdiOn
       map.setPaintProperty(LAYER_PM25_FILL[set], 'fill-opacity', showHex && on ? PM25_FILL_OPACITY : 0)
+    map.setPaintProperty(LAYER_PM25_NOESTIMATE[set], 'fill-opacity', showHex && on ? PM25_FILL_OPACITY : 0)
       map.setPaintProperty(LAYER_PM25_OUTLINE[set], 'line-opacity', showHex && on ? 1 : 0)
       map.setPaintProperty(LAYER_PM25_RASTER[set], 'raster-opacity', !showHex && on ? PM25_FILL_OPACITY : 0)
       map.setPaintProperty(

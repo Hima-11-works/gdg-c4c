@@ -2009,7 +2009,84 @@ body,
   color: #fbbf24;
 }
 
-/* --- local incident notebook (drawer + alerts) --- */
+/* --- run quality: what this run is missing, and where it does not reach --- */
+
+.run-fact-note {
+  font-size: 0.7rem;
+  line-height: 1.3;
+}
+
+.run-coverage-note {
+  margin: 0.3rem 0 0;
+  font-size: 0.7rem;
+  line-height: 1.35;
+}
+
+.run-inputs,
+.run-warnings {
+  margin-top: 0.45rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid #2a2e36;
+}
+
+.run-inputs h4,
+.run-warnings h4 {
+  margin: 0 0 0.15rem;
+  font-size: 0.72rem;
+  color: #9ca3af;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.run-inputs p {
+  margin: 0 0 0.2rem;
+  font-size: 0.7rem;
+  line-height: 1.3;
+}
+
+.run-input-list,
+.run-warning-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+}
+
+.run-input-list li,
+.run-warning-list li {
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  font-size: 0.68rem;
+  line-height: 1.3;
+}
+
+/* A missing input is a hole in the run, not an error: amber, like the other
+   provenance cautions, and never the red the write-refusal blocks use. */
+.run-input-list li {
+  background: #2d2412;
+  border: 1px solid #5c4a1a;
+  color: #fcd34d;
+}
+
+/* Warnings are the backend's own words (sometimes a full sentence), so they
+   are set as text rather than as chips. */
+.run-warning-list li {
+  background: #1b1d24;
+  border: 1px solid #3a3f4a;
+  color: #cbd5e1;
+  max-width: 100%;
+}
+
+.timeline-range {
+  margin: 0.1rem 0 0;
+  font-size: 0.66rem;
+  line-height: 1.25;
+  color: #9ca3af;
+}
+
+/* --- incident workflow (drawer + alerts) --- */
 
 /* A notebook that is explicitly not a backend record: the kind is coloured by
    response track, and the on-device caveat is a visible block rather than a

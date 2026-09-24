@@ -63,9 +63,54 @@ export const EXPOSURE_COLOR_SCALE: ColorStop[] = [
   { value: 251, color: '#e879f9', label: 'Severe (250+)' },
 ]
 
-/** Color used for a cell whose value is null (no estimate yet) — distinct
- * from every ramp so "no data" is never confused with "measured zero". */
+/** Color used for a cell whose value is null (no estimate for that cell).
+ *
+ *  Deliberately far from every ramp: a low-pollution cell is a saturated
+ *  green, and "no estimate" is a desaturated near-black, so the two cannot be
+ *  confused even at a glance on a small hexagon. */
 export const NO_DATA_COLOR = '#2a2e36'
+
+/** Name of the generated hatch applied to cells with no estimate. */
+export const NO_DATA_PATTERN = 'no-estimate-hatch'
+
+/**
+ * A diagonal hatch for cells the run has no estimate for.
+ *
+ * The flat fill above already separates a null cell from a low one by hue, but
+ * "dark patch" is exactly what a *low* reading looks like on a dark basemap if
+ * the reader is not checking the legend — and a null cell is not a low reading,
+ * it is the absence of one. The hatch removes the ambiguity without a second
+ * colour: a cell with a value stays solid, a cell without one is striped.
+ *
+ * Generated on a canvas like the map's other runtime images, so there is no
+ * asset to load and nothing to 404.
+ */
+export function noEstimateHatchImage(): ImageData {
+  const size = 8
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const ctx = canvas.getContext('2d')!
+  ctx.clearRect(0, 0, size, size)
+  // Two one-pixel diagonals per tile, so the stripe reads at any hexagon size
+  // without turning into moire on the small ones.
+  ctx.strokeStyle = 'rgba(148, 163, 184, 0.55)'
+  ctx.lineWidth = 1
+  ctx.beginPath()
+  ctx.moveTo(-1, size + 1)
+  ctx.lineTo(size + 1, -1)
+  ctx.moveTo(-1, 1)
+  ctx.lineTo(1, -1)
+  ctx.moveTo(size - 1, size + 1)
+  ctx.lineTo(size + 1, size - 1)
+  ctx.stroke()
+  return ctx.getImageData(0, 0, size, size)
+}
+
+/** A CSS repeat for the Legend, matching the canvas hatch above so the key and
+ *  the map cannot disagree about what "no estimate" looks like. */
+export const NO_DATA_SWATCH_BACKGROUND =
+  'repeating-linear-gradient(135deg, rgba(148,163,184,0.55) 0 1px, transparent 1px 4px)'
 
 /** Builds a MapLibre `interpolate` expression from a color scale, with a
  * `case` wrapper so a null `value` (no estimate for that cell) renders as

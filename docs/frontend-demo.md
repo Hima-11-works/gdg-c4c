@@ -381,7 +381,87 @@ fetched back from the evidence URL, the digest is the content address, and the
 status is whatever `verification_status` says. A citizen reading is never
 presented as a measurement, and the panel says so in as many words.
 
-## Empty states
+### What the run panel, legend and drawer show
+
+The run panel is the one place that states what the publication is and is not.
+It reads only the envelope and cells of the read the map is painted from, so it
+cannot describe a different run than the map is showing.
+
+| Fact | Where it comes from | What it shows when absent |
+| --- | --- | --- |
+| **Mode** | envelope `mode` | "Mode not reported" |
+| **Source age** | `quality.max_observation_age_hours` (oldest across cells) | "Not reported" **plus why** — no observation feeds the run, or it is synthetic |
+| **Coverage** | envelope `coverage` | "Not reported" |
+| **Missing inputs** | union of `quality.missing_fields` | omitted — an empty list means nothing was missing |
+| **Backend warnings** | union of `quality.warnings` | omitted |
+| **Population** | `exposure.population_weighted_pm25` per cell | "No population estimate in this run" |
+| **Horizons** | `/meta.supported_horizons_hours` | "Published forecast range: not reported by this run yet." |
+
+Two things the panel says that a bare count cannot:
+
+- **Coverage names what is *not* there.** A run covering a fraction of the
+  country has no rows for the rest, so that area is bare basemap on screen —
+  and bare basemap reads as "nothing to report". The panel says so explicitly:
+  *"857 of 858 cells in this view are outside this run and are not drawn — that
+  area is basemap, not clean air."*
+- **Source age says why it is unknown.** "Not reported" alone does not
+  distinguish a run with a gap from a run that never had live observations; the
+  panel distinguishes them.
+
+`missing_fields` and `warnings` were collected but **not displayed** until now,
+which made a run built from a failed fire feed look exactly like a complete one.
+The field names are the backend's own vocabulary (`pollution`, `traffic`,
+`population`, `roads`, `land_cover`, `fires`, `weather`,
+`observed_station_count`), mapped to plain words in `lib/runQuality.ts`; an
+unrecognised name is passed through rather than hidden, because an unknown field
+is still a real missing input.
+
+## Uncovered cells are hatched, not dark
+
+A cell with no estimate is drawn with a **diagonal hatch** over its dark fill,
+from a canvas-generated pattern — no asset to load. A cell *with* a value keeps
+its solid ramp colour. The reason is specific: a flat dark patch is exactly what
+a *low* reading looks like on a dark basemap, and "no estimate" is the absence of
+a reading rather than a low one. The legend repeats the same stripe so the key
+and the map cannot disagree.
+
+It is a **separate filtered layer**, not a per-feature `fill-pattern` on the main
+fill. MapLibre resolves a pattern expression to an image and rejects `null`
+outright, so a `case` expression that returns `null` for the valued cells fails
+the whole layer and the map goes blank. That was observed, not assumed.
+
+## The four run shapes
+
+| Run | How it is produced | What the map shows | What the panel shows |
+| --- | --- | --- | --- |
+| **Complete demo** | `prediction-publish` from the `regional-demo` export | coloured cells where the run has values; hatched elsewhere | `Demo · illustrative, not measured`; `Population: 1/858 cells · 196,942 residents covered`; missing inputs and warnings listed |
+| **Partial run** | the same export with the static-cell and traffic fields nulled | every cell hatched; the exposure layer has nothing to draw | `Population: No population estimate in this run`; warning *"No population estimates are available for this aggregation."* |
+| **Stale run** | the same export published with a `generated_at` a month old | identical geometry — staleness is a property of time, not shape | `Run time … 31d ago`; a **Stale** badge; *"This run was published 733h ago (over 24h old). Values may no longer describe current conditions."* and a matching banner naming the run |
+| **Live run** | **cannot be produced here** | — | — |
+
+A live run needs an observed PM2.5 source (`OPENAQ_API_KEY`) plus the static-cell
+and traffic datasets; none are available in this environment. It is not faked:
+publishing the synthetic export with `--mode live` is **refused** by the backend
+(`ValueError: synthetic feature inputs cannot be published as a live run`), so
+every run this dashboard can reach is `mode=demo` and it keeps saying so. What
+the *partial* run demonstrates is the missing-input reporting, which is the part
+of a live run's honesty that does not need a live feed.
+
+## Runs cannot be mixed
+
+- **Switching measure never re-fetches.** PM2.5 and population-weighted PM2.5
+  are two fields on the *same* rows, so the switch only rewrites `fill-color`.
+  The run id was verified unchanged across PM2.5 → exposure → PM2.5 in all three
+  runs.
+- **Playback stays on one run.** The forecast cache key contains the run id, and
+  a frame from a different run is refused rather than drawn: the panel shows
+  *"Two different runs. The forecast frame on screen is from X while this panel
+  describes Y. Nothing is drawn until they agree."*
+- **The published range is stated.** *"This run published +1h, +2h, +3h, +4h, +5h,
+  +6h and nothing beyond +6h, so the timeline stops there."* A frame between
+  anchors is additionally labelled `interpolated`.
+
+
 
 - **No population to weight by.** Shown in exposure mode when no cell in the
   read carries a population-weighted value, distinguishing "the run has no
