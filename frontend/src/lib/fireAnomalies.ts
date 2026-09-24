@@ -85,12 +85,13 @@ const ANOMALY_SEED: ThermalAnomaly[] = [
   { id: 'f16', lat: 22.79, lon: 83.97, frp: 52.4, detectionMinutesAgo: 24, confidence: 0.94, region: 'industrial', severity: 3 },
 ]
 
-/** The kind of response a detection *would* trigger in the authority
- *  workflow the brief describes. Illustrative: no alert is sent, because
- *  no CAQM/SPCB integration exists (see README's known limitations). */
+/** What a detection this size suggests an operator should consider. A prompt
+ *  for a human, not a step in a workflow: nothing is sent, because there is no
+ *  incident API and no CAQM/SPCB integration in this deployment (see the
+ *  README's known limitations). */
 const DETECTION_ACTIONS: Record<ThermalAnomaly['region'], string> = {
-  stubble: 'Illustrative: CAQM stubble alert (not sent)',
-  industrial: 'Illustrative: SPCB industrial compliance alert (not sent)',
+  stubble: 'Consider a stubble-burning call (nothing is sent)',
+  industrial: 'Consider an industrial compliance check (nothing is sent)',
 }
 
 /** Feature collection for the thermal-anomaly map layers. `severity` is a
@@ -145,13 +146,14 @@ export function worstAnomalyInCell(h3Cell: string | null | undefined): ThermalAn
   return anomaliesInCell(h3Cell)[0] ?? null
 }
 
-/** Popup body for a clicked anomaly — provenance, FRP, detection age,
- *  triage severity and the action the authority workflow would take. */
+/** Popup body for a clicked anomaly — provenance, FRP, detection age, triage
+ *  severity and the response an operator might consider. Nothing in the popup
+ *  is dispatched or notified. */
 export function anomalyPopupHtml(anomaly: ThermalAnomaly): string {
   const priority = priorityForSeverity(anomaly.severity)
   return (
     `<strong>Satellite Thermal Anomaly</strong>` +
-    `<span class="fire-popup-source">Illustrative mock - no VIIRS/satellite ingest exists yet</span>` +
+    `<span class="fire-popup-source">Illustrative mock — hand-authored, not a satellite feed and not a confirmed fire. The ingested satellite detections are the Active Fires (NASA FIRMS) layer.</span>` +
     `<span>FRP (Fire Radiative Power): <b>${anomaly.frp.toFixed(1)} MW</b></span>` +
     `<span>Detection Time: <b>${anomaly.detectionMinutesAgo} mins ago</b></span>` +
     `<span class="fire-popup-action">Priority ${priority} of 3 - ${

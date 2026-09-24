@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { DependencyList } from 'react'
 import { ApiError } from '../lib/api'
-import type { DataMode, Envelope } from '../lib/types'
+import type { CoverageOut, DataMode, DatasetRefOut, Envelope } from '../lib/types'
 
 export type AsyncResource<T> =
   | { status: 'idle' }
@@ -18,6 +18,12 @@ export type AsyncResource<T> =
       runId?: string
       mode?: DataMode
       generatedAt?: string
+      /** The run's own coverage summary, straight off the v2 envelope — how
+       *  many cells were asked for and how many came back. Null when the route
+       *  doesn't send one. */
+      coverage?: CoverageOut | null
+      /** The datasets the backend attributed this run to. */
+      attribution?: DatasetRefOut[]
     }
   | { status: 'error'; message: string }
 
@@ -73,6 +79,8 @@ export function useApiResource<T>(
               runId: envelope.run_id,
               mode: envelope.mode,
               generatedAt: envelope.generated_at,
+              coverage: envelope.coverage,
+              attribution: envelope.attribution,
             })
         })
         .catch((error: unknown) => {

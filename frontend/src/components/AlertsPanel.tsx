@@ -1,8 +1,17 @@
 import { useState } from 'react'
 import { fetchAlerts } from '../lib/api'
 import { formatNumber } from '../lib/format'
+import {
+  RESPONSE_HANDLED_BY,
+  RESPONSE_LABEL,
+  RESPONSE_REFERENCE_NOTE,
+  RESPONSE_STEPS,
+  RESPONSE_STEPS_NOTE,
+} from '../lib/responseTypes'
 import { useApiResource } from '../hooks/useApiResource'
 import { useMapUi } from '../state/MapUiContext'
+import { IncidentNotebook } from './IncidentNotebook'
+import type { IncidentEvidence } from '../lib/incidentNotebook'
 import type { AlertOut, AlertSeverity } from '../lib/types'
 
 const POLL_INTERVAL_MS = 60_000
@@ -13,21 +22,21 @@ const SEVERITY_LABEL: Record<AlertSeverity, string> = {
   critical: 'Critical',
 }
 
-/** Suggested escalation path per severity - a prompt for whoever is reading
- *  the alert, NOT an assignment: this dashboard has no authority-routing
- *  backend, so nothing is dispatched, notified or recorded. */
-const SUGGESTED_AUTHORITY: Record<AlertSeverity, string> = {
-  watch: 'Municipal Air Quality Monitoring Cell',
-  warning: 'State Pollution Control Board Rapid Action Unit',
-  critical: 'CPCB Emergency Response Task Force',
-}
-
-/** Suggested response actions per severity - a local checklist of what an
- *  operator might do by hand. Ticking one does not send anything. */
-const SUGGESTED_ACTIONS: Record<AlertSeverity, string[]> = {
-  watch: ['Issue advisory'],
-  warning: ['Inspect site', 'Issue enforcement notice'],
-  critical: ['Inspect site', 'Issue enforcement notice', 'Escalate to CPCB'],
+/**
+ * The evidence an alert contributes to an incident: the alert record itself,
+ * named by the cell and time the backend raised it at. This is a link, not a
+ * copy — the notebook stores the reference, and the alert stays where it came
+ * from (GET /api/v1/alerts).
+ */
+function alertEvidence(alert: AlertOut): IncidentEvidence[] {
+  return [
+    {
+      source: 'alert',
+      ref: alert.h3_cell,
+      summary: `${SEVERITY_LABEL[alert.severity]} PM2.5 alert: ${alert.message}`,
+      at: alert.created_at,
+    },
+  ]
 }
 
 function AlertItem({
@@ -41,6 +50,8 @@ function AlertItem({
   done: (action: string) => boolean
   onToggle: (action: string) => void
 }) {
+  const [notebookOpen, setNotebookOpen] = useState(false)
+
   return (
     <div className={`alert-item severity-${alert.severity}`}>
       <button type="button" className="alert-item-body" onClick={onSelect}>
@@ -58,12 +69,17 @@ function AlertItem({
         </span>
       </button>
 
-      <div className="alert-authority">
-        <span className="alert-assigned">
-          Suggested escalation: {SUGGESTED_AUTHORITY[alert.severity]}
+      <div className="alert-response">
+        {/* Named explicitly, because the app also carries a fire response and
+            the two must never be described in each other's terms. */}
+        <span className={`alert-response-kind alert-response-kind-pollution`}>
+          {RESPONSE_LABEL.pollution}
+        </span>
+        <span className="muted alert-response-reference">
+          {RESPONSE_HANDLED_BY.pollution}. {RESPONSE_REFERENCE_NOTE}
         </span>
         <div className="alert-actions">
-          {SUGGESTED_ACTIONS[alert.severity].map((action) => {
+          {RESPONSE_STEPS.pollution.map((action) => {
             const checked = done(action)
             return (
               <button
@@ -74,8 +90,8 @@ function AlertItem({
                 aria-pressed={checked}
                 title={
                   checked
-                    ? `${action} - ticked locally (nothing is sent)`
-                    : `Tick ${action} off on this local checklist`
+                    ? `${action} - ticked on this device only (nothing is sent)`
+                    : `Tick ${action} off on the checklist kept on this device`
                 }
               >
                 {checked ? '✓ ' : ''}
@@ -84,6 +100,22 @@ function AlertItem({
             )
           })}
         </div>
+        <button
+          type="button"
+          className="alert-incident-toggle"
+          aria-expanded={notebookOpen}
+          onClick={() => setNotebookOpen((value) => !value)}
+        >
+          {notebookOpen ? 'Hide local incident' : 'Local incident…'}
+        </button>
+        {notebookOpen && (
+          <IncidentNotebook
+            kind="pollution"
+            h3Cell={alert.h3_cell}
+            title={`${SEVERITY_LABEL[alert.severity]} PM2.5 alert`}
+            evidence={alertEvidence(alert)}
+          />
+        )}
       </div>
     </div>
   )
@@ -93,6 +125,7 @@ export function AlertsPanel({ publishedRunId }: { publishedRunId?: string }) {
   const [open, setOpen] = useState(false)
   // The checklist is per-alert and lives here (not inside AlertItem) so a
   // 60s poll re-rendering the list cannot wipe what an operator ticked.
+  // Session-only on purpose: it is a scratch list, not a record.
   const [checked, setChecked] = useState<Set<string>>(new Set())
   const { dispatch } = useMapUi()
   const { resource, refetch } = useApiResource(
@@ -106,8 +139,12 @@ export function AlertsPanel({ publishedRunId }: { publishedRunId?: string }) {
 
   const count = resource.status === 'success' ? resource.data.length : 0
 
+  // A published run can raise many alerts for one cell at the same instant —
+  // the key has to include the severity and message, or React sees duplicates
+  // (it warned about exactly that) and the checklist entry for one alert
+  // silently ticks another.
   const keyFor = (alert: AlertOut, action: string) =>
-    `${alert.h3_cell}-${alert.created_at}-${action}`
+    `${alert.h3_cell}-${alert.created_at}-${alert.severity}-${alert.message}-${action}`
   const toggle = (alert: AlertOut, action: string) =>
     setChecked((prev) => {
       const next = new Set(prev)
@@ -168,15 +205,20 @@ export function AlertsPanel({ publishedRunId }: { publishedRunId?: string }) {
 
           {resource.status === 'success' && resource.data.length > 0 && (
             <p className="muted alerts-checklist-note">
-              The checklist below is local to this session — this dashboard cannot dispatch or
-              notify authorities yet.
+              Each alert is a {RESPONSE_LABEL.pollution.toLowerCase()} — an area, not a source.
+              The checklist and any incident notebook are kept on this device; nothing is
+              dispatched, notified or shared. {RESPONSE_STEPS_NOTE}
             </p>
           )}
 
           {resource.status === 'success' &&
-            resource.data.map((alert) => (
+            resource.data.map((alert, index) => (
               <AlertItem
-                key={`${alert.h3_cell}-${alert.created_at}`}
+                // The index is part of the key because the alert API exposes no
+                // id and a run genuinely returns byte-identical alerts (same
+                // cell, time, severity and message), which React rejected as
+                // duplicate keys. Nothing better is available to key on.
+                key={`${alert.h3_cell}-${alert.created_at}-${alert.severity}-${alert.message}-${index}`}
                 alert={alert}
                 onSelect={() => dispatch({ type: 'SELECT_CELL', cell: alert.h3_cell })}
                 done={(action) => checked.has(keyFor(alert, action))}

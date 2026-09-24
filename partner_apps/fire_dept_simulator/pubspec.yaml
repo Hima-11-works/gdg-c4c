@@ -1,0 +1,30 @@
+name: fire_dept_simulator
+description: "Simulated fire-department response console for the Air Health incident workflow. A SIMULATION: no real dispatch, no notifications."
+publish_to: 'none'
+version: 1.0.0+1
+
+# No third-party runtime packages on purpose.
+#
+# This console needs one origin, JSON in, JSON out, and a header on writes —
+# which `dart:io` already provides. Keeping the dependency set empty means the
+# app has one known-good configuration, and the fail modes it does have (network
+# loss, a refused transition, a duplicate tap) are the ones the task is about
+# rather than ones introduced by a package.
+#
+# flutter_lints is pinned to ^5.0.0 rather than the ^6.0.0 the citizen app uses
+# so this resolves against the packages already in the local pub cache; the
+# rules that matter are identical.
+environment:
+  sdk: ^3.13.3
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true

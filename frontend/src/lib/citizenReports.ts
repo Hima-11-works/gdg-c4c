@@ -8,6 +8,8 @@
 // lookups over whatever the API returned. It never fabricates a report.
 
 import type { FeatureCollection, Point } from 'geojson'
+import { cellToParent } from 'h3-js'
+import { resolutionOfCell } from './h3Geometry'
 import type { FireReportKind, FireReportOut } from './types'
 
 /** Human-readable label per report kind. */
@@ -22,20 +24,76 @@ export const FIRE_KIND_LABELS: Record<FireReportKind, string> = {
 /** Smoke slider labels, index 0 = intensity 1. */
 export const SMOKE_LABELS = ['Low', 'Moderate', 'High', 'Very high', 'Extreme'] as const
 
+/**
+ * The verification state of every resident submission.
+ *
+ * This is not a status the backend reports — `ReportOut` has no verification
+ * field, and the published README states plainly that a citizen report is
+ * "subjective, often non-numeric, and unverified", with any trust or moderation
+ * layer explicitly unbuilt. So "unverified" is not a guess about a particular
+ * row: it is the only true description of every row this endpoint can hold,
+ * and the UI says it wherever a resident's number or note is shown, so a
+ * reader never mistakes it for a measurement.
+ *
+ * If the backend ever grows a real verification field, this constant is the
+ * one place to replace with that field's value.
+ */
+export const CITIZEN_VERIFICATION_LABEL = 'Unverified'
+
+export const CITIZEN_VERIFICATION_DETAIL = 'resident submitted, not a measurement'
+
+/** One-line badge text, e.g. for a drawer row or a confirmation. */
+export const CITIZEN_VERIFICATION_BADGE = `${CITIZEN_VERIFICATION_LABEL} — ${CITIZEN_VERIFICATION_DETAIL}`
+
+export const CITIZEN_VERIFICATION_TOOLTIP =
+  'Submitted by a resident, not a sensor or a satellite. Nothing checks it before it is ' +
+  'stored, and the backend reports no verification status for these reports, so treat it ' +
+  'as a concern raised rather than a measurement.'
+
+/** What the report form says about the photo and the local reading: neither is
+ *  transmitted, because no endpoint accepts them. Kept here so the form and any
+ *  other surface that mentions them cannot drift. */
+export const LOCAL_ONLY_DETAIL =
+  'Kept on this device. There is no photo or sensor upload endpoint, so this is not sent anywhere.'
+
+
 export function smokeLabel(intensity: number): string {
   const index = Math.min(Math.max(Math.round(intensity), 1), SMOKE_LABELS.length) - 1
   return SMOKE_LABELS[index]
 }
 
-/** The report filed in this exact cell, newest first - or null. */
+/** The report filed in this cell, newest first — or null.
+ *
+ *  Containment, not equality. The backend snaps a report at the write
+ *  resolution (res 8), while the map selects cells at whatever display
+ *  resolution the current zoom is on — which is coarser everywhere except the
+ *  deepest level. An exact-string match therefore never fired, and the
+ *  drawer's citizen-report section was unreachable in practice. A report
+ *  belongs to the selected cell when the two share a parent at the coarser of
+ *  their resolutions, which is true both for a res-8 report inside a res-6
+ *  selection and for a coarser report covering a finer selection. */
 export function reportForCell(
   reports: FireReportOut[],
   h3Cell: string | null | undefined,
 ): FireReportOut | null {
   if (!h3Cell) return null
+  const targetResolution = resolutionOfCell(h3Cell)
+  if (targetResolution === undefined) return null
+
   let newest: FireReportOut | null = null
   for (const report of reports) {
-    if (report.h3_cell !== h3Cell) continue
+    const reportResolution = resolutionOfCell(report.h3_cell)
+    if (reportResolution === undefined) continue
+    const shared = Math.min(targetResolution, reportResolution)
+    let belongs: boolean
+    try {
+      belongs =
+        cellToParent(h3Cell, shared) === cellToParent(report.h3_cell, shared)
+    } catch {
+      // An unparseable cell on either side: skip rather than guess.
+      continue
+    }
+    if (!belongs) continue
     if (newest === null || Date.parse(report.reported_at) > Date.parse(newest.reported_at)) {
       newest = report
     }

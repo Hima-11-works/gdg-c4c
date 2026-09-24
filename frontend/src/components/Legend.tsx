@@ -1,12 +1,20 @@
-import { NO_DATA_COLOR, PDI_COLOR_SCALE, PM25_COLOR_SCALE } from '../lib/colorScales'
+import { EXPOSURE_COLOR_SCALE, NO_DATA_COLOR, PDI_COLOR_SCALE, PM25_COLOR_SCALE } from '../lib/colorScales'
 import { BASEMAP, WIND } from '../lib/mapTheme'
 import { DISTRICT_BOUNDARY_COLOR, HIGHWAY_CORE_COLOR, MAJOR_ROAD_COLOR } from '../lib/visualConfig'
-import { PDI_LABEL, PDI_TOOLTIP } from '../lib/format'
+import {
+  EXPOSURE_LABEL,
+  EXPOSURE_METRIC_TOOLTIP,
+  PDI_LABEL,
+  PDI_TOOLTIP,
+  PM25_METRIC_TOOLTIP,
+} from '../lib/format'
 import { useMapUi } from '../state/MapUiContext'
 import { SidePanel } from './SidePanel'
 
 export function Legend() {
   const { state, dispatch } = useMapUi()
+  const exposure = state.mapMetric === 'exposure'
+  const scale = exposure ? EXPOSURE_COLOR_SCALE : PM25_COLOR_SCALE
 
   return (
     <SidePanel
@@ -18,13 +26,30 @@ export function Legend() {
     >
       <div className="panel legend">
         <section>
-          <h3>PM2.5 (µg/m³)</h3>
-          {PM25_COLOR_SCALE.map((stop) => (
+          <h3 title={exposure ? EXPOSURE_METRIC_TOOLTIP : PM25_METRIC_TOOLTIP}>
+            {exposure ? `${EXPOSURE_LABEL} (µg/m³)` : 'PM2.5 (µg/m³)'}
+          </h3>
+          {/* The exposure ramp keeps the PM2.5 band boundaries but not its
+              colours, so the key says both facts plainly rather than leaving a
+              reader to wonder why the same thresholds look different. */}
+          {exposure && (
+            <p className="muted legend-note">
+              Same µg/m³ bands as PM2.5, but each cell is weighted by the people living in it —
+              its own colours so the two layers are never confused.
+            </p>
+          )}
+          {scale.map((stop) => (
             <div className="legend-row" key={stop.value}>
               <span className="swatch" style={{ backgroundColor: stop.color }} />
               {stop.label}
             </div>
           ))}
+          {exposure && (
+            <div className="legend-row">
+              <span className="swatch" style={{ backgroundColor: NO_DATA_COLOR }} />
+              No population estimate
+            </div>
+          )}
         </section>
 
         {state.showPdi && (

@@ -168,6 +168,21 @@ body,
   transform: translateY(calc(100% + 0.4rem));
 }
 
+/* Published run status (top right): the button is the anchor at the right
+   edge and the body opens leftward over the map, so it never collides with
+   the search row above it. */
+.side-panel-right .side-panel-body {
+  position: absolute;
+  top: 0;
+  right: calc(100% + 0.4rem);
+  width: max-content;
+  max-width: min(80vw, 22rem);
+}
+
+.side-panel-right.is-closed .side-panel-body {
+  transform: translateX(calc(100% + 0.4rem));
+}
+
 /* The arrow itself: a small panel-coloured button that reads as the panel's
    handle. The chevron points the way the panel will move on click. */
 .side-panel-toggle {
@@ -244,6 +259,29 @@ body,
 .banner-demo {
   background: #2d2412;
   color: #fcd34d;
+}
+
+/* A data caveat the map cannot draw: no population to weight by. Amber like
+   the demo banner (it is a limitation, not a failure) but calmer, and allowed
+   to wrap because it carries a sentence, not a badge. */
+.banner-notice {
+  background: #26221a;
+  color: #e7d3a1;
+  max-width: min(92vw, 46rem);
+  text-align: left;
+  display: block;
+  line-height: 1.4;
+}
+
+/* Stale is its own colour: distinct from the demo amber and from an error, so
+   "old data" is never read as "broken" or as "illustrative". */
+.banner-stale {
+  background: #2a1f2c;
+  color: #e9b8f0;
+  max-width: min(92vw, 46rem);
+  text-align: left;
+  display: block;
+  line-height: 1.4;
 }
 
 .spinner {
@@ -342,6 +380,17 @@ body,
   color: #e5e7eb;
   letter-spacing: 0.05em;
   white-space: nowrap;
+}
+
+/* Marks the selected frame as one the publication did not forecast at: the
+   backend interpolates between its anchors, and no calibrated interval exists
+   for the in-between. Quiet, but not hidden. */
+.timeline-interpolated {
+  font-size: 0.66rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: #9ca3af;
 }
 
 /* Primary play/pause button — centered, largest control. Rectangular so it
@@ -591,6 +640,102 @@ body,
 .legend-note {
   margin: 0.3rem 0 0;
   line-height: 1.3;
+}
+
+/* --- published run status panel --- */
+
+.run-status section {
+  display: flex;
+  flex-direction: column;
+}
+
+.run-mode-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.4rem;
+}
+
+.run-mode {
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  border: 1px solid #3a3f4a;
+  color: #d1d5db;
+  background: #22252c;
+}
+
+.run-mode-demo {
+  background: #2d2412;
+  color: #fcd34d;
+  border-color: #5c4a1a;
+}
+
+.run-mode-live {
+  background: #12291c;
+  color: #86efac;
+  border-color: #1f5136;
+}
+
+.run-mode-mixed {
+  background: #1c2431;
+  color: #93c5fd;
+  border-color: #2b4364;
+}
+
+.run-stale-badge {
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  background: #2a1f2c;
+  color: #e9b8f0;
+  border: 1px solid #4a3350;
+}
+
+.run-status-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.2rem 0.6rem;
+  margin: 0;
+  font-size: 0.78rem;
+}
+
+.run-status-grid dt {
+  color: #9ca3af;
+  white-space: nowrap;
+}
+
+.run-status-grid dd {
+  margin: 0;
+  color: #e5e7eb;
+  line-height: 1.3;
+}
+
+.run-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  word-break: break-all;
+}
+
+.run-attribution {
+  margin: 0.4rem 0 0;
+  line-height: 1.3;
+}
+
+.run-stale-detail {
+  margin: 0.4rem 0 0;
+  line-height: 1.3;
+  color: #e9b8f0;
+  font-size: 0.76rem;
+}
+
+/* Small heading above a control group (Measure / Rendering). */
+.layer-toggle-heading {
+  margin: 0;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6b7280;
 }
 
 /* --- search bar --- */
@@ -937,6 +1082,12 @@ body,
   letter-spacing: 0.02em;
   color: #9ca3af;
   white-space: nowrap;
+  cursor: pointer;
+}
+
+.federated-pill:hover {
+  border-color: #4b5563;
+  color: #e5e7eb;
 }
 
 .federated-dot {
@@ -945,6 +1096,169 @@ body,
   border-radius: 50%;
   background: #22c55e;
   box-shadow: 0 0 4px rgba(34, 197, 94, 0.7);
+}
+
+/* The dot is the only colour the pill carries, and each state means something
+   specific: a recorded run, none recorded, still reading, and — the one that
+   is an error — the endpoint being unreachable. */
+.federated-dot-ok {
+  background: #22c55e;
+  box-shadow: 0 0 4px rgba(34, 197, 94, 0.7);
+}
+
+.federated-dot-none {
+  background: #6b7280;
+  box-shadow: none;
+}
+
+.federated-dot-loading {
+  background: #eab308;
+  box-shadow: 0 0 4px rgba(234, 179, 8, 0.6);
+}
+
+.federated-dot-unavailable {
+  background: #f97316;
+  box-shadow: 0 0 4px rgba(249, 115, 22, 0.7);
+}
+
+/* The details panel is a dropdown, wider than the pill: it carries the
+   participating regions, the model versions and the recorded limitations
+   verbatim, which does not fit a 20rem column. */
+.federated {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.35rem;
+}
+
+.federated-panel {
+  width: max-content;
+  max-width: min(92vw, 26rem);
+  max-height: min(70vh, 32rem);
+  overflow-y: auto;
+  text-align: left;
+}
+
+.federated-panel h3 {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 0 0.4rem;
+  font-size: 0.9rem;
+}
+
+.federated-panel h4.federated-subhead {
+  margin: 0.6rem 0 0.2rem;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6b7280;
+}
+
+.federated-badge {
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  border: 1px solid #5c4a1a;
+  background: #2d2412;
+  color: #fcd34d;
+  font-size: 0.62rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.federated-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.2rem 0.6rem;
+  margin: 0;
+  font-size: 0.78rem;
+}
+
+.federated-grid dt {
+  color: #9ca3af;
+  white-space: nowrap;
+}
+
+.federated-grid dd {
+  margin: 0;
+  color: #e5e7eb;
+  line-height: 1.35;
+}
+
+.federated-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.7rem;
+  word-break: break-all;
+}
+
+.federated-regions,
+.federated-models,
+.federated-metrics,
+.federated-limitations {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.74rem;
+}
+
+.federated-regions li {
+  padding-left: 0.5rem;
+  border-left: 2px solid #2a2e36;
+}
+
+.federated-region-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.federated-models li,
+.federated-metrics li,
+.federated-limitations li {
+  line-height: 1.35;
+}
+
+.federated-metrics li {
+  padding-left: 0.5rem;
+  border-left: 2px solid #2a2e36;
+  color: #d1d5db;
+}
+
+.federated-limitations li {
+  color: #d1d5db;
+}
+
+.federated-scope {
+  margin: 0.4rem 0 0;
+}
+
+.federated-error {
+  margin: 0.3rem 0;
+  font-size: 0.74rem;
+  color: #fca5a5;
+  line-height: 1.35;
+}
+
+.federated-refresh {
+  margin-top: 0.55rem;
+  border: 1px solid #3a3f4a;
+  border-radius: 5px;
+  background: transparent;
+  color: #d1d5db;
+  font: inherit;
+  font-size: 0.72rem;
+  padding: 0.2rem 0.5rem;
+  cursor: pointer;
+}
+
+.federated-refresh:hover {
+  border-color: #6b7280;
+  color: #e5e7eb;
 }
 
 /* --- layer toggle: signal layers group --- */
@@ -1005,6 +1319,15 @@ body,
   font-size: 0.68rem;
 }
 
+/* Says out loud that the corridor geometry and its node figures are
+   hand-authored, so the numbers below are never read as measured freight
+   data. Same treatment the fire popups give their illustration. */
+.freight-node-popup .freight-popup-source {
+  color: #9ca3af;
+  font-size: 0.66rem;
+  line-height: 1.3;
+}
+
 /* --- satellite fire anomaly popup --- */
 
 .fire-anomaly-popup .maplibregl-popup-content {
@@ -1054,9 +1377,9 @@ body,
   color: #ff5c8a;
 }
 
-/* --- rapid intervention dispatch bar (drawer bottom) --- */
+/* --- fire-response bar (drawer bottom) --- */
 
-/* Sticky at the bottom of the scrolling drawer so the intervention CTA is
+/* Sticky at the bottom of the scrolling drawer so the fire-response CTA is
    reachable no matter how far the readings scroll. */
 .intervention-bar {
   position: sticky;
@@ -1087,27 +1410,27 @@ body,
   border-color: #b91c1c;
 }
 
-/* Severity variants of the same action. The colour of the button is the
-   triage: escalate (critical) keeps the red, inspect (elevated / no
-   detection) is amber, and the local ward log is deliberately low-key
-   because it saves nothing anywhere but this browser. */
-.intervention-cta-inspect {
+/* Variants of the same action, coloured by triage. "urgent" keeps the red,
+   the plain note is amber, and the watch list is deliberately low-key because
+   it saves nothing anywhere but this browser. None of them names a recipient:
+   the action is a copy or a local save, and the label says which. */
+.intervention-cta-note {
   background: #b45309;
   border-color: #b45309;
 }
 
-.intervention-cta-inspect:hover:not(:disabled) {
+.intervention-cta-note:hover:not(:disabled) {
   background: #92400e;
   border-color: #92400e;
 }
 
-.intervention-cta-log {
+.intervention-cta-watch {
   background: transparent;
   border-color: #4b5563;
   color: #d1d5db;
 }
 
-.intervention-cta-log:hover:not(:disabled) {
+.intervention-cta-watch:hover:not(:disabled) {
   background: #1f2937;
   border-color: #6b7280;
 }
@@ -1185,7 +1508,7 @@ body,
   color: #9ca3af;
 }
 
-/* --- authority intervention alerts --- */
+/* --- pollution-control response alerts --- */
 
 .alert-item-body {
   display: flex;
@@ -1202,7 +1525,7 @@ body,
   cursor: pointer;
 }
 
-.alert-authority {
+.alert-response {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
@@ -1212,9 +1535,26 @@ body,
   border-top: 1px dashed #3a3f4a;
 }
 
-.alert-assigned {
+/* Which response track this alert belongs to. Pollution-control is blue,
+   fire is amber, and the two never share a colour or a wording. */
+.alert-response-kind {
+  align-self: flex-start;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  border: 1px solid #2b4364;
+  background: #1c2431;
+  color: #93c5fd;
+}
+
+.incident-kind-fire {
+  border-color: #5c4a1a;
+  background: #2d2412;
+  color: #fcd34d;
+}
+
+.alert-response-reference {
   font-size: 0.7rem;
-  color: #9ca3af;
   font-style: italic;
 }
 
@@ -1292,11 +1632,40 @@ body,
   text-align: left;
 }
 
+/* The report button and its form share the top-left column with the legend,
+   whose body is absolutely positioned and therefore paints over later
+   siblings. Without a stacking context of their own the button was
+   unclickable whenever the legend was open, so the button sits above it. */
+.report-open {
+  position: relative;
+  z-index: 2;
+}
+
+/* The form itself is a modal: it is tall, and every overlay it could live in
+   shares space with an absolutely-positioned panel that would intercept its
+   clicks. Fixed and centred, it is reachable regardless of which panels are
+   open, and it scrolls on its own. */
+.report-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(6, 8, 12, 0.62);
+  overflow: auto;
+}
+
 .report-form {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
   max-width: 20rem;
+  /* Inside the modal backdrop: keep the whole form reachable on a short
+     viewport without the backdrop itself scrolling the page behind it. */
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
 }
 
 .report-form-header {
@@ -1357,4 +1726,356 @@ body,
   margin: 0;
   font-size: 0.78rem;
   color: #f87171;
+}
+
+/* --- report form: validation, local-only extras, confirmation --- */
+
+.report-field-error {
+  font-size: 0.74rem;
+  color: #f87171;
+}
+
+/* The photo and the local reading are grouped and visually set apart from the
+   fields that are actually transmitted, so "kept on this device" reads as a
+   property of the block rather than a footnote. */
+.report-local {
+  margin: 0;
+  padding: 0.4rem 0.5rem;
+  border: 1px dashed #3a3f4a;
+  border-radius: 6px;
+  font-size: 0.8rem;
+}
+
+.report-local legend {
+  padding: 0 0.3rem;
+  color: #9ca3af;
+  font-size: 0.76rem;
+}
+
+.report-local-note {
+  margin: 0 0 0.35rem;
+  font-size: 0.72rem;
+  line-height: 1.3;
+}
+
+.report-local input[type='file'] {
+  width: 100%;
+  font-size: 0.74rem;
+  color: #9ca3af;
+}
+
+.report-photo {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+
+.report-photo-preview {
+  width: 2.6rem;
+  height: 2.6rem;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid #3a3f4a;
+}
+
+.report-photo-remove {
+  margin-left: auto;
+  border: 1px solid #3a3f4a;
+  border-radius: 4px;
+  background: transparent;
+  color: #9ca3af;
+  font: inherit;
+  font-size: 0.72rem;
+  padding: 0.1rem 0.35rem;
+  cursor: pointer;
+}
+
+.report-reading-row {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.report-reading-value {
+  flex: 1;
+  min-width: 0;
+  padding: 0.3rem;
+  border: 1px solid #3a3f4a;
+  border-radius: 6px;
+  background: #12141a;
+  color: #e5e7eb;
+  font: inherit;
+}
+
+.report-reading-row select {
+  padding: 0.3rem;
+  border: 1px solid #3a3f4a;
+  border-radius: 6px;
+  background: #12141a;
+  color: #e5e7eb;
+  font: inherit;
+}
+
+.report-reading-include {
+  display: flex;
+  gap: 0.35rem;
+  align-items: flex-start;
+  margin-top: 0.4rem;
+  font-size: 0.72rem;
+  line-height: 1.3;
+  color: #9ca3af;
+}
+
+.report-retry-note {
+  margin: 0;
+  font-size: 0.74rem;
+  line-height: 1.3;
+}
+
+.report-result {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.2rem 0.6rem;
+  margin: 0;
+  font-size: 0.78rem;
+}
+
+.report-result dt {
+  color: #9ca3af;
+  white-space: nowrap;
+}
+
+.report-result dd {
+  margin: 0;
+  color: #e5e7eb;
+  line-height: 1.3;
+}
+
+.report-result-cell {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  word-break: break-all;
+}
+
+.report-result-note {
+  white-space: pre-wrap;
+}
+
+/* The unverified badge: amber, because it is a caution about provenance and
+   not an error, and used verbatim in the drawer row too. */
+.report-unverified,
+.citizen-report-unverified {
+  margin: 0;
+  padding: 0.2rem 0.45rem;
+  border-radius: 4px;
+  background: #2d2412;
+  color: #fcd34d;
+  border: 1px solid #5c4a1a;
+  font-size: 0.74rem;
+  align-self: flex-start;
+}
+
+.citizen-report-unverified {
+  display: inline-block;
+  margin-top: 0.35rem;
+}
+
+.report-local-only {
+  margin: 0;
+  font-size: 0.74rem;
+  line-height: 1.3;
+}
+
+/* --- local incident notebook (drawer + alerts) --- */
+
+/* A notebook that is explicitly not a backend record: the kind is coloured by
+   response track, and the on-device caveat is a visible block rather than a
+   footnote, because the difference between "an official incident" and "a note
+   in this browser" is the whole point. */
+.incident {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.55rem;
+  border: 1px solid #3a3f4a;
+  border-left-width: 3px;
+  border-radius: 6px;
+  background: #14161c;
+  font-size: 0.78rem;
+}
+
+.incident-fire {
+  border-left-color: #f59e0b;
+}
+
+.incident-pollution {
+  border-left-color: #60a5fa;
+}
+
+.incident-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.35rem;
+}
+
+.incident-header h4 {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.incident-kind {
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.66rem;
+  border: 1px solid #2b4364;
+  background: #1c2431;
+  color: #93c5fd;
+}
+
+.incident-scope {
+  margin: 0 0 0.35rem;
+  color: #9ca3af;
+  font-size: 0.72rem;
+  line-height: 1.3;
+}
+
+.incident-local {
+  margin: 0 0 0.45rem;
+  padding: 0.35rem 0.45rem;
+  border-radius: 4px;
+  background: #1b1d24;
+  border: 1px dashed #4b5563;
+  color: #cbd5e1;
+  font-size: 0.7rem;
+  line-height: 1.35;
+}
+
+.incident-empty {
+  margin: 0 0 0.35rem;
+  font-size: 0.74rem;
+}
+
+.incident-button {
+  border: 1px solid #4b5563;
+  border-radius: 5px;
+  background: transparent;
+  color: #d1d5db;
+  font: inherit;
+  font-size: 0.74rem;
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+}
+
+.incident-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.incident-button-primary {
+  background: #1c2431;
+  border-color: #2b4364;
+  color: #93c5fd;
+}
+
+.incident-button-danger {
+  border-color: #7f1d1d;
+  color: #fca5a5;
+}
+
+.incident-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.25rem 0.5rem;
+  margin: 0 0 0.4rem;
+}
+
+.incident-facts dt {
+  color: #9ca3af;
+  white-space: nowrap;
+}
+
+.incident-facts dd {
+  margin: 0;
+  line-height: 1.3;
+}
+
+.incident-input,
+.incident-status {
+  width: 100%;
+  padding: 0.2rem 0.35rem;
+  border: 1px solid #3a3f4a;
+  border-radius: 5px;
+  background: #12141a;
+  color: #e5e7eb;
+  font: inherit;
+  font-size: 0.74rem;
+}
+
+.incident-status {
+  width: auto;
+}
+
+.incident-reference {
+  margin: 0.35rem 0;
+  font-size: 0.7rem;
+  font-style: italic;
+}
+
+.incident-subhead {
+  margin: 0.45rem 0 0.2rem;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #6b7280;
+}
+
+.incident-evidence,
+.incident-history {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.incident-evidence li,
+.incident-history li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  font-size: 0.72rem;
+  line-height: 1.3;
+  padding-left: 0.5rem;
+  border-left: 2px solid #2a2e36;
+}
+
+.incident-evidence-source {
+  align-self: flex-start;
+  font-size: 0.66rem;
+  color: #93c5fd;
+}
+
+.incident-note-row {
+  display: flex;
+  gap: 0.3rem;
+  margin-top: 0.45rem;
+}
+
+.incident-simulator-note {
+  margin: 0.4rem 0;
+  font-size: 0.7rem;
+  line-height: 1.3;
+}
+
+.alert-incident-toggle {
+  align-self: flex-start;
+  margin-top: 0.3rem;
+  border: 1px solid #3a3f4a;
+  border-radius: 5px;
+  background: transparent;
+  color: #9ca3af;
+  font: inherit;
+  font-size: 0.7rem;
+  padding: 0.15rem 0.4rem;
+  cursor: pointer;
 }

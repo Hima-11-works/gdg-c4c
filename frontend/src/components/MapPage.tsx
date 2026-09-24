@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   fetchActiveFires,
   fetchGridCurrent,
@@ -14,14 +14,17 @@ import {
   warmForecastWindow,
 } from '../lib/forecastFrames'
 import { lodKey, lodQueryFor, weatherResolutionForLod } from '../lib/lod'
+import { runFactsFromGrid, staleness } from '../lib/runFacts'
 import { useMapUi } from '../state/MapUiContext'
 import { AlertsPanel } from './AlertsPanel'
 import { CellDetailPanel } from './CellDetailPanel'
+import { DataQualityNotice } from './DataQualityNotice'
 import { FederatedStatusPill } from './FederatedStatusPill'
 import { Legend } from './Legend'
 import { LayerToggle } from './LayerToggle'
 import { MapView } from './MapView'
 import { ReportFireForm } from './ReportFireForm'
+import { RunStatusPanel } from './RunStatusPanel'
 import { ScopeChip } from './ScopeChip'
 import { SearchBar } from './SearchBar'
 import { StatusBanner } from './StatusBanner'
@@ -167,6 +170,24 @@ export function MapPage() {
     ? 'current conditions'
     : `the +${forecastMinutes >= 60 ? `${Math.floor(forecastMinutes / 60)}h ` : ''}${forecastMinutes % 60 ? `${forecastMinutes % 60}m ` : ''}forecast`.trim()
 
+  // Run-level facts come from the current-conditions read, which is always
+  // fetched and always pinned to the same published run as the forecast
+  // frames — so the status panel describes the run the map is drawing even
+  // while a forecast horizon is playing.
+  const runFacts = useMemo(() => {
+    const current = currentGrid.resource
+    return runFactsFromGrid(current.status === 'success' ? current.data : [], {
+      runId: current.status === 'success' ? current.runId : undefined,
+      mode: current.status === 'success' ? current.mode : undefined,
+      generatedAt: current.status === 'success' ? current.generatedAt : undefined,
+      coverage: current.status === 'success' ? current.coverage : undefined,
+      attribution: current.status === 'success' ? current.attribution : undefined,
+    })
+  }, [currentGrid.resource])
+  const runStaleness = useMemo(() => staleness(runFacts), [runFacts])
+  const activeHasData =
+    activeBaseLayer.resource.status === 'success' && activeBaseLayer.resource.data.length > 0
+
   return (
     <div className="map-page">
       <div className="banner-stack">
@@ -176,6 +197,12 @@ export function MapPage() {
           onRetry={activeBaseLayer.refetch}
           warming={warming}
           interpolated={!isNow && isInterpolated}
+        />
+        <DataQualityNotice
+          facts={runFacts}
+          staleness={runStaleness}
+          metricIsExposure={state.mapMetric === 'exposure'}
+          hasData={activeHasData}
         />
       </div>
 
@@ -198,14 +225,6 @@ export function MapPage() {
             Report a fire
           </button>
         )}
-        {reportOpen && reportCenter !== null && (
-          <ReportFireForm
-            latitude={reportCenter.latitude}
-            longitude={reportCenter.longitude}
-            onClose={() => setReportOpen(false)}
-            onSubmitted={reports.refetch}
-          />
-        )}
       </div>
 
       <div className="overlay overlay-top-right">
@@ -214,6 +233,11 @@ export function MapPage() {
           <AlertsPanel publishedRunId={publishedRunId} />
         </div>
         <FederatedStatusPill />
+        <RunStatusPanel
+          resource={currentGrid.resource}
+          facts={runFacts}
+          staleness={runStaleness}
+        />
       </div>
 
       <div className="overlay overlay-bottom-left">
@@ -229,6 +253,27 @@ export function MapPage() {
       </div>
 
       <CellDetailPanel publishedRunId={publishedRunId} citizenReports={reports.resource} />
+
+      {/* The report form is a modal, and deliberately NOT inside an overlay:
+          every `.overlay` establishes its own stacking context, so a modal
+          rendered inside one could not rise above its sibling overlays and
+          their panels would intercept its clicks. As a direct child of the
+          page it covers all of them. */}
+      {reportOpen && reportCenter !== null && (
+        <div
+          className="report-modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Report a fire"
+        >
+          <ReportFireForm
+            latitude={reportCenter.latitude}
+            longitude={reportCenter.longitude}
+            onClose={() => setReportOpen(false)}
+            onSubmitted={reports.refetch}
+          />
+        </div>
+      )}
     </div>
   )
 }

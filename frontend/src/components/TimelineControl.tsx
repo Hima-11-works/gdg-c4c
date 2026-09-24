@@ -253,17 +253,35 @@ export function TimelineControl({
   // Cleanup on unmount.
   useEffect(() => () => stopPlayback(), [stopPlayback])
 
-  // Mark every interpolated frame, but label only current and hourly anchors.
+  // Major marks are the published anchors (the hours the backend actually
+  // forecast); the 15-minute marks between them are interpolated by the
+  // backend, which is why the selected frame says so in the horizon label.
   const majorTicks = keyframes.filter((minutes) => minutes % 60 === 0)
 
   const currentPct = minutesToPct(forecastMinutes, maxMinutes)
+
+  // A selected frame the publication did not forecast at: the backend
+  // interpolates between the anchors it did publish, and no calibrated interval
+  // exists for the in-between. The banner says the same thing; this label is
+  // what a reader looks at while dragging, so it says it too.
+  const interpolated = forecastMinutes > 0 && !supportedHours.includes(forecastMinutes / 60)
 
   return (
     <div className="panel timeline-control" role="group" aria-label="Forecast timeline">
       {/* Header: horizon on the left, play/pause centered, reset on the right */}
       <div className="timeline-header">
-        <div className="timeline-horizon" aria-live="polite" aria-atomic="true">
+        <div
+          className="timeline-horizon"
+          aria-live="polite"
+          aria-atomic="true"
+          title={
+            interpolated
+              ? 'Interpolated between the published forecast anchors — no calibrated interval is available for in-between frames.'
+              : undefined
+          }
+        >
           {formatHorizon(forecastMinutes)}
+          {interpolated && <span className="timeline-interpolated"> interpolated</span>}
         </div>
 
         <button
@@ -340,7 +358,9 @@ export function TimelineControl({
         aria-valuemin={0}
         aria-valuemax={maxMinutes}
         aria-valuenow={forecastMinutes}
-        aria-valuetext={formatHorizon(forecastMinutes)}
+        aria-valuetext={
+          interpolated ? `${formatHorizon(forecastMinutes)} interpolated` : formatHorizon(forecastMinutes)
+        }
         aria-keyshortcuts="ArrowLeft ArrowRight Home End"
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}

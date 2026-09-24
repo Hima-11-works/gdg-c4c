@@ -331,3 +331,107 @@ export interface FireReportSubmit {
   /** Idempotency id: a retry of the same submission must not stack reports. */
   client_report_id?: string
 }
+
+// --- federation demonstration (GET /api/v1/federation/status) ---
+//
+// The two-region federated-training *demonstration*: two disjoint partitions of
+// one synthetic dataset, each trained locally, exchanging model updates only.
+// The types below follow the route's schemas; the blocks the backend types as
+// loose dicts (`aggregate`, `evaluation`, `limitations`) are modelled here for
+// the fields the dashboard reads, and every one of them is treated as optional
+// because a status payload is allowed to be partial.
+//
+// Nothing in this contract claims privacy, nationwide coverage or real-world
+// accuracy, and neither does the UI: `region_scope`, `synthetic_only` and
+// `evaluation.usable_as_real_world_evidence` exist precisely so the screen can
+// say what the demonstration is not.
+
+export interface FederationParticipantOut {
+  participant_id: string
+  region_label: string
+  example_count: number
+  train_count: number
+  validation_count: number
+  test_count: number
+  station_count: number
+  horizon_count: number
+  update_path: string
+  update_sha256: string
+  weight_fraction: number
+  joined_at?: string
+}
+
+export interface FederationModelVersionOut {
+  model_id: string
+  region: string
+  horizon_hours: number
+  /** Always `candidate` for this demonstration — never promoted. */
+  status: string
+  /** True for every model this demonstration can produce. */
+  synthetic_only: boolean
+}
+
+export interface FederationAggregateOut {
+  artifact_path: string
+  artifact_sha256: string
+  algorithm: string
+  synthetic_only: boolean
+}
+
+export interface FederationEvaluationHorizonOut {
+  horizon_hours: number
+  mae_ugm3: number
+  baseline_mae_ugm3: number
+  rmse_ugm3: number
+  bias_ugm3: number | null
+  heldout_count: number
+  seasons_seen?: string[]
+}
+
+export interface FederationEvaluationOut {
+  /** `synthetic_evaluation_only`, or `unavailable`. */
+  status: string
+  usable_as_real_world_evidence: boolean
+  reason: string
+  heldout_examples?: number | null
+  horizons?: FederationEvaluationHorizonOut[] | null
+}
+
+export interface FederationLimitationsOut {
+  privacy?: string
+  geography?: string
+  accuracy?: string
+}
+
+/** `GET /api/v1/federation/status` returns model versions in one of two
+ *  shapes, and the two carry different detail:
+ *
+ *   - a freshly demonstrated run (and the contract's example) returns a list of
+ *     full objects — see [FederationModelVersionOut];
+ *   - a run read back from the database returns only `{"model_ids": [...]}`,
+ *     because that is all the persisted row carries.
+ *
+ *  Both are handled; a client that assumed only the richer shape would break on
+ *  the other, which is exactly what happened when this was first wired up. */
+export interface FederationModelIdsOut {
+  model_ids?: string[]
+}
+
+export interface FederationStatusOut {
+  /** `succeeded` | `failed` for a recorded run, or `no_federation_run`. */
+  status: string
+  run_id?: string | null
+  participant_count?: number | null
+  /** Always `two-partition-synthetic-demonstration`. */
+  region_scope?: string | null
+  feature_schema_version?: string | null
+  horizons_hours?: number[] | null
+  participants?: FederationParticipantOut[] | null
+  aggregate?: FederationAggregateOut | null
+  model_versions?: FederationModelVersionOut[] | FederationModelIdsOut | null
+  evaluation?: FederationEvaluationOut | null
+  raw_rows_exchanged_to_aggregator?: number | null
+  limitations?: FederationLimitationsOut | null
+  started_at?: string | null
+  finished_at?: string | null
+}
