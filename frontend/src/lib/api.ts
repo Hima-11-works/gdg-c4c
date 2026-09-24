@@ -16,6 +16,7 @@ import type {
   BoundingBox,
   CellDetailOut,
   Envelope,
+  FederationStatusOut,
   FireHotspotOut,
   FireReportOut,
   FireReportSubmit,
@@ -279,6 +280,15 @@ export function fetchAlerts(runId?: string): Promise<Envelope<AlertOut[]>> {
 
 export function fetchReports(): Promise<Envelope<FireReportOut[]>> {
   return apiGet('/api/v1/reports')
+}
+
+/** The two-region federated-training demonstration's status
+ *  (GET /api/v1/federation/status). Public and unpinned: it reports the most
+ *  recent recorded demonstration run, which is not part of any published
+ *  prediction run. See lib/federation.ts for what the payload may and may not
+ *  be read as claiming. */
+export function fetchFederationStatus(): Promise<Envelope<FederationStatusOut>> {
+  return apiGet<Envelope<FederationStatusOut>>('/api/v1/federation/status')
 }
 
 /** NASA FIRMS detections the backend has ingested (GET /api/v1/fires),

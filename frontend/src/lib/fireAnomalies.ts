@@ -153,7 +153,7 @@ export function anomalyPopupHtml(anomaly: ThermalAnomaly): string {
   const priority = priorityForSeverity(anomaly.severity)
   return (
     `<strong>Satellite Thermal Anomaly</strong>` +
-    `<span class="fire-popup-source">Illustrative mock - no VIIRS/satellite ingest exists yet</span>` +
+    `<span class="fire-popup-source">Illustrative mock — hand-authored, not a satellite feed and not a confirmed fire. The ingested satellite detections are the Active Fires (NASA FIRMS) layer.</span>` +
     `<span>FRP (Fire Radiative Power): <b>${anomaly.frp.toFixed(1)} MW</b></span>` +
     `<span>Detection Time: <b>${anomaly.detectionMinutesAgo} mins ago</b></span>` +
     `<span class="fire-popup-action">Priority ${priority} of 3 - ${

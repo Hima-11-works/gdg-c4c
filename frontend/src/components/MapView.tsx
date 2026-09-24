@@ -1212,6 +1212,7 @@ export function MapView({
               'freight-node-popup',
               `<strong>${props.name}</strong>` +
                 `<span class="freight-popup-corridor">${props.corridor}</span>` +
+                `<span class="freight-popup-source">Illustrative — hand-authored corridor geometry and node figures, not measured freight data (see lib/freightCorridors)</span>` +
                 `<span>Corridor congestion: <b>${props.congestion}%</b></span>` +
                 `<span>Emission impact: <b>${props.emission}</b> t CO₂e / day</span>`,
               12,

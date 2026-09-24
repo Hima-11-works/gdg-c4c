@@ -119,8 +119,8 @@ export function activeFirePopupHtml(props: Record<string, unknown>): string {
   const acquired = `${props.acq_date ?? '—'} ${props.acq_time ?? ''}`.trim()
 
   return (
-    `<strong>NASA FIRMS Active Fire</strong>` +
-    `<span class="fire-popup-source">${props.satellite ?? 'VIIRS'} · real satellite detection</span>` +
+    `<strong>NASA FIRMS Thermal Detection</strong>` +
+    `<span class="fire-popup-source">${props.satellite ?? 'VIIRS'} · real satellite detection, not a confirmed ground fire</span>` +
     `<span>FRP (Fire Radiative Power): <b>${frp}</b></span>` +
     `<span>Brightness: <b>${brightness}</b></span>` +
     `<span>Confidence: <b>${confidence}</b></span>` +

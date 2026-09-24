@@ -125,7 +125,7 @@ export function LayerToggle() {
 
           <label
             className="layer-toggle-option"
-            title="Copernicus Sentinel-5P tropospheric NO2 via WMS. Inert until VITE_NO2_WMS_URL is set to a GetMap endpoint - no fabricated data is shown in the meantime."
+            title="Copernicus Sentinel-5P tropospheric NO2, proxied through the backend: the browser only calls GET /api/v1/tiles/no2/{z}/{y}/{x} and the credential lives server-side (NO2_WMS_URL / NO2_WMS_TOKEN). Inert until the backend has that configured — no fabricated data is shown in the meantime."
           >
             <input
               type="checkbox"
@@ -137,7 +137,7 @@ export function LayerToggle() {
 
           <label
             className="layer-toggle-option"
-            title="Illustrative VIIRS-style thermal anomalies - no satellite ingest exists yet; these are hand-authored mock detections (see lib/fireAnomalies)"
+            title="Hand-authored mock thermal detections shaped like VIIRS output — illustrative, not a satellite feed, and not a confirmed fire. The real ingested satellite detections are the Active Fires (NASA FIRMS) layer above (see lib/fireAnomalies)."
           >
             <input
               type="checkbox"
