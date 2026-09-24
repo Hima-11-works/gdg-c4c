@@ -461,6 +461,88 @@ report_evidence = Table(
     Index("ix_report_evidence_verification_status", "verification_status"),
 )
 
+# Incident workflow (the fire-department simulator). An incident is created
+# from an eligible fire alert or citizen report and progressed through
+# response states. See docs/api/incidents.md and app.domain.incidents.
+incident = Table(
+    "incident",
+    metadata,
+    Column("id", BigInteger, primary_key=True),
+    # What the incident was created from. The pair is unique (below), which
+    # is what makes creation idempotent on the source.
+    Column("source_type", String(20), nullable=False),
+    Column("source_id", BigInteger, nullable=False),
+    Column("status", String(20), nullable=False, server_default="reported"),
+    Column("responder_role", String(30), nullable=False),
+    Column("severity", String(20), nullable=False),
+    Column("jurisdiction", String(120), nullable=True),
+    Column("latitude", Float, nullable=False),
+    Column("longitude", Float, nullable=False),
+    # Derived from latitude/longitude at write time; spatial queries only.
+    Column(
+        "geom", Geography(geometry_type="POINT", srid=4326, spatial_index=False), nullable=False
+    ),
+    Column("h3_cell", String(H3_CELL_LENGTH), nullable=True),
+    Column("linked_prediction_run_id", String(120), nullable=True),
+    # Evidence references are citizen report ids; stored as a JSONB int array
+    # so the set is one atomic value, not a join table for a handful of ids.
+    Column("evidence_report_ids", JSONB, nullable=True),
+    Column("assignee", String(120), nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Column("resolved_at", DateTime(timezone=True), nullable=True),
+    CheckConstraint(
+        "source_type IN ('alert', 'report')", name="ck_incident_source_type"
+    ),
+    CheckConstraint(
+        "status IN ('reported', 'assigned', 'acknowledged', 'en_route', "
+        "'on_scene', 'resolved', 'cancelled')",
+        name="ck_incident_status",
+    ),
+    CheckConstraint(
+        "responder_role IN ('fire_department', 'pollution_control')",
+        name="ck_incident_responder_role",
+    ),
+    CheckConstraint("latitude BETWEEN -90 AND 90", name="ck_incident_latitude"),
+    CheckConstraint("longitude BETWEEN -180 AND 180", name="ck_incident_longitude"),
+    CheckConstraint("updated_at >= created_at", name="ck_incident_updated_at"),
+    CheckConstraint(
+        "resolved_at IS NULL OR resolved_at >= created_at",
+        name="ck_incident_resolved_at",
+    ),
+    # One incident per source: the idempotency guarantee at the storage layer.
+    UniqueConstraint("source_type", "source_id", name="uq_incident_source"),
+    Index("ix_incident_status", "status"),
+    Index("ix_incident_responder_role", "responder_role"),
+    Index("ix_incident_created_at", "created_at"),
+)
+
+# Append-only incident history. Every state change and assignment writes one
+# row; nothing updates or deletes these.
+incident_event = Table(
+    "incident_event",
+    metadata,
+    Column("id", BigInteger, primary_key=True),
+    Column(
+        "incident_id",
+        BigInteger,
+        ForeignKey("incident.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("event_type", String(20), nullable=False),
+    Column("from_status", String(20), nullable=True),
+    Column("to_status", String(20), nullable=True),
+    Column("role", String(30), nullable=True),
+    Column("actor", String(120), nullable=True),
+    Column("note", String(500), nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint(
+        "event_type IN ('created', 'assigned', 'reassigned', 'transition')",
+        name="ck_incident_event_type",
+    ),
+    Index("ix_incident_event_incident_id", "incident_id", "created_at"),
+)
+
 fire_hotspot = Table(
     "fire_hotspot",
     metadata,

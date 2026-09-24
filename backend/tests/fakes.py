@@ -13,6 +13,7 @@ from datetime import datetime
 
 from app.domain.environmental_observations import FireHotspot
 from app.domain.citizen_intake import ReportEvidence
+from app.domain.incidents import Incident, IncidentEvent
 from app.domain.providers import ProviderError
 from app.domain.repositories import DuplicateReadingError
 from app.domain.types import (
@@ -162,8 +163,11 @@ class FakeAlertRepository:
         self.alerts: list[Alert] = []
 
     def add(self, alert: Alert) -> Alert:
-        self.alerts.append(alert)
-        return alert
+        # Assign a DB-style auto-incrementing id, like the SQL repository's
+        # RETURNING clause does — the incident workflow needs a real id.
+        stored = replace(alert, id=len(self.alerts) + 1)
+        self.alerts.append(stored)
+        return stored
 
     def list_active(self, *, since: datetime) -> list[Alert]:
         return [a for a in self.alerts if a.created_at >= since]
@@ -338,3 +342,64 @@ class FakeWeatherProvider:
         if self.error is not None:
             raise ProviderError(self.error)
         return [self.samples_by_point.get(p, self.default_sample) for p in points]
+
+
+class FakeIncidentRepository:
+    """In-memory IncidentRepository.
+
+    Mirrors the SQL implementation: one incident per (source_type, source_id)
+    (a duplicate create returns the existing row), and every create/update
+    appends exactly one history event."""
+
+    def __init__(self) -> None:
+        self.incidents: list[Incident] = []
+        self.events: list[IncidentEvent] = []
+
+    def create(self, incident: Incident, event: IncidentEvent) -> Incident:
+        for existing in self.incidents:
+            if existing.source_key == incident.source_key:
+                return existing
+        stored = replace(incident, id=len(self.incidents) + 1)
+        self.incidents.append(stored)
+        self._append_event(stored.id, event)
+        return stored
+
+    def get(self, incident_id: int) -> Incident | None:
+        return next((i for i in self.incidents if i.id == incident_id), None)
+
+    def get_by_source(self, source_type, source_id: int) -> Incident | None:
+        return next(
+            (
+                i
+                for i in self.incidents
+                if i.source_type == source_type and i.source_id == source_id
+            ),
+            None,
+        )
+
+    def update(self, incident: Incident, event: IncidentEvent) -> Incident:
+        stored = replace(incident)
+        for index, existing in enumerate(self.incidents):
+            if existing.id == incident.id:
+                self.incidents[index] = stored
+                break
+        self._append_event(stored.id, event)
+        return stored
+
+    def list(self, *, status=None, role=None) -> list[Incident]:
+        result = list(self.incidents)
+        if status is not None:
+            result = [i for i in result if i.status == status]
+        if role is not None:
+            result = [i for i in result if i.responder_role == role]
+        return sorted(result, key=lambda i: (i.created_at, i.id or 0), reverse=True)
+
+    def history(self, incident_id: int) -> list[IncidentEvent]:
+        return [
+            e for e in self.events if e.incident_id == incident_id
+        ]
+
+    def _append_event(self, incident_id: int, event: IncidentEvent) -> None:
+        self.events.append(
+            replace(event, id=len(self.events) + 1, incident_id=incident_id)
+        )

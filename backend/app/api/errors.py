@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 
 _CODES_BY_STATUS = {
     400: "bad_request",
+    401: "unauthorized",
+    403: "role_mismatch",
     404: "not_found",
     409: "conflict",
     413: "media_too_large",
@@ -46,7 +48,18 @@ def _error_body(code: str, message: str, details: list | None = None) -> dict:
 
 
 async def _http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
-    code = _CODES_BY_STATUS.get(exc.status_code, "http_error")
+    # An endpoint may pin an exact machine code via the exception's
+    # "X-Error-Code" header, because one status can map to more than one
+    # condition (503 is both media_unavailable and simulator_disabled).
+    # Falls back to the status-based default when no override is given.
+    override = None
+    headers = getattr(exc, "headers", None)
+    if headers:
+        for key, value in headers.items():
+            if key.lower() == "x-error-code":
+                override = value
+                break
+    code = override or _CODES_BY_STATUS.get(exc.status_code, "http_error")
     return JSONResponse(status_code=exc.status_code, content=_error_body(code, str(exc.detail)))
 
 

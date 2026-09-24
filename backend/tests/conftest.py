@@ -13,6 +13,10 @@ if os.environ.get("RUN_DB_TESTS") != "1":
     os.environ.setdefault("POSTGRES_PASSWORD", "test")
     os.environ.setdefault("POSTGRES_DB", "test")
 
+# The incident workflow refuses writes unless a simulator key is configured;
+# tests exercise both the configured and unconfigured cases.
+os.environ.setdefault("SIMULATOR_API_KEY", "test-simulator-key")
+
 from app.api.deps import (  # noqa: E402
     get_alert_service,
     get_cell_service,
@@ -21,6 +25,7 @@ from app.api.deps import (  # noqa: E402
     get_fire_hotspot_service,
     get_fire_report_service,
     get_grid_service,
+    get_incident_service,
     get_sensor_service,
     get_weather_service,
 )
@@ -31,6 +36,7 @@ from app.services.cells import CellService  # noqa: E402
 from app.services.citizen_intake import CitizenIntakeService  # noqa: E402
 from app.services.fires import FireHotspotService  # noqa: E402
 from app.services.grid import GridService  # noqa: E402
+from app.services.incidents import IncidentService  # noqa: E402
 from app.services.reports import FireReportService  # noqa: E402
 from app.services.sensors import SensorService  # noqa: E402
 from app.services.weather import WeatherService  # noqa: E402
@@ -40,6 +46,7 @@ from tests.fakes import (  # noqa: E402
     FakeFireReportRepository,
     FakeForecastRepository,
     FakeGridStateRepository,
+    FakeIncidentRepository,
     FakeReportEvidenceRepository,
     FakeSensorReadingRepository,
     FakeWeatherReadingRepository,
@@ -80,6 +87,7 @@ class FakeRepos:
         self.fire_hotspots = FakeFireHotspotRepository()
         self.evidence = FakeReportEvidenceRepository()
         self.media = InMemoryMediaStore()
+        self.incidents = FakeIncidentRepository()
 
 
 @pytest.fixture
@@ -112,6 +120,11 @@ def api_client(fake_repos: FakeRepos) -> TestClient:
         report_repository=fake_repos.fire,
         media_store=fake_repos.media,
         settings=get_settings(),
+    )
+    app.dependency_overrides[get_incident_service] = lambda: IncidentService(
+        incident_repository=fake_repos.incidents,
+        alert_repository=fake_repos.alert,
+        report_repository=fake_repos.fire,
     )
     return TestClient(app)
 

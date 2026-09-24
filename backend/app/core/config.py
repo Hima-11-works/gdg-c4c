@@ -361,6 +361,13 @@ class Settings(BaseSettings):
     # Comma-separated allow-list of accepted citizen sensor pollutants.
     citizen_sensor_pollutants: str = Field(default="pm25,pm10")
 
+    # --- Incident workflow (fire-department simulator) ---
+    # Writes to /api/v1/incidents require this key in the X-Simulator-Key
+    # header, so anonymous public changes are impossible. When unset, ALL
+    # incident writes are refused with 503 (the workflow is off, not
+    # silently unprotected). Reads need no key. See docs/api/incidents.md.
+    simulator_api_key: SecretStr | None = None
+
     @model_validator(mode="after")
     def _check_weather_resolution_not_finer_than_grid(self) -> "Settings":
         if self.weather_h3_resolution > self.h3_resolution:

@@ -12,7 +12,7 @@ validation can't drift between them.
 
 from __future__ import annotations
 
-from fastapi import Depends, HTTPException, Query, status
+from fastapi import Depends, Header, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -22,6 +22,7 @@ from app.db.repositories import (
     SqlFireReportRepository,
     SqlForecastRepository,
     SqlGridStateRepository,
+    SqlIncidentRepository,
     SqlPredictionPublicationRepository,
     SqlReportEvidenceRepository,
     SqlSensorReadingRepository,
@@ -34,6 +35,7 @@ from app.services.cells import CellService
 from app.services.citizen_intake import CitizenIntakeService
 from app.services.fires import FireHotspotService
 from app.services.grid import GridService
+from app.services.incidents import IncidentService
 from app.services.media_storage import (
     DisabledMediaStore,
     FilesystemMediaStore,
@@ -130,6 +132,37 @@ def get_citizen_intake_service(
         media_store=media_store,
         settings=get_settings(),
     )
+
+
+def get_incident_service(session: Session = Depends(get_db)) -> IncidentService:
+    return IncidentService(
+        incident_repository=SqlIncidentRepository(session),
+        alert_repository=SqlAlertRepository(session),
+        report_repository=SqlFireReportRepository(session),
+    )
+
+
+def require_simulator_key(
+    x_simulator_key: str | None = Header(default=None, alias="X-Simulator-Key"),
+) -> None:
+    """Gate every incident write.
+
+    Refuses all writes with 503 when no key is configured (the workflow is
+    off, not silently unprotected), and 401 when the provided key is missing
+    or wrong. Reads do not depend on this.
+    """
+    configured = get_settings().simulator_api_key
+    if configured is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="simulator writes are not configured",
+            headers={"X-Error-Code": "simulator_disabled"},
+        )
+    if x_simulator_key is None or x_simulator_key != configured.get_secret_value():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="a valid X-Simulator-Key header is required",
+        )
 
 
 def get_fire_hotspot_service(session: Session = Depends(get_db)) -> FireHotspotService:
