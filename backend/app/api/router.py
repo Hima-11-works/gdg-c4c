@@ -8,6 +8,7 @@ from fastapi import APIRouter
 from app.api.routes.alerts import router as alerts_router
 from app.api.routes.cells import router as cells_router
 from app.api.routes.citizen_intake import router as citizen_intake_router
+from app.api.routes.federation import router as federation_router
 from app.api.routes.fires import router as fires_router
 from app.api.routes.grid import router as grid_router
 from app.api.routes.incidents import router as incidents_router
@@ -32,3 +33,4 @@ api_v1_router.include_router(tiles_router)
 # (/reports/{id}/evidence...) do not collide with /reports itself.
 api_v1_router.include_router(citizen_intake_router)
 api_v1_router.include_router(incidents_router)
+api_v1_router.include_router(federation_router)

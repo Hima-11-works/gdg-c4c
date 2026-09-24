@@ -13,6 +13,7 @@ from datetime import datetime
 
 from app.domain.environmental_observations import FireHotspot
 from app.domain.citizen_intake import ReportEvidence
+from app.domain.federation import FederationParticipant, FederationRun
 from app.domain.incidents import Incident, IncidentEvent
 from app.domain.providers import ProviderError
 from app.domain.repositories import DuplicateReadingError
@@ -403,3 +404,50 @@ class FakeIncidentRepository:
         self.events.append(
             replace(event, id=len(self.events) + 1, incident_id=incident_id)
         )
+
+
+class FakeFederationRepository:
+    """In-memory store for federation runs and their participants.
+
+    Mirrors the SQL behavior the status reader needs: `latest` returns the
+    run with the newest finished_at, participants come back per run."""
+
+    def __init__(self) -> None:
+        self.runs: list[FederationRun] = []
+        self.participants: list[tuple[str, FederationParticipant]] = []
+
+    def save(self, run: FederationRun, participants) -> None:
+        if any(existing.run_id == run.run_id for existing in self.runs):
+            return
+        self.runs.append(run)
+        for participant in participants:
+            self.participants.append((run.run_id, participant))
+
+    def latest(self) -> FederationRun | None:
+        if not self.runs:
+            return None
+        return max(self.runs, key=lambda run: (run.finished_at, run.run_id))
+
+    def get(self, run_id: str) -> FederationRun | None:
+        return next(
+            (run for run in self.runs if run.run_id == run_id),
+            None,
+        )
+
+    def list_participants(self, run_id: str) -> list[FederationParticipant]:
+        return [
+            participant
+            for key, participant in self.participants
+            if key == run_id
+        ]
+
+
+class FakeModelVersionRepository:
+    """Registry rows recorded by a persisted federation run."""
+
+    def __init__(self) -> None:
+        self.models: list[object] = []
+
+    def upsert(self, model) -> object:
+        self.models.append(model)
+        return model

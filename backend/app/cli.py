@@ -84,6 +84,7 @@ from app.services.prediction_publication import (
     PredictionPublicationService,
     assert_live_snapshots_available,
 )
+from app.services.federation import run_federation_demo
 from app.services.prediction_queries import (
     DEFAULT_EXPOSURE_THRESHOLD_PM25,
     PredictionQueryService,
@@ -814,6 +815,51 @@ async def _run_verify_publication(args: argparse.Namespace) -> int:
         session.close()
 
 
+async def _run_federation_demo(args: argparse.Namespace) -> int:
+    """Run the two-region federation demonstration end to end.
+
+    Deterministic: the run id, partition assignment, aggregate artifact and
+    all metrics are functions of the inputs alone. With `--no-db` nothing is
+    persisted; otherwise the run, its participants and one model_version row
+    per horizon are recorded (idempotently) so the status endpoint reports it.
+    """
+    payload = run_federation_demo(
+        out_dir=Path(args.out_dir),
+        hours=args.hours,
+        station_count=args.station_count,
+        run_id=args.run_id,
+        persist=not args.no_db,
+    )
+    exchange = payload["raw_rows_exchanged_to_aggregator"]
+    print(
+        f"Federation demonstration: run_id={payload['run_id']} "
+        f"status={payload['status']} participants={payload['participant_count']} "
+        f"raw_rows_sent={exchange}"
+    )
+    for participant in payload["participants"]:
+        print(
+            f"  {participant['participant_id']} ({participant['region_label']}): "
+            f"train={participant['train_count']} heldout={participant['test_count']} "
+            f"update_sha256={participant['update_sha256'][:12]}…"
+        )
+    print(f"aggregate: {payload['aggregate']['artifact_path']}")
+    evaluation = payload["evaluation"]
+    if evaluation.get("horizons"):
+        for horizon in evaluation["horizons"]:
+            print(
+                f"  evaluation h={horizon['horizon_hours']}: "
+                f"mae={horizon['mae_ugm3']:.3f} "
+                f"baseline_mae={horizon['baseline_mae_ugm3']:.3f} "
+                f"n={horizon['heldout_count']} "
+                f"(synthetic-only, not real-world evidence)"
+            )
+    else:
+        print(f"  evaluation: {evaluation['status']} — {evaluation['reason']}")
+    print("  limitations: no privacy guarantee; not a nationwide deployment")
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0 if payload["status"] == "succeeded" else 1
+
+
 def _add_demo_snapshot_parser(subparsers: argparse._SubParsersAction, command: str) -> None:
     demo_parser = subparsers.add_parser(
         command,
@@ -1046,6 +1092,24 @@ def main(argv: list[str] | None = None) -> int:
     verify_parser.add_argument("--region", default="india")
     verify_parser.add_argument("--run-id", default=None)
     verify_parser.set_defaults(func=_run_verify_publication)
+
+    federation_parser = subparsers.add_parser(
+        "federation-demo",
+        help=(
+            "Two-region federated-training demonstration: train two partitions "
+            "locally, exchange update payloads only, aggregate, and evaluate."
+        ),
+    )
+    federation_parser.add_argument("--out-dir", default="var/federation")
+    federation_parser.add_argument("--hours", type=int, default=60)
+    federation_parser.add_argument("--station-count", type=int, default=6)
+    federation_parser.add_argument("--run-id", default=None)
+    federation_parser.add_argument(
+        "--no-db",
+        action="store_true",
+        help="Produce the exchange/aggregate artifacts without touching the database.",
+    )
+    federation_parser.set_defaults(func=_run_federation_demo)
 
     args = parser.parse_args(argv)
     logging.basicConfig(level=get_settings().log_level)

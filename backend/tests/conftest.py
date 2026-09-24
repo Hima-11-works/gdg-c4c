@@ -22,6 +22,7 @@ from app.api.deps import (  # noqa: E402
     get_cell_service,
     get_citizen_intake_service,
     get_citizen_media_store,
+    get_federation_status_service,
     get_fire_hotspot_service,
     get_fire_report_service,
     get_grid_service,
@@ -34,6 +35,7 @@ from app.main import create_app  # noqa: E402
 from app.services.alerts import AlertService  # noqa: E402
 from app.services.cells import CellService  # noqa: E402
 from app.services.citizen_intake import CitizenIntakeService  # noqa: E402
+from app.services.federation import FederationStatusReader  # noqa: E402
 from app.services.fires import FireHotspotService  # noqa: E402
 from app.services.grid import GridService  # noqa: E402
 from app.services.incidents import IncidentService  # noqa: E402
@@ -42,6 +44,7 @@ from app.services.sensors import SensorService  # noqa: E402
 from app.services.weather import WeatherService  # noqa: E402
 from tests.fakes import (  # noqa: E402
     FakeAlertRepository,
+    FakeFederationRepository,
     FakeFireHotspotRepository,
     FakeFireReportRepository,
     FakeForecastRepository,
@@ -88,6 +91,7 @@ class FakeRepos:
         self.evidence = FakeReportEvidenceRepository()
         self.media = InMemoryMediaStore()
         self.incidents = FakeIncidentRepository()
+        self.federation = FakeFederationRepository()
 
 
 @pytest.fixture
@@ -125,6 +129,9 @@ def api_client(fake_repos: FakeRepos) -> TestClient:
         incident_repository=fake_repos.incidents,
         alert_repository=fake_repos.alert,
         report_repository=fake_repos.fire,
+    )
+    app.dependency_overrides[get_federation_status_service] = lambda: FederationStatusReader(
+        fake_repos.federation
     )
     return TestClient(app)
 

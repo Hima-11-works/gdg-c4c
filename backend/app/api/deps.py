@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db.repositories import (
     SqlAlertRepository,
+    SqlFederationRepository,
     SqlFireHotspotRepository,
     SqlFireReportRepository,
     SqlForecastRepository,
@@ -33,6 +34,7 @@ from app.domain.types import BoundingBox
 from app.services.alerts import AlertService
 from app.services.cells import CellService
 from app.services.citizen_intake import CitizenIntakeService
+from app.services.federation import FederationStatusReader
 from app.services.fires import FireHotspotService
 from app.services.grid import GridService
 from app.services.incidents import IncidentService
@@ -140,6 +142,12 @@ def get_incident_service(session: Session = Depends(get_db)) -> IncidentService:
         alert_repository=SqlAlertRepository(session),
         report_repository=SqlFireReportRepository(session),
     )
+
+
+def get_federation_status_service(
+    session: Session = Depends(get_db),
+) -> FederationStatusReader:
+    return FederationStatusReader(SqlFederationRepository(session))
 
 
 def require_simulator_key(

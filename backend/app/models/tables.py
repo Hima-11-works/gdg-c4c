@@ -19,6 +19,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Index,
+    Integer,
     MetaData,
     SmallInteger,
     String,
@@ -541,6 +542,83 @@ incident_event = Table(
         name="ck_incident_event_type",
     ),
     Index("ix_incident_event_incident_id", "incident_id", "created_at"),
+)
+
+# Two-region federated-training demonstration (docs/api/federation.md).
+# One run records the participants, the aggregate artifact, the registered
+# model versions and the evaluation; participants carry counts, update
+# paths/hashes and the weight each contributed. The exchange is parameter
+# payloads only, so raw_rows_exchanged is structurally zero - the CHECK
+# constraint makes a nonzero value unwritable, not just unusual.
+federation_run = Table(
+    "federation_run",
+    metadata,
+    Column("id", String(120), primary_key=True),
+    Column("status", String(20), nullable=False),
+    Column("participant_count", SmallInteger, nullable=False),
+    Column("region_scope", String(60), nullable=False),
+    Column("feature_schema_version", String(60), nullable=False),
+    Column("horizons_hours", JSONB, nullable=False),
+    Column("aggregate_artifact_path", String(500), nullable=False),
+    Column("aggregate_artifact_sha256", String(64), nullable=False),
+    Column("model_version_ids", JSONB, nullable=False),
+    Column("evaluation", JSONB, nullable=False),
+    Column("raw_rows_exchanged_to_aggregator", SmallInteger, nullable=False),
+    Column("provenance", JSONB, nullable=False),
+    Column("started_at", DateTime(timezone=True), nullable=False),
+    Column("finished_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint(
+        "status IN ('succeeded', 'failed')", name="ck_federation_run_status"
+    ),
+    CheckConstraint(
+        "region_scope IN ('two-partition-synthetic-demonstration')",
+        name="ck_federation_run_region_scope",
+    ),
+    CheckConstraint(
+        "participant_count >= 2", name="ck_federation_run_participant_count"
+    ),
+    CheckConstraint(
+        "raw_rows_exchanged_to_aggregator = 0",
+        name="ck_federation_run_no_raw_rows",
+    ),
+    CheckConstraint(
+        "finished_at >= started_at", name="ck_federation_run_finished_after_started"
+    ),
+)
+
+# One row per participating region, per run. Kept even on failure, so a
+# failed run still shows who participated and what they produced.
+federation_participant = Table(
+    "federation_participant",
+    metadata,
+    Column("id", BigInteger, primary_key=True),
+    Column(
+        "federation_run_id",
+        String(120),
+        ForeignKey("federation_run.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("participant_id", String(60), nullable=False),
+    Column("region_label", String(60), nullable=False),
+    Column("example_count", Integer, nullable=False),
+    Column("train_count", Integer, nullable=False),
+    Column("validation_count", Integer, nullable=False),
+    Column("test_count", Integer, nullable=False),
+    Column("station_count", SmallInteger, nullable=False),
+    Column("horizon_count", SmallInteger, nullable=False),
+    Column("update_path", String(500), nullable=False),
+    Column("update_sha256", String(64), nullable=False),
+    Column("weight_fraction", Float, nullable=False),
+    Column("joined_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint(
+        "weight_fraction >= 0 AND weight_fraction <= 1",
+        name="ck_federation_participant_weight",
+    ),
+    CheckConstraint("example_count >= 0", name="ck_federation_participant_examples"),
+    UniqueConstraint(
+        "federation_run_id", "participant_id", name="uq_federation_participant"
+    ),
+    Index("ix_federation_participant_run", "federation_run_id"),
 )
 
 fire_hotspot = Table(
