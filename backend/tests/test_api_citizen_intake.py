@@ -17,9 +17,37 @@ from tests.conftest import FakeRepos
 
 LAT, LON = 28.55, 77.20
 
-# A minimal valid JPEG body (the store never decodes it; only type/size are
-# checked, so a few bytes suffice).
-JPEG_BYTES = b"\xff\xd8\xff\xe0" + b"fake-jpeg-payload" * 4
+
+def jpeg_bytes(payload: bytes = b"fake-jpeg-payload") -> bytes:
+    """A byte-complete JPEG envelope (SOI ... EOI) around arbitrary payload.
+
+    The intake path verifies the file's structure — signature, completeness,
+    and that the bytes match the declared type — not its pixels, so this stands
+    in for a real camera photo without shipping a binary fixture. Dropping the
+    trailing EOI yields the shape an interrupted upload arrives in.
+    """
+    return b"\xff\xd8\xff\xe0\x00\x10JFIF\x00" + payload + b"\xff\xd9"
+
+
+def png_bytes(payload: bytes = b"fake-png-payload") -> bytes:
+    """A byte-complete PNG: signature, IHDR, a data chunk, and the IEND trailer."""
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + b"\x00\x00\x00\x0dIHDR"
+        + b"\x00" * 13
+        + b"\x00\x00\x00\x00IDAT"
+        + payload
+        + b"\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+
+
+def webp_bytes(payload: bytes = b"fake-webp-payload") -> bytes:
+    """A byte-complete WebP: a RIFF header whose declared size matches the body."""
+    body = b"WEBP" + payload
+    return b"RIFF" + len(body).to_bytes(4, "little") + body
+
+
+JPEG_BYTES = jpeg_bytes()
 
 
 def _seed_report(fake_repos: FakeRepos, *, report_id: int | None = None) -> int:
@@ -105,7 +133,7 @@ def test_attach_photo_only_returns_201(api_client: TestClient, fake_repos: FakeR
     response = _post_evidence(
         api_client,
         report_id,
-        files={"photo": ("fire.png", JPEG_BYTES, "image/png")},
+        files={"photo": ("fire.png", png_bytes(), "image/png")},
     )
 
     assert response.status_code == 201

@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -347,10 +348,18 @@ class Settings(BaseSettings):
     citizen_media_allowed_types: str = Field(
         default="image/jpeg,image/png,image/webp"
     )
-    # Directory the filesystem media store writes into, when enabled. Empty
-    # means no store is configured and the photo field is refused with 503,
-    # rather than silently dropping bytes.
-    citizen_media_dir: str = Field(default="var/citizen_media")
+    # Which backend serves citizen photos. "disabled" is the default on
+    # purpose: a deployment that has not configured durable storage must
+    # refuse a photo with 503 media_unavailable rather than accept bytes into
+    # a container filesystem that vanishes with the instance. Enable photos by
+    # setting both CITIZEN_MEDIA_STORAGE=filesystem and CITIZEN_MEDIA_DIR to a
+    # persistent volume, then prove it with
+    # `python -m app.cli verify-media-storage`.
+    citizen_media_storage: Literal["disabled", "filesystem"] = "disabled"
+    # Directory the filesystem media store writes into. Selecting the
+    # filesystem backend without one is a configuration error (see the
+    # validator below), not a silent fallback to a relative path.
+    citizen_media_dir: str = ""
     # Oldest accepted citizen sensor measured_at, hours. Older than this is
     # rejected as stale rather than stored as if current.
     citizen_sensor_max_age_hours: float = Field(default=72.0, gt=0)
@@ -384,6 +393,17 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"ALERT_CRITICAL_THRESHOLD_UGM3 ({self.alert_critical_threshold_ugm3}) must be "
                 f"> ALERT_WARNING_THRESHOLD_UGM3 ({self.alert_warning_threshold_ugm3})"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_citizen_media_dir_configured(self) -> "Settings":
+        if self.citizen_media_storage == "filesystem" and not self.citizen_media_dir.strip():
+            raise ValueError(
+                "CITIZEN_MEDIA_STORAGE=filesystem requires CITIZEN_MEDIA_DIR to point at a "
+                "persistent volume. Without it, photos would be written to a directory that "
+                "may not survive a restart — set both variables, then run "
+                "`python -m app.cli verify-media-storage`."
             )
         return self
 

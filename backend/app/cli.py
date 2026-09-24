@@ -6,6 +6,7 @@
     python -m app.cli forecast
     python -m app.cli demo-generate --profile tiny-ci --out demo.json
     python -m app.cli demo-replay --profile regional-demo --at 2025-01-15T12:00:00Z
+    python -m app.cli verify-media-storage
 
 Runs one ingestion pass against the bounding box from .env (overridable
 per-call with the flags above) and prints a summary. This is a manual
@@ -85,6 +86,7 @@ from app.services.prediction_publication import (
     assert_live_snapshots_available,
 )
 from app.services.federation import run_federation_demo
+from app.services.media_storage import MediaStoreError, build_media_store
 from app.services.prediction_queries import (
     DEFAULT_EXPOSURE_THRESHOLD_PM25,
     PredictionQueryService,
@@ -860,6 +862,58 @@ async def _run_federation_demo(args: argparse.Namespace) -> int:
     return 0 if payload["status"] == "succeeded" else 1
 
 
+async def _run_verify_media_storage(args: argparse.Namespace) -> int:
+    """Report whether this deployment can keep citizen photos, and fail if it
+    cannot.
+
+    The point is to run it *in the deployment environment* (container, host,
+    CI step) rather than trusting that a directory setting implies durable
+    storage: it performs a real write / read-back / delete round trip in the
+    configured location and prints exactly what happened. Exit code 1 means
+    photo uploads would be refused (503), so a pipeline or deploy gate can
+    depend on it.
+    """
+    settings = get_settings()
+    try:
+        store = build_media_store(
+            backend=settings.citizen_media_storage,
+            directory=settings.citizen_media_dir,
+        )
+    except MediaStoreError as exc:
+        print(f"media storage backend: misconfigured — {exc}")
+        return 1
+
+    report = store.check_durability()
+    print(f"backend:   {report.backend}")
+    print(f"location:  {report.location or '(none)'}")
+    print(f"available: {report.available}")
+    print(f"durable:   {report.durable}")
+    print(f"detail:    {report.detail}")
+    if report.ok:
+        print(
+            "OK: durable photo storage is available. Keep the location on a persistent "
+            "volume, and re-run this command after any storage change."
+        )
+        return 0
+
+    if report.backend == "disabled":
+        print(
+            "Photo uploads are refused with 503 media_unavailable; sensor-only intake "
+            "still works."
+        )
+        print(
+            "To enable photos: set CITIZEN_MEDIA_STORAGE=filesystem and "
+            "CITIZEN_MEDIA_DIR=<persistent volume path>, then re-run this command."
+        )
+    else:
+        print(
+            "Photo uploads are refused with 503. Fix the location above before "
+            "deploying, or leave CITIZEN_MEDIA_STORAGE=disabled to run "
+            "sensor-only intake."
+        )
+    return 1
+
+
 def _add_demo_snapshot_parser(subparsers: argparse._SubParsersAction, command: str) -> None:
     demo_parser = subparsers.add_parser(
         command,
@@ -1110,6 +1164,15 @@ def main(argv: list[str] | None = None) -> int:
         help="Produce the exchange/aggregate artifacts without touching the database.",
     )
     federation_parser.set_defaults(func=_run_federation_demo)
+
+    media_parser = subparsers.add_parser(
+        "verify-media-storage",
+        help=(
+            "Check that citizen photo storage is configured and durable on this host "
+            "(non-zero exit when photos would be refused)."
+        ),
+    )
+    media_parser.set_defaults(func=_run_verify_media_storage)
 
     args = parser.parse_args(argv)
     logging.basicConfig(level=get_settings().log_level)

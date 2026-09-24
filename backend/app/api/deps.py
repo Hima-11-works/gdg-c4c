@@ -38,11 +38,7 @@ from app.services.federation import FederationStatusReader
 from app.services.fires import FireHotspotService
 from app.services.grid import GridService
 from app.services.incidents import IncidentService
-from app.services.media_storage import (
-    DisabledMediaStore,
-    FilesystemMediaStore,
-    MediaStore,
-)
+from app.services.media_storage import MediaStore, build_media_store
 from app.services.prediction_queries import PredictionQueryService
 from app.services.reports import FireReportService
 from app.services.sensors import SensorService
@@ -111,17 +107,21 @@ def get_fire_report_service(session: Session = Depends(get_db)) -> FireReportSer
 def get_citizen_media_store() -> MediaStore:
     """The media backend for citizen photos.
 
-    A configured ``CITIZEN_MEDIA_DIR`` uses the filesystem store; an empty
-    setting yields the disabled store, so the photo field fails loudly with
-    503 rather than pretending to store bytes. Object stores drop in here
-    without touching routes or services."""
-    settings = get_settings()
-    directory = settings.citizen_media_dir.strip()
-    if not directory:
-        return DisabledMediaStore()
-    from pathlib import Path
+    Selected by ``CITIZEN_MEDIA_STORAGE``:
 
-    return FilesystemMediaStore(Path(directory))
+    * ``disabled`` (the default) yields the disabled store, so a photo is
+      refused with 503 ``media_unavailable`` while sensor-only intake keeps
+      working. Nothing is ever written to an unconfigured, possibly ephemeral
+      directory.
+    * ``filesystem`` yields the durable filesystem store at
+      ``CITIZEN_MEDIA_DIR``. Its writes are fsynced and read back, and an
+      object store can drop in here later without touching routes or services.
+    """
+    settings = get_settings()
+    return build_media_store(
+        backend=settings.citizen_media_storage,
+        directory=settings.citizen_media_dir,
+    )
 
 
 def get_citizen_intake_service(

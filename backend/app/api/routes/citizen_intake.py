@@ -22,6 +22,7 @@ from app.api.schemas import (
     EvidenceMediaOut,
     ReportEvidenceOut,
 )
+from app.core.config import get_settings
 from app.domain.citizen_intake import ReportEvidence
 from app.services.citizen_intake import (
     CitizenIntakeService,
@@ -29,6 +30,12 @@ from app.services.citizen_intake import (
     MediaUpload,
     ReportNotFoundError,
     SensorSubmission,
+)
+from app.services.media_storage import (
+    MediaMissingError,
+    MediaNotDurableError,
+    MediaStoreError,
+    MediaUnavailableError,
 )
 
 router = APIRouter(prefix="/reports", tags=["citizen intake"])
@@ -73,7 +80,19 @@ def _evidence_out(evidence: ReportEvidence) -> ReportEvidenceOut:
 
 
 def _http_error(exc: IntakeValidationError) -> HTTPException:
-    return HTTPException(status_code=exc.status, detail=str(exc))
+    """Render an intake validation failure with its exact machine code.
+
+    The exception carries a code because one status maps to several intake
+    conditions (415 is an unsupported declared type, an unrecognized payload,
+    a truncated upload, or a declared/actual mismatch; 503 is both
+    media_unavailable and media_not_durable). The error handler reads the code
+    from the X-Error-Code header.
+    """
+    return HTTPException(
+        status_code=exc.status,
+        detail=str(exc),
+        headers={"X-Error-Code": exc.code},
+    )
 
 
 @router.post(
@@ -98,8 +117,20 @@ def attach_evidence(
 ) -> Envelope[ReportEvidenceOut]:
     media: MediaUpload | None = None
     if photo is not None:
+        # Read one byte past the cap: an oversized upload is refused without
+        # pulling an unbounded amount of the body into memory.
+        limit = get_settings().citizen_media_max_bytes
+        content = photo.file.read(limit + 1)
+        if len(content) > limit:
+            raise _http_error(
+                IntakeValidationError(
+                    f"photo exceeds {limit} bytes", code="media_too_large", status=413
+                )
+            )
         media = MediaUpload(
-            content=photo.file.read(),
+            content=content,
+            # A client that sends no type gets the generic label, which the
+            # service resolves from the bytes themselves.
             content_type=photo.content_type or "application/octet-stream",
         )
 
@@ -195,7 +226,28 @@ def get_evidence_photo(
     report_id: int,
     service: CitizenIntakeService = Depends(get_citizen_intake_service),
 ) -> Response:
-    stored = service.read_media(report_id=report_id)
+    try:
+        stored = service.read_media(report_id=report_id)
+    except (MediaMissingError, MediaUnavailableError) as exc:
+        # The record says a photo exists, so 404 would be a lie; this is a
+        # storage failure the client can retry later.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+            headers={"X-Error-Code": "media_unavailable"},
+        ) from exc
+    except MediaNotDurableError as exc:  # pragma: no cover - read-side guard
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+            headers={"X-Error-Code": "media_not_durable"},
+        ) from exc
+    except MediaStoreError as exc:  # pragma: no cover - read-side guard
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"media storage error: {exc}",
+            headers={"X-Error-Code": "media_unavailable"},
+        ) from exc
     if stored is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

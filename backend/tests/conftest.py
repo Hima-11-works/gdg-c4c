@@ -39,6 +39,10 @@ from app.services.federation import FederationStatusReader  # noqa: E402
 from app.services.fires import FireHotspotService  # noqa: E402
 from app.services.grid import GridService  # noqa: E402
 from app.services.incidents import IncidentService  # noqa: E402
+from app.services.media_storage import (  # noqa: E402
+    MediaDurability,
+    MediaNotDurableError,
+)
 from app.services.reports import FireReportService  # noqa: E402
 from app.services.sensors import SensorService  # noqa: E402
 from app.services.weather import WeatherService  # noqa: E402
@@ -59,16 +63,28 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 
 
 class InMemoryMediaStore:
-    """A MediaStore backed by a dict — no filesystem, for API tests."""
+    """A MediaStore backed by a dict — no filesystem, for API tests.
+
+    Implements the same durability contract as the real stores: a put that the
+    store cannot return is an error, and `check_durability` reports a healthy
+    in-process store.
+    """
 
     def __init__(self) -> None:
         self.blobs: dict[str, tuple[bytes, str]] = {}
 
     def put(self, *, key: str, content: bytes, content_type: str) -> None:
         self.blobs[key] = (content, content_type)
+        if self.blobs[key] != (content, content_type):  # pragma: no cover
+            raise MediaNotDurableError("in-memory store did not read back")
 
     def get(self, *, key: str) -> tuple[bytes, str] | None:
         return self.blobs.get(key)
+
+    def check_durability(self) -> MediaDurability:
+        return MediaDurability(
+            "in-memory", True, True, "<process memory>", "test double; always available"
+        )
 
 
 @pytest.fixture
