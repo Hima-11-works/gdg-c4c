@@ -32,8 +32,12 @@ class _FireDeptSimulatorAppState extends State<FireDeptSimulatorApp> {
   SimulatorConfig _config = SimulatorConfig.fromEnvironment();
 
   /// One client for the app's lifetime, rebuilt when the settings change so a
-  /// new address or key takes effect immediately.
-  late IncidentApi _api = IncidentApi(baseUrl: _config.baseUrl, apiKey: _config.apiKey);
+  /// new address, key or actor takes effect immediately.
+  late IncidentApi _api = IncidentApi(
+    baseUrl: _config.baseUrl,
+    apiKey: _config.apiKey,
+    actorId: _config.actorId,
+  );
 
   @override
   void dispose() {
@@ -45,7 +49,11 @@ class _FireDeptSimulatorAppState extends State<FireDeptSimulatorApp> {
     setState(() {
       _api.close();
       _config = updated;
-      _api = IncidentApi(baseUrl: updated.baseUrl, apiKey: updated.apiKey);
+      _api = IncidentApi(
+        baseUrl: updated.baseUrl,
+        apiKey: updated.apiKey,
+        actorId: updated.actorId,
+      );
     });
   }
 

@@ -188,12 +188,22 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
       'Assign to $assignee',
       () => widget.api.assign(
         incident.id,
-        role: widget.config.role,
         assignee: assignee,
       ),
       successMessage: (updated) =>
           'Simulated response: assigned to ${updated.assignee} — status is now ${statusLabel(updated.status).toLowerCase()}.',
     );
+  }
+
+  /// "28.6139, 77.2090", or an honest "not recorded".
+  ///
+  /// Through locals because Dart promotes a local variable after a null check
+  /// but not a class field, and a source is allowed to have no coordinates.
+  static String _coordinates(Incident incident) {
+    final lat = incident.latitude;
+    final lon = incident.longitude;
+    if (lat == null || lon == null) return 'Not recorded';
+    return formatCoordinates(lat, lon);
   }
 
   Widget _buildActions(Incident incident) {
@@ -208,11 +218,13 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
       );
     }
     if (!incident.isFireDepartment) {
-      // The API refuses a role that does not own the incident, so the console
-      // does not offer the button at all.
+      // The service refuses an actor whose registered role does not own the
+      // incident, so the console does not offer the button at all. Which role
+      // this console actually holds is decided server-side from the actor id.
       return Text(
         'This incident belongs to ${roleLabel(incident.responderRole)}, not the fire department. '
-        'This console acts only as the fire department, so it offers no actions here.',
+        'This console serves the fire department, so it offers no actions here. Whether the '
+        'configured actor may act is the backend’s call — it decides the role from the actor id.',
       );
     }
 
@@ -239,7 +251,6 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
                                 () => widget.api.transition(
                                   incident.id,
                                   toStatus: action.target!,
-                                  role: widget.config.role,
                                 ),
                               ),
                       icon: _writeInFlight
@@ -283,14 +294,13 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
       body: Column(
         children: [
           const SimulationBanner(dense: true),
-          if (!widget.config.hasKey)
+          if (!widget.config.canWrite)
             Container(
               width: double.infinity,
               color: Theme.of(context).colorScheme.errorContainer,
               padding: const EdgeInsets.all(10),
               child: Text(
-                'No simulator key configured — this console can read but not change anything. '
-                'Add one in Settings.',
+                '${widget.config.writeBlocker} This console can read but not change anything.',
                 style: TextStyle(color: Theme.of(context).colorScheme.onErrorContainer),
               ),
             ),
@@ -344,7 +354,7 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
                   const SizedBox(height: 6),
                   FactRow(
                     label: 'Location',
-                    value: formatCoordinates(incident.latitude, incident.longitude),
+                    value: _coordinates(incident),
                     icon: Icons.place_outlined,
                   ),
                   FactRow(
@@ -359,7 +369,14 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
                   ),
                   FactRow(
                     label: 'Source',
-                    value: '${sourceLabel(incident.sourceType)} #${incident.sourceId}',
+                    // A published alert is named by its v2: identity rather
+                    // than a row id, so the two are shown differently rather
+                    // than printing "#null" for one of them.
+                    value: incident.sourceRef != null
+                        ? '${sourceLabel(incident.sourceType)} ${incident.sourceRef}'
+                        : incident.sourceId == null
+                            ? sourceLabel(incident.sourceType)
+                            : '${sourceLabel(incident.sourceType)} #${incident.sourceId}',
                     icon: Icons.link,
                   ),
                   FactRow(

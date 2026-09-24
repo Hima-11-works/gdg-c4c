@@ -233,6 +233,10 @@ export interface WeatherReadingOut {
 export type AlertSeverity = 'watch' | 'warning' | 'critical'
 
 export interface AlertOut {
+  /** The published-alert identity the incident API accepts as a source:
+   *  `v2:<run_id>:<h3_cell>:<forecast_hours>`. Deterministic and stable, so an
+   *  alert the web is showing can be opened as an incident directly. */
+  alert_id: string
   h3_cell: string
   severity: AlertSeverity
   message: string
@@ -380,6 +384,113 @@ export interface ReportEvidenceOut {
 export const SENSOR_POLLUTANTS = ['pm25', 'pm10'] as const
 
 export type SensorPollutant = (typeof SENSOR_POLLUTANTS)[number]
+
+// --- persistent incident workflow (/api/v1/incidents) ---
+//
+// An incident is an operational record created from a published alert, a
+// persisted fire alert, or a citizen report, and progressed by an authenticated
+// responder. It is deliberately separate from its source: an alert can exist
+// without an incident, and the incident keeps its own lifecycle, assignment,
+// jurisdiction and append-only history.
+
+/** What an incident was opened from. The source decides the responder role, so
+ *  this is not free choice: a published alert is a pollution-control matter, a
+ *  fire report a fire-department one. */
+export type IncidentSourceType = 'published_alert' | 'alert' | 'report'
+
+/** The states the backend enforces, in the order it allows them. `assigned` is
+ *  reachable only through the assign endpoint, never the transition endpoint. */
+export const INCIDENT_STATUS_ORDER = [
+  'reported',
+  'assigned',
+  'acknowledged',
+  'en_route',
+  'on_scene',
+  'resolved',
+] as const
+
+export type IncidentStatus = (typeof INCIDENT_STATUS_ORDER)[number] | 'cancelled'
+
+/** Who may act on an incident. The acting role comes from the server-side
+ *  registry, never from the request. */
+export type ResponderRole = 'fire_department' | 'pollution_control'
+
+export interface IncidentOut {
+  id: number
+  source_type: IncidentSourceType
+  source_id: number | null
+  source_ref: string | null
+  /** True when the source came from a demo/synthetic publication, so a
+   *  fallback run's incident cannot be read as a real-world event. */
+  source_synthetic: boolean
+  status: IncidentStatus
+  responder_role: ResponderRole
+  severity: 'watch' | 'warning' | 'critical'
+  jurisdiction: string | null
+  latitude: number | null
+  longitude: number | null
+  h3_cell: string | null
+  linked_prediction_run_id: string | null
+  evidence_report_ids: number[]
+  assignee: string | null
+  created_at: string
+  updated_at: string
+  resolved_at: string | null
+}
+
+export type IncidentEventType =
+  | 'created'
+  | 'assigned'
+  | 'reassigned'
+  | 'delivered'
+  | 'transition'
+
+/** One append-only history row. `actor`/`actor_jurisdiction` say *which
+ *  authority* acted, not merely which role. */
+export interface IncidentEventOut {
+  id: number
+  incident_id: number
+  event_type: IncidentEventType
+  from_status: IncidentStatus | null
+  to_status: IncidentStatus | null
+  role: ResponderRole | null
+  actor: string | null
+  actor_jurisdiction: string | null
+  note: string | null
+  created_at: string
+}
+
+/** A *simulated* hand-off to one responder role's inbox. The database forces
+ *  `simulated = true`, and the notification string always begins "none": no
+ *  email, SMS, webhook or push is sent by this system. */
+export interface IncidentDeliveryOut {
+  id: number
+  incident_id: number
+  audience_role: ResponderRole
+  status: 'simulated' | 'acknowledged'
+  assignee: string | null
+  simulated: boolean
+  notification: string
+  simulated_at: string
+  acknowledged_at: string | null
+}
+
+export interface InboxItemOut {
+  delivery: IncidentDeliveryOut
+  incident: IncidentOut
+  is_open: boolean
+}
+
+/** Body for POST /api/v1/incidents. Exactly one of `source_id` / `source_ref`
+ *  is required, and it must match `source_type`. */
+export interface IncidentCreate {
+  source_type: IncidentSourceType
+  source_ref?: string
+  source_id?: number
+  severity?: 'watch' | 'warning' | 'critical'
+  jurisdiction?: string
+  evidence_report_ids?: number[]
+}
 
 // --- federation demonstration (GET /api/v1/federation/status) ---
 //

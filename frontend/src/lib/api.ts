@@ -24,6 +24,11 @@ import type {
   ForecastV2Out,
   GridCurrentV2Out,
   GridStateOut,
+  IncidentCreate,
+  IncidentDeliveryOut,
+  IncidentEventOut,
+  IncidentOut,
+  InboxItemOut,
   MetaV2Out,
   ReportEvidenceOut,
   V2Envelope,
@@ -33,6 +38,7 @@ import type {
 } from './types'
 import { activeFireFromHotspot } from './activeFires'
 import type { ActiveFire } from './activeFires'
+import { SIMULATOR_API_KEY, actorId } from './operatorIdentity'
 
 // `||` (not `??`) so an empty VITE_API_BASE_URL — which a host may inject
 // when auto-importing env files — still falls back, and any trailing slash is
@@ -412,6 +418,116 @@ export function fetchReportEvidence(
  *  record carries. */
 export function reportEvidencePhotoUrl(relativeUrl: string): string {
   return `${API_BASE_URL}${relativeUrl}`
+}
+
+// --- incident workflow (/api/v1/incidents) ---
+//
+// Reads are public. Writes need the deployment's simulator key *and* an
+// `X-Actor-Id` naming a responder; the server resolves that actor's role and
+// jurisdiction, so the body can never widen authority.
+
+export interface IncidentQuery {
+  status?: string
+  role?: string
+}
+
+/** The incident list. Public: no key, no actor. */
+export function fetchIncidents(
+  query: IncidentQuery = {},
+): Promise<Envelope<IncidentOut[]>> {
+  return apiGet<Envelope<IncidentOut[]>>(
+    `/api/v1/incidents${buildQuery({ status: query.status, role: query.role })}`,
+  )
+}
+
+export function fetchIncident(id: number): Promise<Envelope<IncidentOut>> {
+  return apiGet<Envelope<IncidentOut>>(`/api/v1/incidents/${id}`)
+}
+
+export function fetchIncidentHistory(id: number): Promise<Envelope<IncidentEventOut[]>> {
+  return apiGet<Envelope<IncidentEventOut[]>>(`/api/v1/incidents/${id}/history`)
+}
+
+export function fetchIncidentDeliveries(id: number): Promise<Envelope<IncidentDeliveryOut[]>> {
+  return apiGet<Envelope<IncidentDeliveryOut[]>>(`/api/v1/incidents/${id}/deliveries`)
+}
+
+export function fetchInbox(
+  role: string,
+  onlyOpen = false,
+): Promise<Envelope<InboxItemOut[]>> {
+  return apiGet<Envelope<InboxItemOut[]>>(
+    `/api/v1/incidents/inbox${buildQuery({ role, only_open: onlyOpen ? 'true' : undefined })}`,
+  )
+}
+
+/** Headers every incident write carries. Omitted entirely when unconfigured, so
+ *  a read-only dashboard sends no credentials at all. */
+function incidentWriteHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {}
+  if (SIMULATOR_API_KEY !== '') headers['X-Simulator-Key'] = SIMULATOR_API_KEY
+  const actor = actorId()
+  if (actor !== '') headers['X-Actor-Id'] = actor
+  return headers
+}
+
+async function incidentWrite(
+  path: string,
+  body: unknown,
+  method: 'POST',
+): Promise<Envelope<IncidentOut>> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...incidentWriteHeaders() },
+    body: JSON.stringify(body),
+  }).catch(() => {
+    throw new ApiError(0, 'network_error', 'Could not reach the incident service.')
+  })
+
+  if (!response.ok) {
+    const parsed = (await response.json().catch(() => null)) as ErrorResponseBody | null
+    throw new ApiError(
+      response.status,
+      parsed?.error?.code ?? 'http_error',
+      parsed?.error?.message ?? `Request failed with status ${response.status}`,
+    )
+  }
+  return (await response.json()) as Envelope<IncidentOut>
+}
+
+/**
+ * Open an incident from a source.
+ *
+ * Idempotent on the source, so a double click returns the same incident with
+ * `200` rather than creating a second one; a differing severity or jurisdiction
+ * under the same source is a `409 conflict` and leaves the stored record alone.
+ */
+export function createIncident(
+  body: IncidentCreate,
+): Promise<Envelope<IncidentOut>> {
+  return incidentWrite('/api/v1/incidents', body, 'POST')
+}
+
+/** `reported` → `assigned`. This is also what opens the simulated inbox, and
+ *  it is the only way to reach `assigned` — the transition endpoint refuses it. */
+export function assignIncident(
+  id: number,
+  assignee: string,
+): Promise<Envelope<IncidentOut>> {
+  return incidentWrite(`/api/v1/incidents/${id}/assign`, { assignee }, 'POST')
+}
+
+/** Move an incident along the response sequence. */
+export function transitionIncident(
+  id: number,
+  toStatus: string,
+  note?: string,
+): Promise<Envelope<IncidentOut>> {
+  return incidentWrite(
+    `/api/v1/incidents/${id}/transitions`,
+    { to_status: toStatus, ...(note !== undefined && note !== '' ? { note } : {}) },
+    'POST',
+  )
 }
 
 export function fetchCellDetail(

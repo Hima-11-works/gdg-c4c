@@ -101,14 +101,13 @@ class _IncidentsScreenState extends State<IncidentsScreen> {
       body: Column(
         children: [
           const SimulationBanner(),
-          if (!widget.config.hasKey)
+          if (!widget.config.canWrite)
             Container(
               width: double.infinity,
               color: Theme.of(context).colorScheme.errorContainer,
               padding: const EdgeInsets.all(10),
               child: Text(
-                'No simulator key configured. Reads work; every action will be refused. '
-                'Set a key in Settings.',
+                '${widget.config.writeBlocker} Reads work; every action will be refused.',
                 style: TextStyle(color: Theme.of(context).colorScheme.onErrorContainer),
               ),
             ),
@@ -221,7 +220,19 @@ class _IncidentsScreenState extends State<IncidentsScreen> {
                       ],
                     ),
                     const SizedBox(height: 4),
-                    Text(formatCoordinates(incident.latitude, incident.longitude)),
+                    Builder(
+                      builder: (context) {
+                        // Locals, not the fields: Dart promotes local variables
+                        // after a null check but not a class field.
+                        final lat = incident.latitude;
+                        final lon = incident.longitude;
+                        return Text(
+                          lat == null || lon == null
+                              ? 'No coordinates recorded'
+                              : formatCoordinates(lat, lon),
+                        );
+                      },
+                    ),
                     Text(
                       '${incident.assignee == null ? 'Unassigned' : 'Assigned to ${incident.assignee}'}'
                       ' · updated ${relativeTime(incident.updatedAt)}'

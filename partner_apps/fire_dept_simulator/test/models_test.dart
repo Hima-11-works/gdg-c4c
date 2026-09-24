@@ -152,6 +152,39 @@ void main() {
       expect(incident.status, isNull);
       expect(statusLabel(incident.status), 'Unrecognised status');
     });
+
+    test('a published alert has no source_id, and that must not throw', () {
+      // The wire shape for a published-alert incident: source_id is null and
+      // the source is named by its v2: identity. A non-nullable source_id would
+      // have thrown on the cast and taken the whole queue down with it.
+      final incident = Incident.fromJson(<String, dynamic>{
+        ...json,
+        'source_type': 'published_alert',
+        'source_id': null,
+        'source_ref': 'v2:pred-20260924T0000Z-india:8861892e0dfffff:6',
+        'source_synthetic': true,
+        'responder_role': 'pollution_control',
+      });
+      expect(incident.sourceId, isNull);
+      expect(incident.sourceRef, 'v2:pred-20260924T0000Z-india:8861892e0dfffff:6');
+      expect(incident.sourceSynthetic, isTrue);
+      expect(incident.isFireDepartment, isFalse);
+    });
+
+    test('missing coordinates are null, not zero', () {
+      final incident = Incident.fromJson(<String, dynamic>{
+        ...json,
+        'latitude': null,
+        'longitude': null,
+      });
+      expect(incident.latitude, isNull);
+      expect(incident.longitude, isNull);
+    });
+
+    test('a missing source_synthetic reads as false', () {
+      final withoutFlag = Map<String, dynamic>.from(json)..remove('source_synthetic');
+      expect(Incident.fromJson(withoutFlag).sourceSynthetic, isFalse);
+    });
   });
 
   group('IncidentEvent.fromJson', () {
@@ -172,6 +205,43 @@ void main() {
       expect(event.toStatus, IncidentStatus.acknowledged);
       expect(event.actor, 'unit-12');
       expect(event.note, 'Unit dispatched');
+    });
+
+    test('names the acting authority, not only the role', () {
+      // actor + role + jurisdiction is the whole point of the identity change:
+      // "who acted", not merely "which role acted".
+      final event = IncidentEvent.fromJson(<String, dynamic>{
+        'id': 32,
+        'incident_id': 5,
+        'event_type': 'transition',
+        'from_status': 'assigned',
+        'to_status': 'acknowledged',
+        'role': 'fire_department',
+        'actor': 'engine-7',
+        'actor_jurisdiction': 'Delhi',
+        'note': null,
+        'created_at': '2026-09-23T09:20:00Z',
+      });
+      expect(event.actorJurisdiction, 'Delhi');
+      expect(event.actorSummary, contains('engine-7'));
+      expect(event.actorSummary, contains('Delhi'));
+    });
+
+    test('a service event with no actor says so', () {
+      final event = IncidentEvent.fromJson(<String, dynamic>{
+        'id': 33,
+        'incident_id': 5,
+        'event_type': 'delivered',
+        'from_status': 'assigned',
+        'to_status': 'assigned',
+        'role': 'fire_department',
+        'actor': null,
+        'actor_jurisdiction': null,
+        'note': null,
+        'created_at': '2026-09-23T09:20:00Z',
+      });
+      expect(event.actor, isNull);
+      expect(event.actorSummary, 'service');
     });
 
     test('parses a created event with no statuses', () {
@@ -221,6 +291,78 @@ void main() {
       for (final status in IncidentStatus.values) {
         expect(statusLabel(status), isNotEmpty);
       }
+    });
+  });
+
+  group('IncidentDelivery.fromJson', () {
+    final json = <String, dynamic>{
+      'id': 8,
+      'incident_id': 5,
+      'audience_role': 'fire_department',
+      'status': 'simulated',
+      'assignee': 'engine-7',
+      'simulated': true,
+      'notification': 'none (simulated inbox only; no email, SMS, or webhook is sent)',
+      'simulated_at': '2026-09-23T09:05:00Z',
+      'acknowledged_at': null,
+    };
+
+    test('reads the simulation flag and the notification wording', () {
+      final delivery = IncidentDelivery.fromJson(json);
+      expect(delivery.simulated, isTrue);
+      expect(delivery.status, 'simulated');
+      expect(delivery.audienceRole, ResponderRole.fireDepartment);
+      expect(delivery.assignee, 'engine-7');
+      // The wording is what stops a consumer reading this as a real dispatch.
+      expect(delivery.notification, startsWith('none'));
+      expect(delivery.acknowledgedAt, isNull);
+    });
+
+    test('an acknowledged delivery carries the time', () {
+      final delivery = IncidentDelivery.fromJson(<String, dynamic>{
+        ...json,
+        'status': 'acknowledged',
+        'acknowledged_at': '2026-09-23T09:20:00Z',
+      });
+      expect(delivery.status, 'acknowledged');
+      expect(delivery.acknowledgedAt, isNotNull);
+    });
+  });
+
+  group('InboxItem.fromJson', () {
+    test('joins a delivery to its incident and reports openness', () {
+      final item = InboxItem.fromJson(<String, dynamic>{
+        'delivery': {
+          'id': 8,
+          'incident_id': 5,
+          'audience_role': 'fire_department',
+          'status': 'simulated',
+          'assignee': 'engine-7',
+          'simulated': true,
+          'notification': 'none (simulated inbox only)',
+          'simulated_at': '2026-09-23T09:05:00Z',
+          'acknowledged_at': null,
+        },
+        'incident': {
+          'id': 5,
+          'source_type': 'report',
+          'source_id': 17,
+          'status': 'assigned',
+          'responder_role': 'fire_department',
+          'severity': 'critical',
+          'latitude': 28.61,
+          'longitude': 77.21,
+          'evidence_report_ids': [3],
+          'created_at': '2026-09-23T09:00:00Z',
+          'updated_at': '2026-09-23T09:05:00Z',
+          'resolved_at': null,
+        },
+        'is_open': true,
+      });
+      expect(item.isOpen, isTrue);
+      expect(item.delivery.simulated, isTrue);
+      expect(item.incident.id, 5);
+      expect(item.incident.evidenceReportIds, [3]);
     });
   });
 }

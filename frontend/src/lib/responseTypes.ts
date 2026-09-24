@@ -1,12 +1,12 @@
 // The two response tracks this dashboard can talk about, and the words for
 // them.
 //
-// There is no incidents API in this deployment (see lib/incidentNotebook.ts
-// for what that means in practice), so nothing here is a workflow object the
-// backend knows about. What it is instead is a vocabulary, kept in one place
-// so a fire response and a pollution-control response can never be described
-// in each other's terms — a mistake the app used to make, addressing a
-// burning-detection escalation to a pollution board.
+// What it is is a vocabulary, kept in one place so a fire response and a
+// pollution-control response can never be described in each other's terms — a
+// mistake the app used to make, addressing a burning-detection escalation to a
+// pollution board. The workflow objects themselves belong to the incident
+// service (see lib/incidents.ts); nothing here is a status the backend knows
+// about.
 //
 // A fire response is about a *source*: something burning at a point. A
 // pollution-control response is about an *area*: PM2.5 over a cell. They have
@@ -45,11 +45,13 @@ export const RESPONSE_HANDLED_BY: Record<ResponseKind, string> = {
 }
 
 export const RESPONSE_REFERENCE_NOTE =
-  'For reference only — this dashboard has no authority-routing backend, so it contacts nobody.'
+  'For reference only — this dashboard routes nothing. Opening an incident records it in the ' +
+  'incident service; the hand-off that follows is simulated and contacts nobody.'
 
 /** Local prompts for the operator's own checklist, per response kind. These
  *  are things to think about, not a workflow: ticking one records nothing
- *  anywhere and notifies no one. */
+ *  anywhere and notifies no one. The real record is the incident, and it is
+ *  opened separately. */
 export const RESPONSE_STEPS: Record<ResponseKind, string[]> = {
   fire: [
     'Note the burning type and how much smoke',
@@ -65,27 +67,3 @@ export const RESPONSE_STEPS: Record<ResponseKind, string[]> = {
 
 export const RESPONSE_STEPS_NOTE =
   'Prompts for you, kept on this device. Nothing here is dispatched, notified or recorded.'
-
-// --- incident state, as the local notebook stores it ---
-
-export const INCIDENT_STATUSES = ['open', 'assigned', 'responding', 'resolved'] as const
-
-export type IncidentStatus = (typeof INCIDENT_STATUSES)[number]
-
-export const STATUS_LABEL: Record<IncidentStatus, string> = {
-  open: 'Open',
-  assigned: 'Assigned',
-  responding: 'Responding',
-  resolved: 'Resolved',
-}
-
-export const STATUS_DESCRIPTION: Record<IncidentStatus, string> = {
-  open: 'Noted, nobody on it yet.',
-  assigned: 'Someone is named as responsible.',
-  responding: 'Work is under way.',
-  resolved: 'Closed by the operator.',
-}
-
-export function isIncidentStatus(value: unknown): value is IncidentStatus {
-  return typeof value === 'string' && (INCIDENT_STATUSES as readonly string[]).includes(value)
-}

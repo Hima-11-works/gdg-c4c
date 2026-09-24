@@ -179,16 +179,18 @@ class Incident {
   const Incident({
     required this.id,
     required this.sourceType,
-    required this.sourceId,
     required this.status,
     required this.responderRole,
     required this.severity,
-    required this.latitude,
-    required this.longitude,
     required this.evidenceReportIds,
     required this.createdAt,
     required this.updatedAt,
+    this.sourceId,
+    this.sourceRef,
+    this.sourceSynthetic = false,
     this.jurisdiction,
+    this.latitude,
+    this.longitude,
     this.h3Cell,
     this.linkedPredictionRunId,
     this.assignee,
@@ -197,13 +199,26 @@ class Incident {
 
   final int id;
   final IncidentSourceType? sourceType;
-  final int sourceId;
+
+  /// Null for a published-alert incident: those are identified by
+  /// [sourceRef], not by a row id.
+  final int? sourceId;
+
+  /// The `v2:<run>:<cell>:<hours>` published-alert identity, when the incident
+  /// was opened from a published alert rather than from a stored row.
+  final String? sourceRef;
+
+  /// True when the source came from a demo/synthetic publication.
+  final bool sourceSynthetic;
   final IncidentStatus? status;
   final ResponderRole? responderRole;
   final String severity;
   final String? jurisdiction;
-  final double latitude;
-  final double longitude;
+
+  /// Nullable: the API allows a source without coordinates, and inventing a
+  /// location would put the incident somewhere it is not.
+  final double? latitude;
+  final double? longitude;
   final String? h3Cell;
   final String? linkedPredictionRunId;
   final List<int> evidenceReportIds;
@@ -217,13 +232,15 @@ class Incident {
     return Incident(
       id: (json['id'] as num).toInt(),
       sourceType: sourceTypeFromWire(json['source_type'] as String?),
-      sourceId: (json['source_id'] as num).toInt(),
+      sourceId: (json['source_id'] as num?)?.toInt(),
+      sourceRef: json['source_ref'] as String?,
+      sourceSynthetic: json['source_synthetic'] as bool? ?? false,
       status: statusFromWire(json['status'] as String?),
       responderRole: roleFromWire(json['responder_role'] as String?),
       severity: (json['severity'] as String?) ?? 'unknown',
       jurisdiction: json['jurisdiction'] as String?,
-      latitude: (json['latitude'] as num).toDouble(),
-      longitude: (json['longitude'] as num).toDouble(),
+      latitude: (json['latitude'] as num?)?.toDouble(),
+      longitude: (json['longitude'] as num?)?.toDouble(),
       h3Cell: json['h3_cell'] as String?,
       linkedPredictionRunId: json['linked_prediction_run_id'] as String?,
       evidenceReportIds: rawEvidence is List
@@ -254,6 +271,7 @@ class IncidentEvent {
     this.toStatus,
     this.role,
     this.actor,
+    this.actorJurisdiction,
     this.note,
   });
 
@@ -263,9 +281,23 @@ class IncidentEvent {
   final IncidentStatus? fromStatus;
   final IncidentStatus? toStatus;
   final ResponderRole? role;
+
+  /// Which authority acted, not merely which role.
   final String? actor;
+  final String? actorJurisdiction;
   final String? note;
   final DateTime createdAt;
+
+  /// The acting authority in one line: `unit-12 · Fire department · Delhi`.
+  String get actorSummary {
+    if (actor == null) return 'service';
+    final parts = <String>[actor!];
+    if (role != null) parts.add(role!.label);
+    if (actorJurisdiction != null && actorJurisdiction!.isNotEmpty) {
+      parts.add(actorJurisdiction!);
+    }
+    return parts.join(' · ');
+  }
 
   factory IncidentEvent.fromJson(Map<String, dynamic> json) => IncidentEvent(
         id: (json['id'] as num).toInt(),
@@ -275,8 +307,75 @@ class IncidentEvent {
         toStatus: statusFromWire(json['to_status'] as String?),
         role: roleFromWire(json['role'] as String?),
         actor: json['actor'] as String?,
+        actorJurisdiction: json['actor_jurisdiction'] as String?,
         note: json['note'] as String?,
         createdAt: DateTime.parse(json['created_at'] as String),
+      );
+}
+
+/// A *simulated* hand-off of an incident to one responder role's inbox.
+///
+/// There is no channel, address or provider behind this: the service sends no
+/// notification of any kind, the database will not record a row claiming a real
+/// dispatch, and the [notification] string always begins with "none". A consumer
+/// therefore cannot mistake one of these for a dispatch.
+class IncidentDelivery {
+  const IncidentDelivery({
+    required this.id,
+    required this.audienceRole,
+    required this.status,
+    required this.simulated,
+    required this.notification,
+    required this.simulatedAt,
+    this.assignee,
+    this.acknowledgedAt,
+  });
+
+  final int id;
+  final ResponderRole? audienceRole;
+  final String status;
+  final String? assignee;
+  final bool simulated;
+  final String notification;
+  final DateTime simulatedAt;
+  final DateTime? acknowledgedAt;
+
+  /// What the hand-off is, in words that cannot read as a dispatch.
+  String get summary => assignee == null
+      ? 'Simulated hand-off, unnamed unit'
+      : 'Simulated hand-off to $assignee';
+
+  factory IncidentDelivery.fromJson(Map<String, dynamic> json) => IncidentDelivery(
+        id: (json['id'] as num).toInt(),
+        audienceRole: roleFromWire(json['audience_role'] as String?),
+        status: (json['status'] as String?) ?? 'unknown',
+        assignee: json['assignee'] as String?,
+        simulated: json['simulated'] as bool? ?? false,
+        notification: (json['notification'] as String?) ?? '',
+        simulatedAt: DateTime.parse(json['simulated_at'] as String),
+        acknowledgedAt: json['acknowledged_at'] == null
+            ? null
+            : DateTime.parse(json['acknowledged_at'] as String),
+      );
+}
+
+/// One row of a responder's simulated inbox: a delivery and the incident it
+/// addressed.
+class InboxItem {
+  const InboxItem({
+    required this.delivery,
+    required this.incident,
+    required this.isOpen,
+  });
+
+  final IncidentDelivery delivery;
+  final Incident incident;
+  final bool isOpen;
+
+  factory InboxItem.fromJson(Map<String, dynamic> json) => InboxItem(
+        delivery: IncidentDelivery.fromJson(json['delivery'] as Map<String, dynamic>),
+        incident: Incident.fromJson(json['incident'] as Map<String, dynamic>),
+        isOpen: json['is_open'] as bool? ?? false,
       );
 }
 

@@ -892,9 +892,17 @@ body,
   position: absolute;
   top: calc(100% + 0.4rem);
   right: 0;
+  /* Above its later siblings in the same overlay: the published-run panel is a
+     sibling that comes after it in the DOM, so without this the (tall) list
+     paints underneath it and the left of every row is hidden. */
+  z-index: 6;
   width: min(90vw, 22rem);
   max-height: 40vh;
   overflow-y: auto;
+  /* The incident panel inside a row carries a long published-alert identity
+     (`v2:<run>:<cell>:<hours>`). Without clipping here that string widens the
+     row past the fixed box and the list runs off the right edge. */
+  overflow-x: hidden;
   padding: 0.5rem;
   border: 1px solid #2a2e36;
   border-radius: 8px;
@@ -2015,6 +2023,10 @@ body,
   border-radius: 6px;
   background: #14161c;
   font-size: 0.78rem;
+  /* Constrained to its container: a flex/grid child defaults to min-width:auto,
+     so without this the long alert identity below widens the whole panel. */
+  min-width: 0;
+  max-width: 100%;
 }
 
 .incident-fire {
@@ -2053,17 +2065,6 @@ body,
   line-height: 1.3;
 }
 
-.incident-local {
-  margin: 0 0 0.45rem;
-  padding: 0.35rem 0.45rem;
-  border-radius: 4px;
-  background: #1b1d24;
-  border: 1px dashed #4b5563;
-  color: #cbd5e1;
-  font-size: 0.7rem;
-  line-height: 1.35;
-}
-
 .incident-empty {
   margin: 0 0 0.35rem;
   font-size: 0.74rem;
@@ -2091,11 +2092,6 @@ body,
   color: #93c5fd;
 }
 
-.incident-button-danger {
-  border-color: #7f1d1d;
-  color: #fca5a5;
-}
-
 .incident-facts {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -2113,8 +2109,7 @@ body,
   line-height: 1.3;
 }
 
-.incident-input,
-.incident-status {
+.incident-input {
   width: 100%;
   padding: 0.2rem 0.35rem;
   border: 1px solid #3a3f4a;
@@ -2123,10 +2118,6 @@ body,
   color: #e5e7eb;
   font: inherit;
   font-size: 0.74rem;
-}
-
-.incident-status {
-  width: auto;
 }
 
 .incident-reference {
@@ -2178,6 +2169,111 @@ body,
 
 .incident-simulator-note {
   margin: 0.4rem 0;
+  font-size: 0.7rem;
+  line-height: 1.3;
+}
+
+/* --- incident workflow states ---
+   Three states that must never be styled as if they were the same thing: a
+   refusal (the service answered and said no), an unreachable service (no answer
+   at all, so the truth is unknown), and the ordinary "no incident" case. */
+
+.incident-source-line {
+  margin: 0.2rem 0 0.4rem;
+  font-size: 0.7rem;
+  line-height: 1.3;
+  /* `anywhere` rather than `break-word`: the published-alert identity has no
+     spaces to break at, so it needs to be able to break mid-token. */
+  overflow-wrap: anywhere;
+}
+
+.incident-history-kind {
+  align-self: flex-start;
+  font-size: 0.64rem;
+  color: #93c5fd;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.incident-synthetic {
+  margin: 0;
+  padding: 0.2rem 0.45rem;
+  border: 1px solid #5c4a1a;
+  border-radius: 4px;
+  background: #2d2412;
+  color: #fcd34d;
+  font-size: 0.72rem;
+  line-height: 1.3;
+}
+
+.incident-assign {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin: 0.4rem 0;
+}
+
+.incident-assign-note {
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1.3;
+}
+
+.incident-write-failure,
+.incident-service-down {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.45rem;
+  padding: 0.45rem 0.5rem;
+  border-radius: 6px;
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+.incident-write-failure p,
+.incident-service-down p {
+  margin: 0;
+}
+
+/* A refusal is the service working correctly, so it reads as a notice rather
+   than as breakage; an unreachable service is the alarming one. */
+.incident-write-rejected {
+  border: 1px solid #5c4a1a;
+  background: #241f12;
+}
+
+.incident-write-unreachable,
+.incident-service-down {
+  border: 1px solid #5c2b2b;
+  background: #241618;
+}
+
+.incident-write-failure-title {
+  font-weight: 600;
+  color: #fca5a5;
+}
+
+.incident-write-rejected .incident-write-failure-title {
+  color: #fbbf24;
+}
+
+.incident-write-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.68rem;
+}
+
+.incident-actor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.5rem;
+  padding-top: 0.45rem;
+  border-top: 1px solid #2a2e36;
+}
+
+.incident-actor-note {
+  margin: 0;
   font-size: 0.7rem;
   line-height: 1.3;
 }

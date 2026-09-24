@@ -45,6 +45,15 @@ class ApiException implements Exception {
             'Set it in Settings — writes are refused without it.',
       );
 
+  /// The app refused to send a write because no actor is configured. Every
+  /// write must name a responder; a key alone is no longer enough.
+  factory ApiException.missingActor() => ApiException(
+        status: 0,
+        code: 'missing_actor',
+        message: 'No actor is configured, so this console cannot change anything. Every write '
+            'must name a responder with X-Actor-Id; set one in Settings.',
+      );
+
   final int status;
   final String code;
   final String message;
@@ -54,7 +63,11 @@ class ApiException implements Exception {
   final bool isNetwork;
 
   bool get isUnauthorized => status == 401;
-  bool get isRoleMismatch => status == 403;
+  bool get isForbidden => status == 403;
+  bool get isRoleMismatch => status == 403 && code == 'role_mismatch';
+  bool get isJurisdictionMismatch => status == 403 && code == 'jurisdiction_mismatch';
+  bool get isInvalidTransition =>
+      status == 409 && (code == 'invalid_transition' || code == 'use_assign_endpoint');
   bool get isConflict => status == 409;
   bool get isNotFound => status == 404;
   bool get isSimulatorDisabled => status == 503;
@@ -93,17 +106,25 @@ class IncidentApi {
   IncidentApi({
     required String baseUrl,
     String? apiKey,
+    String? actorId,
     this.timeout = const Duration(seconds: 12),
   })  : baseUrl = baseUrl.replaceAll(RegExp(r'/+$'), ''),
-        apiKey = (apiKey == null || apiKey.isEmpty) ? null : apiKey;
+        apiKey = (apiKey == null || apiKey.isEmpty) ? null : apiKey,
+        actorId = (actorId == null || actorId.isEmpty) ? null : actorId;
 
   final String baseUrl;
   final String? apiKey;
+
+  /// The responder this console acts as, sent as `X-Actor-Id`. The service
+  /// resolves the role and jurisdiction from it; the console cannot assert
+  /// either.
+  final String? actorId;
   final Duration timeout;
 
   final HttpClient _client = HttpClient();
 
-  bool get canWrite => apiKey != null;
+  /// A write needs both credentials: the deployment key *and* an actor.
+  bool get canWrite => apiKey != null && actorId != null;
 
   void close() => _client.close(force: true);
 
@@ -119,14 +140,20 @@ class IncidentApi {
     bool needsKey = false,
     Map<String, String>? query,
   }) async {
-    if (needsKey && !canWrite) throw ApiException.missingKey();
+    if (needsKey) {
+      if (apiKey == null) throw ApiException.missingKey();
+      if (actorId == null) throw ApiException.missingActor();
+    }
 
     HttpClientResponse response;
     String text;
     try {
       final request = await _client.openUrl(method, _uri(path, query)).timeout(timeout);
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
-      if (needsKey) request.headers.set('X-Simulator-Key', apiKey!);
+      if (needsKey) {
+        request.headers.set('X-Simulator-Key', apiKey!);
+        request.headers.set('X-Actor-Id', actorId!);
+      }
       if (body != null) {
         request.headers.contentType = ContentType('application', 'json', charset: 'utf-8');
         request.add(utf8.encode(jsonEncode(body)));
@@ -254,12 +281,15 @@ class IncidentApi {
 
   /// `reported -> assigned`. Re-assigning an incident updates the assignee and
   /// appends a `reassigned` event rather than editing history.
-  Future<Incident> assign(int id, {required ResponderRole role, required String assignee}) async {
+  ///
+  /// No `role` in the body: the service decides the acting role from the
+  /// `X-Actor-Id` registry entry, and a body could only ever contradict it.
+  Future<Incident> assign(int id, {required String assignee}) async {
     final response = await _send(
       'POST',
       '/api/v1/incidents/$id/assign',
       needsKey: true,
-      body: {'role': wireOfRole(role), 'assignee': assignee},
+      body: {'assignee': assignee},
     );
     return Incident.fromJson(response.data as Map<String, dynamic>);
   }
@@ -270,7 +300,6 @@ class IncidentApi {
   Future<Incident> transition(
     int id, {
     required IncidentStatus toStatus,
-    required ResponderRole role,
     String? note,
   }) async {
     final response = await _send(
@@ -279,10 +308,22 @@ class IncidentApi {
       needsKey: true,
       body: {
         'to_status': wireOfStatus(toStatus),
-        'role': wireOfRole(role),
         if (note != null && note.isNotEmpty) 'note': note,
       },
     );
     return Incident.fromJson(response.data as Map<String, dynamic>);
+  }
+
+  /// The responder role's simulated inbox: what has been handed to this role.
+  /// Public read. Every row is a simulation — nothing was notified.
+  Future<List<InboxItem>> inbox(ResponderRole role, {bool onlyOpen = false}) async {
+    final response = await _send(
+      'GET',
+      '/api/v1/incidents/inbox',
+      query: {'role': wireOfRole(role), if (onlyOpen) 'only_open': 'true'},
+    );
+    return (response.data as List)
+        .map((row) => InboxItem.fromJson(row as Map<String, dynamic>))
+        .toList();
   }
 }

@@ -10,8 +10,7 @@ import {
 } from '../lib/responseTypes'
 import { useApiResource } from '../hooks/useApiResource'
 import { useMapUi } from '../state/MapUiContext'
-import { IncidentNotebook } from './IncidentNotebook'
-import type { IncidentEvidence } from '../lib/incidentNotebook'
+import { IncidentPanel } from './IncidentPanel'
 import type { AlertOut, AlertSeverity } from '../lib/types'
 
 const POLL_INTERVAL_MS = 60_000
@@ -20,23 +19,6 @@ const SEVERITY_LABEL: Record<AlertSeverity, string> = {
   watch: 'Watch',
   warning: 'Warning',
   critical: 'Critical',
-}
-
-/**
- * The evidence an alert contributes to an incident: the alert record itself,
- * named by the cell and time the backend raised it at. This is a link, not a
- * copy — the notebook stores the reference, and the alert stays where it came
- * from (GET /api/v1/alerts).
- */
-function alertEvidence(alert: AlertOut): IncidentEvidence[] {
-  return [
-    {
-      source: 'alert',
-      ref: alert.h3_cell,
-      summary: `${SEVERITY_LABEL[alert.severity]} PM2.5 alert: ${alert.message}`,
-      at: alert.created_at,
-    },
-  ]
 }
 
 function AlertItem({
@@ -106,14 +88,18 @@ function AlertItem({
           aria-expanded={notebookOpen}
           onClick={() => setNotebookOpen((value) => !value)}
         >
-          {notebookOpen ? 'Hide local incident' : 'Local incident…'}
+          {notebookOpen ? 'Hide incident' : 'Incident…'}
         </button>
         {notebookOpen && (
-          <IncidentNotebook
+          <IncidentPanel
             kind="pollution"
-            h3Cell={alert.h3_cell}
+            source={{
+              type: 'published_alert',
+              ref: alert.alert_id,
+              cell: alert.h3_cell,
+              title: `${SEVERITY_LABEL[alert.severity]} PM2.5 alert`,
+            }}
             title={`${SEVERITY_LABEL[alert.severity]} PM2.5 alert`}
-            evidence={alertEvidence(alert)}
           />
         )}
       </div>
@@ -205,20 +191,21 @@ export function AlertsPanel({ publishedRunId }: { publishedRunId?: string }) {
 
           {resource.status === 'success' && resource.data.length > 0 && (
             <p className="muted alerts-checklist-note">
-              Each alert is a {RESPONSE_LABEL.pollution.toLowerCase()} — an area, not a source.
-              The checklist and any incident notebook are kept on this device; nothing is
-              dispatched, notified or shared. {RESPONSE_STEPS_NOTE}
+              Each alert is a {RESPONSE_LABEL.pollution.toLowerCase()} — an area, not a source. The
+              checklist is kept on this device; the incident is a real record in the incident
+              service, and its hand-off is simulated — nothing is dispatched, notified or shared.{' '}
+              {RESPONSE_STEPS_NOTE}
             </p>
           )}
 
           {resource.status === 'success' &&
-            resource.data.map((alert, index) => (
+            resource.data.map((alert) => (
               <AlertItem
-                // The index is part of the key because the alert API exposes no
-                // id and a run genuinely returns byte-identical alerts (same
-                // cell, time, severity and message), which React rejected as
-                // duplicate keys. Nothing better is available to key on.
-                key={`${alert.h3_cell}-${alert.created_at}-${alert.severity}-${alert.message}-${index}`}
+                // The published-alert identity is deterministic and unique per
+                // run/cell/horizon, so it is the key. Before `alert_id` existed
+                // this needed the cell, time, severity, message *and* the index,
+                // because a run genuinely returns byte-identical alerts.
+                key={alert.alert_id}
                 alert={alert}
                 onSelect={() => dispatch({ type: 'SELECT_CELL', cell: alert.h3_cell })}
                 done={(action) => checked.has(keyFor(alert, action))}

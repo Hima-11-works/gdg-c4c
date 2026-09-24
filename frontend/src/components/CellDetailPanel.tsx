@@ -5,7 +5,6 @@ import { cellCenter } from '../lib/h3Geometry'
 import { regionTitle } from '../lib/regionName'
 import {
   CITIZEN_VERIFICATION_BADGE,
-  CITIZEN_VERIFICATION_LABEL,
   CITIZEN_VERIFICATION_TOOLTIP,
   FIRE_KIND_LABELS,
   minutesAgo,
@@ -22,8 +21,7 @@ import { useApiResource } from '../hooks/useApiResource'
 import type { AsyncResource } from '../hooks/useApiResource'
 import { useStateBoundaries } from '../hooks/useStateBoundaries'
 import { useMapUi } from '../state/MapUiContext'
-import { IncidentNotebook } from './IncidentNotebook'
-import type { IncidentEvidence } from '../lib/incidentNotebook'
+import { IncidentPanel } from './IncidentPanel'
 import type { CellDetailOut, FireReportOut } from '../lib/types'
 
 /** The most recent citizen report filed in this cell, from
@@ -488,48 +486,11 @@ export function CellDetailPanel({
   const anomaly = worstAnomalyInCell(selectedCell)
 
   // The citizen report the drawer already looks up, hoisted so the incident
-  // notebook can link it as evidence rather than looking it up twice.
+  // panel can open an incident from it rather than looking it up twice.
   const report =
     state.showCitizenSensors && citizenReports.status === 'success'
       ? reportForCell(citizenReports.data, selectedCell)
       : null
-
-  // Evidence links for a fire incident, built from records that already exist:
-  // the cell's own readings, the (illustrative) thermal detection driving the
-  // triage badge, and any citizen report filed in this cell. The notebook
-  // stores these references, and each one names where the underlying record
-  // lives — it does not copy the record.
-  const fireEvidence: IncidentEvidence[] = []
-  if (resource.status === 'success') {
-    const current = resource.data.current
-    if (current !== null) {
-      fireEvidence.push({
-        source: 'cell_reading',
-        ref: selectedCell,
-        summary: `Cell reading: PM2.5 ${formatNumber(current.pm25)} µg/m³, PDI ${formatNumber(current.pdi)}`,
-        at: current.timestamp,
-      })
-    }
-  }
-  if (anomaly !== null) {
-    fireEvidence.push({
-      source: 'thermal_anomaly',
-      ref: `${selectedCell} (thermal)`,
-      // No wall-clock timestamp: the mock detection carries an age in minutes,
-      // not an instant, and inventing one at render time would be both impure
-      // and less accurate than saying how old it is.
-      summary: `Thermal detection, FRP ${anomaly.frp.toFixed(1)} MW, severity ${anomaly.severity}/3, detected ${anomaly.detectionMinutesAgo} min ago — illustrative mock detection, not a satellite feed`,
-      at: null,
-    })
-  }
-  if (report !== null) {
-    fireEvidence.push({
-      source: 'citizen_report',
-      ref: `report ${report.id}`,
-      summary: `Citizen report: ${FIRE_KIND_LABELS[report.kind] ?? report.kind}, smoke ${report.smoke_intensity}/5 (${CITIZEN_VERIFICATION_LABEL.toLowerCase()})`,
-      at: report.reported_at,
-    })
-  }
 
   return (
     <aside className="panel cell-detail" aria-label="Cell details">
@@ -566,15 +527,29 @@ export function CellDetailPanel({
         <>
           <CellDetailContent detail={resource.data} isDemo={resource.isDemo} report={report} />
 
-          {/* The fire response's own notebook. Kept beside the pollution
-              alerts' notebook in code but labelled apart, because the two
-              responses are about different things. */}
-          <IncidentNotebook
-            kind="fire"
-            h3Cell={selectedCell}
-            title={title ?? selectedCell}
-            evidence={fireEvidence}
-          />
+          {/* A fire incident is opened from a citizen report — that is the only
+              fire source the incident service accepts, alongside published and
+              persisted alerts. With no report in this cell there is nothing to
+              open one from, and the panel says so instead of offering a button
+              that would have no source. */}
+          {report !== null ? (
+            <IncidentPanel
+              kind="fire"
+              source={{
+                type: 'report',
+                id: report.id,
+                cell: selectedCell,
+                title: `${FIRE_KIND_LABELS[report.kind] ?? report.kind}, smoke ${report.smoke_intensity}/5`,
+              }}
+              title={`Citizen report #${report.id}`}
+              evidenceReportIds={[report.id]}
+            />
+          ) : (
+            <p className="muted incident-empty">
+              No citizen report is filed in this cell, so there is no source to open a fire incident
+              from. File one with “Report a fire”; the incident can then be opened from it.
+            </p>
+          )}
 
           <InterventionActionBar h3Cell={selectedCell} detail={resource.data} anomaly={anomaly} />
         </>

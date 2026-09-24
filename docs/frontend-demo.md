@@ -168,53 +168,79 @@ forecast at — the horizon label reads e.g. **`+2 HR 15 MIN interpolated`**, an
 the banner says the same: interpolated between published anchors, no calibrated
 interval.
 
-### 5. Persistent incident
+### 5. Open an incident from the alert you are looking at
 
-Create the incident from the report filed in step 3:
+The alerts list carries a real workflow. Open the bell, pick an alert, and press
+**Incident…**. The panel states the source by its published-alert identity
+(`v2:<run_id>:<h3_cell>:<forecast_hours>`) and says one of three different
+things, which are never blurred together:
+
+| State | What the panel says |
+| --- | --- |
+| **No incident** | "No incident is open for this source. That is a fact about the service, not a gap in this browser." |
+| **Cannot reach the service** | "This says nothing about whether an incident exists for this source — it only says this browser could not ask." |
+| **Write rejected** | The server's own code and message, e.g. `403 role_mismatch`. |
+
+**Open an incident** creates it. Writes need two credentials, and the panel says
+which one is missing when either is: the deployment's `X-Simulator-Key` **and**
+an `X-Actor-Id` naming a responder. The service resolves that actor's role and
+jurisdiction from its own registry, so nothing the browser asks for can widen
+its authority.
+
+The incident is a **persistent operational record**, not a browser note: an
+integer id, an append-only history, and it survives a reload because the server
+holds it. Creating the same source again returns `200` with the *same*
+incident, and the panel simply shows the existing one.
+
+### 6. Assign it — a simulated hand-off
+
+With the incident `reported`, name a unit and press **Assign**. The status
+becomes `assigned`, the history gains an `assigned` **and** a `delivered` event,
+and the incident appears in that role's inbox:
 
 ```bash
-KEY=sim-local-dev-key
-
-curl -s -X POST localhost:8001/api/v1/incidents \
-  -H "X-Simulator-Key: $KEY" -H 'Content-Type: application/json' \
-  -d '{"source_type":"report","source_id":3,"severity":"critical","jurisdiction":"Delhi",
-       "linked_prediction_run_id":"demo-population-f5","evidence_report_ids":[3],
-       "latitude":28.6139,"longitude":77.2090}'
+curl -s "localhost:8001/api/v1/incidents/inbox?role=pollution_control"
 ```
 
-`201` with `status: "reported"`, `responder_role: "fire_department"` (a fire
-report routes to the fire department; a `kind: "other"` report routes to
-pollution control). Running it twice returns `200` with the same id — creation is
-idempotent on `(source_type, source_id)`.
+The delivery is explicitly a simulation, and the panel says so where it shows
+it: *no email, SMS, webhook or push is sent by this system*. The database
+forces `simulated = true` and has no channel, address or provider column at
+all, so a dispatch cannot be recorded even by accident.
 
-### 6. Flutter responder update
+### 7. Flutter responder update
 
 ```bash
 cd partner_apps/fire_dept_simulator
 flutter run --dart-define=INCIDENT_API_BASE_URL=http://localhost:8001 \
-            --dart-define=SIMULATOR_API_KEY=sim-local-dev-key
+            --dart-define=SIMULATOR_API_KEY=sim-local-dev-key \
+            --dart-define=SIMULATOR_ACTOR_ID=engine-7
 ```
 
-Open the incident in the queue, then walk the response: **Assign to a unit** →
-**Acknowledge** → **Mark en route** → **Mark on scene** → **Mark resolved**. Each
-tap re-reads the incident from the server, reports what actually happened, and
-appends one row to the event history. Every screen carries the simulation banner.
+The actor id is not optional: it names the responder, and its registered role
+must match the incident's. A key on its own is refused with `401`.
 
-### 7. Web status
+Open the incident in the queue and walk the response: **Assign to a unit** →
+**Acknowledge** → **Mark en route** → **Mark on scene** → **Mark resolved**.
+Each tap re-reads the incident from the server, reports what actually
+happened, and appends one row to the event history. Every screen carries the
+simulation banner.
 
-The state the app wrote is the state the API returns — the app writes rows and
-nothing else. Refresh a browser against:
+### 8. Web status — the same record after a reload
 
+Reload the dashboard. The same alert shows the same incident id, the status the
+responder set, and their updates in the history, each row naming **which
+authority** acted (`unit-12 · Pollution control · Delhi`) rather than only which
+role:
+
+```bash
+curl -s localhost:8001/api/v1/incidents/7
+curl -s localhost:8001/api/v1/incidents/7/history
 ```
-http://localhost:8001/api/v1/incidents/3
-http://localhost:8001/api/v1/incidents/3/history
-http://localhost:8001/docs
-```
 
-Expected history: `created`, `assigned`, then one `transition` per state change,
-ending at `resolved` with `resolved_at` set.
+Expected history: `created`, `assigned`, `delivered`, then one `transition` per
+responder step, ending at `resolved` with `resolved_at` set.
 
-### 8. Federation demonstration
+### 9. Federation demonstration
 
 Run the two-region demonstration and the dashboard's top-right pill picks it up:
 
@@ -235,9 +261,7 @@ two.
 
 ### What this walkthrough verified, and what it could not
 
-Steps 1–4 and 8 were driven in a browser against the live backend; steps 5 and 7
-were exercised over HTTP with the exact requests the app makes; step 6's
-**contract** was verified the same way.
+Steps 1–4 and 9 were driven in a browser against the live backend.
 
 Step 3's evidence upload was verified **end to end in the web client**, all four
 ways: a report with a photo stored (and the stored bytes read back
@@ -246,10 +270,28 @@ retried against the same report id with the same idempotency key, and a rejected
 photo — each refusal showing the server's own code and a button that does not
 pretend a retry could work.
 
+Steps 5–8 were verified as a **two-client demonstration**: the web panel opened
+an incident from a published alert and assigned it, the responder sequence was
+driven through the exact requests the Flutter app makes, and the web page was
+then **reloaded** and showed the same incident id, the responder's terminal
+status, and the full history naming the acting authority. The three states the
+panel must keep apart were each demonstrated — no incident, an unreachable
+service (and the panel explicitly *not* claiming no incident exists), and a
+rejected write. The duplicate and invalid-action refusals were verified against
+the live service: an identical create returns `200` with the same id, a
+differing one `409 conflict`, a skipped step `409 invalid_transition`, assigning
+through the transition route `409 use_assign_endpoint`, a fire actor on a
+pollution incident `403 role_mismatch`, a Delhi actor on a Mumbai incident
+`403 jurisdiction_mismatch`, and an unregistered actor or a missing credential
+`401`.
+
 **Neither Flutter app has been run.** There is no Dart/Flutter SDK on the machine
 this was built on, so `flutter analyze` and `flutter test` are still outstanding
-for both `air_health_flutter` and `fire_dept_simulator`, and the Flutter evidence
-flow is unverified. See the limitations at the end of this document.
+for both `air_health_flutter` and `fire_dept_simulator`. The responder app's
+writes in step 7 were driven over HTTP with the same headers and the same bodies
+its client sends, and its contract was verified that way — but the app's own UI
+did not run, and neither did the Flutter half of step 3. See the limitations at
+the end of this document.
 
 ---
 
@@ -385,34 +427,47 @@ request rewrite of `latest_run_id` is enough.
   `max_observation_age_hours: 0.0`, and the backend's aggregation maps a zero age
   to `null`. The dashboard shows "Not reported" rather than claiming freshness it
   wasn't told.
-- **The dashboard does not read `/api/v1/incidents`.** It renders an on-device
-  incident notebook (see below); the persistent incident in step 5 is visible
-  through the API, not in the dashboard UI.
+- **The dashboard reads incidents, but only the two sources the API accepts.**
+  A pollution-control incident can be opened from a **published alert** (its
+  `v2:` identity) and a fire incident from a **citizen report**. There is no
+  source for an incident on a cell that merely has a thermal detection, so the
+  drawer says there is nothing to open one from rather than offering a button
+  with no source.
 - **Exposure is per-cell.** The run-wide aggregate lives on
   `GET /api/v2/exposure`, which the dashboard does not call.
 
 ---
 
-# Incident notebook (web)
+# Incident workflow (web)
 
-Because no incidents contract was reachable when this was built, the dashboard's
-incident notebook is **local to the browser**: an operator can group an alert or
-a detection into a case, name who has it, note a jurisdiction, move it through
-states and keep a running history, and it survives a reload because
-`localStorage` does. It is explicitly **not** shared, **not** an official log,
-and **not** evidence — the evidence it links points at real backend records (a
-filed report's id, a cell's readings), but it stores the reference, not the
-record. Every incident says so in the UI.
+The dashboard's incident surface used to be a **notebook in `localStorage`**: an
+operator grouped an alert or a report into a case, typed an assignee, moved a
+status dropdown and kept a local history. Every panel said out loud that it was
+device-local, because there was no incidents API to build against. There is one
+now, so that notebook is gone — status, assignment and history are read from
+`/api/v1/incidents` and written to it.
 
-Two response tracks are kept apart throughout, in wording and in colour: a
-**Fire response** is about a source (a detection, a filed report) and a
-**Pollution-control response** is about an area (PM2.5 over a cell). No action in
-either offers to dispatch, notify or escalate to an authority, because nothing in
-this deployment can — the copy actions say what they do ("Copy fire-response
-note", "Add to watch list (this device)") and the status line repeats that
-nothing left the device.
+`lib/incidents.ts` owns the vocabulary and the failure classification;
+`lib/operatorIdentity.ts` owns the two write credentials. What the panel will
+not do:
 
----
+- **It never presents a device-local record as an operational one.** There is no
+  local copy left to confuse with the real thing.
+- **It never implies a dispatch.** Assignment is a *simulated* hand-off into a
+  role's inbox; no notification of any kind is sent, and the panel says so
+  where the hand-off is shown.
+- **It never resolves a status itself.** The status moves when a responder moves
+  it; the panel shows their updates as they arrive, and offers no control that
+  would resolve an incident from the operator's screen.
+- **It keeps "no incident", "cannot reach the service" and "write rejected"
+  apart.** A refused write shows the server's own code; an unreachable service
+  says plainly that nothing is known about whether an incident exists.
+
+Two response tracks are still kept apart in wording and colour: a **Fire
+response** is about a source (a filed report) and a **Pollution-control
+response** is about an area (PM2.5 over a cell). The source decides the role: a
+fire report routes to the fire department, a `kind: other` report and every
+published alert route to pollution control.
 
 # Fire-department simulator (Flutter)
 
@@ -440,15 +495,29 @@ change re-reads too, and says whether the status moved or was already there.
 
 ## Contract notes that bit, and are worth knowing
 
-- **All three `409` conditions return `code: "conflict"`**, not the
-  `invalid_transition` / `use_assign_endpoint` codes the contract's §6 lists
-  (the error handler maps status→code and the incident routes pin no override).
-  The app keys off the HTTP status and the message. Worth fixing backend-side;
-  the app does not depend on it either way.
+- **Writes need a key *and* an actor.** `X-Simulator-Key` authenticates the
+  deployment; `X-Actor-Id` names the responder and is resolved against
+  `SIMULATOR_ACTORS`, which is the authority on who exists. A key alone is
+  `401`, an unregistered actor is `401`, a wrong role is `403 role_mismatch`, and
+  a scoped actor outside its jurisdiction is `403 jurisdiction_mismatch`. Because
+  the role comes from the registry, the `role` field that `assign`/`transitions`
+  used to accept is now optional and only agreement-checked — the responder app
+  no longer sends it at all.
+- **The `409` code disagreement is resolved.** An earlier backend returned
+  `conflict` for all three 409 cases; the current one pins its own codes, and
+  both were observed live: `invalid_transition` for a skipped step,
+  `use_assign_endpoint` for assigning through the transition route, and
+  `conflict` for the same source with differing attributes.
+- **A repeat of the current status is a no-op `200`**, not an error — so a
+  duplicated tap cannot double-apply. It is also why a *repeat* of
+  `to_status: assigned` from `assigned` returns `200` rather than the
+  `use_assign_endpoint` refusal: the no-op rule is checked first.
 - **`model_versions` differs between a fresh demonstration and a persisted run**
   (see the federation section above).
-- **Writes need `X-Simulator-Key`; reads need nothing.** With no key configured
-  server-side every write is `503 simulator_disabled`, while reads stay `200`.
+- **Writes need both credentials; reads need neither.** With no key *or* no actor
+  registry configured server-side, every write is `503 simulator_disabled`, while
+  reads stay `200` — so a read-only dashboard shows the real workflow without a
+  single credential.
 
 ---
 
@@ -458,14 +527,19 @@ change re-reads too, and says whether the status moved or was already there.
    and test are outstanding and neither app has ever been compiled. The
    `air_health_flutter` evidence flow (photo picker, progress, preserved report
    id, retry, refusal) is implemented and covered by tests, but those tests have
-   never been run. Step 6 of the walkthrough, and the Flutter half of step 3, are
-   documented from the contract rather than driven through the UI.
+   never been run. The responder app's writes in step 7 were driven with the same
+   headers and bodies its client sends, but its own UI did not run.
 2. **Photo evidence needs deployment configuration.** `CITIZEN_MEDIA_STORAGE` is
    `disabled` by default, so an unconfigured deployment answers
    `503 media_unavailable` for photos while sensor-only intake keeps working. Run
    `python -m app.cli verify-media-storage` as a deploy gate.
-3. **The dashboard's incident notebook is local**, not the backend's incidents.
-   Wiring it to `/api/v1/incidents` is a `frontend/**` change.
+3. **Incident writes need credentials in the browser.** The dashboard reads
+   incidents with none, but creating and assigning need `VITE_SIMULATOR_API_KEY`
+   and an actor id. The key reaches the browser bundle, which is acceptable only
+   because this is a **simulator** deployment whose key authenticates a
+   demonstration rather than a real authority — the same caveat the whole
+   incident workflow is built around. Do not reuse this pattern for a real
+   deployment.
 4. **The federation demonstration is a demonstration.** Two partitions of one
    synthetic dataset; the panel repeats the server's own caveats rather than
    summarising them.

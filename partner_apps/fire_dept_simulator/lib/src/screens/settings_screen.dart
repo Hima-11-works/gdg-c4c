@@ -27,6 +27,7 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   late final TextEditingController _baseUrl = TextEditingController(text: widget.config.baseUrl);
   late final TextEditingController _key = TextEditingController(text: widget.config.apiKey);
+  late final TextEditingController _actor = TextEditingController(text: widget.config.actorId);
   bool _showKey = false;
   bool _testing = false;
   String? _testResult;
@@ -36,6 +37,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void dispose() {
     _baseUrl.dispose();
     _key.dispose();
+    _actor.dispose();
     super.dispose();
   }
 
@@ -48,6 +50,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final probe = IncidentApi(
       baseUrl: _baseUrl.text.trim(),
       apiKey: _key.text.trim(),
+      actorId: _actor.text.trim(),
       timeout: const Duration(seconds: 8),
     );
     try {
@@ -123,6 +126,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                 ),
                 const SizedBox(height: 20),
+                Text('Acting as', style: theme.textTheme.titleSmall),
+                const SizedBox(height: 6),
+                TextField(
+                  controller: _actor,
+                  autocorrect: false,
+                  decoration: const InputDecoration(
+                    labelText: 'X-Actor-Id',
+                    helperText:
+                        'Required for every write, and not the same thing as the key: the key '
+                        'authenticates the deployment, this names the responder within it.',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  'The backend decides this actor’s role and jurisdiction from its own registry — '
+                  'this app cannot widen them, and an unregistered id is refused. A key on its own '
+                  'is no longer enough: every write needs both. Relaunch with '
+                  '--dart-define=SIMULATOR_ACTOR_ID=engine-7 to have it set from the start.',
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                ),
+                const SizedBox(height: 20),
                 Row(
                   children: [
                     FilledButton.icon(
@@ -142,6 +168,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         widget.onSave(SimulatorConfig(
                           baseUrl: _baseUrl.text.trim(),
                           apiKey: _key.text.trim(),
+                          actorId: _actor.text.trim(),
                           role: ResponderRole.fireDepartment,
                         ));
                         Navigator.of(context).pop();
