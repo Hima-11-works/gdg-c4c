@@ -46,16 +46,9 @@ export const CITIZEN_VERIFICATION_DETAIL = 'resident submitted, not a measuremen
 export const CITIZEN_VERIFICATION_BADGE = `${CITIZEN_VERIFICATION_LABEL} — ${CITIZEN_VERIFICATION_DETAIL}`
 
 export const CITIZEN_VERIFICATION_TOOLTIP =
-  'Submitted by a resident, not a sensor or a satellite. Nothing checks it before it is ' +
-  'stored, and the backend reports no verification status for these reports, so treat it ' +
-  'as a concern raised rather than a measurement.'
-
-/** What the report form says about the photo and the local reading: neither is
- *  transmitted, because no endpoint accepts them. Kept here so the form and any
- *  other surface that mentions them cannot drift. */
-export const LOCAL_ONLY_DETAIL =
-  'Kept on this device. There is no photo or sensor upload endpoint, so this is not sent anywhere.'
-
+  'Submitted by a resident, not a sensor or a satellite. The report itself carries no ' +
+  'verification status; attached photo and sensor evidence carry their own, and both start ' +
+  'unverified. Treat it as a concern raised rather than a measurement.'
 
 export function smokeLabel(intensity: number): string {
   const index = Math.min(Math.max(Math.round(intensity), 1), SMOKE_LABELS.length) - 1

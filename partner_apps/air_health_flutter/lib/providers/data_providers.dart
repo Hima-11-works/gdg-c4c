@@ -8,6 +8,7 @@ import '../data/providers/dummy_pollution_data_provider.dart';
 import '../data/providers/grid_api_pollution_data_provider.dart';
 import '../data/providers/scenario_data.dart';
 import '../data/reports/fire_report_api.dart';
+import '../services/evidence_photo_picker.dart';
 
 /// Grid API client, or null when `POLLUTION_API_BASE_URL` is not set.
 ///
@@ -30,6 +31,14 @@ final fireReportApiClientProvider = Provider<FireReportApiClient?>((ref) {
   final config = ApiConfig.tryFromEnvironment();
   if (config == null) return null;
   return DioFireReportApiClient(dio: createPollutionDio(config));
+});
+
+/// Photo picker for report evidence.
+///
+/// Overridable in tests so the evidence flow can be exercised without a
+/// platform channel: the sheet only ever sees [EvidencePhotoPicker].
+final evidencePhotoPickerProvider = Provider<EvidencePhotoPicker>((ref) {
+  return const MethodChannelEvidencePhotoPicker();
 });
 
 /// The single binding point for [PollutionDataProvider].

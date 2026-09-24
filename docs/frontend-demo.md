@@ -36,13 +36,39 @@ SIMULATOR_API_KEY=sim-local-dev-key
 # The dashboard's dev-server origin. Without this the browser blocks every
 # read and the dashboard shows empty panels — the API itself is fine.
 CORS_ORIGINS=http://localhost:5173,http://localhost:5174
+# Photo evidence is refused with 503 media_unavailable unless a durable store
+# is configured. This is the backend's default, not an oversight.
+CITIZEN_MEDIA_STORAGE=filesystem
+CITIZEN_MEDIA_DIR=/var/lib/air-health/citizen-media
 ENV
+
+# The media directory has to be a volume, not a path inside the container.
+cat > "$TEMP/published-wt/docker-compose.override.yml" <<'YML'
+services:
+  api:
+    volumes:
+      - ./backend/app:/app/app
+      - citizen_media:/var/lib/air-health/citizen-media
+volumes:
+  citizen_media:
+YML
 
 docker compose -p gdg-demo --env-file "$TEMP/published-wt/.env" \
   -f "$TEMP/published-wt/docker-compose.yml" up -d --build
 ```
 
-Migrations run on boot. `/health/ready` tells you when it is up. Then point the
+Migrations run on boot. `/health/ready` tells you when it is up. Then prove the
+photo store actually works before demonstrating anything — this is the backend's
+own deploy gate, and it fails loudly rather than accepting bytes it cannot
+return:
+
+```bash
+docker exec gdg-demo-api-1 python -m app.cli verify-media-storage   # must exit 0
+```
+
+A fresh named volume is owned by root while the API runs as an unprivileged
+user, so chown it once (`docker exec -u 0 gdg-demo-api-1 chown -R 1000:1000
+/var/lib/air-health/citizen-media`) and re-run the gate. Then point the
 dashboard and the simulator at it:
 
 ```bash
@@ -82,16 +108,56 @@ same cells.
 
 ### 3. Fire evidence
 
-Turn on **Citizen Fire Reports**, then file a report at a spot you are looking
-at and reopen that cell:
+The report form is two steps against two endpoints, and the split is the point:
 
-```bash
-curl -s -X POST localhost:8001/api/v1/reports -H 'Content-Type: application/json' \
-  -d '{"latitude":28.6139,"longitude":77.2090,"kind":"crop_burning","smoke_intensity":4,"duration_hours":2,"notes":"Stubble burning behind the market"}'
-```
+1. `POST /api/v1/reports` **creates the report** and returns its integer `id`.
+2. `POST /api/v1/reports/{id}/evidence` **attaches the selected photo and/or the
+   resident's own sensor reading** to that report.
 
-Click that cell: the drawer shows the **Citizen report** with its smoke,
-duration and age, labelled **Unverified — resident submitted, not a measurement**.
+Zoom in past the country tier first (the report button only exists once the map
+has a viewport), press **Report a fire**, and submit. The form then uploads the
+evidence against the id step 1 returned, showing a progress bar while the bytes
+move.
+
+**A photo.** Choose a file. The confirmation shows the stored evidence: the
+photo rendered *from the backend's own URL*, its type and size, the content
+address it was stored under, the verification status the server returned
+(`Unverified`), and the sentence that matters —
+*"A citizen reading is stored only on this evidence record. It never becomes a
+station observation and never feeds the pollution model."* The stored bytes can
+be fetched back and are byte-identical to what was uploaded.
+
+**A sensor reading.** Type a value, tick *Attach this reading to the report*, and
+send. The stored record carries the pollutant, value, **your unit**, the time you
+say it was measured, and `source: citizen · verified: false`. The backend places
+it at the report's own position when no coordinate is supplied.
+
+**An interrupted upload.** Kill the connection mid-upload (or throttle the
+network to zero). The form says the evidence was not stored, names the report id
+that *is* already stored, and offers a retry that re-sends the identical
+payload under the identical evidence key — which is why the retry returns the
+stored record instead of creating a second one. **The report is never created
+twice**: the retry path is the evidence call alone.
+
+**A rejected photo.** Send a file whose bytes are not an image (a text file
+renamed `.jpg`, or a truncated transfer). The server refuses it and the form
+shows the code and the server's own message:
+
+| What was sent | Response |
+| --- | --- |
+| text file named `.jpg` | `415 unrecognized_media_content` |
+| truncated photo | `415 media_content_invalid` |
+| PNG announced as JPEG | `415 media_content_mismatch` |
+| unsupported pollutant (`co2`) | `422 validation_error` |
+
+None of these are dressed up as a retry that could work — the button reads *Send
+it again (after changing it above)*, because a refusal fails identically next
+time. Fix the file and resend: it goes to the **same report id**, and the
+evidence then stores normally.
+
+Click that cell on the map and the drawer shows the **Citizen report** with its
+smoke, duration and age, labelled **Unverified — resident submitted, not a
+measurement**.
 
 ### 4. Forecast alert
 
@@ -169,12 +235,21 @@ two.
 
 ### What this walkthrough verified, and what it could not
 
-Steps 1–4 and 8 were driven in a browser against the live backend (screenshots
-in `docs/` history of the change); steps 5 and 7 were exercised over HTTP with
-the exact requests the app makes; step 6's **contract** was verified the same
-way, but **the Flutter UI itself was not run** — there is no Dart/Flutter SDK on
-the machine this was built on, so `flutter analyze` and `flutter test` are still
-outstanding. See the limitations at the end of this document.
+Steps 1–4 and 8 were driven in a browser against the live backend; steps 5 and 7
+were exercised over HTTP with the exact requests the app makes; step 6's
+**contract** was verified the same way.
+
+Step 3's evidence upload was verified **end to end in the web client**, all four
+ways: a report with a photo stored (and the stored bytes read back
+byte-identical), a report with a sensor reading stored, an interrupted upload
+retried against the same report id with the same idempotency key, and a rejected
+photo — each refusal showing the server's own code and a button that does not
+pretend a retry could work.
+
+**Neither Flutter app has been run.** There is no Dart/Flutter SDK on the machine
+this was built on, so `flutter analyze` and `flutter test` are still outstanding
+for both `air_health_flutter` and `fire_dept_simulator`, and the Flutter evidence
+flow is unverified. See the limitations at the end of this document.
 
 ---
 
@@ -228,6 +303,41 @@ Two details worth knowing when reading the payload:
   does the panel: `region_scope`, `synthetic_only`,
   `evaluation.usable_as_real_world_evidence` and the `limitations` block are
   shown as the server sent them.
+
+## Report evidence (photo + local sensor reading)
+
+The report form is two calls, and the report id from the first is what makes the
+second retryable:
+
+| Step | Call | Idempotency |
+| --- | --- | --- |
+| create | `POST /api/v1/reports` | `client_report_id`, minted per open form |
+| attach | `POST /api/v1/reports/{id}/evidence` | its own `client_report_id`, **the same on every retry** |
+
+`lib/reportEvidence.ts` owns the evidence half: it mirrors the documented bounds
+(pollutant allow-list, non-negative value, non-empty unit, a reading no older
+than 72h and no more than 300s in the future, a 5 MiB photo cap), builds the
+multipart body, and classifies the server's codes. Two rules it exists to
+enforce:
+
+- **A refusal is not retryable.** `415`/`422`/`409` fail identically next time,
+  so the form says what to change. Only a transport failure, `media_unavailable`
+  and `media_not_durable` get a retry button — the last two because the backend
+  itself says "retry later".
+- **A transport failure is never given a status.** It reads
+  `network_error`, not `503`, because nothing is known about what the server
+  received. The retry settles that question: an identical payload under the same
+  key returns `200` with the stored record.
+
+Upload progress needs `XMLHttpRequest` — the only browser API that reports bytes
+sent — so `submitReportEvidence` is the one call in `lib/api.ts` that does not
+use `fetch`. When the browser cannot compute a total, the bar is indeterminate
+rather than showing an invented percentage.
+
+The photo and the reading are shown as the server stored them: the image is
+fetched back from the evidence URL, the digest is the content address, and the
+status is whatever `verification_status` says. A citizen reading is never
+presented as a measurement, and the panel says so in as many words.
 
 ## Empty states
 
@@ -344,16 +454,23 @@ change re-reads too, and says whether the status moved or was already there.
 
 # Remaining limitations, in one place
 
-1. **The Flutter app is unverified** — no SDK on the build machine; analyze and
-   test are outstanding, and step 6 of the walkthrough is documented from the
-   contract rather than driven through the UI.
-2. **The dashboard's incident notebook is local**, not the backend's incidents.
+1. **Both Flutter apps are unverified** — no SDK on the build machine, so analyze
+   and test are outstanding and neither app has ever been compiled. The
+   `air_health_flutter` evidence flow (photo picker, progress, preserved report
+   id, retry, refusal) is implemented and covered by tests, but those tests have
+   never been run. Step 6 of the walkthrough, and the Flutter half of step 3, are
+   documented from the contract rather than driven through the UI.
+2. **Photo evidence needs deployment configuration.** `CITIZEN_MEDIA_STORAGE` is
+   `disabled` by default, so an unconfigured deployment answers
+   `503 media_unavailable` for photos while sensor-only intake keeps working. Run
+   `python -m app.cli verify-media-storage` as a deploy gate.
+3. **The dashboard's incident notebook is local**, not the backend's incidents.
    Wiring it to `/api/v1/incidents` is a `frontend/**` change.
-3. **The federation demonstration is a demonstration.** Two partitions of one
+4. **The federation demonstration is a demonstration.** Two partitions of one
    synthetic dataset; the panel repeats the server's own caveats rather than
    summarising them.
-4. **The demo run is one region** (Delhi-NCR) published under `region: india`.
-5. **`backend/**` is untouched by all of this.** The backend used for the
+5. **The demo run is one region** (Delhi-NCR) published under `region: india`.
+6. **`backend/**` is untouched by all of this.** The backend used for the
    walkthrough is a detached worktree of the published branch, and its extra
-   configuration (ports, `SIMULATOR_API_KEY`, `CORS_ORIGINS`) lives in that
-   worktree's `.env`, not in the repo.
+   configuration (ports, `SIMULATOR_API_KEY`, `CORS_ORIGINS`, media storage) lives
+   in that worktree's `.env` and a compose override, not in the repo.

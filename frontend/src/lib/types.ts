@@ -332,6 +332,55 @@ export interface FireReportSubmit {
   client_report_id?: string
 }
 
+// --- citizen intake evidence (POST/GET /api/v1/reports/{id}/evidence) ---
+
+/** Moderation state of an evidence record. The backend starts every record at
+ *  `unverified` and never promotes one by itself. */
+export type EvidenceVerificationStatus = 'unverified' | 'pending' | 'verified' | 'rejected'
+
+/** The stored photo. `url` is relative to the API origin, so it is displayed
+ *  through the same base the rest of the client uses. */
+export interface ReportEvidenceMedia {
+  content_type: string
+  byte_size: number
+  sha256: string
+  url: string
+  is_placeholder: boolean
+}
+
+/** A resident's own sensor reading. `source` is always `citizen` and
+ *  `verified` is false for every non-verified state, so a citizen value can
+ *  never be read as a trusted station observation. */
+export interface ReportEvidenceSensor {
+  pollutant: string
+  value: number
+  unit: string
+  measured_at: string
+  latitude: number
+  longitude: number
+  source: string
+  verified: boolean
+}
+
+/** The evidence record for a report: a photo, a sensor reading, or both. One
+ *  report has at most one record, so this is a sub-resource of the report id
+ *  rather than a collection. */
+export interface ReportEvidenceOut {
+  id: number
+  report_id: number
+  client_report_id: string | null
+  verification_status: EvidenceVerificationStatus
+  media: ReportEvidenceMedia | null
+  sensor: ReportEvidenceSensor | null
+  notes: string | null
+  submitted_at: string
+}
+
+/** The pollutants the backend accepts for a citizen reading. */
+export const SENSOR_POLLUTANTS = ['pm25', 'pm10'] as const
+
+export type SensorPollutant = (typeof SENSOR_POLLUTANTS)[number]
+
 // --- federation demonstration (GET /api/v1/federation/status) ---
 //
 // The two-region federated-training *demonstration*: two disjoint partitions of

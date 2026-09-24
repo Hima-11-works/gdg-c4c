@@ -25,6 +25,7 @@ import type {
   GridCurrentV2Out,
   GridStateOut,
   MetaV2Out,
+  ReportEvidenceOut,
   V2Envelope,
   CellDetailV2Out,
   WeatherV2Out,
@@ -313,6 +314,104 @@ export function submitReport(
   payload: FireReportSubmit,
 ): Promise<Envelope<FireReportOut>> {
   return apiPost('/api/v1/reports', payload)
+}
+
+/** How far a multipart upload has got. `fraction` is null when the browser
+ *  cannot compute a total for the request, in which case the UI shows
+ *  indeterminate progress rather than inventing a percentage. */
+export interface UploadProgress {
+  loaded: number
+  total: number
+  fraction: number | null
+}
+
+/**
+ * Attach evidence to a report that already exists.
+ *
+ * This is the one call in the client that cannot use `fetch`: upload progress
+ * is not observable through the fetch API, and a resident sending a photo needs
+ * to see it move. XMLHttpRequest is the only browser API that reports bytes
+ * sent, so it is used here and nowhere else.
+ *
+ * `client_report_id` inside `form` is the evidence idempotency key. Resending
+ * the identical form returns `200` with the stored record; a different payload
+ * under the same key is a `409`. Both are ordinary responses here - the caller
+ * decides what they mean.
+ */
+export function submitReportEvidence(
+  reportId: number,
+  form: FormData,
+  onProgress?: (progress: UploadProgress) => void,
+): Promise<Envelope<ReportEvidenceOut>> {
+  return new Promise<Envelope<ReportEvidenceOut>>((resolve, reject) => {
+    const request = new XMLHttpRequest()
+    request.open('POST', `${API_BASE_URL}/api/v1/reports/${reportId}/evidence`)
+    request.responseType = 'json'
+
+    if (onProgress !== undefined) {
+      request.upload.onprogress = (event) => {
+        onProgress({
+          loaded: event.loaded,
+          total: event.total,
+          fraction: event.lengthComputable && event.total > 0 ? event.loaded / event.total : null,
+        })
+      }
+    }
+
+    request.onload = () => {
+      const body = request.response as
+        | (Envelope<ReportEvidenceOut> & ErrorResponseBody)
+        | null
+      if (request.status >= 200 && request.status < 300) {
+        if (body !== null && body.data !== undefined) {
+          resolve(body)
+        } else {
+          reject(
+            new ApiError(
+              request.status,
+              'bad_response',
+              'The server accepted the upload but returned an unreadable record.',
+            ),
+          )
+        }
+        return
+      }
+      reject(
+        new ApiError(
+          request.status,
+          body?.error?.code ?? 'http_error',
+          body?.error?.message ?? `Evidence upload failed with status ${request.status}`,
+        ),
+      )
+    }
+    // A transport failure, not an HTTP status: nothing about the server's
+    // answer is known, so the client never invents one. Whether the bytes
+    // arrived is exactly what the idempotent retry settles.
+    request.onerror = () =>
+      reject(
+        new ApiError(0, 'network_error', 'The upload was interrupted before the server answered.'),
+      )
+    request.ontimeout = () =>
+      reject(new ApiError(0, 'network_error', 'The upload timed out.'))
+    request.onabort = () =>
+      reject(new ApiError(0, 'network_error', 'The upload was cancelled.'))
+
+    request.send(form)
+  })
+}
+
+/** Read an evidence record back (GET /api/v1/reports/{id}/evidence). Rejects
+ *  with code `not_found` when the report has no evidence yet. */
+export function fetchReportEvidence(
+  reportId: number,
+): Promise<Envelope<ReportEvidenceOut>> {
+  return apiGet<Envelope<ReportEvidenceOut>>(`/api/v1/reports/${reportId}/evidence`)
+}
+
+/** Absolute URL for a stored photo, from the relative `url` the evidence
+ *  record carries. */
+export function reportEvidencePhotoUrl(relativeUrl: string): string {
+  return `${API_BASE_URL}${relativeUrl}`
 }
 
 export function fetchCellDetail(

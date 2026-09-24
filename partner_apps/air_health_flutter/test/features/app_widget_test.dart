@@ -2,14 +2,17 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:air_health_flutter/app/app.dart';
+import 'package:air_health_flutter/data/reports/fire_report_api.dart';
 import 'package:air_health_flutter/domain/models/fire_report.dart';
 import 'package:air_health_flutter/domain/models/location_point.dart';
+import 'package:air_health_flutter/domain/models/report_evidence.dart';
 import 'package:air_health_flutter/providers/data_providers.dart';
 import 'package:air_health_flutter/providers/location_providers.dart';
 import 'package:air_health_flutter/providers/onboarding_providers.dart';
 import 'package:air_health_flutter/providers/prefs_providers.dart';
 
-/// Records submissions instead of touching the network.
+/// This suite only checks that the report entry point appears, so the client's
+/// methods are stubs: nothing here submits anything.
 class _RecordingFireReportApiClient implements FireReportApiClient {
   @override
   Future<FireReport> submitReport(FireReportDraft draft) async {
@@ -18,6 +21,21 @@ class _RecordingFireReportApiClient implements FireReportApiClient {
 
   @override
   Future<List<FireReport>> listActiveReports() async => const [];
+
+  @override
+  Future<ReportEvidence> submitEvidence({
+    required int reportId,
+    required String clientReportId,
+    required EvidencePhoto? photo,
+    required CitizenSensorEvidence? sensor,
+    String? notes,
+    void Function(int sent, int total)? onProgress,
+  }) async =>
+      throw UnimplementedError();
+
+  @override
+  Future<ReportEvidence> fetchEvidence(int reportId) async =>
+      throw UnimplementedError();
 }
 
 void main() {

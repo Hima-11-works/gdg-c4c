@@ -1,12 +1,15 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:air_health_flutter/data/reports/fire_report_api.dart';
 import 'package:air_health_flutter/domain/models/fire_report.dart';
+import 'package:air_health_flutter/domain/models/report_evidence.dart';
 
 /// An in-memory FireReportApiClient: records drafts and hands back a stored
 /// report, idempotent on clientReportId like the backend.
 class FakeFireReportApiClient implements FireReportApiClient {
   final stored = <FireReport>[];
   final submitted = <FireReportDraft>[];
+  final evidenceSubmissions = <String>[];
+  final evidence = <int, ReportEvidence>{};
   int _nextId = 1;
 
   @override
@@ -30,6 +33,69 @@ class FakeFireReportApiClient implements FireReportApiClient {
 
   @override
   Future<List<FireReport>> listActiveReports() async => List.of(stored);
+
+  @override
+  Future<ReportEvidence> submitEvidence({
+    required int reportId,
+    required String clientReportId,
+    required EvidencePhoto? photo,
+    required CitizenSensorEvidence? sensor,
+    String? notes,
+    void Function(int sent, int total)? onProgress,
+  }) async {
+    evidenceSubmissions.add(clientReportId);
+    // Idempotent on (reportId, clientReportId), like the backend: a retry
+    // returns the stored record rather than a second one.
+    final existing = evidence[reportId];
+    if (existing != null && existing.clientReportId == clientReportId) {
+      return existing;
+    }
+    onProgress?.call(10, 10);
+    final record = ReportEvidence(
+      id: reportId,
+      reportId: reportId,
+      clientReportId: clientReportId,
+      verificationStatus: EvidenceVerificationStatus.unverified,
+      media: photo == null
+          ? null
+          : ReportEvidenceMedia(
+              contentType: photo.contentType,
+              byteSize: photo.byteSize,
+              sha256: 'deadbeef',
+              url: '/api/v1/reports/$reportId/evidence/photo',
+              isPlaceholder: false,
+            ),
+      sensor: sensor == null
+          ? null
+          : ReportEvidenceSensor(
+              pollutant: sensor.pollutant.wireValue,
+              value: sensor.value,
+              unit: sensor.unit,
+              measuredAt: sensor.measuredAt,
+              latitude: 28.55,
+              longitude: 77.20,
+              source: 'citizen',
+              verified: false,
+            ),
+      notes: notes,
+      submittedAt: DateTime.utc(2026, 9, 24, 12),
+    );
+    evidence[reportId] = record;
+    return record;
+  }
+
+  @override
+  Future<ReportEvidence> fetchEvidence(int reportId) async {
+    final record = evidence[reportId];
+    if (record == null) {
+      throw const EvidenceUploadException(
+        code: 'not_found',
+        message: 'no evidence for this report',
+        statusCode: 404,
+      );
+    }
+    return record;
+  }
 }
 
 void main() {
@@ -167,42 +233,19 @@ void main() {
     });
   });
 
-  group('LocalSensorReading', () {
-    test('accepts a non-negative number and formats it', () {
-      final reading =
-          LocalSensorReading.tryCreate(rawValue: '145', unit: 'µg/m³');
-
-      expect(reading, isNotNull);
-      expect(reading!.value, 145);
-      expect(reading.display, '145 µg/m³');
-    });
-
-    test('trims input and keeps a fractional value to one place', () {
-      final reading =
-          LocalSensorReading.tryCreate(rawValue: ' 12.5 ', unit: 'ppm');
-
-      expect(reading!.display, '12.5 ppm');
-    });
-
-    test('rejects blank, non-numeric and negative input', () {
-      expect(LocalSensorReading.tryCreate(rawValue: '', unit: 'ppm'), isNull);
-      expect(LocalSensorReading.tryCreate(rawValue: 'abc', unit: 'ppm'), isNull);
-      expect(LocalSensorReading.tryCreate(rawValue: '-1', unit: 'ppm'), isNull);
-    });
-
-    test('offers each unit once', () {
-      expect(
-        LocalSensorReading.units.toSet(),
-        hasLength(LocalSensorReading.units.length),
-      );
-    });
-  });
-
   group('CitizenReportVerification', () {
     test('names the only true status of a resident submission', () {
       expect(CitizenReportVerification.label, 'Unverified');
       expect(CitizenReportVerification.badge, contains('Unverified'));
-      expect(CitizenReportVerification.localOnlyDetail, contains('not sent'));
+    });
+
+    test('says the photo and reading are transmitted, not kept on the device',
+        () {
+      final detail = CitizenReportVerification.evidenceUploadDetail;
+      expect(detail, contains('Sent to the backend'));
+      expect(detail, contains('unverified evidence'));
+      expect(detail, isNot(contains('not sent')));
+      expect(detail, isNot(contains('this device')));
     });
   });
 }
