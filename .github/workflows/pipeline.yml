@@ -1,8 +1,13 @@
 name: Pollution pipeline
 
-# Runs the full ingestion -> grid -> forecast -> alerts pipeline against the
-# hosted database. The app itself has no scheduler (see README "MVP
-# limitations"); this workflow is that scheduler.
+# Runs the full ingestion -> grid -> forecast -> alerts -> v2 publication
+# pipeline against the hosted database. The app itself has no scheduler (see
+# README "MVP limitations"); this workflow is that scheduler.
+#
+# The final stage (`app.pipeline.run` -> `_publish_v2`) writes the v2 run that
+# /api/v2/* serves. In demo mode it publishes a complete deterministic India
+# run; in live mode it fails closed (no observed current PM2.5 => a failed
+# stage, never a synthetic substitute). See docs/api/publication.md.
 #
 # Repository configuration:
 #   secret   DATABASE_URL         direct (non-pooler) Neon connection string
@@ -12,7 +17,7 @@ name: Pollution pipeline
 # GitHub only runs scheduled workflows on the default branch, and pauses a
 # schedule after ~60 days without repository activity.
 #
-# See docs/DEPLOYMENT_PLAN.md.
+# See docs/DEPLOYMENT_PLAN.md and docs/api/publication.md.
 
 on:
   schedule:
@@ -61,5 +66,16 @@ jobs:
       - name: Apply migrations
         run: alembic upgrade head
 
-      - name: Run pipeline
+      # One invocation runs every stage, publication last. Exit code is
+      # non-zero if any stage failed, so a failed live source surfaces as a
+      # red run rather than silently leaving a stale v2 run in place.
+      - name: Run pipeline (ingestion -> grid -> forecast -> alerts -> publish v2)
         run: python -m app.pipeline.run
+
+      # Observable check the finished output asks for: the newest published
+      # run resolves by id, and its coverage/population are readable. In demo
+      # mode population and exposure are non-null; in live mode this only
+      # asserts a run exists and is queryable (it may be a degraded run, which
+      # is labelled as such in the response, not hidden).
+      - name: Verify the published v2 run is readable
+        run: python -m app.cli verify-publication

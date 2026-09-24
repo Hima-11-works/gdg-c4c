@@ -12,6 +12,9 @@ from dataclasses import replace
 from datetime import datetime
 
 from app.domain.environmental_observations import FireHotspot
+from app.domain.citizen_intake import ReportEvidence
+from app.domain.federation import FederationParticipant, FederationRun
+from app.domain.incidents import Incident, IncidentEvent
 from app.domain.providers import ProviderError
 from app.domain.repositories import DuplicateReadingError
 from app.domain.types import (
@@ -161,8 +164,11 @@ class FakeAlertRepository:
         self.alerts: list[Alert] = []
 
     def add(self, alert: Alert) -> Alert:
-        self.alerts.append(alert)
-        return alert
+        # Assign a DB-style auto-incrementing id, like the SQL repository's
+        # RETURNING clause does — the incident workflow needs a real id.
+        stored = replace(alert, id=len(self.alerts) + 1)
+        self.alerts.append(stored)
+        return stored
 
     def list_active(self, *, since: datetime) -> list[Alert]:
         return [a for a in self.alerts if a.created_at >= since]
@@ -188,6 +194,63 @@ class FakeFireReportRepository:
 
     def list_active(self, *, since: datetime) -> list[FireReport]:
         return [r for r in self.reports if r.reported_at >= since]
+
+
+class FakeReportEvidenceRepository:
+    """In-memory ReportEvidenceRepository.
+
+    Mirrors the SQL implementation: at most one record per report, idempotent
+    on (report_id, client_report_id) for identical content, and a ValueError
+    when the same key is reused with different content."""
+
+    def __init__(self) -> None:
+        self.evidence: list[ReportEvidence] = []
+
+    def save(self, evidence: ReportEvidence) -> ReportEvidence:
+        existing = self.get_for_report(evidence.report_id)
+        if existing is not None:
+            same_key = (
+                evidence.client_report_id is not None
+                and existing.client_report_id == evidence.client_report_id
+            )
+            if same_key and _same_evidence_content(existing, evidence):
+                return existing
+            raise ValueError("a different evidence record already exists for this report")
+        stored = replace(evidence, id=len(self.evidence) + 1)
+        self.evidence.append(stored)
+        return stored
+
+    def get_for_report(self, report_id: int) -> ReportEvidence | None:
+        for item in self.evidence:
+            if item.report_id == report_id:
+                return item
+        return None
+
+
+def _same_evidence_content(a: ReportEvidence, b: ReportEvidence) -> bool:
+    """Whether two evidence records carry identical payload (a retry) or
+    differ (a genuine conflict)."""
+
+    def media_fp(item: ReportEvidence):
+        media = item.media
+        return None if media is None else (media.sha256, media.content_type, media.byte_size)
+
+    def sensor_fp(item: ReportEvidence):
+        sensor = item.sensor
+        return (
+            None
+            if sensor is None
+            else (
+                sensor.pollutant,
+                sensor.value,
+                sensor.unit,
+                sensor.measured_at,
+                sensor.latitude,
+                sensor.longitude,
+            )
+        )
+
+    return media_fp(a) == media_fp(b) and sensor_fp(a) == sensor_fp(b)
 
 
 class FakeFireHotspotRepository:
@@ -280,3 +343,111 @@ class FakeWeatherProvider:
         if self.error is not None:
             raise ProviderError(self.error)
         return [self.samples_by_point.get(p, self.default_sample) for p in points]
+
+
+class FakeIncidentRepository:
+    """In-memory IncidentRepository.
+
+    Mirrors the SQL implementation: one incident per (source_type, source_id)
+    (a duplicate create returns the existing row), and every create/update
+    appends exactly one history event."""
+
+    def __init__(self) -> None:
+        self.incidents: list[Incident] = []
+        self.events: list[IncidentEvent] = []
+
+    def create(self, incident: Incident, event: IncidentEvent) -> Incident:
+        for existing in self.incidents:
+            if existing.source_key == incident.source_key:
+                return existing
+        stored = replace(incident, id=len(self.incidents) + 1)
+        self.incidents.append(stored)
+        self._append_event(stored.id, event)
+        return stored
+
+    def get(self, incident_id: int) -> Incident | None:
+        return next((i for i in self.incidents if i.id == incident_id), None)
+
+    def get_by_source(self, source_type, source_id: int) -> Incident | None:
+        return next(
+            (
+                i
+                for i in self.incidents
+                if i.source_type == source_type and i.source_id == source_id
+            ),
+            None,
+        )
+
+    def update(self, incident: Incident, event: IncidentEvent) -> Incident:
+        stored = replace(incident)
+        for index, existing in enumerate(self.incidents):
+            if existing.id == incident.id:
+                self.incidents[index] = stored
+                break
+        self._append_event(stored.id, event)
+        return stored
+
+    def list(self, *, status=None, role=None) -> list[Incident]:
+        result = list(self.incidents)
+        if status is not None:
+            result = [i for i in result if i.status == status]
+        if role is not None:
+            result = [i for i in result if i.responder_role == role]
+        return sorted(result, key=lambda i: (i.created_at, i.id or 0), reverse=True)
+
+    def history(self, incident_id: int) -> list[IncidentEvent]:
+        return [
+            e for e in self.events if e.incident_id == incident_id
+        ]
+
+    def _append_event(self, incident_id: int, event: IncidentEvent) -> None:
+        self.events.append(
+            replace(event, id=len(self.events) + 1, incident_id=incident_id)
+        )
+
+
+class FakeFederationRepository:
+    """In-memory store for federation runs and their participants.
+
+    Mirrors the SQL behavior the status reader needs: `latest` returns the
+    run with the newest finished_at, participants come back per run."""
+
+    def __init__(self) -> None:
+        self.runs: list[FederationRun] = []
+        self.participants: list[tuple[str, FederationParticipant]] = []
+
+    def save(self, run: FederationRun, participants) -> None:
+        if any(existing.run_id == run.run_id for existing in self.runs):
+            return
+        self.runs.append(run)
+        for participant in participants:
+            self.participants.append((run.run_id, participant))
+
+    def latest(self) -> FederationRun | None:
+        if not self.runs:
+            return None
+        return max(self.runs, key=lambda run: (run.finished_at, run.run_id))
+
+    def get(self, run_id: str) -> FederationRun | None:
+        return next(
+            (run for run in self.runs if run.run_id == run_id),
+            None,
+        )
+
+    def list_participants(self, run_id: str) -> list[FederationParticipant]:
+        return [
+            participant
+            for key, participant in self.participants
+            if key == run_id
+        ]
+
+
+class FakeModelVersionRepository:
+    """Registry rows recorded by a persisted federation run."""
+
+    def __init__(self) -> None:
+        self.models: list[object] = []
+
+    def upsert(self, model) -> object:
+        self.models.append(model)
+        return model

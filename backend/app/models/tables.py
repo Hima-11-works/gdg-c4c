@@ -19,6 +19,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Index,
+    Integer,
     MetaData,
     SmallInteger,
     String,
@@ -373,6 +374,251 @@ fire_report = Table(
     UniqueConstraint("client_report_id", name="uq_fire_report_client_report_id"),
     Index("ix_fire_report_reported_at", "reported_at"),
     Index("ix_fire_report_h3_cell", "h3_cell"),
+)
+
+# Citizen intake evidence: an optional photo and/or local sensor reading
+# attached to a fire report, with provenance and a moderation/verification
+# status. See docs/api/citizen-intake.md. One row per report (unique
+# report_id). The sensor columns are citizen-submitted evidence, NEVER
+# trusted station observations - they are not written to sensor_reading and
+# are never read by the pollution model.
+report_evidence = Table(
+    "report_evidence",
+    metadata,
+    Column("id", BigInteger, primary_key=True),
+    Column(
+        "report_id",
+        BigInteger,
+        ForeignKey("fire_report.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    # Moderation state: unverified by default; nothing in the intake path
+    # promotes its own evidence.
+    Column("verification_status", String(20), nullable=False, server_default="unverified"),
+    # --- photo (nullable: a sensor-only submission has no media) ---
+    Column("media_content_type", String(100), nullable=True),
+    Column("media_byte_size", BigInteger, nullable=True),
+    Column("media_sha256", String(64), nullable=True),
+    Column("media_key", String(200), nullable=True),
+    Column("media_is_placeholder", Boolean, nullable=False, server_default=text("false")),
+    # --- citizen sensor reading (nullable: a photo-only submission) ---
+    Column("sensor_pollutant", String(20), nullable=True),
+    Column("sensor_value", Float, nullable=True),
+    Column("sensor_unit", String(20), nullable=True),
+    Column("sensor_measured_at", DateTime(timezone=True), nullable=True),
+    Column("sensor_latitude", Float, nullable=True),
+    Column("sensor_longitude", Float, nullable=True),
+    Column("sensor_source", String(50), nullable=True),
+    Column("notes", String(280), nullable=True),
+    # Idempotency key for the evidence record, scoped to one report.
+    Column("client_report_id", String(64), nullable=True),
+    Column("submitted_at", DateTime(timezone=True), nullable=False),
+    # A record must carry evidence: a photo, a sensor reading, or both.
+    CheckConstraint(
+        "media_key IS NOT NULL OR sensor_value IS NOT NULL",
+        name="ck_report_evidence_has_payload",
+    ),
+    # Photo columns are all-or-nothing.
+    CheckConstraint(
+        "(media_key IS NULL) = (media_content_type IS NULL) "
+        "AND (media_key IS NULL) = (media_byte_size IS NULL) "
+        "AND (media_key IS NULL) = (media_sha256 IS NULL)",
+        name="ck_report_evidence_media_complete",
+    ),
+    # Sensor columns are all-or-nothing.
+    CheckConstraint(
+        "(sensor_value IS NULL) = (sensor_pollutant IS NULL) "
+        "AND (sensor_value IS NULL) = (sensor_unit IS NULL) "
+        "AND (sensor_value IS NULL) = (sensor_measured_at IS NULL) "
+        "AND (sensor_value IS NULL) = (sensor_latitude IS NULL) "
+        "AND (sensor_value IS NULL) = (sensor_longitude IS NULL)",
+        name="ck_report_evidence_sensor_complete",
+    ),
+    CheckConstraint(
+        "verification_status IN ('unverified', 'pending', 'verified', 'rejected')",
+        name="ck_report_evidence_verification_status",
+    ),
+    CheckConstraint(
+        "sensor_value IS NULL OR sensor_value >= 0",
+        name="ck_report_evidence_sensor_value_nonnegative",
+    ),
+    CheckConstraint(
+        "sensor_latitude IS NULL OR sensor_latitude BETWEEN -90 AND 90",
+        name="ck_report_evidence_sensor_latitude",
+    ),
+    CheckConstraint(
+        "sensor_longitude IS NULL OR sensor_longitude BETWEEN -180 AND 180",
+        name="ck_report_evidence_sensor_longitude",
+    ),
+    # One evidence record per report.
+    UniqueConstraint("report_id", name="uq_report_evidence_report_id"),
+    # Idempotent resubmission scoped to the report: the same client id on the
+    # same report must find the original record. Nullable (clients may omit
+    # it); Postgres treats NULLs as distinct in a unique index.
+    UniqueConstraint(
+        "report_id", "client_report_id", name="uq_report_evidence_report_client_id"
+    ),
+    Index("ix_report_evidence_submitted_at", "submitted_at"),
+    Index("ix_report_evidence_verification_status", "verification_status"),
+)
+
+# Incident workflow (the fire-department simulator). An incident is created
+# from an eligible fire alert or citizen report and progressed through
+# response states. See docs/api/incidents.md and app.domain.incidents.
+incident = Table(
+    "incident",
+    metadata,
+    Column("id", BigInteger, primary_key=True),
+    # What the incident was created from. The pair is unique (below), which
+    # is what makes creation idempotent on the source.
+    Column("source_type", String(20), nullable=False),
+    Column("source_id", BigInteger, nullable=False),
+    Column("status", String(20), nullable=False, server_default="reported"),
+    Column("responder_role", String(30), nullable=False),
+    Column("severity", String(20), nullable=False),
+    Column("jurisdiction", String(120), nullable=True),
+    Column("latitude", Float, nullable=False),
+    Column("longitude", Float, nullable=False),
+    # Derived from latitude/longitude at write time; spatial queries only.
+    Column(
+        "geom", Geography(geometry_type="POINT", srid=4326, spatial_index=False), nullable=False
+    ),
+    Column("h3_cell", String(H3_CELL_LENGTH), nullable=True),
+    Column("linked_prediction_run_id", String(120), nullable=True),
+    # Evidence references are citizen report ids; stored as a JSONB int array
+    # so the set is one atomic value, not a join table for a handful of ids.
+    Column("evidence_report_ids", JSONB, nullable=True),
+    Column("assignee", String(120), nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Column("resolved_at", DateTime(timezone=True), nullable=True),
+    CheckConstraint(
+        "source_type IN ('alert', 'report')", name="ck_incident_source_type"
+    ),
+    CheckConstraint(
+        "status IN ('reported', 'assigned', 'acknowledged', 'en_route', "
+        "'on_scene', 'resolved', 'cancelled')",
+        name="ck_incident_status",
+    ),
+    CheckConstraint(
+        "responder_role IN ('fire_department', 'pollution_control')",
+        name="ck_incident_responder_role",
+    ),
+    CheckConstraint("latitude BETWEEN -90 AND 90", name="ck_incident_latitude"),
+    CheckConstraint("longitude BETWEEN -180 AND 180", name="ck_incident_longitude"),
+    CheckConstraint("updated_at >= created_at", name="ck_incident_updated_at"),
+    CheckConstraint(
+        "resolved_at IS NULL OR resolved_at >= created_at",
+        name="ck_incident_resolved_at",
+    ),
+    # One incident per source: the idempotency guarantee at the storage layer.
+    UniqueConstraint("source_type", "source_id", name="uq_incident_source"),
+    Index("ix_incident_status", "status"),
+    Index("ix_incident_responder_role", "responder_role"),
+    Index("ix_incident_created_at", "created_at"),
+)
+
+# Append-only incident history. Every state change and assignment writes one
+# row; nothing updates or deletes these.
+incident_event = Table(
+    "incident_event",
+    metadata,
+    Column("id", BigInteger, primary_key=True),
+    Column(
+        "incident_id",
+        BigInteger,
+        ForeignKey("incident.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("event_type", String(20), nullable=False),
+    Column("from_status", String(20), nullable=True),
+    Column("to_status", String(20), nullable=True),
+    Column("role", String(30), nullable=True),
+    Column("actor", String(120), nullable=True),
+    Column("note", String(500), nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint(
+        "event_type IN ('created', 'assigned', 'reassigned', 'transition')",
+        name="ck_incident_event_type",
+    ),
+    Index("ix_incident_event_incident_id", "incident_id", "created_at"),
+)
+
+# Two-region federated-training demonstration (docs/api/federation.md).
+# One run records the participants, the aggregate artifact, the registered
+# model versions and the evaluation; participants carry counts, update
+# paths/hashes and the weight each contributed. The exchange is parameter
+# payloads only, so raw_rows_exchanged is structurally zero - the CHECK
+# constraint makes a nonzero value unwritable, not just unusual.
+federation_run = Table(
+    "federation_run",
+    metadata,
+    Column("id", String(120), primary_key=True),
+    Column("status", String(20), nullable=False),
+    Column("participant_count", SmallInteger, nullable=False),
+    Column("region_scope", String(60), nullable=False),
+    Column("feature_schema_version", String(60), nullable=False),
+    Column("horizons_hours", JSONB, nullable=False),
+    Column("aggregate_artifact_path", String(500), nullable=False),
+    Column("aggregate_artifact_sha256", String(64), nullable=False),
+    Column("model_version_ids", JSONB, nullable=False),
+    Column("evaluation", JSONB, nullable=False),
+    Column("raw_rows_exchanged_to_aggregator", SmallInteger, nullable=False),
+    Column("provenance", JSONB, nullable=False),
+    Column("started_at", DateTime(timezone=True), nullable=False),
+    Column("finished_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint(
+        "status IN ('succeeded', 'failed')", name="ck_federation_run_status"
+    ),
+    CheckConstraint(
+        "region_scope IN ('two-partition-synthetic-demonstration')",
+        name="ck_federation_run_region_scope",
+    ),
+    CheckConstraint(
+        "participant_count >= 2", name="ck_federation_run_participant_count"
+    ),
+    CheckConstraint(
+        "raw_rows_exchanged_to_aggregator = 0",
+        name="ck_federation_run_no_raw_rows",
+    ),
+    CheckConstraint(
+        "finished_at >= started_at", name="ck_federation_run_finished_after_started"
+    ),
+)
+
+# One row per participating region, per run. Kept even on failure, so a
+# failed run still shows who participated and what they produced.
+federation_participant = Table(
+    "federation_participant",
+    metadata,
+    Column("id", BigInteger, primary_key=True),
+    Column(
+        "federation_run_id",
+        String(120),
+        ForeignKey("federation_run.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("participant_id", String(60), nullable=False),
+    Column("region_label", String(60), nullable=False),
+    Column("example_count", Integer, nullable=False),
+    Column("train_count", Integer, nullable=False),
+    Column("validation_count", Integer, nullable=False),
+    Column("test_count", Integer, nullable=False),
+    Column("station_count", SmallInteger, nullable=False),
+    Column("horizon_count", SmallInteger, nullable=False),
+    Column("update_path", String(500), nullable=False),
+    Column("update_sha256", String(64), nullable=False),
+    Column("weight_fraction", Float, nullable=False),
+    Column("joined_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint(
+        "weight_fraction >= 0 AND weight_fraction <= 1",
+        name="ck_federation_participant_weight",
+    ),
+    CheckConstraint("example_count >= 0", name="ck_federation_participant_examples"),
+    UniqueConstraint(
+        "federation_run_id", "participant_id", name="uq_federation_participant"
+    ),
+    Index("ix_federation_participant_run", "federation_run_id"),
 )
 
 fire_hotspot = Table(

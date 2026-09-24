@@ -59,6 +59,7 @@ from app.db.repositories import (
     SqlWeatherReadingRepository,
 )
 from app.db.session import get_session_factory
+from app.domain.features import DataMode
 from app.domain.types import BoundingBox, Forecast
 from app.ingestion.demo_reports import demo_fire_reports
 from app.ingestion.factory import build_pollution_provider, build_weather_provider
@@ -71,6 +72,13 @@ from app.services.geospatial import GeospatialService
 from app.services.grid_computation import GridComputationService
 from app.services.ingestion import SensorIngestionService, WeatherIngestionService
 from app.services.pdi import HeuristicPDIModel
+from app.services.publication_pipeline import (
+    INDIA_DEMO_PROFILE,
+    INDIA_REGION,
+    PublicationOutcome,
+    publish_from_demo,
+    publish_from_state,
+)
 from app.services.reports import FireReportService
 
 logger = logging.getLogger(__name__)
@@ -296,6 +304,50 @@ def _generate_alerts(
     )
 
 
+def _publish_v2(
+    session: Session, settings: Settings, timestamp: datetime
+) -> StageOutcome:
+    """Publish the v2 run that /api/v2/* actually reads.
+
+    The v1 stages above populate the grid/forecast/alert tables, but the web
+    app's v2 endpoints read the newest row of ``prediction_run`` for the
+    region (see app.services.prediction_queries). Without this stage a
+    scheduled run would update v1 tables and leave the web app reading a stale
+    or absent v2 run — this is the link that closes that gap.
+
+    Demo mode publishes a complete, deterministic India run built straight
+    from the committed scenario, so an empty database becomes fully readable
+    (population and exposure non-null) with no external API. Live mode
+    publishes from the state this run just persisted and **fails closed**:
+    with no observed current PM2.5 it reports a failed stage instead of
+    substituting synthetic data, keeping the failure visible and labelled.
+    """
+    if settings.demo_mode:
+        outcome: PublicationOutcome = publish_from_demo(
+            session,
+            timestamp=timestamp,
+            region=INDIA_REGION,
+            profile=INDIA_DEMO_PROFILE,
+            resolution=settings.h3_resolution,
+        )
+    else:
+        feature_run_id = f"features-{timestamp.strftime('%Y%m%dT%H%M%SZ')}"
+        run_id = f"prediction-{feature_run_id}"
+        outcome = publish_from_state(
+            session,
+            timestamp=timestamp,
+            settings=settings,
+            region=INDIA_REGION,
+            mode=DataMode.LIVE,
+            feature_run_id=feature_run_id,
+            run_id=run_id,
+        )
+
+    if not outcome.succeeded:
+        logger.error("v2 publication failed: %s", outcome.summary)
+    return StageOutcome("publish_v2", outcome.succeeded, outcome.summary)
+
+
 async def run_pipeline(bbox: BoundingBox, *, timestamp: datetime) -> PipelineReport:
     """Runs every stage once, in order, against one DB session. Never
     raises for a stage-level failure (see module docstring) — only an
@@ -316,6 +368,8 @@ async def run_pipeline(bbox: BoundingBox, *, timestamp: datetime) -> PipelineRep
         forecast_outcome, forecasts = _forecast(session, settings, timestamp)
         stages.append(forecast_outcome)
         stages.append(_generate_alerts(session, settings, timestamp, forecasts))
+        # Publication runs last: it reads the state every stage above wrote.
+        stages.append(_publish_v2(session, settings, timestamp))
     finally:
         session.close()
 

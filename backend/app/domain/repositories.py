@@ -11,8 +11,16 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol
 
+from app.domain.citizen_intake import ReportEvidence
 from app.domain.features import FeatureSnapshot
 from app.domain.environmental_observations import FireHotspot, TrafficObservation
+from app.domain.incidents import (
+    Incident,
+    IncidentEvent,
+    IncidentSourceType,
+    IncidentStatus,
+    ResponderRole,
+)
 from app.domain.prediction import PredictionResult, PredictionRun
 from app.domain.scenario import DatasetVersion, IngestionRun
 from app.domain.training import ModelVersion
@@ -139,6 +147,53 @@ class FireReportRepository(Protocol):
         ...
 
     def list_active(self, *, since: datetime) -> list[FireReport]: ...
+
+
+class ReportEvidenceRepository(Protocol):
+    def save(self, evidence: ReportEvidence) -> ReportEvidence:
+        """Store an evidence record and return it (with its database id).
+
+        At most one record exists per report. Idempotent on
+        ``(report_id, client_report_id)`` when the client id is given: a
+        resubmission with the same id returns the original row unchanged.
+        Raises ``ValueError`` when the same id is reused with different
+        content (a genuine conflict, not a retry).
+        """
+        ...
+
+    def get_for_report(self, report_id: int) -> ReportEvidence | None: ...
+
+
+class IncidentRepository(Protocol):
+    def create(self, incident: Incident, event: IncidentEvent) -> Incident:
+        """Store a new incident and its `created` history event atomically.
+
+        The (source_type, source_id) pair is unique: a second create for the
+        same source must not add a row. Returns the stored incident.
+        """
+        ...
+
+    def get(self, incident_id: int) -> Incident | None: ...
+
+    def get_by_source(
+        self, source_type: IncidentSourceType, source_id: int
+    ) -> Incident | None: ...
+
+    def update(self, incident: Incident, event: IncidentEvent) -> Incident:
+        """Persist a status/assignment change and append exactly one event,
+        atomically. Never edits or deletes prior events."""
+        ...
+
+    def list(
+        self,
+        *,
+        status: IncidentStatus | None = None,
+        role: ResponderRole | None = None,
+    ) -> list[Incident]: ...
+
+    def history(self, incident_id: int) -> list[IncidentEvent]:
+        """All events for an incident, oldest first."""
+        ...
 
 
 class FireHotspotRepository(Protocol):

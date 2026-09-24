@@ -13,34 +13,62 @@ if os.environ.get("RUN_DB_TESTS") != "1":
     os.environ.setdefault("POSTGRES_PASSWORD", "test")
     os.environ.setdefault("POSTGRES_DB", "test")
 
+# The incident workflow refuses writes unless a simulator key is configured;
+# tests exercise both the configured and unconfigured cases.
+os.environ.setdefault("SIMULATOR_API_KEY", "test-simulator-key")
+
 from app.api.deps import (  # noqa: E402
     get_alert_service,
     get_cell_service,
+    get_citizen_intake_service,
+    get_citizen_media_store,
+    get_federation_status_service,
     get_fire_hotspot_service,
     get_fire_report_service,
     get_grid_service,
+    get_incident_service,
     get_sensor_service,
     get_weather_service,
 )
+from app.core.config import get_settings  # noqa: E402
 from app.main import create_app  # noqa: E402
 from app.services.alerts import AlertService  # noqa: E402
 from app.services.cells import CellService  # noqa: E402
+from app.services.citizen_intake import CitizenIntakeService  # noqa: E402
+from app.services.federation import FederationStatusReader  # noqa: E402
 from app.services.fires import FireHotspotService  # noqa: E402
 from app.services.grid import GridService  # noqa: E402
+from app.services.incidents import IncidentService  # noqa: E402
 from app.services.reports import FireReportService  # noqa: E402
 from app.services.sensors import SensorService  # noqa: E402
 from app.services.weather import WeatherService  # noqa: E402
 from tests.fakes import (  # noqa: E402
     FakeAlertRepository,
+    FakeFederationRepository,
     FakeFireHotspotRepository,
     FakeFireReportRepository,
     FakeForecastRepository,
     FakeGridStateRepository,
+    FakeIncidentRepository,
+    FakeReportEvidenceRepository,
     FakeSensorReadingRepository,
     FakeWeatherReadingRepository,
 )
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
+
+
+class InMemoryMediaStore:
+    """A MediaStore backed by a dict — no filesystem, for API tests."""
+
+    def __init__(self) -> None:
+        self.blobs: dict[str, tuple[bytes, str]] = {}
+
+    def put(self, *, key: str, content: bytes, content_type: str) -> None:
+        self.blobs[key] = (content, content_type)
+
+    def get(self, *, key: str) -> tuple[bytes, str] | None:
+        return self.blobs.get(key)
 
 
 @pytest.fixture
@@ -60,6 +88,10 @@ class FakeRepos:
         self.alert = FakeAlertRepository()
         self.fire = FakeFireReportRepository()
         self.fire_hotspots = FakeFireHotspotRepository()
+        self.evidence = FakeReportEvidenceRepository()
+        self.media = InMemoryMediaStore()
+        self.incidents = FakeIncidentRepository()
+        self.federation = FakeFederationRepository()
 
 
 @pytest.fixture
@@ -85,6 +117,21 @@ def api_client(fake_repos: FakeRepos) -> TestClient:
     app.dependency_overrides[get_fire_report_service] = lambda: FireReportService(fake_repos.fire)
     app.dependency_overrides[get_fire_hotspot_service] = lambda: FireHotspotService(
         fake_repos.fire_hotspots
+    )
+    app.dependency_overrides[get_citizen_media_store] = lambda: fake_repos.media
+    app.dependency_overrides[get_citizen_intake_service] = lambda: CitizenIntakeService(
+        evidence_repository=fake_repos.evidence,
+        report_repository=fake_repos.fire,
+        media_store=fake_repos.media,
+        settings=get_settings(),
+    )
+    app.dependency_overrides[get_incident_service] = lambda: IncidentService(
+        incident_repository=fake_repos.incidents,
+        alert_repository=fake_repos.alert,
+        report_repository=fake_repos.fire,
+    )
+    app.dependency_overrides[get_federation_status_service] = lambda: FederationStatusReader(
+        fake_repos.federation
     )
     return TestClient(app)
 

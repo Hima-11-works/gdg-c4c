@@ -84,6 +84,11 @@ from app.services.prediction_publication import (
     PredictionPublicationService,
     assert_live_snapshots_available,
 )
+from app.services.federation import run_federation_demo
+from app.services.prediction_queries import (
+    DEFAULT_EXPOSURE_THRESHOLD_PM25,
+    PredictionQueryService,
+)
 from app.services.training_data import (
     export_training_dataset,
     generate_synthetic_training_dataset,
@@ -756,6 +761,105 @@ async def _run_prediction_publish(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _run_verify_publication(args: argparse.Namespace) -> int:
+    """Read the newest published v2 run exactly as /api/v2/* does, and report
+    what the web app will see. Non-zero exit if nothing resolves, so a
+    scheduled pipeline that failed to publish turns the workflow red.
+
+    Deliberately read-only and mode-agnostic: in demo mode it also prints the
+    population/exposure coverage (which should be non-null); in live mode a
+    degraded run is still reported honestly rather than treated as a failure
+    of this check — the pipeline run's own exit code already flags a failed
+    publication stage.
+    """
+    region = args.region
+    session = get_session_factory()()
+    try:
+        repository = SqlPredictionPublicationRepository(session)
+        publisher = PredictionQueryService(repository, region=region)
+        try:
+            run = publisher.run(args.run_id)
+        except ValueError as exc:
+            print(f"No published v2 run for region {region!r}: {exc}", file=sys.stderr)
+            return 1
+
+        horizons = sorted(publisher.horizons(run))
+        cells = {result.h3_cell for result in repository.list_results(run.run_id)}
+        print(
+            f"Published run resolved: run_id={run.run_id} region={run.region} "
+            f"mode={run.mode.value} cells={len(cells)} horizons={horizons}"
+        )
+        print(
+            f"  generated_at={run.generated_at.isoformat()} "
+            f"feature_run_id={run.feature_run_id} scenario_id={run.scenario_id or '-'}"
+        )
+
+        # Exposure over native-resolution cells, exactly as the route computes.
+        views = publisher.aggregate(
+            run,
+            target_cells=sorted(cells),
+            resolution=publisher.native_resolution,
+            horizon=0,
+            threshold_pm25=DEFAULT_EXPOSURE_THRESHOLD_PM25,
+        )
+        covered_population = sum(view.exposure.covered_population for view in views)
+        known = [
+            view for view in views if view.exposure.residents_above_threshold is not None
+        ]
+        print(
+            f"  exposure: covered_population={covered_population} "
+            f"cells_with_residents_above_threshold={len(known)}"
+        )
+        return 0
+    finally:
+        session.close()
+
+
+async def _run_federation_demo(args: argparse.Namespace) -> int:
+    """Run the two-region federation demonstration end to end.
+
+    Deterministic: the run id, partition assignment, aggregate artifact and
+    all metrics are functions of the inputs alone. With `--no-db` nothing is
+    persisted; otherwise the run, its participants and one model_version row
+    per horizon are recorded (idempotently) so the status endpoint reports it.
+    """
+    payload = run_federation_demo(
+        out_dir=Path(args.out_dir),
+        hours=args.hours,
+        station_count=args.station_count,
+        run_id=args.run_id,
+        persist=not args.no_db,
+    )
+    exchange = payload["raw_rows_exchanged_to_aggregator"]
+    print(
+        f"Federation demonstration: run_id={payload['run_id']} "
+        f"status={payload['status']} participants={payload['participant_count']} "
+        f"raw_rows_sent={exchange}"
+    )
+    for participant in payload["participants"]:
+        print(
+            f"  {participant['participant_id']} ({participant['region_label']}): "
+            f"train={participant['train_count']} heldout={participant['test_count']} "
+            f"update_sha256={participant['update_sha256'][:12]}…"
+        )
+    print(f"aggregate: {payload['aggregate']['artifact_path']}")
+    evaluation = payload["evaluation"]
+    if evaluation.get("horizons"):
+        for horizon in evaluation["horizons"]:
+            print(
+                f"  evaluation h={horizon['horizon_hours']}: "
+                f"mae={horizon['mae_ugm3']:.3f} "
+                f"baseline_mae={horizon['baseline_mae_ugm3']:.3f} "
+                f"n={horizon['heldout_count']} "
+                f"(synthetic-only, not real-world evidence)"
+            )
+    else:
+        print(f"  evaluation: {evaluation['status']} — {evaluation['reason']}")
+    print("  limitations: no privacy guarantee; not a nationwide deployment")
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0 if payload["status"] == "succeeded" else 1
+
+
 def _add_demo_snapshot_parser(subparsers: argparse._SubParsersAction, command: str) -> None:
     demo_parser = subparsers.add_parser(
         command,
@@ -980,6 +1084,32 @@ def main(argv: list[str] | None = None) -> int:
     )
     monitor_parser.add_argument("--out", default="model-monitor-report.json")
     monitor_parser.set_defaults(func=_run_model_monitor)
+
+    verify_parser = subparsers.add_parser(
+        "verify-publication",
+        help="Read the newest published v2 run the way /api/v2/* does (CI check).",
+    )
+    verify_parser.add_argument("--region", default="india")
+    verify_parser.add_argument("--run-id", default=None)
+    verify_parser.set_defaults(func=_run_verify_publication)
+
+    federation_parser = subparsers.add_parser(
+        "federation-demo",
+        help=(
+            "Two-region federated-training demonstration: train two partitions "
+            "locally, exchange update payloads only, aggregate, and evaluate."
+        ),
+    )
+    federation_parser.add_argument("--out-dir", default="var/federation")
+    federation_parser.add_argument("--hours", type=int, default=60)
+    federation_parser.add_argument("--station-count", type=int, default=6)
+    federation_parser.add_argument("--run-id", default=None)
+    federation_parser.add_argument(
+        "--no-db",
+        action="store_true",
+        help="Produce the exchange/aggregate artifacts without touching the database.",
+    )
+    federation_parser.set_defaults(func=_run_federation_demo)
 
     args = parser.parse_args(argv)
     logging.basicConfig(level=get_settings().log_level)

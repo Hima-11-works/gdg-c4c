@@ -334,6 +334,40 @@ class Settings(BaseSettings):
     # negative vegetation weight is the only sink, fire is pure pressure.
     pdi_fire_pressure_weight: float = Field(default=0.25, ge=0)
 
+    # --- Citizen intake evidence (photo + local sensor reading) ---
+    # A citizen-submitted photo and/or sensor value attached to a fire
+    # report. See docs/api/citizen-intake.md. Citizen readings are stored
+    # ONLY here and are never written to sensor_reading or fed to the
+    # pollution model - they are unverified evidence, not observations.
+    # Maximum accepted photo size, bytes. 5 MiB is enough for a phone photo
+    # after client-side downscaling and keeps a request body bounded.
+    citizen_media_max_bytes: int = Field(default=5 * 1024 * 1024, gt=0)
+    # Comma-separated allow-list of accepted photo MIME types. Anything else
+    # is rejected at the boundary rather than stored and hoped about.
+    citizen_media_allowed_types: str = Field(
+        default="image/jpeg,image/png,image/webp"
+    )
+    # Directory the filesystem media store writes into, when enabled. Empty
+    # means no store is configured and the photo field is refused with 503,
+    # rather than silently dropping bytes.
+    citizen_media_dir: str = Field(default="var/citizen_media")
+    # Oldest accepted citizen sensor measured_at, hours. Older than this is
+    # rejected as stale rather than stored as if current.
+    citizen_sensor_max_age_hours: float = Field(default=72.0, gt=0)
+    # Allowed clock skew into the future for a sensor measured_at, seconds -
+    # a device clock a little ahead is tolerated, a fabricated future time is
+    # not.
+    citizen_sensor_max_future_skew_seconds: int = Field(default=300, ge=0)
+    # Comma-separated allow-list of accepted citizen sensor pollutants.
+    citizen_sensor_pollutants: str = Field(default="pm25,pm10")
+
+    # --- Incident workflow (fire-department simulator) ---
+    # Writes to /api/v1/incidents require this key in the X-Simulator-Key
+    # header, so anonymous public changes are impossible. When unset, ALL
+    # incident writes are refused with 503 (the workflow is off, not
+    # silently unprotected). Reads need no key. See docs/api/incidents.md.
+    simulator_api_key: SecretStr | None = None
+
     @model_validator(mode="after")
     def _check_weather_resolution_not_finer_than_grid(self) -> "Settings":
         if self.weather_h3_resolution > self.h3_resolution:
@@ -356,6 +390,24 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def citizen_media_allowed_type_list(self) -> list[str]:
+        """Normalized (lower-case) accepted photo MIME types."""
+        return [
+            value.strip().lower()
+            for value in self.citizen_media_allowed_types.split(",")
+            if value.strip()
+        ]
+
+    @property
+    def citizen_sensor_pollutant_list(self) -> list[str]:
+        """Normalized (lower-case) accepted citizen sensor pollutants."""
+        return [
+            value.strip().lower()
+            for value in self.citizen_sensor_pollutants.split(",")
+            if value.strip()
+        ]
 
     @property
     def database_url(self) -> URL:
