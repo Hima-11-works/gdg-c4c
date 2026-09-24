@@ -166,6 +166,12 @@ class Settings(BaseSettings):
     # contacted unless a separate provider is deliberately added.
     traffic_stale_after_hours: float = Field(default=2.0, gt=0)
 
+    # Weather observations for the corridor evaluation are the *labels*: station
+    # readings in a forecast's target window, which post-date the forecast's
+    # issue time. Sources listed here can never be scored as real observations
+    # (the demo scenario provider, for one), so a synthetic metric can never be
+    # reported as real accuracy.
+    synthetic_label_sources: str = "scenario,demo,demo-scenario"
     # --- Satellite raster tile proxy (GET /api/v1/tiles/*, app.services.tiles) ---
     # The web map's raster overlays used to point straight at NASA GIBS and at
     # a NO2 WMS endpoint configured in the browser. They now come through the

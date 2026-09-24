@@ -1,0 +1,36 @@
+{
+  "name": "delhi-kanpur-insufficient-labels",
+  "why": "The shipped live deployment has no station readings inside the Delhi-Kanpur corridor's forecast target windows. This fixture records that case so the insufficient-data path is exercised and its wording pinned, rather than being discovered in production.",
+  "corridor_id": "delhi-kanpur",
+  "run": {
+    "run_id": "prediction-features-20260924T0600Z",
+    "mode": "live",
+    "issued_at": "2026-09-24T06:00:00+00:00",
+    "synthetic_results": false,
+    "horizons": [
+      {"horizon_hours": 1, "issued_at": "2026-09-24T06:00:00+00:00", "valid_at": "2026-09-24T07:00:00+00:00"},
+      {"horizon_hours": 3, "issued_at": "2026-09-24T06:00:00+00:00", "valid_at": "2026-09-24T09:00:00+00:00"},
+      {"horizon_hours": 6, "issued_at": "2026-09-24T06:00:00+00:00", "valid_at": "2026-09-24T12:00:00+00:00"}
+    ],
+    "corridor_cells": 24,
+    "cells_with_forecast": 24
+  },
+  "labels": {
+    "pollutant": "pm25",
+    "window": "+/- 1 hour around each horizon's valid_at",
+    "observations_in_corridor_windows": 0,
+    "candidate_readings_checked": 0,
+    "nearest_station_distance_km": 61.4,
+    "note": "The nearest CPCB/OpenAQ station that could serve this axis is outside the corridor cells at the configured H3 resolution."
+  },
+  "expected": {
+    "verdict": "insufficient_data",
+    "usable_as_real_world_evidence": false,
+    "label_provenance": "none",
+    "reasons_include": [
+      "no pm2.5 station observation fell in the target window",
+      "below the 5-label minimum"
+    ],
+    "exit_code": 2
+  }
+}

@@ -34,6 +34,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import get_settings
 from app.db.repositories import (
@@ -50,6 +51,7 @@ from app.db.repositories import (
     SqlWeatherReadingRepository,
 )
 from app.db.session import get_session_factory
+from app.domain.corridor import get_corridor, list_corridors
 from app.domain.features import DataMode, WeatherFeature
 from app.domain.training import ModelStatus, ModelVersion
 from app.domain.types import BoundingBox
@@ -83,6 +85,13 @@ from app.services.model_training import (
 from app.services.prediction_publication import (
     PredictionPublicationService,
     assert_live_snapshots_available,
+)
+from app.services.corridor_evaluation import (
+    DEFAULT_MIN_LABELS,
+    EventNotFoundError,
+    evaluate_event,
+    event_for_run,
+    event_peak,
 )
 from app.services.training_data import (
     export_training_dataset,
@@ -798,6 +807,161 @@ async def _run_expire_reports(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _run_corridor_evaluate(args: argparse.Namespace) -> int:
+    """Score a named corridor's published forecast against real stations.
+
+    Prints (and optionally writes) one report: the event, its horizons and
+    source times, the metrics per horizon and geography with their sample
+    counts, and the coverage. When the real labels are not there, the report is
+    an explicit insufficient-data result naming the gap — the command exits 2,
+    distinct from a failure (1), because "not enough real data" is an answer,
+    not a crash, and never a synthetic number dressed up as accuracy.
+    """
+    settings = get_settings()
+    corridor = get_corridor(args.corridor)
+    if corridor is None:
+        print(f"No corridor with id {args.corridor!r}.", file=sys.stderr)
+        print(f"Known corridors: {', '.join(c.corridor_id for c in list_corridors())}", file=sys.stderr)
+        return 1
+    horizons = (
+        tuple(float(value) for value in args.horizons.split(",") if value.strip())
+        if args.horizons
+        else None
+    )
+    session = get_session_factory()()
+    try:
+        try:
+            event, run, results = event_for_run(
+                session, corridor=corridor, run_id=args.run_id, horizons=horizons
+            )
+        except EventNotFoundError as exc:
+            print(f"Corridor evaluation unavailable: {exc}", file=sys.stderr)
+            return 1
+        except SQLAlchemyError as exc:
+            # An unreachable database is a clear answer, not a crash: a corridor
+            # event is built from a published v2 run, so there is nothing to
+            # score without one.
+            print(
+                f"Corridor evaluation unavailable: the database is unreachable ({exc!r}). "
+                "A corridor event is built from a published v2 run, so there is nothing "
+                "to score without it.",
+                file=sys.stderr,
+            )
+            return 1
+        evaluation = evaluate_event(
+            session,
+            corridor=corridor,
+            event=event,
+            results=results,
+            settings=settings,
+            min_labels=args.min_labels,
+            high_pollution_threshold_ugm3=args.threshold,
+            require_unused_stations=args.require_unused_stations,
+        )
+        peak_value, peak_horizon = event_peak(results)
+    finally:
+        session.close()
+
+    report = {
+        "corridor": {
+            "corridor_id": corridor.corridor_id,
+            "name": corridor.name,
+            "kind": corridor.kind.value,
+            "geometry_source": corridor.geometry_source.value,
+            "geometry_description": corridor.describe_geometry(),
+        },
+        "event": {
+            "event_id": event.event_id,
+            "run_id": run.run_id,
+            "run_mode": run.mode.value,
+            "run_synthetic": evaluation.event.run_synthetic,
+            "issued_at": event.issued_at.isoformat(),
+            "horizons": [
+                {
+                    "horizon_hours": point.horizon_hours,
+                    "issued_at": point.issued_at.isoformat(),
+                    "valid_at": point.valid_at.isoformat(),
+                }
+                for point in event.horizons
+            ],
+            "cells": len(event.cells),
+            "peak_predicted_ugm3": peak_value,
+            "peak_horizon_hours": peak_horizon,
+        },
+        "evaluation": {
+            "verdict": evaluation.verdict.value,
+            "usable_as_real_world_evidence": evaluation.is_usable_as_real_world_evidence,
+            "label_provenance": evaluation.label_provenance,
+            "label_count": evaluation.event.label_count,
+            "label_sources": list(evaluation.event.label_sources),
+            "min_labels": evaluation.min_labels,
+            "high_pollution_threshold_ugm3": evaluation.high_pollution_threshold_ugm3,
+            "reasons": list(evaluation.reasons),
+            "coverage": evaluation.coverage.to_dict(),
+            "slices": [item.to_dict() for item in evaluation.slices],
+        },
+    }
+
+    print(f"Corridor: {corridor.name} ({corridor.corridor_id})")
+    print(f"  geometry: {evaluation_label_geometry(corridor)}")
+    print(f"  event: {event.event_id}")
+    print(f"  run: {run.run_id} (mode={run.mode.value}, synthetic={evaluation.event.run_synthetic})")
+    print(
+        f"  issued_at={event.issued_at.isoformat()} "
+        f"horizons={[point.horizon_hours for point in event.horizons]} "
+        f"peak={peak_value} µg/m³ at +{peak_horizon}h"
+    )
+    print(
+        f"  verdict: {evaluation.verdict.value} "
+        f"(usable as real-world evidence: {evaluation.is_usable_as_real_world_evidence})"
+    )
+    for reason in evaluation.reasons:
+        print(f"    - {reason}")
+    print(
+        f"  labels: {evaluation.event.label_count} observation(s) "
+        f"from {', '.join(evaluation.event.label_sources) or 'no source'}"
+    )
+    print("  coverage:")
+    for name, value in evaluation.coverage.to_dict().items():
+        print(f"    {name}={value}")
+    if evaluation.slices:
+        print("  metrics by horizon x geography (only sufficient slices are quoted):")
+        for item in evaluation.slices:
+            if not item.sufficient:
+                print(
+                    f"    +{item.horizon_hours:g}h {item.geography}: INSUFFICIENT "
+                    f"({item.note})"
+                )
+                continue
+            print(
+                f"    +{item.horizon_hours:g}h {item.geography}: "
+                f"n={item.pairs} mae={_fmt(item.mae_ugm3)} rmse={_fmt(item.rmse_ugm3)} "
+                f"bias={_fmt(item.bias_ugm3)} "
+                f"recall@{item.high_pollution_threshold_ugm3:g}="
+                f"{_fmt(item.high_pollution_recall)} "
+                f"precision={_fmt(item.high_pollution_precision)}"
+                + (f"  [{item.note}]" if item.note else "")
+            )
+    else:
+        print("  metrics: none — no slice had enough real labels")
+
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+        print(f"  report written to {out_path}")
+
+    return 0 if evaluation.is_usable_as_real_world_evidence else 2
+
+
+def evaluation_label_geometry(corridor) -> str:
+    return f"{corridor.geometry_source.value} — {corridor.geometry_note}"
+
+
+def _fmt(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.2f}"
+
+
 def _add_demo_snapshot_parser(subparsers: argparse._SubParsersAction, command: str) -> None:
     demo_parser = subparsers.add_parser(
         command,
@@ -1046,6 +1210,37 @@ def main(argv: list[str] | None = None) -> int:
         "many rows were swept.",
     )
     media_parser.set_defaults(func=_run_verify_media_storage)
+
+    corridor_parser = subparsers.add_parser(
+        "corridor-evaluate",
+        help=(
+            "Evaluate a named corridor's published forecast against withheld real "
+            "station observations (exit 2 when there is not enough real data)."
+        ),
+    )
+    corridor_parser.add_argument(
+        "--corridor", default="delhi-kanpur", help="Corridor id (see /api/v1/corridors)."
+    )
+    corridor_parser.add_argument("--run-id", default=None, help="Published run to score.")
+    corridor_parser.add_argument(
+        "--horizons", default=None, help="Comma-separated horizon hours, e.g. 1,3,6."
+    )
+    corridor_parser.add_argument(
+        "--min-labels", type=int, default=DEFAULT_MIN_LABELS, help="Minimum labels per slice."
+    )
+    corridor_parser.add_argument(
+        "--threshold", type=float, default=None, help="High-pollution threshold (µg/m³)."
+    )
+    corridor_parser.add_argument(
+        "--require-unused-stations",
+        action="store_true",
+        help=(
+            "Require stations that did not contribute to the estimate. Not available "
+            "yet: reported as a data gap rather than approximated."
+        ),
+    )
+    corridor_parser.add_argument("--out", default=None, help="Write the JSON report here.")
+    corridor_parser.set_defaults(func=_run_corridor_evaluate)
 
     args = parser.parse_args(argv)
     logging.basicConfig(level=get_settings().log_level)
