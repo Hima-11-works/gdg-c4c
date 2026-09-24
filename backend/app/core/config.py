@@ -135,6 +135,13 @@ class Settings(BaseSettings):
     # contacted unless a separate provider is deliberately added.
     traffic_stale_after_hours: float = Field(default=2.0, gt=0)
 
+    # Weather observations for the corridor evaluation are the *labels*: station
+    # readings in a forecast's target window, which post-date the forecast's
+    # issue time. Sources listed here can never be scored as real observations
+    # (the demo scenario provider, for one), so a synthetic metric can never be
+    # reported as real accuracy.
+    synthetic_label_sources: str = "scenario,demo,demo-scenario"
+
     # --- Live feature inputs for the v2 publication (docs/api/publication.md) ---
     # Versioned static cell features (population, road lengths, land cover).
     # A preprocessed, licensed artifact is imported by the `static_features`
