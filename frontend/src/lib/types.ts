@@ -492,6 +492,113 @@ export interface IncidentCreate {
   evidence_report_ids?: number[]
 }
 
+// --- corridor pollution events (docs/api/corridor-evaluation.md) ---
+//
+// A corridor event is a published v2 run evaluated over a named corridor's
+// cells at a set of horizons. The contract's governing rule: a forecast may only
+// be reported as accurate against real, withheld station observations. When those
+// observations are missing the answer is an explicit insufficient-data result,
+// never a synthetic number presented as accuracy.
+
+export interface CorridorEndpoint {
+  label: string
+  latitude: number
+  longitude: number
+}
+
+export interface CorridorCatalogEntry {
+  corridor_id: string
+  name: string
+  kind: string
+  region: string
+  /** `illustrative` until a sourced route dataset replaces the straight line. */
+  geometry_source: string
+  geometry_note: string
+  geometry_description: string
+  h3_resolution: number
+  cell_count: number
+  endpoints: CorridorEndpoint[]
+  notes: string
+}
+
+export interface CorridorHorizon {
+  horizon_hours: number
+  /** The run's generation time — when the forecast was issued. */
+  issued_at: string
+  /** The hour the forecast predicts. */
+  valid_at: string
+}
+
+export interface CorridorEvent {
+  /** `corridor:<corridor_id>:<run_id>:h<digest>` — stable for a run + horizon set. */
+  event_id: string
+  corridor_id: string
+  corridor_name: string
+  /** The published run this event was evaluated over. */
+  run_id: string
+  run_mode: DataMode
+  run_synthetic: boolean
+  issued_at: string
+  horizons: CorridorHorizon[]
+  cell_count: number
+  cells: string[]
+  /** Highest forecast PM2.5 in the corridor — a model prediction, not evidence. */
+  peak_predicted_ugm3: number | null
+  peak_horizon_hours: number | null
+  /** How many station observations were found, and from where. */
+  label_count: number
+  label_sources: string[]
+}
+
+export interface CorridorSlice {
+  horizon_hours: number
+  geography: string
+  /** Scored (forecast, observed) pairs. */
+  pairs: number
+  station_count: number
+  mae_ugm3: number | null
+  rmse_ugm3: number | null
+  bias_ugm3: number | null
+  high_pollution_threshold_ugm3: number
+  high_pollution_observed: number
+  /** Null — not 0 — when no observation crossed the threshold. */
+  high_pollution_recall: number | null
+  high_pollution_precision: number | null
+  /** False means the metrics above are null and must not be quoted. */
+  sufficient: boolean
+  note: string | null
+}
+
+export interface CorridorCoverage {
+  corridor_cells: number
+  cells_with_forecast: number
+  cells_with_labels: number
+  cells_scored: number
+  requested_horizons: number
+  horizons_scored: number
+  fraction_cells_scored: number
+  fraction_horizons_scored: number
+}
+
+export interface CorridorEvaluation {
+  /** `evaluated` only when every requested horizon × slice had enough real labels. */
+  verdict: 'evaluated' | 'insufficient_data'
+  /** True only for `evaluated`. */
+  usable_as_real_world_evidence: boolean
+  label_provenance: string
+  reasons: string[]
+  min_labels: number
+  high_pollution_threshold_ugm3: number
+  coverage: CorridorCoverage
+  slices: CorridorSlice[]
+  evidence: CorridorSlice[]
+}
+
+export interface CorridorEventBundle {
+  event: CorridorEvent
+  evaluation: CorridorEvaluation
+}
+
 // --- federation demonstration (GET /api/v1/federation/status) ---
 //
 // The two-region federated-training *demonstration*: two disjoint partitions of

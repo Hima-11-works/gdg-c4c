@@ -325,6 +325,73 @@ empty states and the banners cannot drift apart.
 The measure applies to every rendering path: hex cells, the smooth raster, and
 the contrast-mode range contours. Forecast playback switches the value too.
 
+## Corridor events and what can honestly be said about their accuracy
+
+**Corridor event…** (top left) opens a named corridor, its geometry, and the
+evaluation of the forecast published over it. The governing rule, from
+`docs/api/corridor-evaluation.md`: **a forecast may only be reported as accurate
+against real, withheld station observations.** When those are missing, the
+answer is an explicit insufficient-data result — never a synthetic number
+presented as real accuracy.
+
+Three things stay visibly apart, each labelled where it appears:
+
+| Label | What it is |
+| --- | --- |
+| **Measured evidence** | Station observations in the target window (`valid_at ± 1h`). A label always post-dates the forecast's issue time — that is what "withheld" means. |
+| **Model prediction** | The run's forecast PM2.5, including the corridor's `peak_predicted_ugm3` and its horizon. |
+| **Illustrative geometry** | The cells themselves: a straight line between two published city coordinates, **not** a road route. The backend says so in every response and the panel repeats it; the map draws the axis **dashed** so it cannot be traced as NH-48/NH-44. |
+
+The panel shows the event id, the affected geography, the forecast timing
+(issued/valid per horizon), the source observations with their count and
+provenance, the uncertainty (`coverage`: cells and horizons scored), and the
+evaluation.
+
+### Insufficient data is a result, not a failure
+
+When the backend returns `verdict: insufficient_data`, the panel says so in
+those words — **"Insufficient data — no performance claim can be made"** — names
+every reason it gives, and shows **no metric at all**:
+
+> No metric is shown. Every slice in this evaluation is below the 5-observation
+> minimum, so each one reports its metrics as null. A number computed from too
+> few observations would describe the sample, not the corridor.
+
+Metrics are tabulated only when `verdict` is `evaluated` *and* the slice itself
+says `sufficient`. Slices that do not qualify are listed in a collapsed section
+with their counts and are deliberately not tabulated — a null recall stays null
+rather than becoming 0%, because "no positives" is not "0% recall".
+
+### An event is pinned to the publication on screen
+
+Lookups carry `run_id`, and if the event that comes back belongs to a different
+publication the panel refuses to merge the two:
+
+> **Different publication.** This event is from run `prediction-features-…`, while
+> the dashboard is showing `demo-stale-…`. Nothing below describes the run on
+> screen, and its cells are not drawn on the map.
+
+That guard was added because the demonstration caught the dashboard rendering
+two publications on one screen: the pin said `demo-stale-…` while the detail
+showed `prediction-features-…`.
+
+### What could be demonstrated here, and what could not
+
+| Case | Status |
+| --- | --- |
+| The **catalog** (corridor, endpoints, cell count, `geometry_source`) | **Live** — `GET /api/v1/corridors` |
+| **No event for the run on screen** | **Live** — a real `404 not_found`: *"published run … has no results in the Delhi–Kanpur interstate corridor"* |
+| **Insufficient data** | Rendered from the backend's **own committed fixture** (`tests/fixtures/corridors/insufficient_labels.json`), which records the shipped live deployment's actual case: 0 observations in the corridor windows, nearest usable station 61.4 km away |
+| **A corridor event that scored against real observations** | **Not producible here, and not faked** |
+
+The last one cannot be produced in this environment: no published run covers the
+Delhi–Kanpur axis (every demo profile is a Delhi-centred disk), and real station
+readings in those windows need an `OPENAQ_API_KEY`. Publishing a run over the
+corridor cells with values copied from Delhi cells would put fabricated numbers
+behind a real place name, so it was not done. The `evaluated` branch of the panel
+is therefore **unexercised** here — the only case that exists is the one the
+contract says must not become a performance claim.
+
 ## The federation pill
 
 `GET /api/v1/federation/status`, public, no key. Three states are kept apart on

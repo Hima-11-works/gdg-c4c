@@ -15,7 +15,9 @@ import {
 } from '../lib/forecastFrames'
 import { lodKey, lodQueryFor, weatherResolutionForLod } from '../lib/lod'
 import { runFactsFromGrid, staleness } from '../lib/runFacts'
+import { CorridorPanel } from './CorridorPanel'
 import { useMapUi } from '../state/MapUiContext'
+import type { CorridorCatalogEntry, CorridorEventBundle } from '../lib/types'
 import { AlertsPanel } from './AlertsPanel'
 import { CellDetailPanel } from './CellDetailPanel'
 import { DataQualityNotice } from './DataQualityNotice'
@@ -41,11 +43,18 @@ const FALLBACK_SUPPORTED_HOURS = [1, 3, 6]
 const FIRMS_POLL_INTERVAL_MS = 10 * 60 * 1000
 
 export function MapPage() {
-  const { state } = useMapUi()
+  const { state, dispatch } = useMapUi()
   const { lod, bbox, forecastMinutes } = state
   // The submit form is open/closed here so its map-centre location and the
   // reports list it refetches both come from this component's data.
   const [reportOpen, setReportOpen] = useState(false)
+  // The corridor selected in the corridor view, and the event it loaded. Both
+  // live here rather than inside the panel because the map draws them: the
+  // selection as an illustrative axis, and the event's own cells as the
+  // markers. An event that fails to load clears the cells, so the map cannot
+  // keep showing an evaluation the panel has just said does not exist.
+  const [corridor, setCorridor] = useState<CorridorCatalogEntry | null>(null)
+  const [corridorEvent, setCorridorEvent] = useState<CorridorEventBundle | null>(null)
 
   // A report is filed where the user is looking: the viewport centre. The
   // backend snaps it to an H3 cell and returns that in the response.
@@ -231,19 +240,30 @@ export function MapPage() {
         weather={weather.resource}
         citizenReports={reports.resource}
         activeFires={activeFires.resource}
+        corridor={corridor}
+        corridorCells={corridorEvent?.event.cells ?? null}
       />
 
       <div className="overlay overlay-top-left">
         <Legend />
-        {reportCenter !== null && (
+        <div className="overlay-buttons">
           <button
             type="button"
             className="panel report-open"
-            onClick={() => setReportOpen(true)}
+            onClick={() => dispatch({ type: 'TOGGLE_CORRIDOR_PANEL' })}
           >
-            Report a fire
+            Corridor event…
           </button>
-        )}
+          {reportCenter !== null && (
+            <button
+              type="button"
+              className="panel report-open"
+              onClick={() => setReportOpen(true)}
+            >
+              Report a fire
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="overlay overlay-top-right">
@@ -272,6 +292,15 @@ export function MapPage() {
       </div>
 
       <CellDetailPanel publishedRunId={publishedRunId} citizenReports={reports.resource} />
+
+      <CorridorPanel
+        runId={publishedRunId}
+        onSelect={(entry) => {
+          setCorridor(entry)
+          setCorridorEvent(null)
+        }}
+        onEventLoaded={(bundle) => setCorridorEvent(bundle)}
+      />
 
       {/* The report form is a modal, and deliberately NOT inside an overlay:
           every `.overlay` establishes its own stacking context, so a modal

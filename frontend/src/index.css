@@ -2086,6 +2086,184 @@ body,
   color: #9ca3af;
 }
 
+/* --- corridor event view ---
+   Three registers, deliberately different: violet for the illustrative
+   geometry, blue for the measured-evidence provenance note, and the existing
+   amber/red for the verdict — so "the axis is not a road", "these are
+   observations" and "this cannot be scored" never look like the same class of
+   claim. */
+
+.overlay-buttons {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  margin-top: 0.35rem;
+}
+
+.corridor-intro {
+  margin: 0.2rem 0 0.45rem;
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.corridor-geometry-warning {
+  margin: 0 0 0.45rem;
+  padding: 0.35rem 0.45rem;
+  border: 1px solid #5b3a8a;
+  border-left-width: 3px;
+  border-radius: 4px;
+  background: #1d1430;
+  color: #ddd6fe;
+  font-size: 0.7rem;
+  line-height: 1.35;
+}
+
+.corridor-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.2rem 0.5rem;
+  margin: 0 0 0.4rem;
+  font-size: 0.74rem;
+}
+
+.corridor-facts dt {
+  color: #9ca3af;
+  white-space: nowrap;
+}
+
+.corridor-facts dd {
+  margin: 0;
+  line-height: 1.3;
+}
+
+.corridor-subhead {
+  margin: 0.5rem 0 0.2rem;
+  font-size: 0.72rem;
+  color: #9ca3af;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.corridor-run-note {
+  margin: 0.15rem 0 0.3rem;
+  font-size: 0.68rem;
+  line-height: 1.3;
+}
+
+.corridor-error {
+  margin-top: 0.4rem;
+  padding: 0.45rem 0.5rem;
+  border: 1px solid #5c2b2b;
+  border-radius: 6px;
+  background: #241618;
+  font-size: 0.73rem;
+  line-height: 1.35;
+}
+
+.corridor-error p {
+  margin: 0 0 0.2rem;
+}
+
+.corridor-provenance {
+  margin: 0.3rem 0;
+  padding: 0.3rem 0.45rem;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.corridor-provenance-evidence {
+  border: 1px solid #1e3a5f;
+  background: #101c2b;
+  color: #bfdbfe;
+}
+
+.corridor-provenance-prediction {
+  border: 1px solid #3a3f4a;
+  background: #1b1d24;
+  color: #e5e7eb;
+}
+
+.corridor-verdict {
+  margin: 0.3rem 0;
+  padding: 0.4rem 0.5rem;
+  border-radius: 5px;
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+/* insufficient_data is a *result*, not a failure: it gets the same caution
+   colour as a provenance warning, never the red used for a broken write. */
+.corridor-verdict-insufficient {
+  border: 1px solid #5c4a1a;
+  background: #241f12;
+  color: #fbbf24;
+}
+
+.corridor-verdict-evaluated {
+  border: 1px solid #2f5b3a;
+  background: #16261c;
+  color: #86efac;
+}
+
+.corridor-reasons {
+  margin: 0.25rem 0 0.4rem;
+  padding-left: 1rem;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: #cbd5e1;
+}
+
+.corridor-no-metrics {
+  margin: 0.35rem 0;
+  padding: 0.4rem 0.5rem;
+  border: 1px dashed #3a3f4a;
+  border-radius: 5px;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: #cbd5e1;
+}
+
+.corridor-slices {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.corridor-slices th {
+  text-align: left;
+  font-weight: 600;
+  color: #9ca3af;
+  padding: 0.1rem 0.2rem;
+  border-bottom: 1px solid #2a2e36;
+  white-space: nowrap;
+}
+
+.corridor-slices td {
+  padding: 0.1rem 0.2rem;
+  border-bottom: 1px solid #1b1d24;
+  color: #e5e7eb;
+  white-space: nowrap;
+}
+
+.corridor-insufficient-slices {
+  margin-top: 0.35rem;
+  font-size: 0.7rem;
+  color: #9ca3af;
+}
+
+.corridor-insufficient-slices summary {
+  cursor: pointer;
+}
+
+.corridor-insufficient-slices ul {
+  margin: 0.25rem 0 0;
+  padding-left: 1rem;
+  line-height: 1.4;
+}
+
 /* --- incident workflow (drawer + alerts) --- */
 
 /* A notebook that is explicitly not a backend record: the kind is coloured by

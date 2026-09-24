@@ -60,6 +60,8 @@ export interface MapUiState {
   legendOpen: boolean
   /** Same, for the published-run status panel (top left, under the legend). */
   runPanelOpen: boolean
+  /** The corridor event view, beside the run panel. */
+  corridorPanelOpen: boolean
   /** Same, for the settings & layer checklist panel (bottom left). */
   settingsOpen: boolean
   /** The searched place the map is scoped to: cells outside its area are
@@ -112,6 +114,7 @@ export type MapUiAction =
   | { type: 'TOGGLE_INDUSTRIAL_EMISSIONS' }
   | { type: 'TOGGLE_LEGEND' }
   | { type: 'TOGGLE_RUN_PANEL' }
+  | { type: 'TOGGLE_CORRIDOR_PANEL' }
   | { type: 'TOGGLE_SETTINGS' }
   | { type: 'SELECT_CELL'; cell: string | null; resolution?: number }
   | { type: 'TOGGLE_CELL'; cell: string }
@@ -136,6 +139,7 @@ export const initialMapUiState: MapUiState = {
   showIndustrialEmissions: false,
   legendOpen: true,
   runPanelOpen: true,
+  corridorPanelOpen: false,
   settingsOpen: true,
   scope: null,
   // Corrected by the map's first SET_VIEWPORT; only read if a scope is
@@ -239,6 +243,8 @@ export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState
       return { ...state, legendOpen: !state.legendOpen }
     case 'TOGGLE_RUN_PANEL':
       return { ...state, runPanelOpen: !state.runPanelOpen }
+    case 'TOGGLE_CORRIDOR_PANEL':
+      return { ...state, corridorPanelOpen: !state.corridorPanelOpen }
     case 'TOGGLE_SETTINGS':
       return { ...state, settingsOpen: !state.settingsOpen }
     case 'SELECT_CELL':

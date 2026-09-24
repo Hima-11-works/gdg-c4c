@@ -18,6 +18,12 @@ import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&ur
 // bundle the worker (with its shared chunk) and hand back a real URL.
 setWorkerUrl(maplibreWorkerUrl)
 import {
+  CORRIDOR_AXIS_COLOR,
+  CORRIDOR_CELL_COLOR,
+  corridorFeatureCollection,
+} from '../lib/corridorGeometry'
+import type { CorridorCatalogEntry } from '../lib/types'
+import {
   colorScaleExpression,
   EXPOSURE_COLOR_SCALE,
   NO_DATA_COLOR,
@@ -110,7 +116,7 @@ import type {
   GridStateOut,
   WeatherReadingOut,
 } from '../lib/types'
-import type { MultiLineString, Position } from 'geojson'
+import type { FeatureCollection, MultiLineString, Position } from 'geojson'
 
 // The app is scoped to India: on load, fit the whole country in view
 // rather than centering on one city. Level of detail (which resolution
@@ -303,6 +309,14 @@ const FREIGHT_LINE_OPACITY = 0.95
 // corridors but below the selection outline, hidden until toggled on.
 const SOURCE_CITIZEN = 'citizen-reports'
 const LAYER_CITIZEN_PINS = 'citizen-report-pins'
+
+// The corridor axis and the cells sampled along it. Drawn only when the corridor
+// view has a corridor selected, and always dashed, because the geometry is
+// illustrative until a routed dataset replaces it.
+const SOURCE_CORRIDOR = 'corridor-axis'
+const LAYER_CORRIDOR_AXIS = 'corridor-axis-line'
+const LAYER_CORRIDOR_CELLS = 'corridor-axis-cells'
+const EMPTY_CORRIDOR: FeatureCollection = { type: 'FeatureCollection', features: [] }
 const CITIZEN_IMAGE = 'citizen-camera-pin'
 
 // VIIRS 375m active-fire detections — the spec-named `satellite-fires-layer`
@@ -673,6 +687,12 @@ interface MapViewProps {
   citizenReports: AsyncResource<FireReportOut[]>
   /** Real NASA FIRMS detections, fetched by MapPage. */
   activeFires: AsyncResource<ActiveFire[]>
+  /** The corridor currently selected in the corridor view, if any. Its geometry
+   *  is drawn as an explicitly illustrative axis, never as a road. */
+  corridor: CorridorCatalogEntry | null
+  /** The cells the loaded corridor event reported for that run. Null until an
+   *  event is loaded, so the map never implies the run covered the axis. */
+  corridorCells: string[] | null
 }
 
 /** Full-screen MapLibre map. Owns the map instance imperatively (MapLibre
@@ -688,6 +708,8 @@ export function MapView({
   weather,
   citizenReports,
   activeFires,
+  corridor,
+  corridorCells,
 }: MapViewProps) {
   const { state, dispatch } = useMapUi()
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -1211,6 +1233,36 @@ export function MapView({
               'icon-size': 0.72,
               'icon-allow-overlap': true,
               visibility: 'none',
+            },
+          })
+
+          // The corridor axis. Dashed on purpose: the geometry is a straight
+          // line between two city points, and a solid line would invite the
+          // reader to trace it as a road. Hidden until a corridor is selected.
+          map!.addSource(SOURCE_CORRIDOR, { type: 'geojson', data: EMPTY_CORRIDOR })
+          map!.addLayer({
+            id: LAYER_CORRIDOR_AXIS,
+            type: 'line',
+            source: SOURCE_CORRIDOR,
+            layout: { 'line-cap': 'butt', visibility: 'none' },
+            paint: {
+              'line-color': CORRIDOR_AXIS_COLOR,
+              'line-width': 3,
+              'line-dasharray': [2, 2],
+              'line-opacity': 0.9,
+            },
+          })
+          map!.addLayer({
+            id: LAYER_CORRIDOR_CELLS,
+            type: 'circle',
+            source: SOURCE_CORRIDOR,
+            layout: { visibility: 'none' },
+            paint: {
+              'circle-radius': 3.5,
+              'circle-color': CORRIDOR_CELL_COLOR,
+              'circle-stroke-color': '#1b1030',
+              'circle-stroke-width': 1,
+              'circle-opacity': 0.95,
             },
           })
 
@@ -2117,6 +2169,22 @@ export function MapView({
       setHighwaysLoaded(true)
     }
   }, [highwaysLoaded, mapReady, state.lod.resolution])
+
+  // The selected corridor, and the cells the loaded event actually reports.
+  // The two are kept separate on purpose: the axis is the catalog's geometry,
+  // while `corridorCells` is what this publication's evaluation covered — so
+  // the map never draws evaluation cells the event did not report.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    const map = mapRef.current
+    const visible = corridor !== null
+    const source = map.getSource(SOURCE_CORRIDOR)
+    if (source instanceof GeoJSONSource) {
+      source.setData(corridorFeatureCollection(corridor, corridorCells) as never)
+    }
+    map.setLayoutProperty(LAYER_CORRIDOR_AXIS, 'visibility', visible ? 'visible' : 'none')
+    map.setLayoutProperty(LAYER_CORRIDOR_CELLS, 'visibility', visible ? 'visible' : 'none')
+  }, [mapReady, corridor, corridorCells])
 
   const [roadsLoaded, setRoadsLoaded] = useState(false)
   useEffect(() => {

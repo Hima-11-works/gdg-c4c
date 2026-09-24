@@ -15,6 +15,8 @@ import type {
   AlertOut,
   BoundingBox,
   CellDetailOut,
+  CorridorCatalogEntry,
+  CorridorEventBundle,
   Envelope,
   FederationStatusOut,
   FireHotspotOut,
@@ -418,6 +420,36 @@ export function fetchReportEvidence(
  *  record carries. */
 export function reportEvidencePhotoUrl(relativeUrl: string): string {
   return `${API_BASE_URL}${relativeUrl}`
+}
+
+// --- corridor pollution events (/api/v1/corridors) ---
+//
+// Public reads, like the rest of the simulator views. The event lookup is
+// scoped to a run so the corridor view can never show an event evaluated over
+// a different publication than the one on screen.
+
+export function fetchCorridors(): Promise<Envelope<CorridorCatalogEntry[]>> {
+  return apiGet<Envelope<CorridorCatalogEntry[]>>('/api/v1/corridors')
+}
+
+export interface CorridorEventQuery {
+  runId?: string
+  minLabels?: number
+  highPollutionThresholdUgm3?: number
+}
+
+export function fetchCorridorEvent(
+  corridorId: string,
+  eventId: string,
+  query: CorridorEventQuery = {},
+): Promise<Envelope<CorridorEventBundle>> {
+  return apiGet<Envelope<CorridorEventBundle>>(
+    `/api/v1/corridors/${encodeURIComponent(corridorId)}/events/${encodeURIComponent(eventId)}${buildQuery({
+      run_id: query.runId,
+      min_labels: query.minLabels,
+      high_pollution_threshold_ugm3: query.highPollutionThresholdUgm3,
+    })}`,
+  )
 }
 
 // --- incident workflow (/api/v1/incidents) ---
