@@ -1188,9 +1188,9 @@ body,
   color: #ff5c8a;
 }
 
-/* --- rapid intervention dispatch bar (drawer bottom) --- */
+/* --- fire-response bar (drawer bottom) --- */
 
-/* Sticky at the bottom of the scrolling drawer so the intervention CTA is
+/* Sticky at the bottom of the scrolling drawer so the fire-response CTA is
    reachable no matter how far the readings scroll. */
 .intervention-bar {
   position: sticky;
@@ -1221,27 +1221,27 @@ body,
   border-color: #b91c1c;
 }
 
-/* Severity variants of the same action. The colour of the button is the
-   triage: escalate (critical) keeps the red, inspect (elevated / no
-   detection) is amber, and the local ward log is deliberately low-key
-   because it saves nothing anywhere but this browser. */
-.intervention-cta-inspect {
+/* Variants of the same action, coloured by triage. "urgent" keeps the red,
+   the plain note is amber, and the watch list is deliberately low-key because
+   it saves nothing anywhere but this browser. None of them names a recipient:
+   the action is a copy or a local save, and the label says which. */
+.intervention-cta-note {
   background: #b45309;
   border-color: #b45309;
 }
 
-.intervention-cta-inspect:hover:not(:disabled) {
+.intervention-cta-note:hover:not(:disabled) {
   background: #92400e;
   border-color: #92400e;
 }
 
-.intervention-cta-log {
+.intervention-cta-watch {
   background: transparent;
   border-color: #4b5563;
   color: #d1d5db;
 }
 
-.intervention-cta-log:hover:not(:disabled) {
+.intervention-cta-watch:hover:not(:disabled) {
   background: #1f2937;
   border-color: #6b7280;
 }
@@ -1319,7 +1319,7 @@ body,
   color: #9ca3af;
 }
 
-/* --- authority intervention alerts --- */
+/* --- pollution-control response alerts --- */
 
 .alert-item-body {
   display: flex;
@@ -1336,7 +1336,7 @@ body,
   cursor: pointer;
 }
 
-.alert-authority {
+.alert-response {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
@@ -1346,9 +1346,26 @@ body,
   border-top: 1px dashed #3a3f4a;
 }
 
-.alert-assigned {
+/* Which response track this alert belongs to. Pollution-control is blue,
+   fire is amber, and the two never share a colour or a wording. */
+.alert-response-kind {
+  align-self: flex-start;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  border: 1px solid #2b4364;
+  background: #1c2431;
+  color: #93c5fd;
+}
+
+.incident-kind-fire {
+  border-color: #5c4a1a;
+  background: #2d2412;
+  color: #fcd34d;
+}
+
+.alert-response-reference {
   font-size: 0.7rem;
-  color: #9ca3af;
   font-style: italic;
 }
 
@@ -1678,4 +1695,198 @@ body,
   margin: 0;
   font-size: 0.74rem;
   line-height: 1.3;
+}
+
+/* --- local incident notebook (drawer + alerts) --- */
+
+/* A notebook that is explicitly not a backend record: the kind is coloured by
+   response track, and the on-device caveat is a visible block rather than a
+   footnote, because the difference between "an official incident" and "a note
+   in this browser" is the whole point. */
+.incident {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.55rem;
+  border: 1px solid #3a3f4a;
+  border-left-width: 3px;
+  border-radius: 6px;
+  background: #14161c;
+  font-size: 0.78rem;
+}
+
+.incident-fire {
+  border-left-color: #f59e0b;
+}
+
+.incident-pollution {
+  border-left-color: #60a5fa;
+}
+
+.incident-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.35rem;
+}
+
+.incident-header h4 {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.incident-kind {
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.66rem;
+  border: 1px solid #2b4364;
+  background: #1c2431;
+  color: #93c5fd;
+}
+
+.incident-scope {
+  margin: 0 0 0.35rem;
+  color: #9ca3af;
+  font-size: 0.72rem;
+  line-height: 1.3;
+}
+
+.incident-local {
+  margin: 0 0 0.45rem;
+  padding: 0.35rem 0.45rem;
+  border-radius: 4px;
+  background: #1b1d24;
+  border: 1px dashed #4b5563;
+  color: #cbd5e1;
+  font-size: 0.7rem;
+  line-height: 1.35;
+}
+
+.incident-empty {
+  margin: 0 0 0.35rem;
+  font-size: 0.74rem;
+}
+
+.incident-button {
+  border: 1px solid #4b5563;
+  border-radius: 5px;
+  background: transparent;
+  color: #d1d5db;
+  font: inherit;
+  font-size: 0.74rem;
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+}
+
+.incident-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.incident-button-primary {
+  background: #1c2431;
+  border-color: #2b4364;
+  color: #93c5fd;
+}
+
+.incident-button-danger {
+  border-color: #7f1d1d;
+  color: #fca5a5;
+}
+
+.incident-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.25rem 0.5rem;
+  margin: 0 0 0.4rem;
+}
+
+.incident-facts dt {
+  color: #9ca3af;
+  white-space: nowrap;
+}
+
+.incident-facts dd {
+  margin: 0;
+  line-height: 1.3;
+}
+
+.incident-input,
+.incident-status {
+  width: 100%;
+  padding: 0.2rem 0.35rem;
+  border: 1px solid #3a3f4a;
+  border-radius: 5px;
+  background: #12141a;
+  color: #e5e7eb;
+  font: inherit;
+  font-size: 0.74rem;
+}
+
+.incident-status {
+  width: auto;
+}
+
+.incident-reference {
+  margin: 0.35rem 0;
+  font-size: 0.7rem;
+  font-style: italic;
+}
+
+.incident-subhead {
+  margin: 0.45rem 0 0.2rem;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #6b7280;
+}
+
+.incident-evidence,
+.incident-history {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.incident-evidence li,
+.incident-history li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  font-size: 0.72rem;
+  line-height: 1.3;
+  padding-left: 0.5rem;
+  border-left: 2px solid #2a2e36;
+}
+
+.incident-evidence-source {
+  align-self: flex-start;
+  font-size: 0.66rem;
+  color: #93c5fd;
+}
+
+.incident-note-row {
+  display: flex;
+  gap: 0.3rem;
+  margin-top: 0.45rem;
+}
+
+.incident-simulator-note {
+  margin: 0.4rem 0;
+  font-size: 0.7rem;
+  line-height: 1.3;
+}
+
+.alert-incident-toggle {
+  align-self: flex-start;
+  margin-top: 0.3rem;
+  border: 1px solid #3a3f4a;
+  border-radius: 5px;
+  background: transparent;
+  color: #9ca3af;
+  font: inherit;
+  font-size: 0.7rem;
+  padding: 0.15rem 0.4rem;
+  cursor: pointer;
 }

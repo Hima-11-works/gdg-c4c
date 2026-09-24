@@ -5,6 +5,7 @@ import { cellCenter } from '../lib/h3Geometry'
 import { regionTitle } from '../lib/regionName'
 import {
   CITIZEN_VERIFICATION_BADGE,
+  CITIZEN_VERIFICATION_LABEL,
   CITIZEN_VERIFICATION_TOOLTIP,
   FIRE_KIND_LABELS,
   minutesAgo,
@@ -21,6 +22,8 @@ import { useApiResource } from '../hooks/useApiResource'
 import type { AsyncResource } from '../hooks/useApiResource'
 import { useStateBoundaries } from '../hooks/useStateBoundaries'
 import { useMapUi } from '../state/MapUiContext'
+import { IncidentNotebook } from './IncidentNotebook'
+import type { IncidentEvidence } from '../lib/incidentNotebook'
 import type { CellDetailOut, FireReportOut } from '../lib/types'
 
 /** The most recent citizen report filed in this cell, from
@@ -274,36 +277,44 @@ function CellDetailContent({
 }
 
 /**
- * Bottom action bar of the inspection drawer.
+ * Bottom action bar of the drawer: the FIRE RESPONSE for this cell.
  *
- * There is no authority-routing backend, so every action here is something
- * that genuinely happens on this device and nothing more:
+ * Named that way on purpose. The app also carries a pollution-control
+ * response (the PM2.5 alerts), and the two are not interchangeable — this one
+ * is about a source (a thermal detection, a filed report), that one is about
+ * an area. The bar used to address a fire escalation to a pollution body,
+ * which is exactly the confusion the labels now prevent.
  *
- *  - Critical severity (3) copies an escalation note addressed to a State
- *    Rapid Action Unit.
- *  - Elevated severity (2) copies the plain inspection note.
- *  - Minor severity (1) appends the cell to a ward list kept in
- *    localStorage on this device only.
- *  - No detection in the cell keeps the plain inspection note.
+ * Every action here is something that genuinely happens on this device and
+ * nothing more:
  *
- * It does NOT dispatch, notify, or record anything anywhere — the status
- * line says so, and the ward list is explicitly local.
+ *  - Critical severity (3) copies a fire-response note to the clipboard.
+ *  - Elevated severity (2) and no-detection copy the same note.
+ *  - Minor severity (1) adds the cell to a watch list kept in localStorage on
+ *    this device only.
+ *
+ * Nothing is addressed to an authority and nothing is sent: there is no
+ * authority-routing backend, the button labels say what they do ("copy",
+ * "add to watch list"), and the status line repeats that nothing left the
+ * device. The note text names no recipient, because there isn't one.
  */
+// Kept under its original key so watch lists already saved in a browser are
+// not silently lost; the user-facing name is "watch list".
 const WARD_LOG_KEY = 'air-health:ward-log'
 
-interface WardLogEntry {
+interface WatchListEntry {
   h3Cell: string
   loggedAt: string
   pm25: number | null
   pdi: number | null
 }
 
-function readWardLog(): WardLogEntry[] {
+function readWatchList(): WatchListEntry[] {
   try {
     const raw = window.localStorage.getItem(WARD_LOG_KEY)
     if (raw === null) return []
     const parsed: unknown = JSON.parse(raw)
-    return Array.isArray(parsed) ? (parsed as WardLogEntry[]) : []
+    return Array.isArray(parsed) ? (parsed as WatchListEntry[]) : []
   } catch {
     return []
   }
@@ -319,10 +330,13 @@ function InterventionActionBar({
   anomaly: ThermalAnomaly | null
 }) {
   const [status, setStatus] = useState<'idle' | 'copied' | 'logged' | 'failed'>('idle')
-  const [wardCount, setWardCount] = useState(() => readWardLog().length)
+  const [watchCount, setWatchCount] = useState(() => readWatchList().length)
 
   const severity: FireSeverity | null = anomaly?.severity ?? null
-  const variant = severity === 3 ? 'escalate' : severity === 1 ? 'log' : 'inspect'
+  // Two outcomes, named for what they do rather than for an authority: a
+  // critical detection gets the same note as any other (it just carries the
+  // reason), and a minor one goes on the watch list.
+  const variant = severity === 1 ? 'watch' : severity === 3 ? 'urgent' : 'note'
 
   const current = detail.current
   const observed = [
@@ -347,31 +361,31 @@ function InterventionActionBar({
         ]
 
   const note =
-    variant === 'escalate'
+    variant === 'urgent'
       ? [
-          'Escalation note (Air Health dashboard) - for the State Rapid Action Unit',
-          `Priority 1 of 3: critical thermal anomaly in this cell`,
+          'Fire response note (Air Health dashboard) - for your own record',
+          `Priority 1 of 3: critical thermal detection in this cell`,
           ...observed,
           ...detection,
-          'Reason for escalation: a critical-severity detection is inside a cell already under watch.',
+          'Reason this is marked urgent: a critical-severity detection is inside a cell already under watch.',
         ].join('\n')
-      : ['Air-quality inspection note (Air Health dashboard)', ...observed].join('\n')
+      : ['Fire response note (Air Health dashboard) - for your own record', ...observed].join('\n')
 
   const runAction = async () => {
-    if (variant === 'log') {
+    if (variant === 'watch') {
       try {
-        const entry: WardLogEntry = {
+        const entry: WatchListEntry = {
           h3Cell,
           loggedAt: new Date().toISOString(),
           pm25: current?.pm25 ?? null,
           pdi: current?.pdi ?? null,
         }
-        // The list is a set of cells, not an append-only log: re-logging a
+        // The list is a set of cells, not an append-only log: re-adding a
         // cell refreshes its entry instead of piling up duplicates the
         // operator would have to de-duplicate by hand.
-        const next = [...readWardLog().filter((existing) => existing.h3Cell !== h3Cell), entry]
+        const next = [...readWatchList().filter((existing) => existing.h3Cell !== h3Cell), entry]
         window.localStorage.setItem(WARD_LOG_KEY, JSON.stringify(next))
-        setWardCount(next.length)
+        setWatchCount(next.length)
         setStatus('logged')
       } catch {
         setStatus('failed')
@@ -391,35 +405,31 @@ function InterventionActionBar({
     status === 'copied'
       ? '✓ Note copied'
       : status === 'logged'
-        ? '✓ Logged to ward list'
-        : variant === 'escalate'
-          ? 'Copy escalation note for the State Rapid Action Unit'
-          : variant === 'log'
-            ? 'Log to ward list (this device)'
-            : 'Copy inspection note'
+        ? '✓ Added to watch list'
+        : variant === 'urgent'
+          ? 'Copy fire-response note'
+          : variant === 'watch'
+            ? 'Add to watch list (this device)'
+            : 'Copy fire-response note'
 
   const statusText =
     status === 'copied'
-      ? 'Copied — send it to the relevant authority yourself.'
+      ? 'On your clipboard — nothing was sent anywhere.'
       : status === 'logged'
-        ? `Saved on this device only (${wardCount} ${wardCount === 1 ? 'entry' : 'entries'}). Nothing left this device.`
+        ? `Saved on this device only (${watchCount} ${watchCount === 1 ? 'cell' : 'cells'}). Nothing left this device.`
         : status === 'failed'
           ? 'Could not access local storage or the clipboard.'
-          : variant === 'escalate'
-            ? 'Nothing is sent automatically; this only prepares an escalation note.'
-            : variant === 'log'
-              ? 'Nothing is sent automatically; this only appends to a list on this device.'
-              : 'Nothing is sent automatically; this only prepares a note.'
+          : variant === 'watch'
+            ? 'Nothing is sent automatically; this only adds the cell to a list in this browser.'
+            : 'Nothing is sent automatically; this only puts a note on your clipboard.'
 
   const title =
-    variant === 'escalate'
-      ? 'Copy a plain-text escalation note for this cell, addressed to a State Rapid Action Unit'
-      : variant === 'log'
-        ? 'Append this cell to a ward list kept in this browser only'
-        : 'Copy a plain-text inspection note for this cell to the clipboard'
+    variant === 'watch'
+      ? 'Add this cell to a watch list kept in this browser only'
+      : 'Copy a plain-text fire-response note for this cell to your own clipboard'
 
   return (
-    <div className="intervention-bar" role="group" aria-label="Inspection note">
+    <div className="intervention-bar" role="group" aria-label="Fire response note">
       <button
         type="button"
         className={`intervention-cta intervention-cta-${variant} ${
@@ -477,6 +487,50 @@ export function CellDetailPanel({
   // triage badge and the severity of the action bar.
   const anomaly = worstAnomalyInCell(selectedCell)
 
+  // The citizen report the drawer already looks up, hoisted so the incident
+  // notebook can link it as evidence rather than looking it up twice.
+  const report =
+    state.showCitizenSensors && citizenReports.status === 'success'
+      ? reportForCell(citizenReports.data, selectedCell)
+      : null
+
+  // Evidence links for a fire incident, built from records that already exist:
+  // the cell's own readings, the (illustrative) thermal detection driving the
+  // triage badge, and any citizen report filed in this cell. The notebook
+  // stores these references, and each one names where the underlying record
+  // lives — it does not copy the record.
+  const fireEvidence: IncidentEvidence[] = []
+  if (resource.status === 'success') {
+    const current = resource.data.current
+    if (current !== null) {
+      fireEvidence.push({
+        source: 'cell_reading',
+        ref: selectedCell,
+        summary: `Cell reading: PM2.5 ${formatNumber(current.pm25)} µg/m³, PDI ${formatNumber(current.pdi)}`,
+        at: current.timestamp,
+      })
+    }
+  }
+  if (anomaly !== null) {
+    fireEvidence.push({
+      source: 'thermal_anomaly',
+      ref: `${selectedCell} (thermal)`,
+      // No wall-clock timestamp: the mock detection carries an age in minutes,
+      // not an instant, and inventing one at render time would be both impure
+      // and less accurate than saying how old it is.
+      summary: `Thermal detection, FRP ${anomaly.frp.toFixed(1)} MW, severity ${anomaly.severity}/3, detected ${anomaly.detectionMinutesAgo} min ago — illustrative mock detection, not a satellite feed`,
+      at: null,
+    })
+  }
+  if (report !== null) {
+    fireEvidence.push({
+      source: 'citizen_report',
+      ref: `report ${report.id}`,
+      summary: `Citizen report: ${FIRE_KIND_LABELS[report.kind] ?? report.kind}, smoke ${report.smoke_intensity}/5 (${CITIZEN_VERIFICATION_LABEL.toLowerCase()})`,
+      at: report.reported_at,
+    })
+  }
+
   return (
     <aside className="panel cell-detail" aria-label="Cell details">
       <div className="cell-detail-header">
@@ -510,18 +564,18 @@ export function CellDetailPanel({
 
       {resource.status === 'success' && (
         <>
-          <CellDetailContent
-            detail={resource.data}
-            isDemo={resource.isDemo}
-            report={
-              state.showCitizenSensors
-                ? reportForCell(
-                    citizenReports.status === 'success' ? citizenReports.data : [],
-                    selectedCell,
-                  )
-                : null
-            }
+          <CellDetailContent detail={resource.data} isDemo={resource.isDemo} report={report} />
+
+          {/* The fire response's own notebook. Kept beside the pollution
+              alerts' notebook in code but labelled apart, because the two
+              responses are about different things. */}
+          <IncidentNotebook
+            kind="fire"
+            h3Cell={selectedCell}
+            title={title ?? selectedCell}
+            evidence={fireEvidence}
           />
+
           <InterventionActionBar h3Cell={selectedCell} detail={resource.data} anomaly={anomaly} />
         </>
       )}
