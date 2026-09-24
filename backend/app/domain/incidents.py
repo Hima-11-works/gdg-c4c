@@ -1,10 +1,19 @@
 """Domain types for the incident workflow (the fire-department simulator).
 
-An incident is an operational record created from an eligible fire alert or
-citizen report, progressed through response states by a responding role. It is
-separate from the alert/report it came from: the source can exist without an
-incident, and the incident owns its lifecycle, assignment, jurisdiction, and
-append-only history.
+An incident is an operational record created from an eligible published v2
+alert, persisted fire alert, or citizen report, progressed through response
+states by an authenticated responder. It is separate from the source it came
+from: the source can exist without an incident, and the incident owns its
+lifecycle, assignment, jurisdiction, and append-only history.
+
+Two rules are load-bearing here:
+
+* **Writes carry an identity, not just a key.** `IncidentActor` binds a write
+  to a role *and* a jurisdiction that the server resolved, so a shared
+  simulator key cannot be used to act as any authority anywhere.
+* **Delivery is simulated.** `IncidentDelivery` records that an assignment
+  became visible in a responder's inbox. Nothing is ever sent to a real person
+  or system; the type and its table both refuse to represent that.
 
 See docs/api/incidents.md for the API contract and the transition table.
 """
@@ -19,11 +28,23 @@ from app.domain.types import _require_utc
 
 
 class IncidentSourceType(StrEnum):
-    """What an incident was created from. The pair (source_type, source_id)
-    is unique across incidents, which is what makes creation idempotent."""
+    """What an incident was created from.
+
+    The pair (source_type, source_id) — or, for a published alert,
+    (source_type, source_ref) — is unique across incidents, which is what makes
+    creation idempotent.
+    """
 
     ALERT = "alert"
     REPORT = "report"
+    PUBLISHED_ALERT = "published_alert"
+
+    @property
+    def uses_ref(self) -> bool:
+        """Whether this source is named by a string reference rather than a row
+        id. A published alert has no row of its own: it is a run + cell +
+        horizon in the published prediction space."""
+        return self is IncidentSourceType.PUBLISHED_ALERT
 
 
 class IncidentStatus(StrEnum):
@@ -54,6 +75,25 @@ class IncidentEventType(StrEnum):
     ASSIGNED = "assigned"
     REASSIGNED = "reassigned"
     TRANSITION = "transition"
+    # A newly assigned incident became visible in the simulated responder
+    # inbox. Appended to history so the operational trail shows that the
+    # handoff was made visible — the delivery itself is simulated.
+    DELIVERED = "delivered"
+
+
+class IncidentDeliveryStatus(StrEnum):
+    """Lifecycle of a *simulated* delivery of an incident to a responder.
+
+    There is deliberately no "sent" state: this workflow never contacts anyone.
+    `SIMULATED` means "recorded as handed to the responder's inbox", and
+    `ACKNOWLEDGED` means the responder acknowledged the incident, which closes
+    the loop. The table that stores these rows has a CHECK constraint forcing
+    `simulated = true`, so a real notification cannot be recorded here by
+    accident.
+    """
+
+    SIMULATED = "simulated"
+    ACKNOWLEDGED = "acknowledged"
 
 
 # The complete transition table. Anything not listed here is rejected, which
@@ -109,6 +149,9 @@ class IncidentEvent:
     role: ResponderRole | None = None
     actor: str | None = None
     note: str | None = None
+    # The jurisdiction the actor acted under, recorded so the history shows
+    # *which* authority made each change, not just which role.
+    actor_jurisdiction: str | None = None
     id: int | None = None
 
     def __post_init__(self) -> None:
@@ -120,11 +163,69 @@ class IncidentEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class IncidentActor:
+    """An authenticated responder identity making a write.
+
+    The role and jurisdiction are *not* taken from the request body: they come
+    from the server-side actor registry, so one shared simulator key cannot be
+    used to act as any role in any jurisdiction. `jurisdiction` is the area the
+    actor is allowed to act in; `None` means the actor is not scoped to one
+    (a control-room actor, e.g. the one that creates incidents).
+    """
+
+    actor_id: str
+    role: ResponderRole
+    jurisdiction: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.actor_id or not self.actor_id.strip():
+            raise ValueError("actor_id must not be empty")
+        if len(self.actor_id) > 120:
+            raise ValueError("actor_id must be at most 120 characters")
+        if self.jurisdiction is not None and not self.jurisdiction.strip():
+            raise ValueError("actor jurisdiction must not be blank")
+
+
+@dataclass(frozen=True, slots=True)
+class IncidentDelivery:
+    """A simulated hand-off of an incident to a responder role's inbox.
+
+    `simulated` is always True — the type will not represent a real dispatch,
+    and the database enforces it too. No notification is ever sent by this
+    system; the row exists so an assigned incident is *visible to the intended
+    responder role* in the simulator, and so the acknowledgement loop is
+    auditable.
+    """
+
+    incident_id: int
+    audience_role: ResponderRole
+    status: IncidentDeliveryStatus
+    simulated_at: datetime
+    assignee: str | None = None
+    acknowledged_at: datetime | None = None
+    id: int | None = None
+
+    def __post_init__(self) -> None:
+        _require_utc(self.simulated_at, "simulated_at")
+        if self.acknowledged_at is not None:
+            _require_utc(self.acknowledged_at, "acknowledged_at")
+            if self.acknowledged_at < self.simulated_at:
+                raise ValueError("acknowledged_at must not precede simulated_at")
+        if self.status is IncidentDeliveryStatus.ACKNOWLEDGED and self.acknowledged_at is None:
+            raise ValueError("an acknowledged delivery must record acknowledged_at")
+
+    @property
+    def simulated(self) -> bool:
+        """Always True. Kept explicit in the API response so a consumer cannot
+        mistake this for a real dispatch."""
+        return True
+
+
+@dataclass(frozen=True, slots=True)
 class Incident:
     """An operational incident record."""
 
     source_type: IncidentSourceType
-    source_id: int
     status: IncidentStatus
     responder_role: ResponderRole
     severity: str
@@ -132,6 +233,13 @@ class Incident:
     longitude: float
     created_at: datetime
     updated_at: datetime
+    # Exactly one of source_id / source_ref identifies the source, decided by
+    # source_type (see IncidentSourceType.uses_ref).
+    source_id: int | None = None
+    source_ref: str | None = None
+    # True when the source was a synthetic/demo published run, so a responder
+    # reading the incident cannot mistake a fallback run for a real forecast.
+    source_synthetic: bool = False
     jurisdiction: str | None = None
     linked_prediction_run_id: str | None = None
     evidence_report_ids: tuple[int, ...] = ()
@@ -153,7 +261,23 @@ class Incident:
             raise ValueError(f"longitude out of range: {self.longitude}")
         if not self.severity:
             raise ValueError("severity must not be empty")
+        # The source must be identified exactly one way, and the way must match
+        # the source type: a published alert is a ref, everything else a row id.
+        if self.source_type.uses_ref:
+            if self.source_ref is None or not self.source_ref.strip():
+                raise ValueError("a published-alert incident requires source_ref")
+            if self.source_id is not None:
+                raise ValueError("a published-alert incident must not carry source_id")
+        else:
+            if self.source_id is None or self.source_id < 1:
+                raise ValueError(f"a {self.source_type.value} incident requires source_id")
+            if self.source_ref is not None:
+                raise ValueError(f"a {self.source_type.value} incident must not carry source_ref")
 
     @property
-    def source_key(self) -> tuple[IncidentSourceType, int]:
+    def source_key(self) -> tuple[IncidentSourceType, int | str]:
+        """The idempotency key: the row id for alert/report sources, the
+        published-alert reference otherwise."""
+        if self.source_type.uses_ref:
+            return (self.source_type, self.source_ref or "")
         return (self.source_type, self.source_id)

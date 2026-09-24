@@ -166,6 +166,11 @@ class CellDetailV2Out(BaseModel):
 class AlertV2Out(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    # Stable, run-pinned identity: `v2:<run_id>:<h3_cell>:<forecast_hours>`.
+    # Recomputable, so a client can correlate an alert it is looking at with a
+    # stored incident without the server keeping an alert table. Pass it to
+    # POST /api/v1/incidents to open one. See docs/api/incidents.md.
+    alert_id: str
     h3_cell: str
     severity: str
     message: str

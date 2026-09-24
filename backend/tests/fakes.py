@@ -14,8 +14,14 @@ from datetime import datetime
 from app.domain.environmental_observations import FireHotspot
 from app.domain.citizen_intake import ReportEvidence
 from app.domain.federation import FederationParticipant, FederationRun
-from app.domain.incidents import Incident, IncidentEvent
+from app.domain.incidents import (
+    Incident,
+    IncidentDelivery,
+    IncidentDeliveryStatus,
+    IncidentEvent,
+)
 from app.domain.providers import ProviderError
+from app.domain.prediction import PredictionResult, PredictionRun
 from app.domain.repositories import DuplicateReadingError
 from app.domain.types import (
     Alert,
@@ -345,12 +351,47 @@ class FakeWeatherProvider:
         return [self.samples_by_point.get(p, self.default_sample) for p in points]
 
 
+class FakePredictionPublicationRepository:
+    """In-memory PredictionPublicationRepository.
+
+    Enough for the published-alert read path: a run plus its result rows, so a
+    test can publish a forecast and then ask for the alert identity the web
+    would have been shown.
+    """
+
+    def __init__(self) -> None:
+        self.runs: dict[str, PredictionRun] = {}
+        self.results: list[PredictionResult] = []
+
+    def publish(self, run: PredictionRun, results: list[PredictionResult]) -> None:
+        self.runs[run.run_id] = run
+        self.results.extend(results)
+
+    def get_run(self, run_id: str) -> PredictionRun | None:
+        return self.runs.get(run_id)
+
+    def latest_run(self, *, region: str | None = None) -> PredictionRun | None:
+        candidates = [
+            run
+            for run in self.runs.values()
+            if region is None or run.region == region
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda run: run.generated_at)
+
+    def list_results(self, run_id: str) -> list[PredictionResult]:
+        return [row for row in self.results if row.run_id == run_id]
+
+
 class FakeIncidentRepository:
     """In-memory IncidentRepository.
 
-    Mirrors the SQL implementation: one incident per (source_type, source_id)
-    (a duplicate create returns the existing row), and every create/update
-    appends exactly one history event."""
+    Mirrors the SQL implementation: one incident per source (a row id for
+    alert/report, a ref for a published alert — a duplicate create returns the
+    existing row), and every create/update appends exactly one history event.
+    `append_event` adds an event without touching the incident row, the way a
+    simulated delivery is recorded."""
 
     def __init__(self) -> None:
         self.incidents: list[Incident] = []
@@ -368,7 +409,16 @@ class FakeIncidentRepository:
     def get(self, incident_id: int) -> Incident | None:
         return next((i for i in self.incidents if i.id == incident_id), None)
 
-    def get_by_source(self, source_type, source_id: int) -> Incident | None:
+    def get_by_source(self, source_type, *, source_id=None, source_ref=None) -> Incident | None:
+        if source_type.uses_ref:
+            return next(
+                (
+                    i
+                    for i in self.incidents
+                    if i.source_type == source_type and i.source_ref == source_ref
+                ),
+                None,
+            )
         return next(
             (
                 i
@@ -387,6 +437,9 @@ class FakeIncidentRepository:
         self._append_event(stored.id, event)
         return stored
 
+    def append_event(self, event: IncidentEvent) -> IncidentEvent:
+        return self._append_event(event.incident_id, event)
+
     def list(self, *, status=None, role=None) -> list[Incident]:
         result = list(self.incidents)
         if status is not None:
@@ -400,10 +453,58 @@ class FakeIncidentRepository:
             e for e in self.events if e.incident_id == incident_id
         ]
 
-    def _append_event(self, incident_id: int, event: IncidentEvent) -> None:
-        self.events.append(
-            replace(event, id=len(self.events) + 1, incident_id=incident_id)
-        )
+    def _append_event(self, incident_id: int, event: IncidentEvent) -> IncidentEvent:
+        stored = replace(event, id=len(self.events) + 1, incident_id=incident_id)
+        self.events.append(stored)
+        return stored
+
+
+class FakeIncidentDeliveryRepository:
+    """In-memory IncidentDeliveryRepository.
+
+    Mirrors the SQL implementation, including the invariant that every stored
+    delivery is simulated: there is no way to construct a `real` one, because
+    the domain type does not represent it.
+    """
+
+    def __init__(self) -> None:
+        self.deliveries: list[IncidentDelivery] = []
+
+    def create(self, delivery: IncidentDelivery) -> IncidentDelivery:
+        stored = replace(delivery, id=len(self.deliveries) + 1)
+        self.deliveries.append(stored)
+        return stored
+
+    def acknowledge_open(self, incident_id: int, *, acknowledged_at) -> list[IncidentDelivery]:
+        self.deliveries = [
+            replace(
+                item,
+                status=IncidentDeliveryStatus.ACKNOWLEDGED,
+                acknowledged_at=acknowledged_at,
+            )
+            if item.incident_id == incident_id
+            and item.status is IncidentDeliveryStatus.SIMULATED
+            else item
+            for item in self.deliveries
+        ]
+        return self.list_for_incident(incident_id)
+
+    def list_for_incident(self, incident_id: int) -> list[IncidentDelivery]:
+        return [
+            item
+            for item in self.deliveries
+            if item.incident_id == incident_id
+        ]
+
+    def list_for_role(self, role, *, only_open: bool = False) -> list[IncidentDelivery]:
+        result = [
+            item for item in self.deliveries if item.audience_role == role
+        ]
+        if only_open:
+            result = [
+                item for item in result if item.status is IncidentDeliveryStatus.SIMULATED
+            ]
+        return sorted(result, key=lambda item: (item.simulated_at, item.id or 0), reverse=True)
 
 
 class FakeFederationRepository:

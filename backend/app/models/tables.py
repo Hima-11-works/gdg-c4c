@@ -463,16 +463,24 @@ report_evidence = Table(
 )
 
 # Incident workflow (the fire-department simulator). An incident is created
-# from an eligible fire alert or citizen report and progressed through
-# response states. See docs/api/incidents.md and app.domain.incidents.
+# from an eligible published v2 alert, persisted fire alert, or citizen report
+# and progressed through response states. See docs/api/incidents.md and
+# app.domain.incidents.
 incident = Table(
     "incident",
     metadata,
     Column("id", BigInteger, primary_key=True),
-    # What the incident was created from. The pair is unique (below), which
-    # is what makes creation idempotent on the source.
+    # What the incident was created from. Exactly one of source_id (a persisted
+    # alert/report row) or source_ref (a published alert identity) identifies
+    # it, decided by source_type; both are covered by unique indexes below,
+    # which is what makes creation idempotent on the source.
     Column("source_type", String(20), nullable=False),
-    Column("source_id", BigInteger, nullable=False),
+    Column("source_id", BigInteger, nullable=True),
+    # `v2:<run_id>:<h3_cell>:<forecast_hours>` for a published alert.
+    Column("source_ref", String(200), nullable=True),
+    # True when the source was a synthetic/demo published run, so nobody reads
+    # a fallback run's incident as a real-world event.
+    Column("source_synthetic", Boolean, nullable=False, server_default=text("false")),
     Column("status", String(20), nullable=False, server_default="reported"),
     Column("responder_role", String(30), nullable=False),
     Column("severity", String(20), nullable=False),
@@ -493,7 +501,20 @@ incident = Table(
     Column("updated_at", DateTime(timezone=True), nullable=False),
     Column("resolved_at", DateTime(timezone=True), nullable=True),
     CheckConstraint(
-        "source_type IN ('alert', 'report')", name="ck_incident_source_type"
+        "source_type IN ('alert', 'report', 'published_alert')",
+        name="ck_incident_source_type",
+    ),
+    # A published alert is named by its ref; an alert or report by its row id.
+    CheckConstraint(
+        "(source_type = 'published_alert') = (source_ref IS NOT NULL)",
+        name="ck_incident_source_ref_only_for_published_alert",
+    ),
+    CheckConstraint(
+        "(source_type = 'published_alert') = (source_id IS NULL)",
+        name="ck_incident_source_id_absent_for_published_alert",
+    ),
+    CheckConstraint(
+        "source_ref IS NULL OR length(source_ref) > 0", name="ck_incident_source_ref_nonempty"
     ),
     CheckConstraint(
         "status IN ('reported', 'assigned', 'acknowledged', 'en_route', "
@@ -511,15 +532,29 @@ incident = Table(
         "resolved_at IS NULL OR resolved_at >= created_at",
         name="ck_incident_resolved_at",
     ),
-    # One incident per source: the idempotency guarantee at the storage layer.
-    UniqueConstraint("source_type", "source_id", name="uq_incident_source"),
     Index("ix_incident_status", "status"),
     Index("ix_incident_responder_role", "responder_role"),
     Index("ix_incident_created_at", "created_at"),
+    # One incident per source: the idempotency guarantee at the storage layer.
+    # Partial unique indexes, because a source is identified by an id *or* a ref.
+    Index(
+        "uq_incident_source_id",
+        "source_type",
+        "source_id",
+        unique=True,
+        postgresql_where=text("source_id IS NOT NULL"),
+    ),
+    Index(
+        "uq_incident_source_ref",
+        "source_type",
+        "source_ref",
+        unique=True,
+        postgresql_where=text("source_ref IS NOT NULL"),
+    ),
 )
 
-# Append-only incident history. Every state change and assignment writes one
-# row; nothing updates or deletes these.
+# Append-only incident history. Every state change, assignment, and simulated
+# delivery writes one row; nothing updates or deletes these.
 incident_event = Table(
     "incident_event",
     metadata,
@@ -535,13 +570,59 @@ incident_event = Table(
     Column("to_status", String(20), nullable=True),
     Column("role", String(30), nullable=True),
     Column("actor", String(120), nullable=True),
+    # The jurisdiction the actor acted under, so the trail shows which
+    # authority made each change.
+    Column("actor_jurisdiction", String(120), nullable=True),
     Column("note", String(500), nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=False),
     CheckConstraint(
-        "event_type IN ('created', 'assigned', 'reassigned', 'transition')",
+        "event_type IN ('created', 'assigned', 'reassigned', 'transition', 'delivered')",
         name="ck_incident_event_type",
     ),
     Index("ix_incident_event_incident_id", "incident_id", "created_at"),
+)
+
+# Simulated delivery of an incident to a responder role's inbox. This records
+# that an assignment became visible; it does NOT notify anyone. The CHECK on
+# `simulated` makes that structural: the table cannot hold a row claiming a
+# real dispatch, and there is no column for a channel, address, or provider.
+incident_delivery = Table(
+    "incident_delivery",
+    metadata,
+    Column("id", BigInteger, primary_key=True),
+    Column(
+        "incident_id",
+        BigInteger,
+        ForeignKey("incident.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    # The role the incident was handed to — the only audience that sees it in
+    # its inbox.
+    Column("audience_role", String(30), nullable=False),
+    Column("status", String(20), nullable=False, server_default="simulated"),
+    Column("assignee", String(120), nullable=True),
+    Column("simulated", Boolean, nullable=False, server_default=text("true")),
+    Column("simulated_at", DateTime(timezone=True), nullable=False),
+    Column("acknowledged_at", DateTime(timezone=True), nullable=True),
+    CheckConstraint(
+        "audience_role IN ('fire_department', 'pollution_control')",
+        name="ck_incident_delivery_audience_role",
+    ),
+    CheckConstraint(
+        "status IN ('simulated', 'acknowledged')", name="ck_incident_delivery_status"
+    ),
+    # Structural guarantee: this table can only ever hold simulated deliveries.
+    CheckConstraint("simulated", name="ck_incident_delivery_is_simulated"),
+    CheckConstraint(
+        "acknowledged_at IS NULL OR acknowledged_at >= simulated_at",
+        name="ck_incident_delivery_acknowledged_at",
+    ),
+    CheckConstraint(
+        "(status = 'acknowledged') = (acknowledged_at IS NOT NULL)",
+        name="ck_incident_delivery_acknowledged_consistent",
+    ),
+    Index("ix_incident_delivery_incident_id", "incident_id", "simulated_at"),
+    Index("ix_incident_delivery_role", "audience_role", "status", "simulated_at"),
 )
 
 # Two-region federated-training demonstration (docs/api/federation.md).

@@ -23,6 +23,7 @@ from app.db.repositories import (
     SqlFireReportRepository,
     SqlForecastRepository,
     SqlGridStateRepository,
+    SqlIncidentDeliveryRepository,
     SqlIncidentRepository,
     SqlPredictionPublicationRepository,
     SqlReportEvidenceRepository,
@@ -30,6 +31,7 @@ from app.db.repositories import (
     SqlWeatherReadingRepository,
 )
 from app.db.session import get_db
+from app.domain.incidents import IncidentActor
 from app.domain.types import BoundingBox
 from app.services.alerts import AlertService
 from app.services.cells import CellService
@@ -37,9 +39,14 @@ from app.services.citizen_intake import CitizenIntakeService
 from app.services.federation import FederationStatusReader
 from app.services.fires import FireHotspotService
 from app.services.grid import GridService
-from app.services.incidents import IncidentService
+from app.services.incidents import (
+    ActorNotPermittedError,
+    IncidentService,
+    SimulatorDisabledError,
+)
 from app.services.media_storage import MediaStore, build_media_store
 from app.services.prediction_queries import PredictionQueryService
+from app.services.published_alerts import PublishedAlertService
 from app.services.reports import FireReportService
 from app.services.sensors import SensorService
 from app.services.tiles import TileService
@@ -141,6 +148,13 @@ def get_incident_service(session: Session = Depends(get_db)) -> IncidentService:
         incident_repository=SqlIncidentRepository(session),
         alert_repository=SqlAlertRepository(session),
         report_repository=SqlFireReportRepository(session),
+        delivery_repository=SqlIncidentDeliveryRepository(session),
+        # Resolves a v2 published-alert identity against the same published run
+        # the web reads, so an incident opened from the map names the run the
+        # map was showing.
+        published_alerts=PublishedAlertService(
+            PredictionQueryService(SqlPredictionPublicationRepository(session))
+        ),
     )
 
 
@@ -171,6 +185,41 @@ def require_simulator_key(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="a valid X-Simulator-Key header is required",
         )
+
+
+def require_incident_actor(
+    x_simulator_key: str | None = Header(default=None, alias="X-Simulator-Key"),
+    x_actor_id: str | None = Header(default=None, alias="X-Actor-Id"),
+    service: IncidentService = Depends(get_incident_service),
+) -> IncidentActor:
+    """Authenticate a write as a *specific responder*, not just as the key.
+
+    The simulator key proves the request comes from the simulator deployment;
+    `X-Actor-Id` says which responder is acting, and the role and jurisdiction
+    come from the configured `SIMULATOR_ACTORS` registry rather than from the
+    request. A body may name the role it thinks it has, but it cannot claim one
+    the actor does not hold (the service checks that too).
+
+    401 when no actor is named, 401 when the actor is not registered, 503 when
+    the simulator or the registry is not configured.
+    """
+    # The key is passed explicitly: calling the dependency directly would skip
+    # FastAPI's header injection and always see None.
+    require_simulator_key(x_simulator_key=x_simulator_key)
+    try:
+        return service.resolve_actor(actor_id=x_actor_id)
+    except ActorNotPermittedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+            headers={"X-Error-Code": "unauthorized"},
+        ) from exc
+    except SimulatorDisabledError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+            headers={"X-Error-Code": "simulator_disabled"},
+        ) from exc
 
 
 def get_fire_hotspot_service(session: Session = Depends(get_db)) -> FireHotspotService:

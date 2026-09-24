@@ -376,6 +376,15 @@ class Settings(BaseSettings):
     # incident writes are refused with 503 (the workflow is off, not
     # silently unprotected). Reads need no key. See docs/api/incidents.md.
     simulator_api_key: SecretStr | None = None
+    # The responder identities a write may act as, as comma-separated
+    # "<actor_id>:<role>[:<jurisdiction>]" entries, e.g.
+    #   "unit-12:pollution_control:Delhi,engine-7:fire_department:Delhi"
+    # The key authenticates the *simulator*; this registry is the authority on
+    # who exists, which role they hold, and where they may act. A request that
+    # presents X-Actor-Id is resolved here — so one shared key cannot be used
+    # to act as any role in any jurisdiction. Empty means no actor can be
+    # resolved and every write is refused with 503.
+    simulator_actors: str = ""
 
     @model_validator(mode="after")
     def _check_weather_resolution_not_finer_than_grid(self) -> "Settings":

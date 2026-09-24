@@ -25,6 +25,8 @@ def _row_to_incident(row) -> Incident:
         id=row.id,
         source_type=IncidentSourceType(row.source_type),
         source_id=row.source_id,
+        source_ref=row.source_ref,
+        source_synthetic=bool(row.source_synthetic),
         status=IncidentStatus(row.status),
         responder_role=ResponderRole(row.responder_role),
         severity=row.severity,
@@ -50,6 +52,7 @@ def _row_to_event(row) -> IncidentEvent:
         to_status=None if row.to_status is None else IncidentStatus(row.to_status),
         role=None if row.role is None else ResponderRole(row.role),
         actor=row.actor,
+        actor_jurisdiction=row.actor_jurisdiction,
         note=row.note,
         created_at=row.created_at,
     )
@@ -59,6 +62,8 @@ def _incident_values(incident: Incident) -> dict:
     return {
         "source_type": incident.source_type.value,
         "source_id": incident.source_id,
+        "source_ref": incident.source_ref,
+        "source_synthetic": incident.source_synthetic,
         "status": incident.status.value,
         "responder_role": incident.responder_role.value,
         "severity": incident.severity,
@@ -84,6 +89,7 @@ def _event_values(event: IncidentEvent) -> dict:
         "to_status": None if event.to_status is None else event.to_status.value,
         "role": None if event.role is None else event.role.value,
         "actor": event.actor,
+        "actor_jurisdiction": event.actor_jurisdiction,
         "note": event.note,
         "created_at": event.created_at,
     }
@@ -99,11 +105,16 @@ def _get_stmt(incident_id: int) -> Select:
     return select(incident_table).where(incident_table.c.id == incident_id)
 
 
-def _by_source_stmt(source_type: IncidentSourceType, source_id: int) -> Select:
-    return select(incident_table).where(
-        incident_table.c.source_type == source_type.value,
-        incident_table.c.source_id == source_id,
-    )
+def _by_source_stmt(
+    source_type: IncidentSourceType,
+    *,
+    source_id: int | None = None,
+    source_ref: str | None = None,
+) -> Select:
+    stmt = select(incident_table).where(incident_table.c.source_type == source_type.value)
+    if source_type.uses_ref:
+        return stmt.where(incident_table.c.source_ref == source_ref)
+    return stmt.where(incident_table.c.source_id == source_id)
 
 
 def _list_stmt(status, role) -> Select:
@@ -147,6 +158,7 @@ class SqlIncidentRepository:
                             to_status=event.to_status,
                             role=event.role,
                             actor=event.actor,
+                            actor_jurisdiction=event.actor_jurisdiction,
                             note=event.note,
                             created_at=event.created_at,
                         )
@@ -160,7 +172,11 @@ class SqlIncidentRepository:
                 raise
             # Same source already has an incident: return it rather than
             # surfacing a storage error. The service compares attributes.
-            existing = self.get_by_source(incident.source_type, incident.source_id)
+            existing = self.get_by_source(
+                incident.source_type,
+                source_id=incident.source_id,
+                source_ref=incident.source_ref,
+            )
             if existing is None:
                 raise
             return existing
@@ -171,9 +187,15 @@ class SqlIncidentRepository:
         return None if row is None else _row_to_incident(row)
 
     def get_by_source(
-        self, source_type: IncidentSourceType, source_id: int
+        self,
+        source_type: IncidentSourceType,
+        *,
+        source_id: int | None = None,
+        source_ref: str | None = None,
     ) -> Incident | None:
-        row = self._session.execute(_by_source_stmt(source_type, source_id)).first()
+        row = self._session.execute(
+            _by_source_stmt(source_type, source_id=source_id, source_ref=source_ref)
+        ).first()
         return None if row is None else _row_to_incident(row)
 
     def update(self, incident: Incident, event: IncidentEvent) -> Incident:
@@ -201,6 +223,7 @@ class SqlIncidentRepository:
                         to_status=event.to_status,
                         role=event.role,
                         actor=event.actor,
+                        actor_jurisdiction=event.actor_jurisdiction,
                         note=event.note,
                         created_at=event.created_at,
                     )
@@ -209,6 +232,20 @@ class SqlIncidentRepository:
         )
         self._session.commit()
         return stored
+
+    def append_event(self, event: IncidentEvent) -> IncidentEvent:
+        """Append one history event on its own, leaving the incident row alone.
+
+        Committed immediately so a simulated delivery is recorded even though it
+        changes no incident state.
+        """
+        row = self._session.execute(
+            incident_event_table.insert().values(**_event_values(event)).returning(
+                incident_event_table
+            )
+        ).one()
+        self._session.commit()
+        return _row_to_event(row)
 
     def list(self, *, status=None, role=None) -> list[Incident]:
         rows = self._session.execute(_list_stmt(status, role)).all()

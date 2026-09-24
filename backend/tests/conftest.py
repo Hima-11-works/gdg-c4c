@@ -14,8 +14,17 @@ if os.environ.get("RUN_DB_TESTS") != "1":
     os.environ.setdefault("POSTGRES_DB", "test")
 
 # The incident workflow refuses writes unless a simulator key is configured;
-# tests exercise both the configured and unconfigured cases.
+# tests exercise both the configured and unconfigured cases. Writes also need
+# an X-Actor-Id naming a responder in SIMULATOR_ACTORS, so the test registry
+# below mirrors the real one: an id, a role, and the jurisdiction it may act in.
 os.environ.setdefault("SIMULATOR_API_KEY", "test-simulator-key")
+os.environ.setdefault(
+    "SIMULATOR_ACTORS",
+    "control-room:pollution_control:Delhi,"
+    "unit-12:pollution_control:Delhi,"
+    "engine-7:fire_department:Delhi,"
+    "engine-9:fire_department:Mumbai",
+)
 
 from app.api.deps import (  # noqa: E402
     get_alert_service,
@@ -43,6 +52,8 @@ from app.services.media_storage import (  # noqa: E402
     MediaDurability,
     MediaNotDurableError,
 )
+from app.services.prediction_queries import PredictionQueryService  # noqa: E402
+from app.services.published_alerts import PublishedAlertService  # noqa: E402
 from app.services.reports import FireReportService  # noqa: E402
 from app.services.sensors import SensorService  # noqa: E402
 from app.services.weather import WeatherService  # noqa: E402
@@ -53,7 +64,9 @@ from tests.fakes import (  # noqa: E402
     FakeFireReportRepository,
     FakeForecastRepository,
     FakeGridStateRepository,
+    FakeIncidentDeliveryRepository,
     FakeIncidentRepository,
+    FakePredictionPublicationRepository,
     FakeReportEvidenceRepository,
     FakeSensorReadingRepository,
     FakeWeatherReadingRepository,
@@ -107,6 +120,8 @@ class FakeRepos:
         self.evidence = FakeReportEvidenceRepository()
         self.media = InMemoryMediaStore()
         self.incidents = FakeIncidentRepository()
+        self.incident_deliveries = FakeIncidentDeliveryRepository()
+        self.publication = FakePredictionPublicationRepository()
         self.federation = FakeFederationRepository()
 
 
@@ -145,6 +160,13 @@ def api_client(fake_repos: FakeRepos) -> TestClient:
         incident_repository=fake_repos.incidents,
         alert_repository=fake_repos.alert,
         report_repository=fake_repos.fire,
+        delivery_repository=fake_repos.incident_deliveries,
+        published_alerts=PublishedAlertService(
+            PredictionQueryService(
+                fake_repos.publication,
+                native_resolution=get_settings().h3_resolution,
+            )
+        ),
     )
     app.dependency_overrides[get_federation_status_service] = lambda: FederationStatusReader(
         fake_repos.federation

@@ -4,6 +4,12 @@ Runs against in-memory fakes (no database). Covers the documented sequence:
 create from an eligible fire alert, assign, progress through response states,
 and retrieve the complete history — plus duplicate handling, invalid
 transitions, role checks, and the anonymous-write protection.
+
+Every write carries the simulator key *and* an X-Actor-Id naming a responder in
+SIMULATOR_ACTORS: the key authenticates the simulator, the actor identity
+carries the role and jurisdiction the server enforces. See
+tests/test_incident_authority.py for published-alert sources, the simulated
+inbox, and the jurisdiction rules.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -16,7 +22,10 @@ from app.domain.types import AlertSeverity, FireKind, FireReport
 from tests.conftest import FakeRepos
 
 KEY = "test-simulator-key"
-HEADERS = {"X-Simulator-Key": KEY}
+# unit-12 is a pollution-control responder scoped to Delhi (see conftest's
+# SIMULATOR_ACTORS); engine-7 is the fire-department equivalent.
+HEADERS = {"X-Simulator-Key": KEY, "X-Actor-Id": "unit-12"}
+FIRE_HEADERS = {"X-Simulator-Key": KEY, "X-Actor-Id": "engine-7"}
 LAT, LON = 28.55, 77.20
 
 
@@ -97,10 +106,22 @@ def test_fire_incident_full_lifecycle_with_history(
     assert history.status_code == 200
     events = history.json()["data"]
     types = [event["event_type"] for event in events]
-    assert types == ["created", "assigned", "transition", "transition", "transition", "transition"]
+    # Assignment also records the simulated hand-off to the responder's inbox.
+    assert types == [
+        "created",
+        "assigned",
+        "delivered",
+        "transition",
+        "transition",
+        "transition",
+        "transition",
+    ]
     assert events[-1]["to_status"] == "resolved"
     # The append-only history never loses the earlier states.
     assert events[0]["to_status"] == "reported"
+    # Every event names the acting authority, not just the role.
+    assert events[1]["actor"] == "unit-12"
+    assert events[1]["actor_jurisdiction"] == "Delhi"
 
 
 def test_fire_report_creates_fire_department_incident(

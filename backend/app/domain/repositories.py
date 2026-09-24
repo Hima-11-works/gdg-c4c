@@ -16,6 +16,7 @@ from app.domain.features import FeatureSnapshot
 from app.domain.environmental_observations import FireHotspot, TrafficObservation
 from app.domain.incidents import (
     Incident,
+    IncidentDelivery,
     IncidentEvent,
     IncidentSourceType,
     IncidentStatus,
@@ -168,20 +169,34 @@ class IncidentRepository(Protocol):
     def create(self, incident: Incident, event: IncidentEvent) -> Incident:
         """Store a new incident and its `created` history event atomically.
 
-        The (source_type, source_id) pair is unique: a second create for the
-        same source must not add a row. Returns the stored incident.
+        The source is unique — (source_type, source_id) for an alert or report,
+        (source_type, source_ref) for a published alert — so a second create
+        for the same source must not add a row. Returns the stored incident.
         """
         ...
 
     def get(self, incident_id: int) -> Incident | None: ...
 
     def get_by_source(
-        self, source_type: IncidentSourceType, source_id: int
+        self,
+        source_type: IncidentSourceType,
+        *,
+        source_id: int | None = None,
+        source_ref: str | None = None,
     ) -> Incident | None: ...
 
     def update(self, incident: Incident, event: IncidentEvent) -> Incident:
         """Persist a status/assignment change and append exactly one event,
         atomically. Never edits or deletes prior events."""
+        ...
+
+    def append_event(self, event: IncidentEvent) -> IncidentEvent:
+        """Append one history event without changing the incident row.
+
+        Used for events that record something other than a state change — a
+        simulated delivery, for instance. History stays append-only and
+        complete.
+        """
         ...
 
     def list(
@@ -193,6 +208,39 @@ class IncidentRepository(Protocol):
 
     def history(self, incident_id: int) -> list[IncidentEvent]:
         """All events for an incident, oldest first."""
+        ...
+
+
+class IncidentDeliveryRepository(Protocol):
+    """Storage for the *simulated* hand-off of incidents to responder inboxes.
+
+    Nothing here contacts anyone: rows record that an assignment became visible
+    to a role, and that the responder acknowledged the incident.
+    """
+
+    def create(self, delivery: IncidentDelivery) -> IncidentDelivery:
+        """Record a new simulated delivery and return it stored (with its id)."""
+        ...
+
+    def acknowledge_open(
+        self, incident_id: int, *, acknowledged_at: datetime
+    ) -> list[IncidentDelivery]:
+        """Mark every still-simulated delivery for the incident acknowledged.
+
+        Called when the responder acknowledges the incident, so the inbox item
+        and the incident status cannot disagree. Idempotent: a second call
+        returns the same rows without changing them.
+        """
+        ...
+
+    def list_for_incident(self, incident_id: int) -> list[IncidentDelivery]:
+        """Deliveries for one incident, oldest first."""
+        ...
+
+    def list_for_role(
+        self, role: ResponderRole, *, only_open: bool = False
+    ) -> list[IncidentDelivery]:
+        """The inbox of one responder role, newest first."""
         ...
 
 
