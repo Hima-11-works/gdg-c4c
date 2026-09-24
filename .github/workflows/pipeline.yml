@@ -9,10 +9,24 @@ name: Pollution pipeline
 # run; in live mode it fails closed (no observed current PM2.5 => a failed
 # stage, never a synthetic substitute). See docs/api/publication.md.
 #
+# In live mode the run also ingests the feature inputs the v2 publication
+# reads, each one optional and each one reported in the stage summary with its
+# own state (present / empty / stale / missing / failed):
+#   static cells, Open-Meteo observations, Open-Meteo forecast weather,
+#   NASA FIRMS, licensed traffic. A source that is not configured is skipped,
+#   never faked: its features stay null in the published run.
+#
 # Repository configuration:
 #   secret   DATABASE_URL         direct (non-pooler) Neon connection string
 #   variable PIPELINE_DEMO_MODE   optional; "true" (default) or "false"
 #   secret   OPENAQ_API_KEY       only needed when PIPELINE_DEMO_MODE=false
+#   secret   FIRMS_MAP_KEY        optional; without it fire features stay null
+#   variable STATIC_FEATURES_DIR  optional; directory holding the versioned
+#                                static-cell artifact(s) to import. The
+#                                artifact filename is passed as
+#                                STATIC_FEATURES_PATH by the step below.
+#   variable TRAFFIC_FEED_FILE   optional; licensed traffic JSONL to import
+#                                (plus TRAFFIC_FEED_* provenance variables)
 #
 # GitHub only runs scheduled workflows on the default branch, and pauses a
 # schedule after ~60 days without repository activity.
@@ -44,6 +58,18 @@ jobs:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       DEMO_MODE: ${{ vars.PIPELINE_DEMO_MODE || 'true' }}
       OPENAQ_API_KEY: ${{ secrets.OPENAQ_API_KEY }}
+      FIRMS_MAP_KEY: ${{ secrets.FIRMS_MAP_KEY }}
+      # Optional live feature inputs. Each unset variable makes its stage a
+      # documented skip, and the published run reports the source as missing
+      # with null features — never a fabricated value. The *paths* are set by
+      # the materialize step below, once it knows whether a download happened.
+      STATIC_FEATURES_URL: ${{ vars.STATIC_FEATURES_URL }}
+      TRAFFIC_FEED_URL: ${{ vars.TRAFFIC_FEED_URL }}
+      TRAFFIC_FEED_SOURCE: ${{ vars.TRAFFIC_FEED_SOURCE || 'licensed-sample' }}
+      TRAFFIC_FEED_PRODUCT: ${{ vars.TRAFFIC_FEED_PRODUCT || 'sampled road speeds' }}
+      TRAFFIC_FEED_VERSION: ${{ vars.TRAFFIC_FEED_VERSION || 'unversioned' }}
+      TRAFFIC_FEED_ATTRIBUTION: ${{ vars.TRAFFIC_FEED_ATTRIBUTION || 'unattributed' }}
+      TRAFFIC_FEED_LICENSE: ${{ vars.TRAFFIC_FEED_LICENSE || 'unknown' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -52,6 +78,30 @@ jobs:
           if [ -z "$DATABASE_URL" ]; then
             echo "::error::Set the DATABASE_URL repository secret (a direct Neon connection string)."
             exit 1
+          fi
+
+      # Fetch the configured live feature inputs. A missing artifact is not an
+      # error here: the pipeline stage reports the source as missing and the
+      # published run leaves those features null. Paths are exported for the
+      # later steps only when a file actually landed.
+      - name: Materialize configured live feature inputs
+        run: |
+          mkdir -p var/inputs
+          if [ -n "$STATIC_FEATURES_URL" ]; then
+            if curl -fsSL "$STATIC_FEATURES_URL" -o var/inputs/static_cells.json; then
+              echo "STATIC_FEATURES_PATH=$PWD/var/inputs/static_cells.json" >> "$GITHUB_ENV"
+              echo "::notice::static-cell artifact fetched"
+            else
+              echo "::warning::static artifact download failed; the source will be reported missing"
+            fi
+          fi
+          if [ -n "$TRAFFIC_FEED_URL" ]; then
+            if curl -fsSL "$TRAFFIC_FEED_URL" -o var/inputs/traffic.jsonl; then
+              echo "TRAFFIC_FEED_PATH=$PWD/var/inputs/traffic.jsonl" >> "$GITHUB_ENV"
+              echo "::notice::licensed traffic feed fetched"
+            else
+              echo "::warning::traffic feed download failed; the source will be reported missing"
+            fi
           fi
 
       - uses: actions/setup-python@v5
@@ -66,9 +116,13 @@ jobs:
       - name: Apply migrations
         run: alembic upgrade head
 
-      # One invocation runs every stage, publication last. Exit code is
-      # non-zero if any stage failed, so a failed live source surfaces as a
-      # red run rather than silently leaving a stale v2 run in place.
+      # One invocation runs every stage, publication last: static cells,
+      # sensors, weather observations, forecast weather, FIRMS, traffic, grid,
+      # forecast, alerts, publish v2. Exit code is non-zero if any stage failed,
+      # so a failed live source surfaces as a red run rather than silently
+      # leaving a stale v2 run in place. A *skipped* optional source (no
+      # credential or artifact) is reported in the summary as missing, with its
+      # features null in the published run.
       - name: Run pipeline (ingestion -> grid -> forecast -> alerts -> publish v2)
         run: python -m app.pipeline.run
 

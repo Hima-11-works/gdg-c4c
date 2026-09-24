@@ -135,6 +135,36 @@ class Settings(BaseSettings):
     # contacted unless a separate provider is deliberately added.
     traffic_stale_after_hours: float = Field(default=2.0, gt=0)
 
+    # --- Live feature inputs for the v2 publication (docs/api/publication.md) ---
+    # Versioned static cell features (population, road lengths, land cover).
+    # A preprocessed, licensed artifact is imported by the `static_features`
+    # pipeline stage; the publication path then reads the newest dataset that
+    # was available by the run's issue time. Unset means no static input at
+    # all, and population/land-cover features stay null (reported as `missing`)
+    # rather than being invented.
+    static_features_path: str = ""
+    # A static release older than this is reported as stale and not used, so a
+    # forgotten artifact cannot quietly describe a year that has moved on.
+    static_features_max_age_days: float = Field(default=400.0, gt=0)
+    # Licensed sampled-traffic feed (JSONL, see app.ingestion.traffic_samples).
+    # Unset means traffic features stay null; the provenance fields below are
+    # recorded with the import, so a licensed feed must state its own terms.
+    traffic_feed_path: str = ""
+    traffic_feed_source: str = "licensed-sample"
+    traffic_feed_product: str = "sampled road speeds"
+    traffic_feed_version: str = "unversioned"
+    traffic_feed_attribution: str = "unattributed"
+    traffic_feed_license: str = "unknown"
+    # How far ahead forecast weather is pulled, in hours. Matches the published
+    # horizons (0..6h) so every future horizon can be described by a forecast
+    # issued at or before prediction time.
+    weather_forecast_hours: int = Field(default=6, ge=1, le=48)
+    # Self-imposed cap on how many cell centres one forecast run requests, so
+    # one pipeline stage can never fan out without bound. A shortfall is
+    # reported in the ingestion run metrics and the publication's coverage, not
+    # hidden.
+    weather_forecast_max_locations: int = Field(default=400, ge=1, le=5000)
+
     # --- Satellite raster tile proxy (GET /api/v1/tiles/*, app.services.tiles) ---
     # The web map's raster overlays used to point straight at NASA GIBS and at
     # a NO2 WMS endpoint configured in the browser. They now come through the

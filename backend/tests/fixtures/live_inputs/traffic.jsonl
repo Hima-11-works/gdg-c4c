@@ -1,0 +1,3 @@
+{"road_id":"NH-48-km12","h3_cell":"8861892e0dfffff","observed_at":"2026-09-24T08:05:00Z","available_at":"2026-09-24T08:10:00Z","observed_speed_kph":8.0,"free_flow_speed_kph":60.0,"sampled_road_coverage_fraction":0.72,"confidence":0.81}
+{"road_id":"NH-48-km12","h3_cell":"8861892e0dfffff","observed_at":"2026-09-24T08:20:00Z","available_at":"2026-09-24T08:25:00Z","observed_speed_kph":11.5,"free_flow_speed_kph":60.0,"sampled_road_coverage_fraction":0.72,"confidence":0.81}
+{"road_id":"NH-48-km13","h3_cell":"8861892e1dfffff","observed_at":"2026-09-24T08:20:00Z","available_at":"2026-09-24T08:26:00Z","observed_speed_kph":44.0,"free_flow_speed_kph":60.0,"sampled_road_coverage_fraction":0.55,"confidence":0.7}

@@ -16,6 +16,8 @@ from app.db.repositories.prediction_publication import SqlPredictionPublicationR
 from app.db.repositories.report_evidence import SqlReportEvidenceRepository
 from app.db.repositories.traffic_observation import SqlTrafficObservationRepository
 from app.db.repositories.sensor_reading import SqlSensorReadingRepository
+from app.db.repositories.static_cell_feature import SqlStaticCellFeatureRepository
+from app.db.repositories.weather_forecast import SqlWeatherForecastRepository
 from app.db.repositories.weather_reading import SqlWeatherReadingRepository
 
 __all__ = [
@@ -35,5 +37,7 @@ __all__ = [
     "SqlReportEvidenceRepository",
     "SqlTrafficObservationRepository",
     "SqlSensorReadingRepository",
+    "SqlStaticCellFeatureRepository",
+    "SqlWeatherForecastRepository",
     "SqlWeatherReadingRepository",
 ]

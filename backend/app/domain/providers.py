@@ -10,6 +10,7 @@ only on these interfaces, never on a concrete provider.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
@@ -35,6 +36,48 @@ class PollutionDataProvider(Protocol):
         going (see OpenAQProvider for the expected pattern).
         """
         ...
+
+
+@dataclass(frozen=True, slots=True)
+class WeatherForecastSample:
+    """One modeled forecast value for a cell: issued now, valid later.
+
+    `issued_at` is the provider's issue time and `valid_at` the hour it
+    predicts, so a consumer can enforce "issued at or before the prediction
+    time" instead of silently reading a forecast that did not exist yet.
+    """
+
+    h3_cell: str
+    issued_at: datetime
+    valid_at: datetime
+    horizon_hours: float
+    wind_speed: float
+    wind_direction: float
+    precipitation: float
+    boundary_layer_height: float | None = None
+    temperature: float | None = None
+    humidity: float | None = None
+
+    def __post_init__(self) -> None:
+        from app.domain.types import WeatherSample
+
+        if not self.h3_cell.strip():
+            raise ValueError("h3_cell must not be empty")
+        if self.valid_at < self.issued_at:
+            raise ValueError("valid_at must not precede issued_at")
+        if not self.horizon_hours > 0:
+            raise ValueError("horizon_hours must be > 0")
+        # Reuse the observation validator so a forecast and a reading are held
+        # to the same physical ranges.
+        WeatherSample(
+            wind_speed=self.wind_speed,
+            wind_direction=self.wind_direction,
+            precipitation=self.precipitation,
+            measured_at=self.valid_at,
+            boundary_layer_height=self.boundary_layer_height,
+            temperature=self.temperature,
+            humidity=self.humidity,
+        )
 
 
 class WeatherProvider(Protocol):

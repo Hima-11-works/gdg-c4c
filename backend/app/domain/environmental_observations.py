@@ -1,4 +1,5 @@
-"""Retained, provenance-aware fire and traffic source observations."""
+"""Retained, provenance-aware fire, forecast-weather and traffic source
+observations."""
 
 from __future__ import annotations
 
@@ -65,6 +66,64 @@ class FireHotspot:
             raise ValueError("confidence_class must be low, nominal, high, or unknown")
         if self.daynight is not None and self.daynight not in {"D", "N"}:
             raise ValueError("daynight must be D, N, or null")
+
+
+@dataclass(frozen=True, slots=True)
+class WeatherForecast:
+    """One modeled forecast-weather value for a cell and a future valid time.
+
+    Distinct from `WeatherReading` (an observation) on purpose: a forecast
+    carries the time it was *issued* separately from the time it is *valid* for.
+    The publication path only accepts a forecast whose `issued_at` is at or
+    before the prediction issue time, so a future horizon can never be filled
+    with a forecast that did not exist yet when the prediction was made.
+    """
+
+    forecast_id: str
+    dataset_id: str
+    ingestion_run_id: str
+    source: str
+    h3_cell: str
+    issued_at: datetime
+    valid_at: datetime
+    horizon_hours: float
+    wind_speed_ms: float
+    wind_direction_deg: float
+    precipitation_mm: float
+    boundary_layer_height_m: float | None = None
+    temperature_c: float | None = None
+    relative_humidity_pct: float | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("forecast_id", "dataset_id", "ingestion_run_id", "source", "h3_cell"):
+            if not getattr(self, name).strip():
+                raise ValueError(f"{name} must not be empty")
+        _require_utc(self.issued_at, "issued_at")
+        _require_utc(self.valid_at, "valid_at")
+        if self.valid_at < self.issued_at:
+            raise ValueError("valid_at must not precede issued_at")
+        if not math.isfinite(self.horizon_hours) or self.horizon_hours <= 0:
+            raise ValueError("horizon_hours must be finite and > 0")
+        _finite_nonnegative(self.wind_speed_ms, "wind_speed_ms")
+        if not math.isfinite(self.wind_direction_deg) or not (
+            0 <= self.wind_direction_deg < 360
+        ):
+            raise ValueError("wind_direction_deg must be within [0, 360)")
+        _finite_nonnegative(self.precipitation_mm, "precipitation_mm")
+        _finite_nonnegative(self.boundary_layer_height_m, "boundary_layer_height_m")
+        if self.temperature_c is not None and not (
+            -90 <= self.temperature_c <= 60
+        ):
+            raise ValueError("temperature_c must be within [-90, 60]")
+        if self.relative_humidity_pct is not None and not (
+            0 <= self.relative_humidity_pct <= 100
+        ):
+            raise ValueError("relative_humidity_pct must be within [0, 100]")
+
+    @property
+    def is_usable_for(self, issued_before: datetime) -> bool:
+        """Whether this forecast existed by `issued_before` (leakage guard)."""
+        return self.issued_at <= issued_before
 
 
 @dataclass(frozen=True, slots=True)

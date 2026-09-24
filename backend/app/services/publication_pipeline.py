@@ -19,12 +19,15 @@ Two entry points, deliberately distinct:
   always populated. This is what an empty database uses to get a complete,
   self-consistent India demo run without any external API.
 * ``publish_from_state`` — a run built from the grid state / weather / reports
-  the live pipeline just persisted. In live mode it **fails closed**: if the
-  current state has no observed PM2.5 with supporting stations, the
-  publication stage reports a degraded result and refuses to publish a
-  synthetic stand-in. A failed live source therefore stays visible as a
-  failure (or an explicitly labelled degraded run), never as an unlabeled
-  synthetic replacement.
+  the live pipeline just persisted, **plus** the versioned live feature inputs
+  it can actually supply: static population/land use, FIRMS fire detections,
+  licensed traffic observations, and forecast weather issued before prediction
+  time. In live mode it **fails closed**: if the current state has no observed
+  PM2.5 with supporting stations, the publication stage reports a degraded
+  result and refuses to publish a synthetic stand-in. A failed or unavailable
+  auxiliary source is not fatal either — it is recorded as exactly that
+  (``failed`` / ``stale`` / ``missing``) and its features stay null, and a
+  source that legitimately reports nothing is a *valid zero*, not a gap.
 
 Both routes reuse ``PredictionPublicationService`` for the actual write; this
 module only assembles its inputs and decides which mode/provenance is honest.
@@ -32,21 +35,30 @@ module only assembles its inputs and decides which mode/provenance is honest.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+import math
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
+from enum import StrEnum
 
 from sqlalchemy.orm import Session
 
 from app.db.repositories import (
+    SqlDatasetVersionRepository,
     SqlFeatureSnapshotRepository,
+    SqlFireHotspotRepository,
     SqlForecastRepository,
     SqlGridStateRepository,
+    SqlIngestionRunRepository,
     SqlModelVersionRepository,
     SqlPredictionPublicationRepository,
     SqlSensorReadingRepository,
+    SqlStaticCellFeatureRepository,
+    SqlTrafficObservationRepository,
+    SqlWeatherForecastRepository,
     SqlWeatherReadingRepository,
 )
 from app.domain.features import (
+    CellStaticFeatures,
     DataMode,
     DatasetRef,
     FeatureSnapshot,
@@ -54,9 +66,11 @@ from app.domain.features import (
     WeatherFeature,
 )
 from app.domain.prediction import PredictionResult, PredictionRun
+from app.domain.scenario import IngestionRunStatus
 from app.ingestion.demo_scenarios import ScenarioGenerator
 from app.services.features import FeatureBuilder
 from app.services.prediction_publication import PredictionPublicationService
+from app.services.static_features import STATIC_SOURCE
 
 # The region label every published run is stamped with. The v2 query service
 # defaults to this exact string (PredictionQueryService.region), so a run
@@ -83,10 +97,117 @@ class PublicationOutcome:
     mode: DataMode | None = None
     cells: int = 0
     results: int = 0
+    sources: tuple["SourceStatus", ...] = ()
+    coverage_fraction: float | None = None
 
     @property
     def published(self) -> bool:
         return self.run_id is not None
+
+    def source_report(self) -> str:
+        """One compact line per source: state, rows used, and its newest timestamp."""
+        return " | ".join(item.report_line() for item in self.sources)
+
+
+class SourceState(StrEnum):
+    """The five states an upstream input can be in, kept distinct on purpose.
+
+    ``PRESENT`` and ``EMPTY`` are the two kinds of "we have data": ``EMPTY`` is
+    a *valid zero* (the source answered and reported nothing), which must never
+    be confused with a gap. ``STALE`` means rows exist but all of them are too
+    old to describe the run's issue time. ``MISSING`` means the source was never
+    configured or has no dataset. ``FAILED`` means the last ingestion attempt
+    errored. Only the first two contribute feature values; the rest leave
+    features null with the source named in the run's provenance.
+    """
+
+    PRESENT = "present"
+    EMPTY = "empty"
+    STALE = "stale"
+    MISSING = "missing"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class SourceStatus:
+    """One upstream input's state, and the evidence for that judgement."""
+
+    name: str
+    state: SourceState
+    rows_available: int = 0
+    rows_used: int = 0
+    rows_stale: int = 0
+    newest_at: datetime | None = None
+    dataset_id: str | None = None
+    detail: str = ""
+
+    @property
+    def contributes(self) -> bool:
+        """Whether this source's values may enter a feature vector."""
+        return self.state in (SourceState.PRESENT, SourceState.EMPTY)
+
+    def report_line(self) -> str:
+        """One compact line: name, state, rows, newest timestamp, and why."""
+        parts = [f"{self.name}={self.state.value}", f"{self.rows_used} rows"]
+        if self.newest_at is not None:
+            parts.append(f"newest={self.newest_at.isoformat()}")
+        if self.rows_stale:
+            parts.append(f"stale={self.rows_stale}")
+        if self.detail:
+            parts.append(self.detail)
+        return f"({', '.join(parts)})"
+
+
+@dataclass
+class LiveFeatureInputs:
+    """Everything the live path can supply beyond grid/sensors/observations.
+
+    A field left as ``None`` means *no usable value* and the corresponding
+    features stay null with a ``missing_fields`` entry. An **empty list** means
+    the source answered and reported nothing — a valid zero (no fires, no
+    traffic sample), not a gap. The distinction is the whole point of this type.
+    """
+
+    static_features: list[CellStaticFeatures] | None = None
+    static_refs: tuple[DatasetRef, ...] = ()
+    fire_detections: list[dict] | None = None
+    fire_refs: tuple[DatasetRef, ...] = ()
+    traffic_observations: list[dict] | None = None
+    traffic_refs: tuple[DatasetRef, ...] = ()
+    weather_features: list[WeatherFeature] = field(default_factory=list)
+    weather_refs: tuple[DatasetRef, ...] = ()
+    forecast_features: list[WeatherFeature] = field(default_factory=list)
+    statuses: tuple[SourceStatus, ...] = ()
+
+    def status_of(self, name: str) -> SourceStatus | None:
+        return next((item for item in self.statuses if item.name == name), None)
+
+    def all_refs(self) -> list[DatasetRef]:
+        """Every dataset that contributed to the run, in a stable order."""
+        refs: list[DatasetRef] = [*self.static_refs, *self.fire_refs, *self.traffic_refs]
+        refs.extend(self.weather_refs)
+        return refs
+
+    def assert_no_synthetic_refs(self, mode: DataMode) -> None:
+        """A live run may not carry a synthetic input, whatever produced it.
+
+        This is the last line of defence behind the per-source checks: if any
+        dataset ref is synthetic and the run claims to be live, refuse to
+        publish rather than publish a mixed run with an honest-looking label.
+        """
+        if mode is not DataMode.LIVE:
+            return
+        synthetic = sorted(
+            {
+                ref.dataset_id
+                for ref in self.all_refs()
+                if ref.kind is InputKind.SYNTHETIC
+            }
+        )
+        if synthetic:
+            raise ValueError(
+                "live run refuses synthetic dataset refs: " + ", ".join(synthetic)
+            )
 
 
 def _build_snapshots(
@@ -279,11 +400,16 @@ def _weather_features_from_readings(
     features: list[WeatherFeature] = []
     for reading in SqlWeatherReadingRepository(session).list_latest():
         measured_at = reading.measured_at
+        # u/v components, same convention as the demo scenario and the v2
+        # weather route, so a live feature vector carries the same wind fields
+        # the scenario path always did.
         features.append(
             WeatherFeature(
                 h3_cell=reading.h3_cell,
                 issued_at=measured_at,
                 valid_at=measured_at,
+                wind_u_ms=-reading.wind_speed * math.sin(math.radians(reading.wind_direction)),
+                wind_v_ms=-reading.wind_speed * math.cos(math.radians(reading.wind_direction)),
                 wind_speed_ms=reading.wind_speed,
                 wind_direction_deg=reading.wind_direction,
                 precipitation_mm=reading.precipitation,
@@ -305,14 +431,20 @@ def publish_from_state(
     mode: DataMode,
     feature_run_id: str,
     run_id: str,
+    inputs: LiveFeatureInputs | None = None,
 ) -> PublicationOutcome:
     """Publish a run from the state the live pipeline just persisted.
 
-    Builds feature snapshots from the current grid state, weather, and sensor
-    readings. In live mode this fails closed: ``publish`` (via
+    Builds feature snapshots from the current grid state and sensor readings,
+    plus whatever live feature inputs the deployment actually has: versioned
+    static population/land use, validated FIRMS detections, licensed traffic
+    observations, and forecast weather issued before prediction time.
+
+    In live mode this fails closed: ``publish`` (via
     ``assert_live_snapshots_available``) refuses when the current state has no
-    observed PM2.5 with supporting stations, so a failed live source becomes a
-    visible failure rather than an unlabeled synthetic run.
+    observed PM2.5 with supporting stations, and a synthetic dataset ref is
+    refused too, so a failed live source becomes a visible failure rather than
+    an unlabeled synthetic run.
     """
     resolution = getattr(settings, "h3_resolution", 8)
     current_state = SqlGridStateRepository(session).latest()
@@ -329,6 +461,14 @@ def publish_from_state(
     weather_features = _weather_features_from_readings(session, resolution=resolution)
 
     cells = [state.h3_cell for state in current_state]
+    if inputs is None:
+        inputs = collect_live_inputs(
+            session, timestamp=timestamp, settings=settings, cells=cells, region=region
+        )
+    # Observations for "now", modeled forecasts for the horizons ahead.
+    all_weather = [*weather_features, *inputs.forecast_features]
+    refs = _live_dataset_refs() + inputs.all_refs()
+
     builder = FeatureBuilder(resolution=resolution)
     snapshots: list[FeatureSnapshot] = []
     for horizon in PUBLISHED_HORIZONS:
@@ -340,9 +480,21 @@ def publish_from_state(
                 valid_at=valid_at,
                 horizon_hours=horizon,
                 sensor_readings=sensor_readings,
-                weather_features=weather_features,
-                dataset_refs=_live_dataset_refs(),
+                weather_features=all_weather,
+                static_features=inputs.static_features or (),
+                traffic_observations=inputs.traffic_observations,
+                fire_detections=inputs.fire_detections,
+                dataset_refs=refs,
             )
+        )
+
+    try:
+        inputs.assert_no_synthetic_refs(mode)
+    except ValueError as exc:
+        return PublicationOutcome(
+            False,
+            f"live publication refused: {exc}",
+            sources=inputs.statuses,
         )
 
     try:
@@ -359,19 +511,37 @@ def publish_from_state(
     except ValueError as exc:
         # assert_live_snapshots_available raises here when live inputs are
         # missing/synthetic — that is the fail-closed signal, surfaced clearly.
-        return PublicationOutcome(False, f"live publication refused: {exc}")
+        return PublicationOutcome(False, f"live publication refused: {exc}", sources=inputs.statuses)
     except Exception as exc:  # noqa: BLE001
-        return PublicationOutcome(False, f"publication failed: {exc!r}")
+        return PublicationOutcome(
+            False, f"publication failed: {exc!r}", sources=inputs.statuses
+        )
 
+    coverage = _mean_coverage(snapshots)
+    source_report = PublicationOutcome(
+        succeeded=True, summary="", sources=inputs.statuses
+    ).source_report()
     return PublicationOutcome(
         True,
         f"published {run.mode.value} run {run.run_id} "
-        f"(cells={len({r.h3_cell for r in results})}, results={len(results)})",
+        f"(cells={len({r.h3_cell for r in results})}, results={len(results)}, "
+        f"coverage={coverage:.2f}) sources: {source_report}",
         run_id=run.run_id,
         mode=run.mode,
         cells=len({result.h3_cell for result in results}),
         results=len(results),
+        sources=inputs.statuses,
+        coverage_fraction=coverage,
     )
+
+
+def _mean_coverage(snapshots: list[FeatureSnapshot]) -> float:
+    """Mean current-horizon coverage, so a run's completeness is visible in the
+    stage summary rather than only inside the per-cell quality object."""
+    current = [item for item in snapshots if item.horizon_hours == 0]
+    if not current:
+        return 0.0
+    return sum(item.quality.coverage_fraction for item in current) / len(current)
 
 
 def _live_dataset_refs() -> list[DatasetRef]:
@@ -391,3 +561,530 @@ def _live_dataset_refs() -> list[DatasetRef]:
             license="project",
         )
     ]
+
+
+# --- live source collection ------------------------------------------------
+
+
+def _latest_run_for(
+    runs: list, dataset_ids: set[str]
+):
+    candidates = [run for run in runs if run.dataset_id in dataset_ids]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda run: run.started_at)
+
+
+def _state_from_ingestion(
+    run_status: str | None, rows: int, rows_stale: int
+) -> SourceState:
+    """Map (last ingestion outcome, usable rows) onto a source state.
+
+    Ordering matters: a failed attempt is reported as failed even if older rows
+    exist, because the newest attempt is the one that describes "what happened
+    this run".
+    """
+    if run_status == IngestionRunStatus.FAILED.value:
+        return SourceState.FAILED
+    if run_status is None:
+        return SourceState.MISSING
+    if rows > 0:
+        return SourceState.PRESENT
+    if rows_stale > 0:
+        return SourceState.STALE
+    # A completed run with no rows at all: the source answered and said
+    # "nothing here", which is a valid zero.
+    return SourceState.EMPTY
+
+
+def _ref_from_dataset(dataset, region: str) -> DatasetRef:
+    return DatasetRef(
+        dataset_id=dataset.dataset_id,
+        source=dataset.source,
+        product=dataset.product,
+        version=dataset.version,
+        kind=dataset.kind,
+        region=dataset.region or region,
+        attribution=dataset.attribution,
+        license=dataset.license,
+    )
+
+
+def _static_inputs(
+    session: Session,
+    *,
+    timestamp: datetime,
+    cells: list[str],
+    region: str,
+    live: bool,
+    max_age_days: float,
+) -> tuple[list[CellStaticFeatures] | None, tuple[DatasetRef, ...], SourceStatus]:
+    """The newest static dataset that existed by `timestamp`, for these cells.
+
+    Refuses a synthetic dataset in live mode rather than passing it through to
+    the feature vector.
+    """
+    datasets = SqlDatasetVersionRepository(session).list(source=STATIC_SOURCE)
+    usable = [
+        item
+        for item in datasets
+        if item.available_at is not None and item.available_at <= timestamp
+    ]
+    if not usable:
+        return (
+            None,
+            (),
+            SourceStatus(
+                name="static",
+                state=SourceState.MISSING,
+                detail="no static-cell dataset is available for this run",
+            ),
+        )
+    dataset = max(usable, key=lambda item: item.available_at)
+    if live and dataset.kind is InputKind.SYNTHETIC:
+        return (
+            None,
+            (),
+            SourceStatus(
+                name="static",
+                state=SourceState.MISSING,
+                dataset_id=dataset.dataset_id,
+                detail=(
+                    f"live mode refuses the synthetic dataset {dataset.dataset_id}; "
+                    "population stays null"
+                ),
+            ),
+        )
+    age_days = (timestamp - dataset.available_at).total_seconds() / 86_400
+    ref = _ref_from_dataset(dataset, region)
+    declared = _declared_datasets_for(session, dataset.dataset_id)
+    detail = ""
+    if declared:
+        # One stored dataset can aggregate several upstream releases; name them
+        # so a reader can audit what the population number actually came from.
+        detail = "sources=" + ",".join(declared)
+    features = SqlStaticCellFeatureRepository(session).list_for_dataset(
+        dataset.dataset_id, h3_cells=cells, available_by=timestamp, refs=(ref,)
+    )
+    if age_days > max_age_days:
+        # Stored, but too old to describe now: report it, use nothing.
+        return (
+            None,
+            (),
+            SourceStatus(
+                name="static",
+                state=SourceState.STALE,
+                rows_available=len(features),
+                rows_stale=len(features),
+                newest_at=dataset.available_at,
+                dataset_id=dataset.dataset_id,
+                detail=(
+                    f"dataset is {age_days:.0f} days old, beyond the "
+                    f"{max_age_days:.0f}-day window"
+                ),
+            ),
+        )
+    if not features:
+        # A dataset with no rows for these cells is a gap, not a zero.
+        return (
+            None,
+            (),
+            SourceStatus(
+                name="static",
+                state=SourceState.MISSING,
+                newest_at=dataset.available_at,
+                dataset_id=dataset.dataset_id,
+                detail="the current static dataset has no rows for these cells",
+            ),
+        )
+    return (
+        features,
+        (ref,),
+        SourceStatus(
+            name="static",
+            state=SourceState.PRESENT,
+            rows_available=len(features),
+            rows_used=len(features),
+            newest_at=max((item.available_at for item in features), default=None),
+            dataset_id=dataset.dataset_id,
+            detail=detail,
+        ),
+    )
+
+
+def _declared_datasets_for(session: Session, dataset_id: str) -> list[str]:
+    """The upstream dataset ids a stored static dataset was built from.
+
+    The import run records them in its metrics (one stored dataset may
+    aggregate a population raster, a road extract, and a land-cover product),
+    which keeps the audit trail complete without a second table.
+    """
+    run = _latest_run_for(
+        SqlIngestionRunRepository(session).list(), {dataset_id}
+    )
+    if run is None or not run.metrics:
+        return []
+    declared = run.metrics.get("declared_datasets") or []
+    return [str(item) for item in declared]
+
+
+def _fire_inputs(
+    session: Session,
+    *,
+    timestamp: datetime,
+    cells: list[str],
+    region: str,
+    stale_after_hours: float,
+    live: bool,
+) -> tuple[list[dict] | None, tuple[DatasetRef, ...], SourceStatus]:
+    """Validated FIRMS detections inside the freshness window.
+
+    "Validated" means: the last ingestion attempt succeeded, the row's
+    acquisition is fresh, and it was *available* by the prediction issue time.
+    A successful but empty feed is a valid zero (no fires) and is passed as an
+    empty list; a failed feed or one whose only rows are stale contributes
+    nothing.
+    """
+    datasets = [
+        item
+        for item in SqlDatasetVersionRepository(session).list(source="nasa-firms")
+        if item.kind is not InputKind.SYNTHETIC
+    ]
+    dataset_ids = {item.dataset_id for item in datasets}
+    run = _latest_run_for(SqlIngestionRunRepository(session).list(), dataset_ids)
+    rows = SqlFireHotspotRepository(session).list_for_window(
+        acquired_from=timestamp - timedelta(hours=max(stale_after_hours * 4, 24.0)),
+        acquired_to=timestamp,
+        available_by=timestamp,
+        h3_cells=cells,
+    )
+    fresh = [
+        item
+        for item in rows
+        if (timestamp - item.acquired_at).total_seconds() / 3600 <= stale_after_hours
+    ]
+    state = _state_from_ingestion(
+        None if run is None else run.status.value,
+        rows=len(rows),
+        rows_stale=len(rows) - len(fresh),
+    )
+    if live and any(item.kind is InputKind.SYNTHETIC for item in datasets):
+        return (
+            None,
+            (),
+            SourceStatus(
+                name="fires",
+                state=SourceState.MISSING,
+                detail="live mode refuses a synthetic FIRMS dataset",
+            ),
+        )
+    newest = max((item.acquired_at for item in rows), default=None)
+    if state is SourceState.FAILED:
+        return (
+            None,
+            (),
+            SourceStatus(
+                name="fires",
+                state=SourceState.FAILED,
+                rows_available=len(rows),
+                rows_stale=len(rows) - len(fresh),
+                newest_at=newest,
+                detail="; ".join(run.errors) if run is not None and run.errors else "",
+            ),
+        )
+    if state is SourceState.MISSING:
+        return (
+            None,
+            (),
+            SourceStatus(
+                name="fires",
+                state=SourceState.MISSING,
+                newest_at=newest,
+                detail="no FIRMS ingestion has run for this region",
+            ),
+        )
+    if state is SourceState.STALE:
+        return (
+            None,
+            (),
+            SourceStatus(
+                name="fires",
+                state=SourceState.STALE,
+                rows_available=len(rows),
+                rows_stale=len(rows) - len(fresh),
+                newest_at=newest,
+                detail=(
+                    f"all {len(rows)} retained detection(s) are older than "
+                    f"{stale_after_hours:.1f}h; fire features stay null rather than "
+                    "reporting no fires"
+                ),
+            ),
+        )
+    dataset = next(
+        (item for item in datasets if run is not None and item.dataset_id == run.dataset_id),
+        None,
+    )
+    ref = _ref_from_dataset(dataset, region) if dataset is not None else None
+    return (
+        [
+            {
+                "latitude": item.latitude,
+                "longitude": item.longitude,
+                "acquired_at": item.acquired_at.isoformat(),
+                "available_at": item.available_at.isoformat(),
+                "frp_mw": item.frp_mw,
+            }
+            for item in fresh
+        ],
+        () if ref is None else (ref,),
+        SourceStatus(
+            name="fires",
+            state=state,
+            rows_available=len(rows),
+            rows_used=len(fresh),
+            rows_stale=len(rows) - len(fresh),
+            newest_at=newest,
+            dataset_id=None if dataset is None else dataset.dataset_id,
+        ),
+    )
+
+
+def _traffic_inputs(
+    session: Session,
+    *,
+    timestamp: datetime,
+    cells: list[str],
+    region: str,
+    stale_after_hours: float,
+) -> tuple[list[dict] | None, tuple[DatasetRef, ...], SourceStatus]:
+    """Licensed traffic observations inside the freshness window.
+
+    An empty list is a valid zero (a complete feed with no sample in this
+    window); ``None`` means missing, stale, or failed and leaves the feature
+    null.
+    """
+    datasets = SqlDatasetVersionRepository(session).list(source="traffic")
+    dataset_ids = {item.dataset_id for item in datasets}
+    run = _latest_run_for(SqlIngestionRunRepository(session).list(), dataset_ids)
+    rows = SqlTrafficObservationRepository(session).list_for_window(
+        observed_from=timestamp - timedelta(hours=max(stale_after_hours * 4, 6.0)),
+        observed_to=timestamp,
+        available_by=timestamp,
+        h3_cells=cells,
+    )
+    fresh = [
+        item
+        for item in rows
+        if (timestamp - item.observed_at).total_seconds() / 3600 <= stale_after_hours
+    ]
+    state = _state_from_ingestion(
+        None if run is None else run.status.value,
+        rows=len(rows),
+        rows_stale=len(rows) - len(fresh),
+    )
+    newest = max((item.observed_at for item in rows), default=None)
+    dataset = next(
+        (item for item in datasets if run is not None and item.dataset_id == run.dataset_id),
+        None,
+    )
+    common = {
+        "rows_available": len(rows),
+        "rows_stale": len(rows) - len(fresh),
+        "newest_at": newest,
+        "dataset_id": None if dataset is None else dataset.dataset_id,
+    }
+    if state is SourceState.FAILED:
+        return (
+            None,
+            (),
+            SourceStatus(
+                name="traffic",
+                state=SourceState.FAILED,
+                detail="; ".join(run.errors) if run is not None and run.errors else "",
+                **common,
+            ),
+        )
+    if state is SourceState.MISSING:
+        return (
+            None,
+            (),
+            SourceStatus(
+                name="traffic",
+                state=SourceState.MISSING,
+                detail="no licensed traffic feed has been imported for this region",
+                **common,
+            ),
+        )
+    if state is SourceState.STALE:
+        return (
+            None,
+            (),
+            SourceStatus(
+                name="traffic",
+                state=SourceState.STALE,
+                detail=(
+                    f"all {len(rows)} retained sample(s) are older than "
+                    f"{stale_after_hours:.1f}h; the feature stays null"
+                ),
+                **common,
+            ),
+        )
+    ref = _ref_from_dataset(dataset, region) if dataset is not None else None
+    return (
+        [
+            {
+                "h3_cell": item.h3_cell,
+                "valid_at": item.observed_at.isoformat(),
+                "available_at": item.available_at.isoformat(),
+                # A measured standstill is a valid zero, not missing.
+                "congestion_ratio": item.observed_free_flow_ratio,
+                "speed_kph": item.observed_speed_kph,
+                "free_flow_kph": item.free_flow_speed_kph,
+            }
+            for item in fresh
+        ],
+        () if ref is None else (ref,),
+        SourceStatus(
+            name="traffic",
+            state=state,
+            rows_used=len(fresh),
+            **common,
+        ),
+    )
+
+
+def _forecast_inputs(
+    session: Session,
+    *,
+    timestamp: datetime,
+    cells: list[str],
+    region: str,
+    horizons: tuple[float, ...],
+) -> tuple[list[WeatherFeature], tuple[DatasetRef, ...], SourceStatus]:
+    """Forecast weather issued at or before `timestamp` for the future horizons.
+
+    This is the leakage guard: a forecast whose issue time is after the
+    prediction is not usable, so the query filters on ``issued_at <= timestamp``
+    and the values are tagged ``MODELED`` rather than ``OBSERVED``.
+    """
+    max_horizon = max(horizons, default=0.0)
+    rows = SqlWeatherForecastRepository(session).list_usable(
+        issued_by=timestamp,
+        valid_from=timestamp,
+        valid_to=timestamp + timedelta(hours=max_horizon + 1.0),
+        h3_cells=cells,
+    )
+    features = [
+        WeatherFeature(
+            h3_cell=item.h3_cell,
+            issued_at=item.issued_at,
+            valid_at=item.valid_at,
+            # Same convention as the demo scenario and the v2 weather route:
+            # u/v are the components of the forecast wind vector.
+            wind_u_ms=-item.wind_speed_ms * math.sin(math.radians(item.wind_direction_deg)),
+            wind_v_ms=-item.wind_speed_ms * math.cos(math.radians(item.wind_direction_deg)),
+            wind_speed_ms=item.wind_speed_ms,
+            wind_direction_deg=item.wind_direction_deg,
+            precipitation_mm=item.precipitation_mm,
+            boundary_layer_height_m=item.boundary_layer_height_m,
+            temperature_c=item.temperature_c,
+            relative_humidity_pct=item.relative_humidity_pct,
+            input_kind=InputKind.MODELED,
+        )
+        for item in rows
+    ]
+    covered = {item.h3_cell for item in rows}
+    if not rows:
+        state = SourceState.MISSING
+        detail = "no forecast weather was issued before this run; horizons fall back to the latest observation"
+    elif len(covered) < len(cells):
+        state = SourceState.PRESENT
+        detail = f"forecast weather covers {len(covered)} of {len(cells)} cell(s)"
+    else:
+        state = SourceState.PRESENT
+        detail = ""
+    dataset_ids = sorted({item.dataset_id for item in rows})
+    refs = tuple(
+        _ref_from_dataset(item, region)
+        for item in SqlDatasetVersionRepository(session).list()
+        if item.dataset_id in set(dataset_ids)
+    )
+    return (
+        features,
+        refs,
+        SourceStatus(
+            name="weather_forecast",
+            state=state,
+            rows_available=len(rows),
+            rows_used=len(rows),
+            newest_at=max((item.issued_at for item in rows), default=None),
+            dataset_id=dataset_ids[0] if dataset_ids else None,
+            detail=detail,
+        ),
+    )
+
+
+def collect_live_inputs(
+    session: Session,
+    *,
+    timestamp: datetime,
+    settings: object,
+    cells: list[str],
+    region: str = INDIA_REGION,
+    horizons: tuple[float, ...] = PUBLISHED_HORIZONS,
+) -> LiveFeatureInputs:
+    """Read every live feature input and classify its state.
+
+    One place decides what "available", "stale", "failed", and "a valid zero"
+    mean, so the pipeline stage, the published run, and the documentation cannot
+    disagree. Nothing here invents a value: a source that cannot answer is
+    reported as such and its features stay null.
+    """
+    live = bool(getattr(settings, "demo_mode", False)) is False
+    max_age_days = float(getattr(settings, "static_features_max_age_days", 400.0))
+    firms_stale = float(getattr(settings, "firms_stale_after_hours", 6.0))
+    traffic_stale = float(getattr(settings, "traffic_stale_after_hours", 2.0))
+
+    static_features, static_refs, static_status = _static_inputs(
+        session,
+        timestamp=timestamp,
+        cells=cells,
+        region=region,
+        live=live,
+        max_age_days=max_age_days,
+    )
+    fires, fire_refs, fire_status = _fire_inputs(
+        session,
+        timestamp=timestamp,
+        cells=cells,
+        region=region,
+        stale_after_hours=firms_stale,
+        live=live,
+    )
+    traffic, traffic_refs, traffic_status = _traffic_inputs(
+        session,
+        timestamp=timestamp,
+        cells=cells,
+        region=region,
+        stale_after_hours=traffic_stale,
+    )
+    forecasts, forecast_refs, forecast_status = _forecast_inputs(
+        session, timestamp=timestamp, cells=cells, region=region, horizons=horizons
+    )
+    return LiveFeatureInputs(
+        static_features=static_features,
+        static_refs=static_refs,
+        fire_detections=fires,
+        fire_refs=fire_refs,
+        traffic_observations=traffic,
+        traffic_refs=traffic_refs,
+        forecast_features=forecasts,
+        weather_refs=forecast_refs,
+        statuses=(
+            static_status,
+            fire_status,
+            traffic_status,
+            forecast_status,
+        ),
+    )
+

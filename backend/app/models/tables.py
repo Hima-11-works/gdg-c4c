@@ -783,3 +783,111 @@ traffic_observation = Table(
     Index("ix_traffic_source_observed", "source", "observed_at"),
     Index("ix_traffic_run", "ingestion_run_id"),
 )
+
+# Versioned static cell features (population, roads, land cover) imported from
+# a preprocessed, licensed artifact (app.ingestion.static_features). The
+# version lives in dataset_version; rows are keyed by (dataset_id, cell) so a
+# new census or land-cover release never overwrites the previous one, and the
+# publication path can prove which version a run used.
+static_cell_feature = Table(
+    "static_cell_feature",
+    metadata,
+    Column("dataset_id", String(120), ForeignKey("dataset_version.id"), primary_key=True),
+    Column("h3_cell", String(H3_CELL_LENGTH), primary_key=True),
+    Column("ingestion_run_id", String(120), ForeignKey("ingestion_run.id"), nullable=False),
+    Column("population_count", Float, nullable=True),
+    Column("population_density_per_km2", Float, nullable=True),
+    # {"motorway": 12.3, "trunk": 4.5, ...} — the per-class road lengths the
+    # feature builder sums into a density. JSONB because the class set is
+    # dataset-specific.
+    Column("road_length_km_by_class", JSONB, nullable=True),
+    Column("major_road_distance_km", Float, nullable=True),
+    Column("built_up_fraction", Float, nullable=True),
+    Column("vegetation_fraction", Float, nullable=True),
+    Column("bare_soil_fraction", Float, nullable=True),
+    Column("industrial_fraction", Float, nullable=True),
+    Column("coverage_fraction", Float, nullable=False),
+    # The period the values describe, and when they became usable. Both gate
+    # leakage: a value valid only from the future, or published after the
+    # prediction issue time, is treated as missing rather than used.
+    Column("valid_from", DateTime(timezone=True), nullable=True),
+    Column("available_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint(
+        "population_count IS NULL OR population_count >= 0",
+        name="ck_static_cell_feature_population_nonnegative",
+    ),
+    CheckConstraint(
+        "population_density_per_km2 IS NULL OR population_density_per_km2 >= 0",
+        name="ck_static_cell_feature_density_nonnegative",
+    ),
+    CheckConstraint(
+        "major_road_distance_km IS NULL OR major_road_distance_km >= 0",
+        name="ck_static_cell_feature_road_distance_nonnegative",
+    ),
+    CheckConstraint(
+        "built_up_fraction IS NULL OR built_up_fraction BETWEEN 0 AND 1",
+        name="ck_static_cell_feature_built_up",
+    ),
+    CheckConstraint(
+        "vegetation_fraction IS NULL OR vegetation_fraction BETWEEN 0 AND 1",
+        name="ck_static_cell_feature_vegetation",
+    ),
+    CheckConstraint(
+        "bare_soil_fraction IS NULL OR bare_soil_fraction BETWEEN 0 AND 1",
+        name="ck_static_cell_feature_bare_soil",
+    ),
+    CheckConstraint(
+        "industrial_fraction IS NULL OR industrial_fraction BETWEEN 0 AND 1",
+        name="ck_static_cell_feature_industrial",
+    ),
+    CheckConstraint(
+        "coverage_fraction BETWEEN 0 AND 1", name="ck_static_cell_feature_coverage"
+    ),
+    Index("ix_static_cell_feature_dataset_cell", "dataset_id", "h3_cell"),
+    Index("ix_static_cell_feature_run", "ingestion_run_id"),
+)
+
+# Modeled forecast weather. Kept apart from weather_reading (observations)
+# because a forecast's issue time and valid time differ, and the publication
+# path only accepts forecasts issued at or before the prediction time.
+weather_forecast = Table(
+    "weather_forecast",
+    metadata,
+    Column("forecast_id", String(64), primary_key=True),
+    Column("dataset_id", String(120), ForeignKey("dataset_version.id"), nullable=False),
+    Column("ingestion_run_id", String(120), ForeignKey("ingestion_run.id"), nullable=False),
+    Column("source", String(40), nullable=False),
+    Column("h3_cell", String(H3_CELL_LENGTH), nullable=False),
+    Column("issued_at", DateTime(timezone=True), nullable=False),
+    Column("valid_at", DateTime(timezone=True), nullable=False),
+    Column("horizon_hours", Float, nullable=False),
+    Column("wind_speed_ms", Float, nullable=False),
+    Column("wind_direction_deg", Float, nullable=False),
+    Column("precipitation_mm", Float, nullable=False),
+    Column("boundary_layer_height_m", Float, nullable=True),
+    Column("temperature_c", Float, nullable=True),
+    Column("relative_humidity_pct", Float, nullable=True),
+    CheckConstraint("valid_at >= issued_at", name="ck_weather_forecast_validity"),
+    CheckConstraint("horizon_hours > 0", name="ck_weather_forecast_horizon_positive"),
+    CheckConstraint("wind_speed_ms >= 0", name="ck_weather_forecast_wind_speed"),
+    CheckConstraint(
+        "wind_direction_deg >= 0 AND wind_direction_deg < 360",
+        name="ck_weather_forecast_wind_direction",
+    ),
+    CheckConstraint("precipitation_mm >= 0", name="ck_weather_forecast_precipitation"),
+    CheckConstraint(
+        "boundary_layer_height_m IS NULL OR boundary_layer_height_m >= 0",
+        name="ck_weather_forecast_blh",
+    ),
+    CheckConstraint(
+        "temperature_c IS NULL OR temperature_c BETWEEN -90 AND 60",
+        name="ck_weather_forecast_temperature",
+    ),
+    CheckConstraint(
+        "relative_humidity_pct IS NULL OR relative_humidity_pct BETWEEN 0 AND 100",
+        name="ck_weather_forecast_humidity",
+    ),
+    Index("ix_weather_forecast_cell_valid", "h3_cell", "valid_at"),
+    Index("ix_weather_forecast_issued", "issued_at"),
+    Index("ix_weather_forecast_run", "ingestion_run_id"),
+)

@@ -12,8 +12,12 @@ from datetime import datetime
 from typing import Protocol
 
 from app.domain.citizen_intake import ReportEvidence
-from app.domain.features import FeatureSnapshot
-from app.domain.environmental_observations import FireHotspot, TrafficObservation
+from app.domain.features import CellStaticFeatures, FeatureSnapshot, DatasetRef
+from app.domain.environmental_observations import (
+    FireHotspot,
+    TrafficObservation,
+    WeatherForecast,
+)
 from app.domain.incidents import (
     Incident,
     IncidentDelivery,
@@ -272,6 +276,55 @@ class TrafficObservationRepository(Protocol):
         available_by: datetime,
         h3_cells: list[str] | None = None,
     ) -> list[TrafficObservation]: ...
+
+
+class StaticCellFeatureRepository(Protocol):
+    """Versioned population / road / land-cover values per H3 cell."""
+
+    def save_many(
+        self,
+        *,
+        dataset_id: str,
+        ingestion_run_id: str,
+        features: list[CellStaticFeatures],
+    ) -> tuple[int, int]:
+        """Upsert one dataset's rows; return (written, unchanged)."""
+        ...
+
+    def list_for_dataset(
+        self,
+        dataset_id: str,
+        *,
+        h3_cells: list[str] | None = None,
+        available_by: datetime | None = None,
+        refs: tuple[DatasetRef, ...] = (),
+    ) -> list[CellStaticFeatures]:
+        """Rows of one dataset. A cell with no row is missing for that run —
+        never a zero."""
+        ...
+
+
+class WeatherForecastRepository(Protocol):
+    """Modeled forecast weather, keyed by forecast identity."""
+
+    def save_many(self, forecasts: list[WeatherForecast]) -> tuple[int, int]:
+        """Insert idempotently; return (inserted, already_seen)."""
+        ...
+
+    def list_usable(
+        self,
+        *,
+        issued_by: datetime,
+        valid_from: datetime,
+        valid_to: datetime,
+        h3_cells: list[str] | None = None,
+    ) -> list[WeatherForecast]:
+        """Forecasts issued by `issued_by` and valid inside the window.
+
+        The `issued_by` filter is the leakage guard: a future horizon may only
+        use a forecast that already existed at prediction time.
+        """
+        ...
 
 
 class DatasetVersionRepository(Protocol):

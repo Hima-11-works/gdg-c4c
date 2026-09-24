@@ -207,8 +207,61 @@ Configuration:
 | `DATABASE_URL` | secret | Direct (non-pooler) Postgres connection string. |
 | `PIPELINE_DEMO_MODE` | variable | `true` (default) publishes the deterministic demo run; `false` runs live. |
 | `OPENAQ_API_KEY` | secret | Only used when `PIPELINE_DEMO_MODE=false`. |
+| `FIRMS_MAP_KEY` | secret | Optional. Without it the fire stage is skipped and fire features stay null. |
+| `STATIC_FEATURES_URL` | variable | Optional. A URL for the versioned static-cell artifact; the workflow downloads it and sets `STATIC_FEATURES_PATH`. |
+| `TRAFFIC_FEED_URL` | variable | Optional. A URL for the licensed traffic JSONL feed; same treatment. |
+| `TRAFFIC_FEED_SOURCE` / `_PRODUCT` / `_VERSION` / `_ATTRIBUTION` / `_LICENSE` | variable | Provenance recorded with a licensed traffic import. Defaults say "unknown" on purpose. |
 
-### Live mode fails closed
+### 4.1 Live feature inputs
+
+The synthetic scenario has always passed population, land use, fires, and
+traffic to `FeatureBuilder`; the live path used to pass grid, sensors, and
+weather only, so every published live vector had null static and environmental
+fields. The live path now collects, in this order, and reports each one:
+
+| Source | Store | Needs | Freshness |
+| --- | --- | --- | --- |
+| **Static cells** (population, road lengths, land cover) | `static_cell_feature`, keyed by `dataset_id` | `STATIC_FEATURES_PATH` (a versioned JSON artifact) | `STATIC_FEATURES_MAX_AGE_DAYS` (default 400) |
+| **Sensor observations** | `sensor_reading` | `OPENAQ_API_KEY` | `INGEST_MAX_READING_AGE_HOURS` |
+| **Weather observations** | `weather_reading` | none (Open-Meteo free tier) | as above |
+| **Forecast weather** | `weather_forecast` | none | `WEATHER_FORECAST_HOURS` ahead (default 6) |
+| **FIRMS detections** | `fire_hotspot` | `FIRMS_MAP_KEY` | `FIRMS_STALE_AFTER_HOURS` (default 6) |
+| **Licensed traffic** | `traffic_observation` | `TRAFFIC_FEED_PATH` | `TRAFFIC_STALE_AFTER_HOURS` (default 2) |
+
+**Forecast weather for future horizons.** `weather_forecast` is a separate table
+from `weather_reading` because a forecast's *issue* time and *valid* time
+differ. The publication query filters `issued_at <= prediction time`, so a
+horizon can only be described by a forecast that already existed when the
+prediction was made — no lookahead, and no observation quietly standing in for a
++6h forecast. When the newest usable weather for a horizon is materially older
+than the target hour, the snapshot carries the `weather_forecast_gap` warning
+instead of pretending the gap is not there.
+
+### 4.2 Missing, stale, failed, and valid zero are different things
+
+Every source is classified before use, and the classification is printed in the
+`publish_v2` stage summary and carried on the published run:
+
+| State | Meaning | Feature effect |
+| --- | --- | --- |
+| `present` | The source answered and rows are inside the freshness window | values used |
+| `empty` | The source answered and reported **nothing** | a **valid zero** (`fire_frp_upwind_mw = 0.0`), *not* a gap |
+| `stale` | Rows exist but all are past the freshness window | features null, source reported |
+| `missing` | Never configured, or no dataset for these cells | features null, source reported |
+| `failed` | The last ingestion attempt errored | features null, source reported with its error |
+
+A per-cell absence is still per-cell: a dataset with no row for one cell leaves
+that cell's `population`/`land_cover` in `missing_fields` while other cells are
+fully populated. A measured standstill (`congestion_ratio = 0.0`) is a real
+value, not missing.
+
+**No demo values in a live run.** Live mode refuses a synthetic static artifact
+at import, refuses a synthetic FIRMS dataset when collecting, and — as a last
+line of defence — `LiveFeatureInputs.assert_no_synthetic_refs` refuses to publish
+a `live` run that carries any `kind: synthetic` dataset ref. A live run also
+fails closed when there is no observed current PM2.5 (below).
+
+### 4.3 Live mode fails closed
 
 In live mode `publish_from_state` builds snapshots from the persisted state and
 publishes them as a `live` run. If there is no observed current PM2.5 with
@@ -217,6 +270,122 @@ supporting stations, `PredictionPublicationService` (via
 `publish_v2` stage then reports a failure and the workflow exits non-zero.
 A failed live source therefore always produces a visible failure or a degraded,
 explicitly labelled run — never an unlabeled synthetic replacement.
+
+### 4.4 Partial upstream failure, demonstrated
+
+`backend/tests/test_live_publication_inputs.py` is the executable version of all
+of this, driven by committed fixtures and no network:
+
+| Test | Demonstrates |
+| --- | --- |
+| `test_offline_fixture_run_carries_every_live_input` | The full live feature set, with the vector, source timestamps, coverage, and quality flags printed |
+| `test_valid_zero_is_not_missing` | A completed FIRMS pull with no detections → `empty`, `frp = 0.0` |
+| `test_failed_fire_source_stays_null` | A failed pull → `failed`, fire features **null**, run still publishes |
+| `test_unconfigured_traffic_is_missing_not_zero` | No feed → `missing`, ratio **null** |
+| `test_stale_traffic_is_reported_and_unused` | Out-of-window rows → not used, feature null |
+| `test_live_mode_refuses_synthetic_static_data` | A synthetic artifact → refused, population null |
+| `test_live_mode_refuses_a_synthetic_dataset_ref` | Any synthetic ref → publication refused |
+| `test_future_horizon_uses_a_forecast_issued_before_prediction_time` | +3h described by a pre-issued modeled forecast |
+| `test_forecast_issued_after_prediction_time_is_not_used` | A later-issued forecast is invisible; the horizon falls back and is flagged |
+
+Run them with the transcript:
+
+```bash
+cd backend
+python -m pytest -s tests/test_live_publication_inputs.py
+```
+
+#### The offline fixture run, verbatim
+
+```
+--- offline fixture run: published live run -----------------------
+run_id=prediction-fixture mode=live cells=3
+summary=published live run prediction-fixture (cells=3, results=21, coverage=0.73) sources:
+  (static=present, 3 rows, newest=2026-06-01T00:00:00+00:00,
+   sources=worldpop-india-2020,osm-roads-india-2025,esa-worldcover-india-2024)
+  | (fires=present, 1 rows, newest=2026-09-24T08:00:00+00:00)
+  | (traffic=present, 3 rows, newest=2026-09-24T08:20:00+00:00)
+  | (weather_forecast=present, 18 rows, newest=2026-09-24T08:40:00+00:00)
+  +0h valid_at=2026-09-24T09:00:00+00:00 wind_u_ms=0.32 wind_v_ms=0.12 rain_1h_mm=0.0
+       population=41200.0 built_up=0.62 fire_frp_mw=12.5 traffic_ratio=0.1625
+       coverage=0.950 stations=1 max_age_h=1.0 missing=[] warnings=[]
+  +1h valid_at=2026-09-24T10:00:00+00:00 wind_u_ms=4.2286 wind_v_ms=1.5391 rain_1h_mm=0.2
+       population=41200.0 built_up=0.62 fire_frp_mw=12.5 traffic_ratio=0.1625
+       coverage=0.950 stations=1 max_age_h=1.0 missing=[] warnings=[]
+  ... +2h .. +6h use the modeled forecast (issued 08:40Z, i.e. before the 09:00Z run) ...
+  +6h valid_at=2026-09-24T15:00:00+00:00 wind_u_ms=4.2286 wind_v_ms=1.5391 rain_1h_mm=0.2
+       population=41200.0 built_up=0.62 fire_frp_mw=12.5 traffic_ratio=0.1625
+       coverage=0.950 stations=1 max_age_h=1.0 missing=[] warnings=[]
+```
+
+The fixture inputs are committed at
+`backend/tests/fixtures/live_inputs/static_cells.json` (three cells, including
+one with a genuine **zero** population) and `traffic.jsonl` (a licensed
+congestion sample, including a near-standstill).
+
+### 4.5 A documented live-mode run
+
+```bash
+cd backend
+export DATABASE_URL='postgresql://…'          # direct, non-pooler
+export DEMO_MODE=false
+export OPENAQ_API_KEY='…'                     # sensors
+export FIRMS_MAP_KEY='…'                      # fires (optional)
+export STATIC_FEATURES_PATH='var/inputs/static_cells.json'
+export STATIC_FEATURES_MAX_AGE_DAYS=400
+export TRAFFIC_FEED_PATH='var/inputs/traffic.jsonl'
+export TRAFFIC_FEED_SOURCE='licensed-sample'
+export TRAFFIC_FEED_PRODUCT='sampled road speeds'
+export TRAFFIC_FEED_VERSION='2026-09'
+export TRAFFIC_FEED_ATTRIBUTION='<operator>'
+export TRAFFIC_FEED_LICENSE='<licence terms>'
+export WEATHER_FORECAST_HOURS=6
+export WEATHER_FORECAST_MAX_LOCATIONS=400
+
+alembic upgrade head
+python -m app.pipeline.run          # stages print what each source did
+python -m app.cli verify-publication
+```
+
+A healthy live run prints, in order:
+
+```
+[OK  ] static_features: static dataset static:<hash> (…): rows=<n> available_at=…
+[OK  ] sensor_ingestion: fetched=… saved=…
+[OK  ] weather_ingestion: fetched=… saved=…
+[OK  ] weather_forecast: rows=… cells=…/… +6h issued=…
+[OK  ] fire_ingestion: fetched=… saved=… stale=… newest=…
+[OK  ] traffic_ingestion: samples=… saved=… stale=…
+[OK  ] grid_computation: cells=… sensors_used=…
+[OK  ] forecasting: cells=… generated=…
+[OK  ] alert_generation: cells_evaluated=… alerts_created=…
+[OK  ] publish_v2: published live run prediction-features-… (cells=…, results=…, coverage=0.73) sources: (static=present, …) | (fires=present, …) | (traffic=present, …) | (weather_forecast=present, …)
+```
+
+With an optional source unconfigured, its stage says so and the run still
+publishes:
+
+```
+[OK  ] static_features: STATIC_FEATURES_PATH is not set - population/land cover stay null
+[OK  ] fire_ingestion: FIRMS_MAP_KEY is not set - fire features stay null (not zero)
+…
+[OK  ] publish_v2: … sources: (static=missing, 0 rows, no static-cell dataset is available for this run) | (fires=missing, 0 rows, no FIRMS ingestion has run for this region) | …
+```
+
+### 4.6 Which live sources still need credentials or datasets
+
+| Source | Credential | Dataset | If absent |
+| --- | --- | --- | --- |
+| Sensors (OpenAQ) | `OPENAQ_API_KEY` | none | Stage fails; live publication fails closed (no observed PM2.5) |
+| Weather observations | none | none | Stage fails if Open-Meteo is unreachable |
+| **Forecast weather** | **none** | none | Runs everywhere; if it fails, horizons fall back to the latest observation and are flagged `weather_forecast_gap` |
+| **FIRMS** | `FIRMS_MAP_KEY` (free NASA key) | none | Stage skipped; `fires=missing`; fire features null |
+| **Static cells** | none | **required** — a preprocessed, licensed population/road/land-cover artifact per H3 cell | Stage skipped; `static=missing`; population, roads, land cover, and exposure are null |
+| **Traffic** | none | **required** — a licensed sampled-speed feed in the JSONL contract | Stage skipped; `traffic=missing`; congestion ratio null |
+
+So a live deployment can run today with only `OPENAQ_API_KEY`; adding
+population/exposure and traffic features needs the two **datasets** above, not
+another API key.
 
 ---
 
@@ -239,3 +408,15 @@ explicitly labelled run — never an unlabeled synthetic replacement.
   inferring a value.
 - **PDI is heuristic.** The published `pdi` is the existing heuristic score,
   not a calibrated model output.
+- **No static-cell artifact ships with the repo.** A live deployment must supply
+  its own licensed population/road/land-cover artifact; until it does, the live
+  run reports `static=missing` and exposure is null. There is no bundled
+  fallback, on purpose.
+- **Traffic is file-based.** The licensed feed is imported from a JSONL file; no
+  traffic vendor is contacted. A continuously updated licensed source would need
+  its own provider implementation.
+- **FIRMS detections are not confirmed fires.** They are satellite detections
+  with a confidence class; the fire features are a signal, not a ground truth.
+- **Forecast weather is a single provider.** Open-Meteo only, with no ensemble
+  spread; `confidence` for a horizon therefore reflects data coverage, not
+  forecast uncertainty.

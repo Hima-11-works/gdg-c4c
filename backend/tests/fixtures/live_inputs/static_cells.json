@@ -1,0 +1,78 @@
+{
+  "static_features": [
+    {
+      "h3_cell": "8861892e0dfffff",
+      "population_count": 41200.0,
+      "population_density_per_km2": 18400.0,
+      "road_length_km_by_class": {"motorway": 3.1, "trunk": 8.4, "residential": 41.2},
+      "major_road_distance_km": 0.4,
+      "built_up_fraction": 0.62,
+      "vegetation_fraction": 0.21,
+      "bare_soil_fraction": 0.11,
+      "industrial_fraction": 0.06,
+      "coverage_fraction": 0.95,
+      "valid_from": "2025-01-01T00:00:00Z",
+      "available_at": "2026-06-01T00:00:00Z"
+    },
+    {
+      "h3_cell": "8861892e1dfffff",
+      "population_count": 9800.0,
+      "population_density_per_km2": 6100.0,
+      "road_length_km_by_class": {"trunk": 2.2, "residential": 18.7},
+      "major_road_distance_km": 1.9,
+      "built_up_fraction": 0.31,
+      "vegetation_fraction": 0.52,
+      "bare_soil_fraction": 0.13,
+      "industrial_fraction": 0.04,
+      "coverage_fraction": 0.8,
+      "valid_from": "2025-01-01T00:00:00Z",
+      "available_at": "2026-06-01T00:00:00Z"
+    },
+    {
+      "h3_cell": "8861892e3dfffff",
+      "population_count": 0.0,
+      "population_density_per_km2": 0.0,
+      "road_length_km_by_class": {"residential": 1.1},
+      "major_road_distance_km": 4.2,
+      "built_up_fraction": 0.04,
+      "vegetation_fraction": 0.83,
+      "bare_soil_fraction": 0.09,
+      "industrial_fraction": 0.0,
+      "coverage_fraction": 0.6,
+      "valid_from": "2025-01-01T00:00:00Z",
+      "available_at": "2026-06-01T00:00:00Z"
+    }
+  ],
+  "dataset_refs": [
+    {
+      "dataset_id": "worldpop-india-2020",
+      "source": "WorldPop",
+      "product": "population count raster (aggregated to H3)",
+      "version": "2020-v1",
+      "kind": "observed",
+      "region": "india",
+      "attribution": "WorldPop (www.worldpop.org)",
+      "license": "CC BY 4.0"
+    },
+    {
+      "dataset_id": "osm-roads-india-2025",
+      "source": "OpenStreetMap",
+      "product": "road network lengths by class",
+      "version": "2025-06",
+      "kind": "observed",
+      "region": "india",
+      "attribution": "OpenStreetMap contributors",
+      "license": "ODbL 1.0"
+    },
+    {
+      "dataset_id": "esa-worldcover-india-2024",
+      "source": "ESA WorldCover",
+      "product": "land cover fractions",
+      "version": "2024-v200",
+      "kind": "observed",
+      "region": "india",
+      "attribution": "ESA WorldCover 2024",
+      "license": "CC BY 4.0"
+    }
+  ]
+}

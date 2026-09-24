@@ -165,16 +165,20 @@ class FeatureBuilder:
         timezone: str = "Asia/Kolkata",
         max_weather_distance_km: float = 50.0,
         max_observation_age_hours: float = 48.0,
+        max_weather_forecast_gap_hours: float = 1.5,
         feature_schema_version: str = FEATURE_SCHEMA_VERSION,
     ) -> None:
         if resolution < 0 or resolution > 15:
             raise ValueError("resolution must be within [0, 15]")
         if max_weather_distance_km <= 0 or max_observation_age_hours <= 0:
             raise ValueError("feature freshness and distance limits must be positive")
+        if max_weather_forecast_gap_hours <= 0:
+            raise ValueError("max_weather_forecast_gap_hours must be positive")
         self.resolution = resolution
         self.timezone = ZoneInfo(timezone)
         self.max_weather_distance_km = max_weather_distance_km
         self.max_observation_age_hours = max_observation_age_hours
+        self.max_weather_forecast_gap_hours = max_weather_forecast_gap_hours
         self.feature_schema_version = feature_schema_version
         self._cell_area_km2 = average_cell_area_km2(resolution)
 
@@ -290,6 +294,15 @@ class FeatureBuilder:
             weather_age = (valid_at - current_weather.valid_at).total_seconds() / 3600
             if weather_age > self.max_observation_age_hours:
                 warnings.add("weather_stale")
+            elif (
+                horizon_hours > 0
+                and weather_age > self.max_weather_forecast_gap_hours
+            ):
+                # The newest usable weather is materially older than the target
+                # hour, so the horizon is being described by an earlier sample
+                # than a forecast issued now would give. Flagged, not hidden —
+                # and never padded with a fabricated value.
+                warnings.add("weather_forecast_gap")
             ages.append(max(0.0, weather_age))
         rain_1h = self._rain_sum(weather_series, valid_at, 1)
         rain_6h = self._rain_sum(weather_series, valid_at, 6)

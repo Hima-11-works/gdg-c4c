@@ -1,4 +1,5 @@
-"""Orchestrate retained fire/traffic ingestion and source-quality reporting."""
+"""Orchestrate retained fire/traffic/forecast-weather ingestion and
+source-quality reporting."""
 
 from __future__ import annotations
 
@@ -9,17 +10,18 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from app.domain.environmental_observations import TrafficObservation
+from app.domain.environmental_observations import TrafficObservation, WeatherForecast
 from app.domain.features import InputKind
-from app.domain.providers import ProviderError
+from app.domain.providers import ProviderError, WeatherForecastSample
 from app.domain.repositories import (
     DatasetVersionRepository,
     FireHotspotRepository,
     IngestionRunRepository,
     TrafficObservationRepository,
+    WeatherForecastRepository,
 )
 from app.domain.scenario import DatasetVersion, IngestionRun, IngestionRunStatus
-from app.domain.types import BoundingBox
+from app.domain.types import BoundingBox, Coordinate
 from app.ingestion.firms import FirmsProvider
 from app.ingestion.traffic_samples import parse_traffic_jsonl
 
@@ -43,8 +45,39 @@ def _utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
+def _to_forecast(
+    sample: WeatherForecastSample,
+    *,
+    dataset_id: str,
+    ingestion_run_id: str,
+    source: str,
+) -> WeatherForecast:
+    """Map a provider sample onto the retained row, with a deterministic id so
+    re-fetching the same hour is idempotent."""
+    identity = "|".join(
+        (dataset_id, sample.h3_cell, sample.valid_at.isoformat(), source)
+    )
+    return WeatherForecast(
+        forecast_id=hashlib.sha256(identity.encode("utf-8")).hexdigest(),
+        dataset_id=dataset_id,
+        ingestion_run_id=ingestion_run_id,
+        source=source,
+        h3_cell=sample.h3_cell,
+        issued_at=sample.issued_at,
+        valid_at=sample.valid_at,
+        horizon_hours=sample.horizon_hours,
+        wind_speed_ms=sample.wind_speed,
+        wind_direction_deg=sample.wind_direction,
+        precipitation_mm=sample.precipitation,
+        boundary_layer_height_m=sample.boundary_layer_height,
+        temperature_c=sample.temperature,
+        relative_humidity_pct=sample.humidity,
+    )
+
+
 class EnvironmentalIngestionService:
-    """Fire NRT pulls and contract-normalized traffic imports share run history."""
+    """Fire NRT pulls, contract-normalized traffic imports, and forecast-weather
+    pulls share run history."""
 
     def __init__(
         self,
@@ -54,6 +87,8 @@ class EnvironmentalIngestionService:
         traffic_repository: TrafficObservationRepository,
         dataset_repository: DatasetVersionRepository,
         run_repository: IngestionRunRepository,
+        forecast_repository: WeatherForecastRepository | None = None,
+        weather_forecast_provider: object | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._fire_provider = fire_provider
@@ -61,6 +96,8 @@ class EnvironmentalIngestionService:
         self._traffic_repository = traffic_repository
         self._dataset_repository = dataset_repository
         self._run_repository = run_repository
+        self._forecast_repository = forecast_repository
+        self._weather_forecast_provider = weather_forecast_provider
         self._clock = clock or (lambda: datetime.now(UTC))
 
     async def ingest_firms(
@@ -195,6 +232,112 @@ class EnvironmentalIngestionService:
         )
         self._run_repository.upsert(run)
         return EnvironmentalIngestionResult(run, saved, duplicates)
+
+    async def ingest_weather_forecast(
+        self,
+        points: list[Coordinate],
+        *,
+        hours: int,
+        region: str,
+        source: str,
+        h3_resolution: int,
+    ) -> EnvironmentalIngestionResult:
+        """Pull modeled forecast weather and retain it as an auditable dataset.
+
+        Future horizons need a forecast whose *issue* time is known, so each row
+        records both ``issued_at`` and ``valid_at``. An empty successful pull is
+        a valid zero-hour forecast (recorded as such), and a provider failure is
+        recorded as a failed run — the two are never confused, and neither is
+        padded with observation values.
+        """
+        provider = self._weather_forecast_provider
+        if provider is None or self._forecast_repository is None:
+            raise ValueError("forecast weather ingestion requires a provider and repository")
+        started_at = _utc(self._clock())
+        run_id = uuid.uuid4().hex
+        dataset_id = f"weather-forecast:{source}:{run_id}"
+        self._dataset_repository.upsert(
+            DatasetVersion(
+                dataset_id=dataset_id,
+                source=source,
+                product="hourly forecast",
+                version=f"+{hours}h",
+                kind=InputKind.MODELED,
+                region=region,
+                attribution="Open-Meteo",
+                license="Open-Meteo free tier (CC BY 4.0)",
+                available_at=started_at,
+            )
+        )
+        self._run_repository.upsert(
+            IngestionRun(
+                run_id=run_id,
+                dataset_id=dataset_id,
+                started_at=started_at,
+                status=IngestionRunStatus.RUNNING,
+            )
+        )
+        try:
+            samples: list[WeatherForecastSample] = await provider.fetch_forecast(
+                points, hours=hours, h3_resolution=h3_resolution
+            )
+        except ProviderError as exc:
+            run = IngestionRun(
+                run_id=run_id,
+                dataset_id=dataset_id,
+                started_at=started_at,
+                finished_at=_utc(self._clock()),
+                status=IngestionRunStatus.FAILED,
+                errors=(str(exc),),
+                metrics={"forecast_complete": False, "forecast_rows": 0},
+            )
+            self._run_repository.upsert(run)
+            logger.error("Forecast weather ingestion failed for run %s: %s", run_id, exc)
+            return EnvironmentalIngestionResult(run)
+        except Exception as exc:  # noqa: BLE001 - one bad pull must not abort the run
+            run = IngestionRun(
+                run_id=run_id,
+                dataset_id=dataset_id,
+                started_at=started_at,
+                finished_at=_utc(self._clock()),
+                status=IngestionRunStatus.FAILED,
+                errors=(f"unexpected {type(exc).__name__} during forecast ingestion",),
+                metrics={"forecast_complete": False, "forecast_rows": 0},
+            )
+            self._run_repository.upsert(run)
+            logger.error("Forecast weather ingestion stopped unexpectedly (%s)", type(exc).__name__)
+            return EnvironmentalIngestionResult(run)
+
+        forecasts = [
+            _to_forecast(sample, dataset_id=dataset_id, ingestion_run_id=run_id, source=source)
+            for sample in samples
+        ]
+        inserted, duplicates = self._forecast_repository.save_many(forecasts)
+        issued = max((item.issued_at for item in forecasts), default=started_at)
+        run = IngestionRun(
+            run_id=run_id,
+            dataset_id=dataset_id,
+            started_at=started_at,
+            finished_at=max(_utc(self._clock()), issued),
+            fetched_at=issued,
+            # An empty but complete forecast pull is a success with zero rows,
+            # not a failure: "the provider says there is nothing" is data.
+            status=IngestionRunStatus.SUCCEEDED,
+            metrics={
+                "forecast_complete": True,
+                "requested_locations": len(points),
+                "forecast_rows": len(forecasts),
+                "inserted_records": inserted,
+                "duplicate_records": duplicates,
+                "covered_cells": len({item.h3_cell for item in forecasts}),
+                "issued_at": issued.isoformat(),
+                "max_horizon_hours": max(
+                    (item.horizon_hours for item in forecasts), default=None
+                ),
+            },
+        )
+        self._run_repository.upsert(run)
+        return EnvironmentalIngestionResult(run, inserted, duplicates)
 
     def import_traffic_jsonl(
         self,

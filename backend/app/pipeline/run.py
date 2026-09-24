@@ -1,8 +1,9 @@
 """The complete processing pipeline for the configured region:
 
-    OpenAQ -> sensor ingestion -> H3 grid + PM2.5 interpolation -> PDI
-    -> Open-Meteo -> weather ingestion -> dispersion model -> 1h/3h/6h
-    forecasts -> alerts
+    static cells -> OpenAQ -> sensor ingestion -> H3 grid + PM2.5
+    interpolation -> PDI -> Open-Meteo observations + forecast weather
+    -> NASA FIRMS -> licensed traffic -> dispersion model -> 1h/3h/6h
+    forecasts -> alerts -> v2 publication
 
 Run with:
 
@@ -11,12 +12,20 @@ Run with:
 Every stage below is a thin wrapper around a small orchestration service
 that already has its own test file and can be constructed and run in
 isolation with fakes (SensorIngestionService, WeatherIngestionService,
-GridComputationService, ForecastingService, AlertGenerationService) —
+GridComputationService, ForecastingService, AlertGenerationService,
+EnvironmentalIngestionService, StaticFeatureIngestionService) —
 this module only wires them together in order, against one shared
 session/timestamp/bounding box, and prints a clear per-stage pass/fail
 summary. It is not itself where any pollution/forecast/PDI logic lives.
 
-Demo Mode (DEMO_MODE=true): the two ingestion stages substitute a fixed,
+The `*_features`/`*_ingestion` stages before the grid exist because the v2
+publication reads them: versioned static population/land use, forecast weather
+issued before prediction time, FIRMS detections, and licensed traffic. A source
+that is not configured (no `STATIC_FEATURES_PATH`, no `FIRMS_MAP_KEY`, no
+`TRAFFIC_FEED_PATH`) is *skipped*, not failed, and the publication records it as
+missing so its features stay null — never zero.
+
+Demo Mode (DEMO_MODE=true): the ingestion stages substitute a fixed,
 deterministic dataset (app.ingestion.demo) for OpenAQ/Open-Meteo — see
 app.ingestion.factory, the single place that decision is made. Every
 stage after ingestion is completely unaware of it and runs identically
@@ -45,6 +54,7 @@ import logging
 import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import httpx
 from sqlalchemy.orm import Session
@@ -52,19 +62,29 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings, get_settings
 from app.db.repositories import (
     SqlAlertRepository,
+    SqlDatasetVersionRepository,
+    SqlFireHotspotRepository,
     SqlFireReportRepository,
     SqlForecastRepository,
     SqlGridStateRepository,
+    SqlIngestionRunRepository,
     SqlSensorReadingRepository,
+    SqlStaticCellFeatureRepository,
+    SqlTrafficObservationRepository,
+    SqlWeatherForecastRepository,
     SqlWeatherReadingRepository,
 )
 from app.db.session import get_session_factory
 from app.domain.features import DataMode
-from app.domain.types import BoundingBox, Forecast
+from app.domain.h3_grid import cell_center
+from app.domain.types import BoundingBox, Coordinate, Forecast
 from app.ingestion.demo_reports import demo_fire_reports
 from app.ingestion.factory import build_pollution_provider, build_weather_provider
+from app.ingestion.firms import FirmsProvider
+from app.ingestion.open_meteo import OpenMeteoProvider
 from app.services.alert_generation import AlertGenerationService
 from app.services.dispersion import DeterministicH3DispersionModel
+from app.services.environmental_ingestion import EnvironmentalIngestionService
 from app.services.estimation import IDWPollutionEstimator
 from app.services.fire_gradient import PlumeFireGradientModel
 from app.services.forecasting import ForecastingService
@@ -80,6 +100,7 @@ from app.services.publication_pipeline import (
     publish_from_state,
 )
 from app.services.reports import FireReportService
+from app.services.static_features import StaticFeatureIngestionService
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +164,195 @@ async def _ingest_weather(session: Session, settings: Settings, bbox: BoundingBo
         f"fetched={result.fetched} saved={result.saved} "
         f"skipped_duplicates={result.skipped_duplicates}",
     )
+
+
+async def _ingest_static_features(
+    session: Session, settings: Settings
+) -> StageOutcome:
+    """Import the versioned static population/land-use artifact, if configured.
+
+    Live only: in demo mode the committed scenario already supplies static
+    features, and importing an artifact there would mix two provenances into
+    one run. An unset path is *not* a failure — the publication records the
+    source as `missing` and population stays null, which is honest.
+    """
+    if settings.demo_mode:
+        return StageOutcome("static_features", True, "demo mode - scenario supplies static features")
+    path = settings.static_features_path.strip()
+    if not path:
+        return StageOutcome(
+            "static_features",
+            True,
+            "STATIC_FEATURES_PATH is not set - population/land cover stay null",
+        )
+    service = StaticFeatureIngestionService(
+        static_repository=SqlStaticCellFeatureRepository(session),
+        dataset_repository=SqlDatasetVersionRepository(session),
+        run_repository=SqlIngestionRunRepository(session),
+    )
+    result = service.import_artifact(
+        Path(path),
+        region=INDIA_REGION,
+        live=True,
+        max_age_days=settings.static_features_max_age_days,
+    )
+    if not result.succeeded:
+        return StageOutcome("static_features", False, result.summary())
+    return StageOutcome("static_features", True, result.summary())
+
+
+async def _ingest_fires(
+    session: Session, settings: Settings, bbox: BoundingBox, timestamp: datetime
+) -> StageOutcome:
+    """Pull NASA FIRMS detections for the region.
+
+    Needs `FIRMS_MAP_KEY`. An unset key is a skipped stage, not a failed one:
+    the publication then reports `fires=missing` and leaves the fire features
+    null rather than reporting "no fires".
+    """
+    if settings.demo_mode:
+        return StageOutcome("fire_ingestion", True, "demo mode - scenario supplies fire detections")
+    if settings.firms_map_key is None:
+        return StageOutcome(
+            "fire_ingestion",
+            True,
+            "FIRMS_MAP_KEY is not set - fire features stay null (not zero)",
+        )
+    async with httpx.AsyncClient(timeout=settings.firms_timeout_seconds) as client:
+        provider = FirmsProvider(
+            client,
+            map_key=settings.firms_map_key.get_secret_value(),
+            source=settings.firms_source,
+            base_url=settings.firms_base_url,
+            timeout_seconds=settings.firms_timeout_seconds,
+            max_retries=settings.firms_max_retries,
+            h3_resolution=settings.h3_resolution,
+            stale_after_hours=settings.firms_stale_after_hours,
+        )
+        service = EnvironmentalIngestionService(
+            fire_provider=provider,
+            fire_repository=SqlFireHotspotRepository(session),
+            traffic_repository=SqlTrafficObservationRepository(session),
+            dataset_repository=SqlDatasetVersionRepository(session),
+            run_repository=SqlIngestionRunRepository(session),
+        )
+        result = await service.ingest_firms(
+            bbox,
+            day_range=1,
+            region=INDIA_REGION,
+            source=settings.firms_source,
+            stale_after_hours=settings.firms_stale_after_hours,
+        )
+    if not result.succeeded:
+        errors = "; ".join(result.run.errors) or "incomplete feed"
+        return StageOutcome("fire_ingestion", False, f"FIRMS ingestion failed: {errors}")
+    return StageOutcome(
+        "fire_ingestion",
+        True,
+        f"fetched={result.run.metrics.get('fetched_records', 0)} saved={result.saved} "
+        f"stale={result.run.metrics.get('stale_records', 0)} "
+        f"newest={result.run.metrics.get('newest_detection_at', '-')}",
+    )
+
+
+async def _ingest_traffic(session: Session, settings: Settings) -> StageOutcome:
+    """Import the licensed sampled-traffic feed, if one is configured."""
+    if settings.demo_mode:
+        return StageOutcome("traffic_ingestion", True, "demo mode - scenario supplies traffic")
+    path = settings.traffic_feed_path.strip()
+    if not path:
+        return StageOutcome(
+            "traffic_ingestion",
+            True,
+            "TRAFFIC_FEED_PATH is not set - traffic features stay null",
+        )
+    service = EnvironmentalIngestionService(
+        fire_provider=None,
+        fire_repository=SqlFireHotspotRepository(session),
+        traffic_repository=SqlTrafficObservationRepository(session),
+        dataset_repository=SqlDatasetVersionRepository(session),
+        run_repository=SqlIngestionRunRepository(session),
+    )
+    result = service.import_traffic_jsonl(
+        Path(path).read_text(encoding="utf-8"),
+        source=settings.traffic_feed_source,
+        product=settings.traffic_feed_product,
+        version=settings.traffic_feed_version,
+        region=INDIA_REGION,
+        attribution=settings.traffic_feed_attribution,
+        license=settings.traffic_feed_license,
+        stale_after_hours=settings.traffic_stale_after_hours,
+        h3_resolution=settings.h3_resolution,
+    )
+    if not result.succeeded:
+        errors = "; ".join(result.run.errors) or "invalid feed"
+        return StageOutcome("traffic_ingestion", False, f"traffic import failed: {errors}")
+    return StageOutcome(
+        "traffic_ingestion",
+        True,
+        f"samples={result.run.metrics.get('sample_count', 0)} saved={result.saved} "
+        f"stale={result.run.metrics.get('stale_records', 0)}",
+    )
+
+
+async def _ingest_weather_forecast(
+    session: Session, settings: Settings, bbox: BoundingBox
+) -> StageOutcome:
+    """Pull modeled forecast weather for the published horizons.
+
+    No credential is needed (Open-Meteo's free tier), so this stage runs in
+    every live deployment; the forecast's issue time is stored, and the
+    publication only uses forecasts issued at or before prediction time.
+    """
+    if settings.demo_mode:
+        return StageOutcome(
+            "weather_forecast", True, "demo mode - scenario supplies forecast weather"
+        )
+    resolution = settings.h3_resolution
+    cells = GeospatialService(resolution=resolution).region_coverage(bbox)
+    points = [Coordinate(*cell_center(cell)) for cell in cells]
+    requested = len(points)
+    if requested > settings.weather_forecast_max_locations:
+        points = points[: settings.weather_forecast_max_locations]
+    async with httpx.AsyncClient(timeout=settings.open_meteo_timeout_seconds) as client:
+        provider = OpenMeteoProvider(
+            client,
+            base_url=settings.open_meteo_base_url,
+            timeout_seconds=settings.open_meteo_timeout_seconds,
+            max_retries=settings.open_meteo_max_retries,
+            max_locations_per_request=settings.open_meteo_max_locations_per_request,
+            h3_resolution=resolution,
+        )
+        service = EnvironmentalIngestionService(
+            fire_provider=None,
+            fire_repository=SqlFireHotspotRepository(session),
+            traffic_repository=SqlTrafficObservationRepository(session),
+            dataset_repository=SqlDatasetVersionRepository(session),
+            run_repository=SqlIngestionRunRepository(session),
+            forecast_repository=SqlWeatherForecastRepository(session),
+            weather_forecast_provider=provider,
+        )
+        result = await service.ingest_weather_forecast(
+            points,
+            hours=settings.weather_forecast_hours,
+            region=INDIA_REGION,
+            source="open-meteo",
+            h3_resolution=resolution,
+        )
+    if not result.succeeded:
+        errors = "; ".join(result.run.errors) or "incomplete forecast"
+        return StageOutcome("weather_forecast", False, f"forecast weather failed: {errors}")
+    covered = result.run.metrics.get("covered_cells", 0)
+    summary = (
+        f"rows={result.run.metrics.get('forecast_rows', 0)} cells={covered}/{requested} "
+        f"+{settings.weather_forecast_hours}h issued={result.run.metrics.get('issued_at', '-')}"
+    )
+    if requested > settings.weather_forecast_max_locations:
+        summary += (
+            f" (capped at {settings.weather_forecast_max_locations} locations; "
+            f"{requested - settings.weather_forecast_max_locations} cell(s) uncovered)"
+        )
+    return StageOutcome("weather_forecast", True, summary)
 
 
 def _seed_fire_reports(session: Session, settings: Settings, timestamp: datetime) -> StageOutcome:
@@ -360,8 +570,15 @@ async def run_pipeline(bbox: BoundingBox, *, timestamp: datetime) -> PipelineRep
     session = get_session_factory()()
     try:
         stages = [
+            # The live feature inputs the v2 publication reads come first, so
+            # the publication stage below sees a complete picture of what is
+            # available, stale, or failed.
+            await _ingest_static_features(session, settings),
             await _ingest_sensors(session, settings, bbox, since),
             await _ingest_weather(session, settings, bbox),
+            await _ingest_weather_forecast(session, settings, bbox),
+            await _ingest_fires(session, settings, bbox, timestamp),
+            await _ingest_traffic(session, settings),
             _seed_fire_reports(session, settings, timestamp),
             _compute_grid(session, settings, bbox, timestamp),
         ]
