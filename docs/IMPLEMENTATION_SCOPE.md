@@ -5,10 +5,10 @@ changed by this document; it adds no code and no schema.
 
 | | |
 | --- | --- |
-| Scoped against | `main` @ `1685e85` (integrated with the one commit that landed during this pass) |
+| Scoped against | `main` @ `78cb15a` (HEAD when this revision was written; every gate in §1.5 was re-measured on it) |
 | Brief | `india_pollution_implementation_prompts.md` (received out-of-band, 2026-09-26) |
 | Assessment baseline in the brief | `origin/main` @ `1685e85` — **reached and verified**; the brief writes it as `1685e855`, which is one character longer than the real abbreviated SHA and resolves to nothing (§1.3) |
-| F1 owner | **TBD** — §15 defines the hand-off contract so any owner can start |
+| F1 owner | **UNASSIGNED — blocking.** §15 defines the hand-off contract; naming the owner is the one thing this pass cannot decide |
 
 ---
 
@@ -19,8 +19,8 @@ changed by this document; it adds no code and no schema.
 | Item | Finding |
 | --- | --- |
 | Branch | `main`, tracking `origin/main`, **0 ahead / 0 behind** |
-| HEAD | `8cb39f1` — `[ux] Major roads join the highways at level 4` |
-| Worktree | Clean before and after this pass, including untracked files |
+| HEAD | `78cb15a` — `Correct the scope doc after rebasing onto the real assessment baseline`; the two commits before it are earlier revisions of this same document (§1.3) |
+| Worktree | **Not clean.** Three *untracked* files, all from a parallel effort and **left untouched by this pass** (§1.4) |
 | Stashes | 4 pre-existing (`satellite AOD fix`, incidental `pubspec.lock`, etc.) — untouched |
 | Repository instructions | **None.** No `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md` or `.cursorrules`. `README.md` is the developer reference; `tests/test_architecture.py` is the only mechanically enforced rule (layer imports) |
 | Local branches | `backhima` @ `6631397`, `himanshi` @ `b044b18` — **both remote branches are deleted upstream**; only `origin/main` exists |
@@ -31,9 +31,11 @@ changed by this document; it adds no code and no schema.
 | --- | --- | --- |
 | Python | 3.14.7 (`.venv`) | yes |
 | pytest | 9.1.1 | yes |
-| Ruff | 0.16.8 | yes |
+| Ruff | 0.16.8 | yes, but **only inside `backend/.venv`** — not on `PATH`; invoke as `backend/.venv/Scripts/ruff.exe` |
 | Node / npm | 24.16.0 / 11.13.0 | yes |
-| Flutter / Dart | Flutter on PATH at `C:\src\flutter`, Dart 3.13.3 | yes |
+| Flutter / Dart | Flutter at `C:\src\flutter`, Dart 3.13.3 | yes |
+| Postgres / PostGIS | **no local instance** | DB-backed tests are skipped (31 of them) |
+
 
 ### 1.3 Changes since the assessment baseline: none on `main`
 
@@ -43,12 +45,20 @@ resolves to nothing in this repository. That is worth recording, because an
 owner who copies the SHA from the brief will conclude the baseline is missing
 when it is simply misquoted.
 
-With the typo corrected, **`1685e85` is the current tip of `origin/main`**, so
-**no teammate commits have landed on `main` since the assessment.** The brief's
-per-feature "current footing" column can therefore be read directly against
-`main` as it stands, with one qualification:
+With the typo corrected, `1685e85` was the tip of `origin/main` when this
+document was first written. **`origin/main` is now `78cb15a`**, and the two
+commits since `1685e85` are both revisions of *this document*:
 
-> One commit landed on `origin/main` *during* this scoping pass —
+| Commit | What it is |
+| --- | --- |
+| `2e89f24` | `Scope F1-F11 before any implementation (Prompt 0)` — added this document |
+| `78cb15a` | `Correct the scope doc after rebasing onto the real assessment baseline` — rebased onto `1685e85`, re-ran the frontend gates |
+
+So **no teammate commit has landed on `main` since the assessment.** The brief's
+per-feature "current footing" column can be read directly against `main` as it
+stands, with one qualification:
+
+> One commit landed on `origin/main` *during* the first scoping pass —
 > `1685e85` `[fix] Stop the map drawing cells and the smooth field outside
 > India` (+349/−2 across `frontend/src/components/MapView.tsx` and the new
 > `frontend/src/lib/indiaOutline.ts`). The document was rebased onto it and the
@@ -57,11 +67,16 @@ per-feature "current footing" column can therefore be read directly against
 The substantive movement since the assessment is therefore **not** on `main` at
 all — it is the unmerged `backhima` line (§1.4).
 
+
 ### 1.4 Finding: a large body of F1–F11 work is not on `main`
 
-`backhima` is **8 commits, 131 files, +29,725 / −216 lines** ahead of `main`, and
-its remote branch has been deleted. It already contains work that maps onto most
-of the brief:
+`backhima` is **8 commits ahead of `main`** — `git diff --shortstat main..backhima`
+reports **133 files changed, 29,726 insertions, 1,181 deletions** as of `main`
+@ `78cb15a` — and its remote branch has been deleted. (That deletion count is
+`main`-relative: part of it is `1685e85`'s MapLibre India-outline fix, which
+`backhima` predates. An earlier pass measured this against an older `main` and
+recorded "131 files, −216", which understated the divergence.) It already
+contains work that maps onto most of the brief:
 
 | On `backhima`, not on `main` | Brief feature it pre-satisfies (partially) |
 | --- | --- |
@@ -76,38 +91,73 @@ of the brief:
 
 **Consequence for sequencing:** an F1 owner starting from bare `main` will
 re-implement, or worse, collide with, ~29.7k lines of existing work. Step 0 of
-the release sequence (§12) is to recover and merge this line. It is a
+the release sequence (§12) is to recover and merge this line — and the merge will
+need a real decision about `1685e85`, which `backhima` does not contain. It is a
 **demonstration-grade** implementation, not brief compliance: hotspots are
 imagery-driven scans written to disk with authored fixtures (no persisted event
 lifecycle), federation is two local processes (no node registry), corridors are
 straight-line illustrative geometry. Each feature in §4–§11 states what the
 backhima line already covers and what the brief still requires.
 
-### 1.5 Baselines (exact, on `main` @ `1685e85`)
+#### Second collision risk: uncommitted work in the working tree
 
-Backend and Flutter figures were taken on `8cb39f1`; the only commit added
-thereafter (`1685e85`) touches `frontend/` alone, so the three frontend rows were
-re-run on the integrated tree and the other five are unaffected.
+While this pass was running, three files appeared in the worktree, untracked and
+**left untouched**:
+
+```
+?? backend/app/domain/india.py                   6.7 KB  2026-09-26 00:53:23
+?? backend/app/domain/data/india_geofence.json  317 KB  2026-09-26 00:53:31
+?? scripts/build-india-geofence.py               9.3 KB  2026-09-26 00:53:48
+```
+
+They implement **exactly the F1 gap "no India geofence"**: a server-side
+point-in-polygon test against **ADM1 states and union territories** (deliberately
+not the dissolved country outline, which omits small UTs such as Diu), fed by a
+geofence generated by `scripts/build-india-geofence.py` from published boundaries.
+The stated motivation is that `POST /api/v1/reports` is open and unauthenticated,
+so report coordinates are attacker-controlled.
+
+This is **work in progress by a parallel effort**, not a reviewer's change to
+make. Two consequences, both carried into the baseline (§1.5) and the hand-off
+(§15):
+
+* The Ruff and format baselines are each **+1** versus the committed tree, and
+  both come from this one file. They must not be "fixed" as inherited debt.
+* F1 should **adopt and finish** it rather than write a second geofence. Its
+  remaining F1 obligations — lifecycle, rate/abuse control, moderation, and the
+  predicate for whether a report may influence the plume — are untouched by it.
+
+### 1.5 Baselines (re-measured on `main` @ `78cb15a`)
+
+Every row below was re-run by this pass on the current HEAD. Figures are given
+for the **committed tree**, with the working-tree delta attributed separately,
+because three untracked files (§1.4) are physically present and would otherwise
+be silently counted as inherited debt.
 
 | Gate | Command | Result |
 | --- | --- | --- |
-| Backend tests | `cd backend && pytest` | **553 passed, 11 failed, 31 skipped** (11.2s) — exit 1 |
-| Backend lint | `ruff check .` | **79 errors**, 20 auto-fixable — exit 1 |
-| Backend format | `ruff format --check .` | **36 files** would be reformatted, 126 clean — exit 1 |
-| Frontend build | `npm run build` | **pass** (62 modules, 1.54 MB chunk warning) — exit 0 |
-| Frontend lint | `npm run lint` (oxlint) | **pass** — 1 warning, 0 errors (46 files) — exit 0 |
+| Backend tests | `cd backend && pytest -q` | **553 passed, 11 failed, 31 skipped** (12.2s) — exit 1 |
+| Backend lint | `ruff check .` | **80 errors**, 20 auto-fixable — exit 1 (**79 on the committed tree**) |
+| Backend format | `ruff format --check .` | **37 files** would be reformatted, 126 clean — exit 1 (**36 on the committed tree**) |
+| Frontend build | `npm run build` | **pass**, exit 0 — 63 modules; `index-*.js` 1,545 kB / 438 kB gzip, chunk warning |
+| Frontend lint | `npm run lint` (oxlint) | **pass**, exit 0 — 1 warning, 0 errors, 47 files, 116 rules |
 | Frontend format | `npx prettier --check .` | **23 files** unformatted — exit 1 |
-| Flutter analyze | `flutter analyze` | **58 issues** incl. hard `error`s — exit 1 |
-| Flutter test | `flutter test` | **180 passed, 8 failed (load errors)** — exit 1 |
+| Flutter analyze | `flutter analyze` | **58 issues** (21 error / 7 warning / 30 info) — exit 1 |
+| Flutter test | `flutter test` | **180 passed, 8 failed**, all 8 compile/load failures — exit 1 |
 
-Ruff error mix: 58 × E501 (line length), 10 × I001 (import order), 6 × UP035, 3 ×
-F401, 1 × B904, 1 × UP037. Hottest files: `app/api/routes/predictions_v2.py` (17),
-`app/services/prediction_queries.py` (10), `app/models/tables.py` (8),
-`app/services/prediction_publication.py` (6).
+Ruff is **not on `PATH`**; it is `backend/.venv/Scripts/ruff.exe` at 0.16.8. Committed-tree
+error mix: 58 × E501, 10 × I001, 6 × UP035, 3 × F401, 1 × B904, 1 × UP037. Hottest files:
+`app/api/routes/predictions_v2.py` (17), `app/services/prediction_queries.py` (10),
+`app/models/tables.py` (8), `app/services/prediction_publication.py` (6).
 
-On the integrated tree the Prettier count moved from 22 to 23: the new
-`frontend/src/lib/indiaOutline.ts` from `1685e85` is itself unformatted, so the
-format debt grew with the fix. Build and lint are unaffected (exit 0).
+**The +1 lint and +1 format finding are both `app/domain/india.py`** — the
+untracked geofence file from §1.4 (`india.py:114` is one line too long, and the
+file is unformatted). Nothing inherited changed: the committed tree is still 79
+errors and 36 unformatted files.
+
+Prettier's 23 includes `frontend/src/lib/indiaOutline.ts`, added by `1685e85`
+itself unformatted, so the format debt grew with that fix. Build and lint are
+unaffected (exit 0).
 
 The **11 backend failures are inherited, not new**, and are the same 11 the
 `backhima` line also fails: `test_api_grid` (2), `test_environmental_contracts`
@@ -117,30 +167,57 @@ The **11 backend failures are inherited, not new**, and are the same 11 the
 `step_minutes`, `alert.forecast_hours` SMALLINT vs FLOAT, and a stale expected
 table set.
 
-**The Flutter failures are missing imports, not missing features.**
-`lib/notifications/forecast_alarm_scheduler.dart` uses `SensitivityRules` without
-importing `domain/sensitivity_rules.dart`; `test/features/app_widget_test.dart`
-and `test/features/report_fire_sheet_test.dart` use `FireReportApiClient` without
-importing `data/reports/fire_report_api.dart`. All three classes exist. Eight
-test files therefore fail to load; the other 180 tests pass.
+**The Flutter failures are code defects, and the previous diagnosis in this
+document was wrong.** An earlier pass recorded them as three missing imports
+("all three classes exist"). Re-running the gates and reading the compiler output
+shows four distinct root causes, only one of which is a missing import:
 
-`flutter pub get` rewrites `partner_apps/air_health_flutter/pubspec.lock`. I
-restored it; **it must never be committed** (it is already in a stash as
-"incidental").
+1. **A one-character syntax error makes the live v2 adapter unparseable.**
+   `lib/data/grid/grid_api.dart:393` reads `  ) async {` — the closing `}` for
+   the named-parameter group opened on line 391 is simply absent. Confirmed two
+   ways: `dart analyze` reports `grid_api.dart:393:3 — Expected to find '}'`, and
+   `dart format` refuses the file outright ("the source could not be parsed").
+   A brace-balance scan shows `class DioGridApiClient` (opened line 263) never
+   closes. This single missing brace is why **4 test files plus
+   `acceptance_test.dart` fail to load**, and why the citizen app cannot compile
+   its live API path at all — the dummy provider is not a preference, it is the
+   only thing that can run.
+2. **A real contract mismatch**, not an import: `fire_report_api.dart:108,117`
+   return `ReportEnvelope<FireReport>` / `ReportEnvelope<List<FireReport>>` from
+   methods typed `Future<FireReport>` / `Future<List<FireReport>>`. The adapter
+   does not unwrap the platform's `{generated_at, is_demo, data}` envelope.
+3. **A missing import plus a signature drift**: `forecast_alarm_scheduler.dart`
+   cannot resolve `SensitivityRules` *and* fails on
+   `Required named parameter 'freshness' must be provided`. Fixing the import
+   alone will not make it compile.
+4. **Plugin API drift against the locked dependency**: with
+   `flutter_local_notifications 19.5.0`, `notification_service.dart` calls
+   `canScheduleExactAlarms` (undefined), `.alarm` (member not found) and
+   `uiLocalNotificationDateInterpretation` (undefined). This is a dependency
+   problem, not a source problem, and F9 owns it.
+
+Only 180 of 188 tests run at all today. No Flutter gate can be quoted as a
+baseline for F2 or F9 until (1) and (2) are fixed.
+
+`flutter pub get` rewrites `partner_apps/air_health_flutter/pubspec.lock` (it
+dropped 37 entries and changed 37 dependencies in this pass). It was restored and
+is **not** part of this change; it must never be committed (it is already in a
+stash as "incidental").
+
 
 ### 1.6 Stale README claims, resolved against code
 
 | README claim | Reality on `main` |
 | --- | --- |
-| "five tables" in `app/models/tables.py` | **14 tables**, migrations `0001`–`0010` |
-| Pipeline makes "1h/3h/6h forecasts" | `app/pipeline/run.py` produces **24 quarter-hour horizons** (`0.25`–`6.0`, `step_minutes=15`) |
-| "All five stages should print `[OK]`" | **six** stages — `fire_reports` was added |
-| "**No scheduler**" | `.github/workflows/pipeline.yml` **is** the scheduler: hourly cron + `workflow_dispatch`, `alembic upgrade head` then the pipeline against Neon. The README never mentions it |
-| Env-var table | Omits `FIRMS_*`, `GIBS_BASE_URL`, `NO2_WMS_*`, `TILE_*`, `TRAFFIC_STALE_AFTER_HOURS`, `FIRE_*`, `PDI_FIRE_PRESSURE_WEIGHT`, `DATABASE_URL`. (`.env.example` itself is complete: 71 keys matching 71 `Settings` fields) |
-| Repository structure | Omits `partner_apps/air_health_flutter` entirely, plus the v2 and tiles routes |
-| "No authentication … every route on `/api/v1/*` and `/api/v2/*` is open" | **True on `main`** — but already false on `backhima` (simulator key + actor registry). The claim must be qualified per-branch |
-| Flutter README: "Dummy provider active today; Remote is a Dio skeleton" | **Stale.** `GridApiPollutionDataProvider` calls `/api/v2/{grid/current,grid/forecast,weather,alerts}` and is selected whenever a `GridApiClient` is configured |
-| README: repo structure "routes/ sensors, weather, grid, cells, alerts, reports, fires" | Also `tiles.py`, `health.py`, `predictions_v2.py` |
+| "five tables" in `app/models/tables.py` (line 625) | **14** `Table(...)` declarations; migrations `0001`–`0010` |
+| Pipeline makes "1h/3h/6h forecasts" (lines 52, 698, 1193) | `app/pipeline/run.py` calls `service.run(hours=[i * 0.25 for i in range(1, 25)], step_minutes=15)` — **24 quarter-hour horizons**, `0.25`–`6.0` |
+| "All five stages should print `[OK  ]`" (line 165) | **six** stages — `_seed_fire_reports` was added; `_print_report` prints `[OK  ]`/`[FAIL]` per stage |
+| "**No scheduler**" (lines 62, 259, 684, 726, 1245) | `.github/workflows/pipeline.yml` **is** the scheduler: `cron: "0 * * * *"` + `workflow_dispatch`, then `alembic upgrade head` and `python -m app.pipeline.run`. The README never mentions the file |
+| Env-var table | Omits `FIRMS_*`, `GIBS_BASE_URL`, `NO2_WMS_*`, `TILE_*`, `TRAFFIC_STALE_AFTER_HOURS`, `FIRE_*`, `PDI_FIRE_PRESSURE_WEIGHT`, `DATABASE_URL`. (`.env.example` itself is complete and exact: **71 keys = 71 `Settings` fields**, re-verified) |
+| Directory-tree comment for `routes/` (line 416) lists "sensors, weather, grid, cells, alerts, health" | Ten route modules exist; the comment **omits `fires.py`, `reports.py`, `tiles.py`, `predictions_v2.py`**. Note the *endpoint tables* further down are complete and accurate — all 18 routes, including both v1 reports/fires and all seven v2 routes, are documented there. Only the tree comment is stale |
+| Repository structure | Omits `partner_apps/air_health_flutter` entirely, and the v2 + tiles route modules |
+| "No authentication … every route on `/api/v1/*` and `/api/v2/*` is open" (lines 279, 1246) | **True on `main`** — verified: no route module on `main` takes a `Depends(require_*)` auth dependency. Already false on `backhima` (simulator key + actor registry), so the claim must be qualified per branch |
+| Flutter README: "Dummy provider active today; Remote is a Dio skeleton" | **Stale, but read the caveat.** `data_providers.dart` returns `GridApiPollutionDataProvider(client: client)` whenever `gridApiClientProvider` is non-null and the dummy otherwise; `grid_api.dart` pins `_apiPrefix = '/api/v2'` and `DioGridApiClient implements GridApiClient`. So the adapter is written and selected, not a skeleton — **but it does not compile** (missing `}` at `grid_api.dart:393`, §1.5). The dummy is the only provider that can actually run today |
 
 Recommendation: fold these corrections into the F3 README pass; do not let a
 feature depend on a README sentence that is already wrong.
@@ -275,11 +352,12 @@ contract** → **acceptance** → **proof mode** (`O` = provable offline,
 - **Footing.** None on `main`. `backhima` implements
   `report_evidence` + `media_storage`: content sniffing by bytes (JPEG EOI / PNG
   IEND / WebP RIFF size), bounded reads, fsync→rename→read-back durable writes,
-  `CITIZOTEN`-style `CITIZEN_MEDIA_STORAGE=disabled` by default (503
-  `media_unavailable`, sensor-only still works), `verify-media-storage` CLI, and
-  a 503-not-404 rule for recorded-but-missing bytes.
+  `CITIZEN_MEDIA_STORAGE=disabled` by default (503 `media_unavailable`,
+  sensor-only still works), a `verify-media-storage` CLI, and a 503-not-404 rule
+  for recorded-but-missing bytes.
 - **Gap.** Capture UI, consent, retention/deletion jobs, reviewer access control,
-  safe re-encoding, malware/quarantine, and orphaned-file cleanup on failure.
+  safe re-encoding, malware/quarantine, and orphaned-file cleanup on failure. The
+  Flutter app also cannot demonstrate any of it until step 0.1 lands (§1.5).
 - **New entities.** `report_evidence.media_*` (already on `backhima`) plus
   `consent_at`, `retention_expires_at`, `deleted_at`, `derivative_key`,
   `review_state`.
@@ -419,12 +497,16 @@ contract** → **acceptance** → **proof mode** (`O` = provable offline,
 ### F9 — Personal health alerts (make reliable)
 
 - **Footing.** Flutter alert engine, notifications, forecast alarm scheduler,
-  onboarding, sensitivity profile, secure storage; the app already reads
-  `/api/v2/*` through `GridApiPollutionDataProvider`.
+  onboarding, sensitivity profile, secure storage. The app is *written* to read
+  `/api/v2/*` through `GridApiPollutionDataProvider`, but that adapter does not
+  compile (§1.5), so today the app runs on the dummy provider.
 - **Gap.** Evaluations are not pinned to one published run; stale/low-coverage
   data is not visibly downgraded; alarm reconciliation on run/permission/
   location/profile change is incomplete; lock-screen privacy and in-app
-  explanation need review.
+  explanation need review. **`notification_service.dart` also targets a plugin API
+  that the locked `flutter_local_notifications 19.5.0` does not expose**
+  (`canScheduleExactAlarms`, `.alarm`, `uiLocalNotificationDateInterpretation`) —
+  F9 owns that dependency decision, not a source fix.
 - **New entities.** None required — this is client state; keep it minimal.
 - **API.** Consume existing v2 meta/run metadata.
 - **Acceptance.** Deterministic Dart tests for threshold edges, rapid rise,
@@ -432,8 +514,10 @@ contract** → **acceptance** → **proof mode** (`O` = provable offline,
   revision, and alarm cancellation; `flutter analyze` and `flutter test` clean.
 - **Proof.** `O` for the logic; `D` for permission granted/denied, app resume,
   app-closed-with-alarm, and tap-to-route.
-- **Note.** The app **does not currently build** (§1.5). Fixing the missing
-  imports is a prerequisite for any F9 claim.
+- **Note.** The app **does not currently build** (§1.5, root causes 1–4). Step 0.1
+  is a prerequisite for any F9 claim, and root cause 4 may force a plugin
+  upgrade or a downgrade of the calls — decide that before writing new alarm
+  logic, not after.
 
 ### F10 — Decision map (harden and connect)
 
@@ -486,12 +570,12 @@ contract** → **acceptance** → **proof mode** (`O` = provable offline,
 
 | # | Step | Gate | Notes |
 | --- | --- | --- | --- |
-| **0** | **Recover the `backhima` line** (8 commits, +29.7k lines) and merge to `main` without force | backend pytest at or better than today's 553/11; migrations `0011`–`0015` apply on a fresh PostGIS DB | **Blocking.** The remote branch is deleted; recover from the local clone or another holder's clone first. Without this, F1–F11 owners duplicate existing work |
-| 0.1 | Fix the 3 missing Flutter imports so the citizen app builds | `flutter analyze` 58 → 0 errors; `flutter test` 8 → 0 load failures | Cheap, unblocks F2/F9 claims |
+| **0** | **Recover the `backhima` line** (8 commits, +29.7k lines) and merge to `main` without force, resolving `1685e85` (which `backhima` lacks) | backend pytest at or better than today's 553/11; migrations `0011`–`0015` apply on a fresh PostGIS DB | **Blocking.** The remote branch is deleted; recover from the local clone or another holder's clone first. Without this, F1–F11 owners duplicate existing work |
+| 0.1 | Fix the citizen app so it compiles: the missing `}` at `grid_api.dart:393`, then the `ReportEnvelope` unwrap in `fire_report_api.dart` | `flutter analyze` 21 errors → 0; `flutter test` 8 load failures → 0 | **One character for the first one.** A previous pass mis-diagnosed these as missing imports; §1.5 gives the four real causes. Until this lands, the Flutter app runs on dummy data only, so no F2 or F9 claim can be demonstrated on a device |
 | 0.2 | Resolve the 11 inherited backend test failures | `pytest` 11 → 0 failed | Known root causes, all mechanical |
-| 0.3 | Land a lint/format baseline decision | Either fix (79 + 36 files) or record a documented, enforced ratchet | Do not silently carry a red gate; do not let a feature PR grow a 36-file reformat diff |
-| 0.4 | Correct the stale README claims (§1.6) | README matches code | Cheap; prevents downstream features building on wrong statements |
-| 1 | **F1** citizen reports | F1 acceptance | Owner **TBD** |
+| 0.3 | Land a lint/format baseline decision | Either fix (79 + 36 files) or record a documented, enforced ratchet | Do not silently carry a red gate; do not let a feature PR grow a 36-file reformat diff. Re-measure after the `backhima` merge, which brings its own files |
+| 0.4 | Correct the stale README claims (§1.6) | README matches code | Cheap; prevents downstream features building on wrong statements. Correct the "no scheduler" claim first: it is the one that misleads an operator |
+| 1 | **F1** citizen reports | F1 acceptance | Owner **unassigned** (§15) — and it must first adopt the untracked geofence work (§1.4) |
 | 2 | **F2** citizen photos | F2 | Needs F1's schema for linkage; privacy review |
 | 3 | **F3** forecast and alerts | F3 | Unblocks live claims for F4/F6/F7 |
 | 4 | **F4** satellite fusion | F4 | Gate any model use on observed-label ablation |
@@ -591,27 +675,68 @@ Existing licensed data already in the repo: geoBoundaries ADM1/ADM2
 F4's licensed quantitative product. Everything else is provable offline with
 fixtures; the honest report for any feature is which column it landed in.
 
+**One precondition sits outside all three columns.** Every `D` cell assumes the
+citizen app compiles, and today it does not (§1.5, step 0.1). Until that is
+fixed, the `D` column for F1, F2 and F9 is *unreachable*, not merely unrun — the
+app cannot be installed against the live API at all. A feature report that claims
+device evidence while `grid_api.dart` still has a parse error is not honest, so
+step 0.1 gates the whole device column rather than just the Flutter tickets.
+
+
 ---
 
 ## 15. Hand-off to the F1 owner
 
-**Owner: TBD.** The scope is written so any owner can start.
+**Status: the scope is complete and committed; the owner is the one open item.**
+Assigning a person is a human decision this pass cannot make, so it is recorded
+as a blocker rather than papered over with a name. Everything else below is
+ready to execute the moment an owner is named.
+
+**Owner: UNASSIGNED.** Needed from whoever runs the pack: a name, and a decision
+on whether F1 is owned by the person who already has the geofence work in
+progress (§1.4) or by someone starting clean — that choice changes step 1.
+
+### Entry checklist for whoever picks it up
 
 1. **Start from `main` *after* step 0.** Do not begin F1 on bare `main`:
    `b6c003f` and `71aea3d` already contain `report_evidence`, `media_storage`
-   and `citizen_intake`, and the merge is unavoidable.
-2. **Read first:** `docs/api/citizen-intake.md` (on `backhima`),
+   and `citizen_intake`, and the merge is unavoidable. An F1 owner who starts on
+   bare `main` will collide with both that and the untracked geofence work.
+2. **Adopt, do not duplicate, the geofence.** `backend/app/domain/india.py` +
+   `data/india_geofence.json` already implement ADM1 point-in-polygon. F1's
+   remaining obligations are lifecycle, rate/abuse control, moderation, and the
+   plume-gating predicate — none of which that work touches.
+3. **Read first:** `docs/api/citizen-intake.md` (on `backhima`),
    `app/services/reports.py`, `app/services/fire_gradient.py`,
    `app/api/routes/reports.py`, `fire_report` in `app/models/tables.py`,
    `frontend/src/components/ReportFireForm.tsx`,
    `partner_apps/air_health_flutter/lib/features/reports/report_fire_sheet.dart`,
    and `frontend/src/lib/reportValidation.ts`.
-3. **Decide first:** the lifecycle column set and the default state; the
-   geofence definition of "India"; the abuse-control mechanism (per-IP
-   submission rate is the minimum); and the exact predicate under which a report
-   is allowed to influence the plume.
-4. **Then implement** per the F1 scope in §4–11, run the checks, and report
+4. **Decide first, in this order** — each is a contract other features inherit:
+   1. the lifecycle column set and the **default state** for an existing row;
+   2. the **plume-gating predicate**: the exact condition under which a report may
+      alter the modeled field (this is the acceptance criterion most likely to be
+      got wrong, and it is what makes an uncorroborated report harmless);
+   3. the **abuse-control** mechanism — per-IP submission rate is the minimum,
+      and note that no route is authenticated, so the control cannot assume
+      identity;
+   4. whether moderation needs a real role or a shared reviewer key, given that
+      §13.3 keeps reads public.
+5. **Then implement** per the F1 scope in §4–11, run the gates in §1.5, and report
    scope/design, changed files, migrations and configuration, tests and results,
    manual demo evidence, and limitations — and do not mark F1 complete while any
    acceptance criterion is unverified.
-5. **Never commit** `partner_apps/air_health_flutter/pubspec.lock`.
+6. **Never commit** `partner_apps/air_health_flutter/pubspec.lock`.
+
+### What the F1 owner inherits, stated plainly
+
+| Inherited | State |
+| --- | --- |
+| `fire_report` table | 11 columns, **no status column**, `UNIQUE(client_report_id)`, spatial index, age-bounded |
+| `POST /api/v1/reports` | unauthenticated, no geofence, no rate limit, no moderation, response keys are contract-locked by `tests/test_api_reports.py` |
+| Plume coupling | an unverified report alters the modeled field **immediately** — the behaviour F1 must gate |
+| Report UI | web `ReportFireForm` and Flutter `ReportFireSheet` both exist and post today |
+| `report_evidence` + `citizen_intake` | on `backhima` only; lands with step 0 and gives F1 its verification-status vocabulary |
+| India geofence | untracked, in progress, ADM1-based, untested by any committed test |
+| Baseline | 553 passed / 11 failed / 31 skipped; Ruff 79 errors and 36 unformatted **on the committed tree** |
+
