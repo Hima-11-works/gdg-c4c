@@ -441,13 +441,66 @@ quality. The verdict comes back `insufficient_data`,
 minimum, and **no metric rendered at all** — not a zero, not a dash.
 
 
-## The federation pill
+## The federation panel
 
-`GET /api/v1/federation/status`, public, no key. Three states are kept apart on
-purpose: a recorded run, **no run recorded**, and **the endpoint being
-unreachable**. Only the last is an error, and an unavailable endpoint is never
-rendered as "no run" — that would be a claim about the backend rather than about
-the connection.
+`GET /api/v1/federation/status`, public, no key. The panel reports one
+**separate-client** run: participants that each trained on their own partition
+and sent fitted parameters, never rows.
+
+### Four states, and what each one displays
+
+`FederationRunStatus` is exactly `succeeded | failed`, so a recorded run either
+completed or did not. That makes four states, and they are kept apart on purpose —
+only the last is an error, and an unavailable endpoint is never rendered as "no
+run", which would be a claim about the backend rather than about the connection.
+
+| State | Pill | Panel |
+| --- | --- | --- |
+| **No run recorded** | `Federation: no demo run recorded`, grey dot | *"No federation run recorded"* — the endpoint answered, and says to run `python -m app.cli federation-demo`. Shows the scope that *would* apply, marked as conditional. |
+| **Completed run** | `Federation demo: N regions · succeeded`, green dot | Full run record: run id, participant count, regional scope, run time, feature schema, label basis, participants, model versions, evaluation, what was exchanged, recorded limitations. |
+| **Failed run** | `Federation demo: N regions · failed`, **red** dot | *"Federation run failed · did not complete"*, then run id, how many participants joined, scope, run time, and **"What this run did not produce"**: no aggregate, no registered model version, evaluation `unavailable`. **No metric is ever shown for a run that did not complete.** |
+| **Unreachable** | `Federation: status unavailable`, orange dot | *"Federation status unavailable"* and the transport error, with a retry. No run facts, and explicitly not "no run recorded". |
+
+The failed state is deliberately **not** the completed view with a different word
+in it. A run that never aggregated has nothing to quote, so it is never shown a
+model version or an evaluation metric beside its participants and timestamps —
+that is exactly how a half-finished run would come to read as a result.
+
+### What a run states about itself
+
+| Fact | Source |
+| --- | --- |
+| Participant count | `participant_count`, shown next to how many participants the payload actually **listed**. If the two disagree the panel says so rather than silently preferring one. |
+| Regional scope | `region_scope`, verbatim (`two-partition-synthetic-demonstration`), never paraphrased into a coverage claim |
+| Run time | `started_at` → `finished_at`, plus elapsed time; a missing endpoint reports *not recorded* |
+| Model version | The model ids, and whether the payload carried per-model status or ids only |
+| Evaluation status | `evaluation.status`, `usable_as_real_world_evidence`, `reason`, and the held-out metrics **only** for a completed run |
+| Synthetic or observed labels | Reconciled from `aggregate.synthetic_only`, `evaluation.status` and the model versions, with each signal shown |
+
+That last row is the subtle one. The payload can state it in three places, and
+only an explicit `false` counts as observed: a signal that merely *exists* — an
+evaluation status of `unavailable`, say — says nothing either way and is reported
+as *not reported*, never as evidence that observed labels took part. If the
+signals contradict each other, that contradiction is shown rather than resolved.
+
+### Privacy is never inferred
+
+Participants exchange fitted parameters and counts. The panel reports the
+**count** of raw rows that reached the aggregator and then says plainly, in both
+run views, that this **is not a privacy guarantee** and that a row count is not
+evidence of one — then prints the recorded `limitations.privacy` verbatim. There
+is no differential privacy, secure aggregation or membership-inference analysis
+behind this feature, so a screen that said "private" because the row count is
+zero would be claiming something the system never established.
+
+### Demonstrating the four states
+
+| State | How |
+| --- | --- |
+| No run recorded | **Live** — the shipped deployment has no recorded run, so the endpoint really answers `no_federation_run` |
+| Completed run | The contract's own *"After a run"* payload (`docs/api/federation.md` §4), served to the panel |
+| Failed run | The same §4 shape with `status: "failed"` — the fields a run that never aggregated would not have: no aggregate, no model ids, evaluation `unavailable`, `finished_at: null` |
+| Unreachable | The status request refused at the transport layer |
 
 Two details worth knowing when reading the payload:
 
@@ -457,6 +510,10 @@ Two details worth knowing when reading the payload:
   `{"model_ids": [...]}`. The panel handles both and, for the persisted shape,
   says *per-model status not reported for a persisted run* rather than implying
   one.
+- **`feature_schema_version` appears in two places** too — at the top level from
+  the persisted reader, and inside the `aggregate` block in the contract's
+  example. The panel reads both, because checking only one reports a real value
+  as *not recorded*.
 - **Nothing in the payload claims privacy, geography or accuracy**, and neither
   does the panel: `region_scope`, `synthetic_only`,
   `evaluation.usable_as_real_world_evidence` and the `limitations` block are

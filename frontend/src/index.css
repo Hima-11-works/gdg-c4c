@@ -1129,6 +1129,32 @@ body,
   box-shadow: 0 0 4px rgba(249, 115, 22, 0.7);
 }
 
+/* A run that was recorded but did not complete. Deliberately not the green of
+   a completed run: the dot reports the run's own status, and green would read
+   as "this worked". */
+.federated-dot-failed {
+  background: #ef4444;
+  box-shadow: 0 0 4px rgba(239, 68, 68, 0.7);
+}
+
+.federated-badge-failed {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: rgba(239, 68, 68, 0.5);
+  color: #fca5a5;
+}
+
+.federated-failed-note {
+  margin: 0.2rem 0 0.4rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  border-left-width: 3px;
+  border-radius: 4px;
+  background: rgba(239, 68, 68, 0.1);
+  color: #fecaca;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
 /* The details panel is a dropdown, wider than the pill: it carries the
    participating regions, the model versions and the recorded limitations
    verbatim, which does not fit a 20rem column. */

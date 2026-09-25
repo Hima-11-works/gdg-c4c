@@ -3,12 +3,19 @@ import { fetchFederationStatus } from '../lib/api'
 import { useApiResource } from '../hooks/useApiResource'
 import {
   evaluation,
+  featureSchemaVersion,
+  formatDuration,
   hasRun,
   headline,
-  latestAggregationTime,
+  labelBasis,
+  labelBasisSentence,
   limitations,
+  modelVersionSummary,
   modelVersions,
+  participantCount,
   participants,
+  runOutcome,
+  runTiming,
   scopeLine,
   syntheticOnly,
   usableAsEvidence,
@@ -42,11 +49,15 @@ function when(iso: string | null | undefined): string {
  * synthetic-only, the evaluation is marked not usable as real-world evidence,
  * and the recorded limitations are shown word for word.
  *
- * Three states are kept apart on purpose. A recorded run, no run recorded yet,
- * and **the endpoint being unreachable** are different facts, and only the
- * last is an error — an unavailable endpoint must never be rendered as
- * "no federation run", which would be a claim about the backend rather than
- * about the connection.
+ * Four states are kept apart on purpose. A completed run, a run that was
+ * recorded but **failed**, no run recorded yet, and **the endpoint being
+ * unreachable** are four different facts, and only the last is an error — an
+ * unavailable endpoint must never be rendered as "no federation run", which
+ * would be a claim about the backend rather than about the connection.
+ *
+ * A failed run is the one most easily smoothed away. It is not a run without
+ * results; it is a run that never produced an aggregate, so it is given its own
+ * heading and is never shown a model version or an evaluation metric.
  */
 export function FederatedStatusPill() {
   const [open, setOpen] = useState(false)
@@ -58,14 +69,17 @@ export function FederatedStatusPill() {
     resource.status === 'success' ? resource.data : null
   const failed = resource.status === 'error'
   const loading = resource.status === 'idle' || resource.status === 'loading'
+  const runFailed = hasRun(status) && runOutcome(status) === 'failed'
 
   const dotClass = failed
     ? 'federated-dot federated-dot-unavailable'
     : loading
       ? 'federated-dot federated-dot-loading'
-      : hasRun(status)
-        ? 'federated-dot federated-dot-ok'
-        : 'federated-dot federated-dot-none'
+      : runFailed
+        ? 'federated-dot federated-dot-failed'
+        : hasRun(status)
+          ? 'federated-dot federated-dot-ok'
+          : 'federated-dot federated-dot-none'
 
   const label = loading ? 'Federation: checking…' : headline(status)
 
@@ -124,12 +138,133 @@ export function FederatedStatusPill() {
             </>
           )}
 
-          {resource.status === 'success' && hasRun(status) && (
+          {resource.status === 'success' && hasRun(status) && runFailed && (
+            <FederationFailedRun status={status} onRefresh={refetch} />
+          )}
+
+          {resource.status === 'success' && hasRun(status) && !runFailed && (
             <FederationRunDetails status={status} onRefresh={refetch} />
           )}
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * A run that was recorded but did not complete.
+ *
+ * This is deliberately not the completed-run view with a different word in it.
+ * A failed run produced no aggregate, so there is no model version to register
+ * and no held-out evaluation to quote. Rendering the participants and the
+ * timestamps is honest; rendering a metric or a model id beside them would let
+ * a half-finished run read as a result.
+ */
+function FederationFailedRun({
+  status,
+  onRefresh,
+}: {
+  status: FederationStatusOut
+  onRefresh: () => void
+}) {
+  const count = participantCount(status)
+  const timing = runTiming(status)
+  const basis = labelBasis(status)
+  const evaluationBlock = evaluation(status)
+  const recordedLimitations = limitations(status)
+  const models = modelVersions(status)
+
+  return (
+    <>
+      <h3>
+        Federation run failed
+        <span className="federated-badge federated-badge-failed">did not complete</span>
+      </h3>
+
+      <p className="federated-failed-note" role="alert">
+        The backend recorded this run with status <b>{status.status}</b>. It did not finish, so
+        there is no aggregate to report and nothing here may be read as a result.
+      </p>
+
+      <dl className="federated-grid">
+        <dt>Run</dt>
+        <dd className="federated-mono">{status.run_id ?? 'not recorded'}</dd>
+
+        <dt>Participants</dt>
+        <dd>
+          {count.reported === null
+            ? `not recorded; ${count.listed} listed below`
+            : `${count.reported} joined before the failure`}
+          {!count.agrees && (
+            <span className="muted">
+              {' '}
+              — the record says {count.reported} but lists {count.listed}
+            </span>
+          )}
+        </dd>
+
+        <dt>Regional scope</dt>
+        <dd>
+          <span className="federated-mono">{scopeLine(status)}</span>
+          <span className="muted"> — unchanged by the failure; it is still a demonstration scope.</span>
+        </dd>
+
+        <dt>Run time</dt>
+        <dd>
+          {when(timing.startedAt)} → {when(timing.finishedAt)}
+          <span className="muted"> · took {formatDuration(timing.durationMs)}</span>
+        </dd>
+
+        <dt>Labels</dt>
+        <dd>{labelBasisSentence(basis)}</dd>
+      </dl>
+
+      <h4 className="federated-subhead">What this run did not produce</h4>
+      <ul className="federated-limitations">
+        <li>
+          <b>Aggregate:</b> none — a failed run has no artifact to quote, so none is shown.
+        </li>
+        <li>
+          <b>Model versions:</b>{' '}
+          {models.length === 0
+            ? 'none registered.'
+            : `${models.length} id(s) present in the record, but not registered as a usable model by a run that did not finish.`}
+        </li>
+        <li>
+          <b>Evaluation:</b>{' '}
+          {evaluationBlock === null
+            ? 'not reported.'
+            : `${evaluationBlock.status} — ${evaluationBlock.reason || 'no reason recorded'}`}
+        </li>
+      </ul>
+
+      <h4 className="federated-subhead">What was exchanged</h4>
+      <p className="muted">
+        {status.raw_rows_exchanged_to_aggregator === null ||
+        status.raw_rows_exchanged_to_aggregator === undefined
+          ? 'The payload does not report how many raw observation rows reached the aggregator.'
+          : `${formatCount(status.raw_rows_exchanged_to_aggregator)} raw observation rows reached the aggregator.`}{' '}
+        Participants exchange fitted parameters and counts. That is <b>not</b> a privacy guarantee,
+        and a row count is not evidence of one.
+      </p>
+
+      {recordedLimitations.length > 0 && (
+        <>
+          <h4 className="federated-subhead">Limitations, as recorded</h4>
+          <ul className="federated-limitations">
+            {recordedLimitations.map((item) => (
+              <li key={item.key}>
+                <b>{item.key}:</b> {item.text}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      <button type="button" className="federated-refresh" onClick={onRefresh}>
+        Check again
+      </button>
+    </>
   )
 }
 
@@ -146,6 +281,9 @@ function FederationRunDetails({
   const synthetic = syntheticOnly(status)
   const usable = usableAsEvidence(status)
   const recordedLimitations = limitations(status)
+  const count = participantCount(status)
+  const timing = runTiming(status)
+  const basis = labelBasis(status)
 
   return (
     <>
@@ -161,28 +299,49 @@ function FederationRunDetails({
         <dt>Run status</dt>
         <dd>{status.status}</dd>
 
-        <dt>Scope</dt>
+        <dt>Participants</dt>
         <dd>
-          {scopeLine(status)}
+          {count.reported === null
+            ? `not recorded; ${count.listed} listed below`
+            : `${count.reported}`}
+          {!count.agrees && (
+            <span className="muted">
+              {' '}
+              — the payload records {count.reported} but lists {count.listed}
+            </span>
+          )}
+        </dd>
+
+        <dt>Regional scope</dt>
+        <dd>
+          <span className="federated-mono">{scopeLine(status)}</span>
           <span className="muted">
             {' '}
             — two disjoint partitions of one synthetic demo dataset, not a nationwide deployment.
           </span>
         </dd>
 
-        <dt>Latest aggregation</dt>
-        <dd>{when(latestAggregationTime(status))}</dd>
+        <dt>Run time</dt>
+        <dd>
+          {when(timing.startedAt)} → {when(timing.finishedAt)}
+          <span className="muted"> · took {formatDuration(timing.durationMs)}</span>
+        </dd>
 
         <dt>Feature schema</dt>
-        <dd>{status.feature_schema_version ?? 'not recorded'}</dd>
+        <dd>{featureSchemaVersion(status) ?? 'not recorded'}</dd>
 
-        <dt>Data</dt>
+        <dt>Labels</dt>
         <dd>
-          {synthetic === null
-            ? 'synthetic-only flag not reported'
-            : synthetic
-              ? 'Synthetic only — no observed labels participate'
-              : 'Not marked synthetic'}
+          {labelBasisSentence(basis)}
+          {basis.signals.length > 0 && (
+            <span className="muted">
+              {' '}
+              ({basis.signals.map((signal) => `${signal.source}=${signal.value}`).join(', ')})
+            </span>
+          )}
+          {synthetic === null && (
+            <span className="muted"> The aggregate did not carry a synthetic-only flag.</span>
+          )}
         </dd>
       </dl>
 
@@ -211,7 +370,14 @@ function FederationRunDetails({
       {models.length === 0 ? (
         <p className="muted">None reported.</p>
       ) : (
-        <ul className="federated-models">
+        <>
+          <p className="muted">
+            {models.length} model version{models.length === 1 ? '' : 's'} recorded
+            {modelVersionSummary(status).described
+              ? ', with per-model status.'
+              : ' — ids only; the persisted run does not carry per-model status.'}
+          </p>
+          <ul className="federated-models">
           {models.map((model) => (
             <li key={model.modelId}>
               <span className="federated-mono">{model.modelId}</span>
@@ -226,7 +392,8 @@ function FederationRunDetails({
               </span>
             </li>
           ))}
-        </ul>
+          </ul>
+        </>
       )}
 
       <h4 className="federated-subhead">Evaluation</h4>
@@ -250,9 +417,9 @@ function FederationRunDetails({
                   +{horizon.horizon_hours}h: MAE {formatNumber(horizon.mae_ugm3)} µg/m³ vs baseline{' '}
                   {formatNumber(horizon.baseline_mae_ugm3)} · held out{' '}
                   {formatCount(horizon.heldout_count)}
-                </li>
-              ))}
-            </ul>
+            </li>
+          ))}
+          </ul>
           )}
         </>
       )}
