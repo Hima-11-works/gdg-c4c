@@ -1,0 +1,120 @@
+{
+  "case": {
+    "case_id": "authored-negative-distractor-delhi-ncr",
+    "title": "Authored fixture: a false positive, a missed cell, and signals that create nothing",
+    "description": "AUTHORED TEST DATA, not an observed event. One distractor cell crosses the trigger but is labelled clear (a demonstrated false positive), one labelled hotspot is masked by cloud (a missed detection), one predicted cell carries no label at all (excluded from precision), and a strong authored station reading plus a weak FIRMS detection sit in cells that do not trigger."
+  },
+  "h3_resolution": 8,
+  "scan_time": "2025-11-09T06:00:00Z",
+  "label_provenance": "authored-fixture",
+  "imagery": {
+    "artifact_id": "fixture-imagery-negative",
+    "source": "authored-fixture",
+    "product": "smoke-composite-index",
+    "product_version": "fixture-v1",
+    "index_name": "authored_smoke_index",
+    "license": "fixture-only-not-for-redistribution",
+    "h3_resolution": 8,
+    "acquired_at": "2025-11-09T05:15:00Z",
+    "available_at": "2025-11-09T05:30:00Z",
+    "synthetic": true,
+    "notes": "Distractor and cloud-masked cells authored to expose the detector's errors.",
+    "tiles": [
+      {
+        "tile_id": "tile-c",
+        "h3_cell": "883da11445fffff",
+        "latitude": 28.63,
+        "longitude": 77.2,
+        "acquired_at": "2025-11-09T05:15:00Z",
+        "index_value": 0.68,
+        "cloud_fraction": 0.06
+      },
+      {
+        "tile_id": "tile-e",
+        "h3_cell": "883da11405fffff",
+        "latitude": 28.62,
+        "longitude": 77.215,
+        "acquired_at": "2025-11-09T05:15:00Z",
+        "index_value": 0.79,
+        "cloud_fraction": 0.72
+      },
+      {
+        "tile_id": "tile-f",
+        "h3_cell": "883da11409fffff",
+        "latitude": 28.63,
+        "longitude": 77.215,
+        "acquired_at": "2025-11-09T05:15:00Z",
+        "index_value": 0.61,
+        "cloud_fraction": 0.04
+      },
+      {
+        "tile_id": "tile-b2",
+        "h3_cell": "883da1146bfffff",
+        "latitude": 28.62,
+        "longitude": 77.2,
+        "acquired_at": "2025-11-09T05:15:00Z",
+        "index_value": 0.22,
+        "cloud_fraction": 0.05
+      }
+    ]
+  },
+  "fires": [
+    {
+      "detection_id": "fixture-fire-weak",
+      "h3_cell": "883da11445fffff",
+      "latitude": 28.63,
+      "longitude": 77.2,
+      "acquired_at": "2025-11-09T05:20:00Z",
+      "available_at": "2025-11-09T05:25:00Z",
+      "frp_mw": 0.4,
+      "confidence_class": "low",
+      "satellite": "VIIRS-NOAA20",
+      "source": "firms",
+      "product_version": "VIIRS_NOAA20_NRT"
+    }
+  ],
+  "stations": [
+    {
+      "station_id": "fixture-station-b",
+      "h3_cell": "883da1146bfffff",
+      "latitude": 28.62,
+      "longitude": 77.2,
+      "measured_at": "2025-11-09T05:30:00Z",
+      "available_at": "2025-11-09T05:35:00Z",
+      "pm25_ugm3": 142.0,
+      "source": "authored-fixture",
+      "verified": true
+    },
+    {
+      "station_id": "fixture-station-f",
+      "h3_cell": "883da11409fffff",
+      "latitude": 28.63,
+      "longitude": 77.215,
+      "measured_at": "2025-11-09T05:30:00Z",
+      "available_at": "2025-11-09T05:35:00Z",
+      "pm25_ugm3": 88.0,
+      "source": "authored-fixture",
+      "verified": true
+    }
+  ],
+  "labels": [
+    {
+      "h3_cell": "883da11445fffff",
+      "kind": "authored_clear",
+      "label_source": "authored-fixture",
+      "note": "haze with no hotspot: the distractor"
+    },
+    {
+      "h3_cell": "883da11405fffff",
+      "kind": "authored_hotspot",
+      "label_source": "authored-fixture",
+      "note": "a real hotspot in the fixture, hidden by cloud"
+    },
+    {
+      "h3_cell": "883da1146bfffff",
+      "kind": "authored_clear",
+      "label_source": "authored-fixture",
+      "note": "background cell carrying a strong authored reading"
+    }
+  ]
+}

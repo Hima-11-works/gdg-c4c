@@ -1,0 +1,100 @@
+{
+  "case": {
+    "case_id": "authored-positive-delhi-ncr",
+    "title": "Authored fixture: one imagery hotspot with FIRMS support",
+    "description": "AUTHORED TEST DATA, not an observed event. A single authored high-index cell crosses the trigger, a FIRMS detection in the same cell supports it, and an authored station reading is supplied but excluded from confidence because its source is a fixture. Used to show the positive path end to end."
+  },
+  "h3_resolution": 8,
+  "scan_time": "2025-11-08T05:30:00Z",
+  "label_provenance": "authored-fixture",
+  "imagery": {
+    "artifact_id": "fixture-imagery-positive",
+    "source": "authored-fixture",
+    "product": "smoke-composite-index",
+    "product_version": "fixture-v1",
+    "index_name": "authored_smoke_index",
+    "license": "fixture-only-not-for-redistribution",
+    "h3_resolution": 8,
+    "acquired_at": "2025-11-08T04:30:00Z",
+    "available_at": "2025-11-08T04:45:00Z",
+    "synthetic": true,
+    "notes": "Hand-authored index values on a real H3 grid. The index is a declared upstream product; this fixture stands in for one and is not a satellite observation.",
+    "tiles": [
+      {
+        "tile_id": "tile-a",
+        "h3_cell": "883da11467fffff",
+        "latitude": 28.61,
+        "longitude": 77.2,
+        "acquired_at": "2025-11-08T04:30:00Z",
+        "index_value": 0.82,
+        "cloud_fraction": 0.08
+      },
+      {
+        "tile_id": "tile-b",
+        "h3_cell": "883da1146bfffff",
+        "latitude": 28.62,
+        "longitude": 77.2,
+        "acquired_at": "2025-11-08T04:30:00Z",
+        "index_value": 0.41,
+        "cloud_fraction": 0.1
+      },
+      {
+        "tile_id": "tile-d",
+        "h3_cell": "883da11429fffff",
+        "latitude": 28.61,
+        "longitude": 77.215,
+        "acquired_at": "2025-11-08T04:30:00Z",
+        "index_value": 0.33,
+        "cloud_fraction": 0.05
+      }
+    ]
+  },
+  "fires": [
+    {
+      "detection_id": "fixture-fire-1",
+      "h3_cell": "883da11467fffff",
+      "latitude": 28.61,
+      "longitude": 77.2,
+      "acquired_at": "2025-11-08T04:45:00Z",
+      "available_at": "2025-11-08T04:50:00Z",
+      "frp_mw": 12.4,
+      "confidence_class": "high",
+      "satellite": "VIIRS-NOAA20",
+      "source": "firms",
+      "product_version": "VIIRS_NOAA20_NRT"
+    }
+  ],
+  "stations": [
+    {
+      "station_id": "fixture-station-1",
+      "h3_cell": "883da11467fffff",
+      "latitude": 28.61,
+      "longitude": 77.2,
+      "measured_at": "2025-11-08T05:00:00Z",
+      "available_at": "2025-11-08T05:05:00Z",
+      "pm25_ugm3": 168.0,
+      "source": "authored-fixture",
+      "verified": true
+    }
+  ],
+  "labels": [
+    {
+      "h3_cell": "883da11467fffff",
+      "kind": "authored_hotspot",
+      "label_source": "authored-fixture",
+      "note": "the cell the fixture says contains a hotspot"
+    },
+    {
+      "h3_cell": "883da1146bfffff",
+      "kind": "authored_clear",
+      "label_source": "authored-fixture",
+      "note": "ordinary background, below the trigger"
+    },
+    {
+      "h3_cell": "883da11429fffff",
+      "kind": "authored_clear",
+      "label_source": "authored-fixture",
+      "note": "ordinary background, below the trigger"
+    }
+  ]
+}

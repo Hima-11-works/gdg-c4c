@@ -45,6 +45,7 @@ from app.services.media_storage import (
     MediaStore,
     MediaStoreUnavailable,
 )
+from app.services.hotspot_detection import HotspotScanStore, build_store
 from app.services.prediction_queries import PredictionQueryService
 from app.services.reports import FireReportService
 from app.services.incidents import (
@@ -201,8 +202,18 @@ def get_federation_status_service(
     return FederationStatusReader(SqlFederationRepository(session))
 
 
+def get_hotspot_scan_store() -> HotspotScanStore:
+    """Where recorded candidate-hotspot scans are read from.
+
+    No session: the route serves scans written by `python -m app.cli
+    hotspot-scan` (see docs/api/hotspots.md). It never re-runs the detector on
+    request, and an unconfigured directory yields an empty catalog rather than
+    an invented scan.
+    """
+    return build_store(get_settings())
+
+
 def get_tile_service() -> TileService:
     """No session: the tile proxy reads settings and one upstream HTTP call,
     never the database."""
     return TileService(get_settings())
-

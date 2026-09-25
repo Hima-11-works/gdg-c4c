@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useApiResource } from '../hooks/useApiResource'
+import { fetchHotspotCatalog, fetchHotspotEvents, fetchHotspotScan } from '../lib/api'
 import { useMapUi } from '../state/MapUiContext'
 import {
   EVIDENCE_GAPS,
@@ -9,6 +11,7 @@ import {
 } from '../lib/hotspotCandidates'
 import type { CandidatesUnavailableReason, HotspotCandidate } from '../lib/hotspotCandidates'
 import type { ActiveFire } from '../lib/activeFires'
+import type { HotspotScanOut, HotspotScanSummaryOut } from '../lib/types'
 import type { AsyncResource } from '../hooks/useApiResource'
 import { SidePanel } from './SidePanel'
 
@@ -39,7 +42,10 @@ const STATUS_CLASS: Record<string, string> = {
  */
 export function HotspotEvidencePanel({ resource }: { resource: AsyncResource<ActiveFire[]> }) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedScanId, setSelectedScanId] = useState<string | null>(null)
   const { state, dispatch } = useMapUi()
+  const scanCatalog = useApiResource(fetchHotspotCatalog, [], { pollIntervalMs: 5 * 60 * 1000 })
+  const eventCatalog = useApiResource(fetchHotspotEvents, [], { pollIntervalMs: 5 * 60 * 1000 })
 
   const candidates = useMemo(
     () => (resource.status === 'success' ? resource.data.map(hotspotCandidateFromRow) : []),
@@ -61,6 +67,16 @@ export function HotspotEvidencePanel({ resource }: { resource: AsyncResource<Act
 
   const selected: HotspotCandidate | null =
     candidates.find((candidate) => candidate.detectionId === selectedId) ?? null
+
+  const scans = scanCatalog.resource.status === 'success' ? scanCatalog.resource.data.scans : []
+  const events = eventCatalog.resource.status === 'success' ? eventCatalog.resource.data.events : []
+  const selectedScanSummary =
+    scans.find((scan) => scan.scan_id === selectedScanId) ?? scans[0] ?? null
+  const scanDetails = useApiResource(
+    (signal) => fetchHotspotScan(selectedScanSummary?.scan_id ?? '', signal),
+    [selectedScanSummary?.scan_id],
+    { enabled: selectedScanSummary !== null },
+  )
 
   const reason: CandidatesUnavailableReason | null =
     resource.status === 'error'
@@ -84,9 +100,98 @@ export function HotspotEvidencePanel({ resource }: { resource: AsyncResource<Act
       <div className="panel hotspot-panel">
         <h3>Fire candidate evidence</h3>
         <p className="muted">
-          Imagery-derived candidates, triaged from NASA FIRMS thermal detections. This is not
-          measured PM2.5, and not a confirmed fire.
+          Imagery-index candidates, optionally supported by FIRMS and verified stations. These are
+          not measured PM2.5 values or confirmed pollution events; they await human review.
         </p>
+
+        <h4 className="hotspot-subhead">Potential pollution events</h4>
+        {(eventCatalog.resource.status === 'loading' ||
+          eventCatalog.resource.status === 'idle') && (
+          <p className="muted">Reading persisted hotspot events…</p>
+        )}
+        {eventCatalog.resource.status === 'error' && (
+          <div className="hotspot-unavailable" role="status">
+            <p className="hotspot-unavailable-title">Hotspot event catalog unavailable</p>
+            <p className="hotspot-unavailable-error">{eventCatalog.resource.message}</p>
+          </div>
+        )}
+        {eventCatalog.resource.status === 'success' && events.length === 0 && (
+          <p className="muted">
+            No potential events are recorded. Run an imagery scan to create reviewable, deduplicated
+            events.
+          </p>
+        )}
+        {events.length > 0 && (
+          <ul className="hotspot-list">
+            {events.slice(0, 8).map((event) => (
+              <li className="hotspot-scan-candidate" key={event.event_id}>
+                <b>{event.status.replaceAll('_', ' ')}</b> · severity {event.severity} ·{' '}
+                {event.confidence_band} triage ({Math.round(event.confidence_score * 100)}%)
+                <div className="hotspot-row-meta">
+                  {event.region} · {event.footprint_cells.length} cell(s) · {event.scan_ids.length}{' '}
+                  scan(s) · {event.evidence.length} evidence link(s)
+                  {event.synthetic ? ' · authored fixture' : ''}
+                </div>
+                <div className="hotspot-mono">{event.footprint_cells.join(', ')}</div>
+                <div className="muted">
+                  {when(event.time_window.from, true)} ·{' '}
+                  {[...new Set(event.evidence.map((item) => item.source))].join(', ') ||
+                    'no evidence links'}
+                </div>
+                <div className="muted">{event.uncertainty}</div>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <h4 className="hotspot-subhead">Recorded imagery scans</h4>
+        {(scanCatalog.resource.status === 'loading' || scanCatalog.resource.status === 'idle') && (
+          <p className="muted">Reading recorded detector scans…</p>
+        )}
+        {scanCatalog.resource.status === 'error' && (
+          <div className="hotspot-unavailable" role="status">
+            <p className="hotspot-unavailable-title">Scan catalog unavailable</p>
+            <p className="muted">
+              The dashboard cannot tell whether any imagery scans were recorded.
+            </p>
+            <p className="hotspot-unavailable-error">{scanCatalog.resource.message}</p>
+          </div>
+        )}
+        {scanCatalog.resource.status === 'success' && scans.length === 0 && (
+          <p className="muted">
+            No imagery scan is recorded here. The detector needs a prepared, georeferenced imagery
+            artifact; shipped fixtures are authored examples, not live satellite observations.
+          </p>
+        )}
+        {scans.length > 0 && (
+          <>
+            <ul className="hotspot-list">
+              {scans.map((scan) => (
+                <li key={scan.scan_id}>
+                  <button
+                    type="button"
+                    className={`hotspot-row ${
+                      selectedScanSummary?.scan_id === scan.scan_id ? 'hotspot-row-selected' : ''
+                    }`}
+                    onClick={() => setSelectedScanId(scan.scan_id)}
+                  >
+                    <span className="hotspot-row-status">{scan.verdict.replaceAll('_', ' ')}</span>
+                    <span className="hotspot-row-meta">
+                      {scan.case_title} · {scan.candidate_count} candidate
+                      {scan.candidate_count === 1 ? '' : 's'}
+                      {scan.synthetic_input ? ' · authored fixture' : ''}
+                    </span>
+                    <span className="hotspot-row-id">{scan.scan_id}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            {selectedScanSummary !== null && (
+              <RecordedScanDetails summary={selectedScanSummary} resource={scanDetails.resource} />
+            )}
+          </>
+        )}
+
         {resource.status === 'loading' || resource.status === 'idle' ? (
           <p className="muted">Reading the satellite detection feed…</p>
         ) : null}
@@ -204,5 +309,58 @@ export function HotspotEvidencePanel({ resource }: { resource: AsyncResource<Act
         )}
       </div>
     </SidePanel>
+  )
+}
+
+function RecordedScanDetails({
+  summary,
+  resource,
+}: {
+  summary: HotspotScanSummaryOut
+  resource: AsyncResource<HotspotScanOut>
+}) {
+  if (resource.status === 'idle' || resource.status === 'loading') {
+    return <p className="muted">Loading scan evidence…</p>
+  }
+  if (resource.status === 'error') {
+    return (
+      <p className="hotspot-unavailable-error">Scan evidence unavailable: {resource.message}</p>
+    )
+  }
+
+  const scan = resource.data
+  return (
+    <div className="hotspot-scan-details">
+      <p className="muted">
+        {scan.detector_version} · evaluated {when(scan.evaluated_at, true)}
+        {scan.imagery?.synthetic ? ' · authored imagery fixture' : ''}
+      </p>
+      {summary.synthetic_input && (
+        <p className="hotspot-caveat">
+          Fixture score only: {summary.false_positives} false positive(s), {summary.false_negatives}{' '}
+          missed label(s). This does not establish real-world accuracy.
+        </p>
+      )}
+      {scan.candidates.length === 0 ? (
+        <p className="muted">This scan returned no candidate locations.</p>
+      ) : (
+        <ul className="hotspot-list">
+          {scan.candidates.map((candidate) => (
+            <li className="hotspot-scan-candidate" key={candidate.candidate_id}>
+              <b>{candidate.review_status.replaceAll('_', ' ')}</b> · {candidate.confidence}{' '}
+              confidence ({Math.round(candidate.confidence_score * 100)}%)
+              <div className="hotspot-row-meta">
+                {candidate.supporting_sources.join(', ')} · {when(candidate.acquired_at, true)}
+              </div>
+              <div className="hotspot-mono">
+                {candidate.latitude.toFixed(4)}, {candidate.longitude.toFixed(4)} · cell{' '}
+                {candidate.h3_cell}
+              </div>
+              <div className="muted">Candidate location for human review; no PM2.5 value.</div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   )
 }

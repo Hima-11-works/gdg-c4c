@@ -409,21 +409,23 @@ contract** → **acceptance** → **proof mode** (`O` = provable offline,
 
 ### F5 — Hidden hotspots (build detection)
 
-- **Footing.** `backhima` has a bounded, versioned
-  `hotspot-candidate-v1` detector: imagery index trigger, FIRMS/station support,
-  cloud masking, freshness, georeference verification, `insufficient_evidence`,
-  and false-positive/missed-detection evaluation against labelled fixtures.
-- **Gap.** The brief needs a **persisted event** with footprint, time window,
-  severity, evidence links, lifecycle, cross-cell/run dedup, and separation of
-  potential/corroborated/resolved — and it should combine **time-aligned station
-  anomalies** and wind context, not imagery alone. The backhima detector writes
-  scans to disk and never creates a measured PM2.5 value, which is the right
-  instinct but not the required event model.
-- **New entities.** `hotspot_event` (id, region, footprint cells, window,
-  severity, status, run_id, detector_version, confidence, uncertainty),
-  `hotspot_evidence` (event_id, source, observed_at, available_at, ref).
-- **API.** `GET /api/v1/hotspots`, `GET /api/v1/hotspots/{id}` with evidence and
-  uncertainty; map cards read these.
+- **Footing.** `main` has the bounded, versioned `hotspot-candidate-v1`
+  detector and now persists candidate events in a local SQLite store. A stable
+  event groups cells sharing one coarser H3 parent and a six-hour UTC bucket;
+  repeated scans merge evidence links. Events expose footprint, observation and
+  availability times, triage confidence, uncertainty, and `potential` status.
+- **Remaining gap.** Severity remains unassessed and event status cannot yet be
+  reviewed or transitioned. Deduplication does not span parent-cell boundaries.
+  The detector still needs prepared imagery artifacts; a live imagery adapter,
+  time-aligned station anomaly and wind context, event lifecycle, and authority
+  notification are not wired. Fixture precision/recall are not real-world
+  performance.
+- **Storage.** `hotspot_events.sqlite3` contains the current event projection;
+  scan JSON remains the detector provenance record. This is a local demo store,
+  not yet a shared database entity or multi-region service.
+- **API.** `GET /api/v1/hotspots` and `/{scan_id}` serve recorded scans;
+  `/api/v1/hotspots/events` and `/events/{event_id}` serve deduplicated events
+  with evidence and uncertainty. The dashboard shows event cards.
 - **Acceptance.** Replay cases for real signal, sensor-only spike, FIRMS-only
   fire, citizen-only false report, missing coverage, stale satellite, and
   adjacent-cell duplicates; precision/recall reported **only** where labels
@@ -739,4 +741,3 @@ progress (§1.4) or by someone starting clean — that choice changes step 1.
 | `report_evidence` + `citizen_intake` | on `backhima` only; lands with step 0 and gives F1 its verification-status vocabulary |
 | India geofence | untracked, in progress, ADM1-based, untested by any committed test |
 | Baseline | 553 passed / 11 failed / 31 skipped; Ruff 79 errors and 36 unformatted **on the committed tree** |
-

@@ -6,6 +6,8 @@
     python -m app.cli forecast
     python -m app.cli demo-generate --profile tiny-ci --out demo.json
     python -m app.cli demo-replay --profile regional-demo --at 2025-01-15T12:00:00Z
+    python -m app.cli verify-media-storage
+    python -m app.cli hotspot-scan --fixture tests/fixtures/hotspots/positive_hotspot.json
 
 Runs one ingestion pass against the bounding box from .env (overridable
 per-call with the flags above) and prints a summary. This is a manual
@@ -53,6 +55,7 @@ from app.db.repositories import (
 from app.db.session import get_session_factory
 from app.domain.corridor import get_corridor, list_corridors
 from app.domain.features import DataMode, WeatherFeature
+from app.domain.hotspots import DETECTOR_VERSION, ScanVerdict
 from app.domain.training import ModelStatus, ModelVersion
 from app.domain.types import BoundingBox
 from app.ingestion.demo_scenarios import ScenarioGenerator
@@ -94,6 +97,19 @@ from app.services.corridor_evaluation import (
     event_peak,
 )
 from app.services.federation import run_federation_demo
+from app.services.hotspot_detection import (
+    DetectorConfig,
+    HotspotDetector,
+    HotspotInputError,
+    HotspotScanStore,
+    load_case,
+    run_case,
+)
+from app.services.media_storage import MediaStoreError, build_media_store
+from app.services.prediction_queries import (
+    DEFAULT_EXPOSURE_THRESHOLD_PM25,
+    PredictionQueryService,
+)
 from app.services.training_data import (
     export_training_dataset,
     generate_synthetic_training_dataset,
@@ -808,6 +824,153 @@ async def _run_expire_reports(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _run_hotspot_scan(args: argparse.Namespace) -> int:
+    """Run the candidate-hotspot detector over one or more case fixtures.
+
+    Each case is an authored document: a versioned georeferenced imagery
+    artifact, the FIRMS and station signals offered as support, and the labels
+    used to score the result. The command prints the candidates with their
+    provenance, records the scan under HOTSPOT_SCAN_DIR (where
+    GET /api/v1/hotspots/{scan_id} serves it), and reports the false-positive /
+    missed-detections assessment.
+
+    Exit codes, chosen so a script can tell the three situations apart:
+
+    * `0` — the detector ran. This includes "it ran and found nothing": an empty
+      candidate list with a `candidates` verdict.
+    * `2` — insufficient evidence: no usable imagery, so nothing was detected.
+      Not a failure, and never a silent zero.
+    * `1` — the command could not run: unreadable fixture, bad georeferencing, or
+      a store that could not be written.
+
+    The scan time defaults to the case's own `scan_time`, so a fixture produces
+    the same result on any machine on any day; `--evaluated-at` overrides it.
+    """
+    settings = get_settings()
+    config = DetectorConfig.from_settings(settings)
+    detector = HotspotDetector(config)
+    store = HotspotScanStore(args.out_dir or settings.hotspot_scan_dir)
+
+    fixtures: list[Path] = [Path(value) for value in (args.fixture or [])]
+    if args.fixture_dir:
+        fixtures.extend(sorted(Path(args.fixture_dir).glob("*.json")))
+    if not fixtures:
+        print(
+            "Nothing to scan: pass --fixture <path> (repeatable) or --fixture-dir <dir>.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if args.evaluated_at:
+        try:
+            evaluated_at = _parse_utc_argument(args.evaluated_at)
+        except ValueError as exc:
+            print(f"Invalid --evaluated-at: {exc}", file=sys.stderr)
+            return 1
+    else:
+        evaluated_at = None
+
+    exit_code = 0
+    report: dict = {"detector_version": DETECTOR_VERSION, "scans": []}
+    for fixture in fixtures:
+        try:
+            case = load_case(fixture)
+        except HotspotInputError as exc:
+            print(f"Refusing {fixture}: {exc}", file=sys.stderr)
+            return 1
+        try:
+            scan = run_case(case, detector=detector, evaluated_at=evaluated_at)
+        except HotspotInputError as exc:
+            print(f"Refusing {fixture}: {exc}", file=sys.stderr)
+            return 1
+        try:
+            path = store.write(scan)
+        except (OSError, ValueError) as exc:
+            print(f"Could not record the scan for {fixture}: {exc}", file=sys.stderr)
+            return 1
+
+        report["scans"].append(scan.to_dict())
+        _print_hotspot_scan(scan, fixture=fixture, recorded_at=path)
+        if scan.verdict is ScanVerdict.INSUFFICIENT_EVIDENCE:
+            exit_code = 2
+
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+        print(f"report written to {out_path}")
+    return exit_code
+
+
+def _print_hotspot_scan(scan, *, fixture: Path, recorded_at: Path) -> None:
+    """Print one scan the way a reviewer needs to read it."""
+    print(f"Case: {scan.case_title} ({scan.case_id})")
+    print(f"  fixture: {fixture}")
+    print(f"  scan_id: {scan.scan_id}")
+    print(f"  detector: {scan.detector_version}   evaluated_at: {scan.evaluated_at.isoformat()}")
+    print(f"  verdict: {scan.verdict.value}")
+    for reason in scan.reasons:
+        print(f"    - {reason}")
+    if scan.imagery is not None:
+        first, last = scan.imagery.acquisition_window
+        print(
+            f"  imagery: {scan.imagery.source} {scan.imagery.product} "
+            f"{scan.imagery.product_version} index={scan.imagery.index_name} "
+            f"license={scan.imagery.license} synthetic={scan.imagery.synthetic}"
+        )
+        print(
+            f"    acquisition {first.isoformat()} .. {last.isoformat()} "
+            f"({scan.imagery.tile_count} tile(s), H3 res {scan.imagery.h3_resolution})"
+        )
+        print(f"    digest: {scan.imagery_digest}")
+    print(
+        f"  tiles: " + ", ".join(f"{name}={count}" for name, count in scan.tile_counts.items())
+    )
+    print(f"  supporting signals supplied: fires={scan.fire_count} stations={scan.station_count}")
+
+    if scan.candidates:
+        print(f"  candidate hotspots ({len(scan.candidates)}):")
+        for candidate in scan.candidates:
+            print(
+                f"    {candidate.h3_cell} ({candidate.latitude:.4f}, {candidate.longitude:.4f}) "
+                f"acquired {candidate.acquired_at.isoformat()}"
+            )
+            print(
+                f"      confidence={candidate.confidence.value} "
+                f"({candidate.confidence_score:.2f}) "
+                f"sources={'+'.join(source.value for source in candidate.supporting_sources)}"
+            )
+            print(f"      review_status={candidate.review_status.value} pm25_ugm3={candidate.pm25_ugm3}")
+            for item in candidate.evidence:
+                print(f"        {item.source.value} @ {item.observed_at.isoformat()}: {item.detail}")
+    else:
+        print("  candidate hotspots: none")
+
+    evaluation = scan.evaluation
+    print(
+        f"  evaluation: {evaluation.status.value} "
+        f"(sufficient={evaluation.sufficient}, labels={evaluation.label_provenance})"
+    )
+    for reason in evaluation.reasons:
+        print(f"    - {reason}")
+    print(
+        f"    tp={evaluation.true_positives} fp={evaluation.false_positives} "
+        f"fn={evaluation.false_negatives} unlabelled={evaluation.unlabelled_predictions} "
+        f"precision={_fmt(evaluation.precision)} recall={_fmt(evaluation.recall)}"
+    )
+    if evaluation.false_positive_cells:
+        print(f"    false-positive cells: {', '.join(evaluation.false_positive_cells)}")
+    if evaluation.missed_cells:
+        print(f"    missed cells: {', '.join(evaluation.missed_cells)}")
+    if evaluation.unlabelled_cells:
+        print(f"    unlabelled predicted cells: {', '.join(evaluation.unlabelled_cells)}")
+    print(f"  recorded at: {recorded_at}")
+    print(
+        "  note: a candidate is a location for human review - not a PM2.5 value, not an "
+        "identified source, and never auto-confirmed."
+    )
+
+
 async def _run_corridor_evaluate(args: argparse.Namespace) -> int:
     """Score a named corridor's published forecast against real stations.
 
@@ -1260,6 +1423,42 @@ def main(argv: list[str] | None = None) -> int:
         help="Write local artifacts without persisting a run to PostgreSQL.",
     )
     federation_parser.set_defaults(func=_run_federation_demo)
+    hotspot_parser = subparsers.add_parser(
+        "hotspot-scan",
+        help=(
+            "Run the candidate-hotspot detector over a case fixture and record the scan "
+            "(exit 2 when the inputs are insufficient, 0 when it ran)."
+        ),
+    )
+    hotspot_parser.add_argument(
+        "--fixture",
+        action="append",
+        default=None,
+        help=(
+            "Case fixture JSON (repeatable): georeferenced imagery plus optional FIRMS and "
+            "station signals and authored labels."
+        ),
+    )
+    hotspot_parser.add_argument(
+        "--fixture-dir",
+        default=None,
+        help="Scan every *.json case fixture in this directory.",
+    )
+    hotspot_parser.add_argument(
+        "--out-dir",
+        default=None,
+        help="Where to record scans (default: HOTSPOT_SCAN_DIR).",
+    )
+    hotspot_parser.add_argument("--out", default=None, help="Also write the full report JSON here.")
+    hotspot_parser.add_argument(
+        "--evaluated-at",
+        default=None,
+        help=(
+            "Override the scan time (RFC 3339 UTC). Defaults to each fixture's own scan_time, "
+            "so a case is reproducible on any day."
+        ),
+    )
+    hotspot_parser.set_defaults(func=_run_hotspot_scan)
 
     args = parser.parse_args(argv)
     logging.basicConfig(level=get_settings().log_level)

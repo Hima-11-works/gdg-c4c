@@ -23,6 +23,9 @@ import type {
   FireReportWithStatus,
   ForecastOut,
   FederationStatusOut,
+  HotspotCatalogOut,
+  HotspotEventsOut,
+  HotspotScanOut,
   ForecastV2Out,
   GridCurrentV2Out,
   GridStateOut,
@@ -347,6 +350,24 @@ export function fetchActiveFires(query: LodQuery = {}): Promise<Envelope<ActiveF
       data: envelope.data.map(activeFireFromHotspot),
     }),
   )
+}
+
+/** Recorded imagery-driven candidate scans (not confirmed pollution events). */
+export function fetchHotspotCatalog(signal?: AbortSignal): Promise<Envelope<HotspotCatalogOut>> {
+  return apiGet<Envelope<HotspotCatalogOut>>('/api/v1/hotspots', signal)
+}
+
+/** Persisted, spatially and temporally deduplicated potential hotspot events. */
+export function fetchHotspotEvents(signal?: AbortSignal): Promise<Envelope<HotspotEventsOut>> {
+  return apiGet<Envelope<HotspotEventsOut>>('/api/v1/hotspots/events', signal)
+}
+
+/** Candidate locations and evidence for one recorded detector scan. */
+export function fetchHotspotScan(
+  scanId: string,
+  signal?: AbortSignal,
+): Promise<Envelope<HotspotScanOut>> {
+  return apiGet<Envelope<HotspotScanOut>>(`/api/v1/hotspots/${encodeURIComponent(scanId)}`, signal)
 }
 
 export function submitReport(payload: FireReportSubmit): Promise<Envelope<FireReportOut>> {

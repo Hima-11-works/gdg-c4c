@@ -441,6 +441,115 @@ export interface FireHotspotOut {
   daynight: string | null
 }
 
+export interface HotspotScanSummaryOut {
+  scan_id: string
+  case_id: string
+  case_title: string
+  detector_version: string
+  evaluated_at: string
+  verdict: string
+  candidate_count: number
+  evaluation_status: string
+  false_positives: number
+  false_negatives: number
+  precision: number | null
+  recall: number | null
+  synthetic_input: boolean
+  reasons: string[]
+}
+
+export interface HotspotCatalogOut {
+  detector_version: string
+  trigger: string
+  supporting_signals: string[]
+  required_inputs: string[]
+  outputs: string[]
+  bounds: Record<string, unknown>
+  scans: HotspotScanSummaryOut[]
+  limitations: Record<string, string>
+}
+
+export interface HotspotEventEvidenceOut {
+  source: string
+  observed_at: string
+  available_at: string | null
+  ref: string
+  source_ref: string | null
+  scan_id: string
+  detail: string
+}
+
+export interface HotspotEventOut {
+  event_id: string
+  region: string
+  dedup_cell: string
+  footprint_cells: string[]
+  footprint_resolution: number
+  time_window: Record<string, string>
+  severity: string
+  severity_basis: string
+  status: string
+  scan_ids: string[]
+  detector_version: string
+  confidence_score: number
+  confidence_band: string
+  uncertainty: string
+  pm25_ugm3: null
+  synthetic: boolean
+  evidence: HotspotEventEvidenceOut[]
+  created_at: string
+  updated_at: string
+}
+
+export interface HotspotEventsOut {
+  events: HotspotEventOut[]
+}
+
+export interface HotspotCandidateOut {
+  candidate_id: string
+  h3_cell: string
+  latitude: number
+  longitude: number
+  acquired_at: string
+  detector_version: string
+  confidence: string
+  confidence_score: number
+  supporting_sources: string[]
+  review_status: string
+  notes: string
+}
+
+export interface HotspotScanOut {
+  scan_id: string
+  case_title: string
+  detector_version: string
+  evaluated_at: string
+  verdict: string
+  reasons: string[]
+  imagery: {
+    source: string
+    product: string
+    product_version: string
+    acquired_at: string
+    available_at: string
+    synthetic: boolean
+    notes: string
+  } | null
+  candidate_count: number
+  candidates: HotspotCandidateOut[]
+  evaluation: {
+    status: string
+    usable_as_real_world_evidence: boolean
+    labels_total: number
+    true_positives: number
+    false_positives: number
+    false_negatives: number
+    precision: number | null
+    recall: number | null
+  }
+  limitations: Record<string, string>
+}
+
 /** Request body for POST /api/v1/reports - the same bounds the backend
  *  validates (intensity 1-5, duration 0-24h, notes <= 280 chars). */
 export interface FireReportSubmit {
