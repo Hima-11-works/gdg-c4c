@@ -22,7 +22,7 @@ import {
   CORRIDOR_CELL_COLOR,
   corridorFeatureCollection,
 } from '../lib/corridorGeometry'
-import type { CorridorCatalogEntry } from '../lib/types'
+import type { CorridorCatalogEntry, HotspotCandidateOut } from '../lib/types'
 import {
   colorScaleExpression,
   EXPOSURE_COLOR_SCALE,
@@ -51,11 +51,7 @@ import {
   activeFirePopupHtml,
   activeFiresFeatureCollection,
 } from '../lib/activeFires'
-import {
-  hotspotCandidatePopupHtml,
-  hotspotCandidateFromRow,
-  hotspotCandidatesFeatureCollection,
-} from '../lib/hotspotCandidates'
+import { hotspotCandidatePopupHtml, hotspotCandidatesFeatureCollection } from '../lib/hotspotScans'
 import type { ActiveFire } from '../lib/activeFires'
 import {
   GIBS_ATTRIBUTION,
@@ -713,6 +709,9 @@ interface MapViewProps {
   /** The cells the loaded corridor event reported for that run. Null until an
    *  event is loaded, so the map never implies the run covered the axis. */
   corridorCells: string[] | null
+  /** Candidate hotspots the detector recorded, from GET /api/v1/hotspots. A
+   *  candidate is a location for human review, not a PM2.5 value. */
+  hotspotCandidates: HotspotCandidateOut[]
 }
 
 /** Full-screen MapLibre map. Owns the map instance imperatively (MapLibre
@@ -730,6 +729,7 @@ export function MapView({
   activeFires,
   corridor,
   corridorCells,
+  hotspotCandidates,
 }: MapViewProps) {
   const { state, dispatch } = useMapUi()
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -1897,20 +1897,17 @@ export function MapView({
     map.setLayoutProperty(LAYER_CANDIDATE_RING, 'visibility', visibility)
   }, [mapReady, state.showHotspotCandidates])
 
-  // Candidates are derived from the same FIRMS records the detection layer
-  // draws, so this reuses the one fetch rather than asking twice. A failed or
-  // absent fetch leaves the source empty - which the panel reports as its own
-  // unavailable state rather than as "no candidates".
+  // The candidates the detector recorded, handed straight down from MapPage.
+  // They come from /api/v1/hotspots, not from the FIRMS layer: imagery is the
+  // trigger, so these are not the same records the detection layer draws. A
+  // failed or absent fetch leaves the source empty, which the panel reports as
+  // its own unavailable state rather than as "no hotspots".
   useEffect(() => {
     if (!mapReady || !mapRef.current) return
     const source = mapRef.current.getSource(SOURCE_HOTSPOT_CANDIDATES)
     if (!(source instanceof GeoJSONSource)) return
-    const candidates =
-      activeFires.status === 'success'
-        ? activeFires.data.map(hotspotCandidateFromRow)
-        : []
-    source.setData(hotspotCandidatesFeatureCollection(candidates) as never)
-  }, [mapReady, activeFires])
+    source.setData(hotspotCandidatesFeatureCollection(hotspotCandidates) as never)
+  }, [mapReady, hotspotCandidates])
 
   // Feed the map the real FIRMS detections MapPage fetched. A failed or
   // absent fetch leaves the source empty rather than falling back to

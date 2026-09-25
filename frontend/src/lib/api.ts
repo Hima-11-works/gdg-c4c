@@ -20,6 +20,8 @@ import type {
   Envelope,
   FederationStatusOut,
   FireHotspotOut,
+  HotspotDetectorStatusOut,
+  HotspotScanOut,
   FireReportOut,
   FireReportSubmit,
   ForecastOut,
@@ -316,6 +318,17 @@ export function fetchActiveFires(query: LodQuery = {}): Promise<Envelope<ActiveF
     ...envelope,
     data: envelope.data.map(activeFireFromHotspot),
   }))
+}
+
+/** The candidate-hotspot detector's recorded scans (GET /api/v1/hotspots).
+ *  Read-only: the backend never re-runs a detector on request. */
+export function fetchHotspotScans(): Promise<Envelope<HotspotDetectorStatusOut>> {
+  return apiGet<Envelope<HotspotDetectorStatusOut>>('/api/v1/hotspots')
+}
+
+/** One recorded scan in full (GET /api/v1/hotspots/{scan_id}). */
+export function fetchHotspotScan(scanId: string): Promise<Envelope<HotspotScanOut>> {
+  return apiGet<Envelope<HotspotScanOut>>(`/api/v1/hotspots/${encodeURIComponent(scanId)}`)
 }
 
 export function submitReport(

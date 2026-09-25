@@ -29,7 +29,18 @@ enum IncidentStatus {
   bool get isTerminal => this == IncidentStatus.resolved || this == IncidentStatus.cancelled;
 }
 
-enum ResponderRole { fireDepartment, pollutionControl }
+enum ResponderRole {
+  fireDepartment,
+  pollutionControl;
+
+  /// Human-readable name for the history line, e.g. `unit-12 · Fire department ·
+  /// Delhi`. The wire form (`fire_department`) is the API's, not something to
+  /// show a responder, so the two are kept apart deliberately.
+  String get label => switch (this) {
+        ResponderRole.fireDepartment => 'Fire department',
+        ResponderRole.pollutionControl => 'Pollution control',
+      };
+}
 
 enum IncidentEventType { created, assigned, reassigned, transition }
 

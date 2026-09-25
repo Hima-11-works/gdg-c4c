@@ -213,7 +213,10 @@ void main() {
 }
 
 CitizenSensorEvidence? _readingOrNull({
-  String raw = '',
+  // A parseable value by default. The age and skew bounds below are the subject
+  // of these tests, so a default of '' made every call fail the value check
+  // first and the bounds were never exercised at all.
+  String raw = '87.5',
   String unit = 'µg/m³',
   DateTime? measuredAt,
 }) =>

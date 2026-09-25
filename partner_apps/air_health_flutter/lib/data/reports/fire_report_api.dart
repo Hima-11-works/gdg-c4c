@@ -249,7 +249,7 @@ class DioFireReportApiClient implements FireReportApiClient {
       if (draft.notes != null) 'notes': draft.notes,
       if (draft.clientReportId != null) 'client_report_id': draft.clientReportId,
     });
-    return _parseEnvelope(
+    return _unwrapEnvelope(
       json,
       (data) => FireReportDto.fromJson(data as Map<String, dynamic>).toDomain(),
     );
@@ -258,7 +258,7 @@ class DioFireReportApiClient implements FireReportApiClient {
   @override
   Future<List<FireReport>> listActiveReports() async {
     final json = await _get('$_apiPrefix/reports');
-    return _parseEnvelope(
+    return _unwrapEnvelope(
       json,
       (data) => (data as List<dynamic>)
           .map((e) => FireReportDto.fromJson(e as Map<String, dynamic>).toDomain())
@@ -312,7 +312,7 @@ class DioFireReportApiClient implements FireReportApiClient {
         data: form,
         onSendProgress: onProgress,
       );
-      return _parseEnvelope(
+      return _unwrapEnvelope(
         response.data!,
         (data) => ReportEvidence.fromJson(data as Map<String, dynamic>),
       );
@@ -325,7 +325,7 @@ class DioFireReportApiClient implements FireReportApiClient {
   Future<ReportEvidence> fetchEvidence(int reportId) async {
     try {
       final json = await _get('$_apiPrefix/reports/$reportId/evidence');
-      return _parseEnvelope(
+      return _unwrapEnvelope(
         json,
         (data) => ReportEvidence.fromJson(data as Map<String, dynamic>),
       );
@@ -395,5 +395,20 @@ class DioFireReportApiClient implements FireReportApiClient {
       isDemo: json['is_demo'] as bool? ?? false,
       data: parseData(json['data']),
     );
+  }
+
+  /// Unwrap the platform envelope (`{generated_at, is_demo, data}`) and return
+  /// the payload the interface promises.
+  ///
+  /// The backend wraps every citizen-intake response in an envelope, so the
+  /// declared return types are the *inner* record. Returning the envelope here
+  /// is a type error, and at runtime it would hand every caller an
+  /// `Envelope<FireReport>` where a `FireReport` was expected - a report with
+  /// no `id`, so evidence could never be attached to it.
+  static T _unwrapEnvelope<T>(
+    Map<String, dynamic> json,
+    T Function(dynamic data) parseData,
+  ) {
+    return _parseEnvelope(json, parseData).data;
   }
 }

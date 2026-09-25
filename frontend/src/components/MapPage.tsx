@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   fetchActiveFires,
+  fetchHotspotScan,
+  fetchHotspotScans,
   fetchGridCurrent,
   fetchPublishedMeta,
   fetchReports,
@@ -18,7 +20,7 @@ import { runFactsFromGrid, staleness } from '../lib/runFacts'
 import { CorridorPanel } from './CorridorPanel'
 import { HotspotEvidencePanel } from './HotspotEvidencePanel'
 import { useMapUi } from '../state/MapUiContext'
-import type { CorridorCatalogEntry, CorridorEventBundle } from '../lib/types'
+import type { CorridorCatalogEntry, CorridorEventBundle, HotspotScanOut } from '../lib/types'
 import { AlertsPanel } from './AlertsPanel'
 import { CellDetailPanel } from './CellDetailPanel'
 import { DataQualityNotice } from './DataQualityNotice'
@@ -156,6 +158,34 @@ export function MapPage() {
     enabled: firesNeeded,
   })
 
+  // The candidate-hotspot detector's recorded scans. The index lists them; a
+  // scan is only opened on demand, because the map needs its candidates and the
+  // panel needs the full record.
+  const hotspots = useApiResource(() => fetchHotspotScans(), [state.showHotspotCandidates], {
+    enabled: state.showHotspotCandidates || state.hotspotPanelOpen,
+  })
+  const [hotspotScan, setHotspotScan] = useState<{
+    scanId: string
+    data: HotspotScanOut
+  } | null>(null)
+  const [hotspotScanError, setHotspotScanError] = useState<string | null>(null)
+
+  const openHotspotScan = useCallback(
+    async (scanId: string) => {
+      setHotspotScanError(null)
+      try {
+        const envelope = await fetchHotspotScan(scanId)
+        setHotspotScan({ scanId, data: envelope.data })
+      } catch (error) {
+        setHotspotScan(null)
+        setHotspotScanError(error instanceof Error ? error.message : String(error))
+      }
+    },
+    [],
+  )
+
+  const hotspotCandidates = hotspotScan?.data.candidates ?? []
+
   // A view change (new queryKey) invalidates the forecast cache for this
   // view: warm the current position plus the next WARM_WINDOW keyframes so
   // playback is smooth from the moment it starts. The warm-up is an explicit
@@ -246,6 +276,7 @@ export function MapPage() {
         activeFires={activeFires.resource}
         corridor={corridor}
         corridorCells={corridorEvent?.event.cells ?? null}
+        hotspotCandidates={hotspotCandidates}
       />
 
       <div className="overlay overlay-top-left">
@@ -312,7 +343,12 @@ export function MapPage() {
 
       <CellDetailPanel publishedRunId={publishedRunId} citizenReports={reports.resource} />
 
-      <HotspotEvidencePanel resource={activeFires.resource} />
+      <HotspotEvidencePanel
+        index={hotspots.resource}
+        scans={hotspotScan === null ? {} : { [hotspotScan.scanId]: hotspotScan.data }}
+        onSelectScan={openHotspotScan}
+        scanError={hotspotScanError}
+      />
 
       <CorridorPanel
         runId={publishedRunId}

@@ -1255,12 +1255,69 @@ body,
   border-left-color: #22d3ee;
 }
 
+/* The detector's own bounded confidence bands. A triage ordering, not a
+   probability, so they are drawn as an escalating dash weight rather than a
+   heat ramp that would imply one. */
+.hotspot-status-low {
+  border-left-color: #64748b;
+  border-left-style: dotted;
+}
+
+.hotspot-status-medium {
+  border-left-color: #38bdf8;
+  border-left-style: dashed;
+}
+
+.hotspot-status-high {
+  border-left-color: #22d3ee;
+  border-left-style: solid;
+}
+
+/* A scan that could not look at all. Never styled as "found nothing". */
+.hotspot-status-insufficient {
+  border-left-color: #f59e0b;
+  border-left-style: double;
+}
+
 .hotspot-status-rejected {
   border-left-color: #64748b;
 }
 
 .hotspot-status-unclassifiable {
   border-left-color: #a16207;
+}
+
+.hotspot-reasons {
+  margin: 0.2rem 0 0.4rem;
+  padding-left: 1.05rem;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: #fcd34d;
+}
+
+.hotspot-basis {
+  margin: 0.25rem 0 0;
+  padding-left: 1.05rem;
+  font-size: 0.74rem;
+  line-height: 1.4;
+  color: #94a3b8;
+}
+
+.hotspot-evidence {
+  margin: 0;
+  padding-left: 1.05rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.hotspot-note {
+  margin: 0.35rem 0 0;
+  font-size: 0.74rem;
+  line-height: 1.45;
+  font-style: italic;
 }
 
 .hotspot-row-status {

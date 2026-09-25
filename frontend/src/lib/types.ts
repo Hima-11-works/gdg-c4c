@@ -305,6 +305,118 @@ export interface FireReportOut {
  *  raw FIRMS token ('l'/'n'/'h', or a 0-100 string for MODIS) and
  *  `confidence_class` its normalized form; `daynight` is null when the feed
  *  didn't say. */
+// --- candidate hotspots (GET /api/v1/hotspots) ---
+//
+// A candidate hotspot is a LOCATION FOR HUMAN REVIEW. It is not a PM2.5 value
+// (`pm25_ugm3` is always null and the response schema refuses a float), not an
+// identified source (`source_attribution` is always `unattributed`), and never
+// auto-confirmed (`review_status` is `pending_human_review`).
+//
+// Imagery is the only trigger: FIRMS and station readings raise confidence and
+// are recorded as evidence, but neither can create a candidate on its own.
+
+export interface HotspotEvidenceOut {
+  source: string
+  observed_at: string
+  detail: string
+  index_value: number | null
+  frp_mw: number | null
+  detection_id: string | null
+  station_id: string | null
+  station_pm25_ugm3: number | null
+}
+
+export interface HotspotCandidateOut {
+  candidate_id: string
+  h3_cell: string
+  latitude: number
+  longitude: number
+  acquired_at: string
+  detector_version: string
+  /** `low` | `medium` | `high` - a bounded triage band, not a probability. */
+  confidence: string
+  confidence_score: number
+  /** Every contribution to the score, spelled out. */
+  confidence_basis: string[]
+  supporting_sources: string[]
+  evidence: HotspotEvidenceOut[]
+  index_value: number
+  /** Always null. Typed so the UI can never render it as a number. */
+  pm25_ugm3: null
+  value_semantics: string
+  source_attribution: string
+  review_status: string
+  reviewed_by: string | null
+  reviewed_at: string | null
+  notes: string
+}
+
+export interface HotspotEvaluationOut {
+  status: string
+  sufficient: boolean
+  usable_as_real_world_evidence: boolean
+  label_provenance: string
+  reasons: string[]
+  labels_total: number
+  labels_positive: number
+  labels_negative: number
+  true_positives: number
+  false_positives: number
+  false_negatives: number
+  unlabelled_predictions: number
+  precision: number | null
+  recall: number | null
+  candidates_scored: number
+  matched_cells: string[]
+  false_positive_cells: string[]
+  missed_cells: string[]
+  unlabelled_cells: string[]
+}
+
+export interface HotspotScanRowOut {
+  scan_id: string
+  case_id: string
+  case_title: string
+  detector_version: string
+  evaluated_at: string
+  /** `candidates` | `insufficient_evidence`. */
+  verdict: string
+  candidate_count: number
+  evaluation_status: string
+  false_positives: number | null
+  false_negatives: number | null
+  precision: number | null
+  recall: number | null
+  synthetic_input: boolean
+  reasons: string[]
+}
+
+export interface HotspotScanOut extends HotspotScanRowOut {
+  h3_resolution: number
+  imagery: Record<string, unknown> | null
+  imagery_digest: string | null
+  tile_counts: Record<string, number>
+  signal_counts: Record<string, number>
+  fire_count: number
+  station_count: number
+  truncated_candidates: number
+  candidates: HotspotCandidateOut[]
+  evaluation: HotspotEvaluationOut
+  config: Record<string, unknown>
+  limitations: Record<string, string>
+}
+
+export interface HotspotDetectorStatusOut {
+  detector_version: string
+  trigger: string
+  supporting_signals: string[]
+  required_inputs: string[]
+  outputs: string[]
+  bounds: Record<string, unknown>
+  scans: HotspotScanRowOut[]
+  limitations: Record<string, string>
+}
+
 export interface FireHotspotOut {
   detection_id: string
   /** The H3 cell the detection was snapped to at ingest time. */
