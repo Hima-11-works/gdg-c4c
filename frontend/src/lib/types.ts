@@ -294,6 +294,39 @@ export interface FireReportOut {
   reported_at: string
 }
 
+/** The report lifecycle, mirrored from the backend's ReportStatus enum.
+ *  A client must not hardcode the order; GET /api/v1/reports/statuses is the
+ *  source of truth and `affects_air_quality_model` is the field a UI must show
+ *  rather than infer. */
+export type FireReportStatus =
+  | 'submitted'
+  | 'under_review'
+  | 'corroborated'
+  | 'rejected'
+  | 'expired'
+
+/** A report with its standing: the v2 row shape and GET /api/v1/reports/{id}.
+ *
+ *  `affects_air_quality_model` is the distinction that matters to a citizen:
+ *  a `submitted` report has been received, and is NOT changing the air-quality
+ *  model. Conflating "received" with "counted" is the problem F1 exists to fix,
+ *  so this type makes the field impossible to omit. */
+export interface FireReportWithStatus extends FireReportOut {
+  status: FireReportStatus
+  status_meaning: string
+  is_verified: boolean
+  affects_air_quality_model: boolean
+  last_status_change_at: string | null
+  expires_at: string | null
+  seconds_until_expiry: number | null
+  corroborating_report_count: number
+  cluster_id: string | null
+  /** Photos/extra evidence attached so far (F2). Never required: a report with
+   *  zero evidence is a normal claim. */
+  evidence_count: number
+  evidence_expected: boolean
+}
+
 /** One stored NASA FIRMS detection, as GET /api/v1/fires returns it.
  *
  *  The backend ingests and parses the feed (app.ingestion.firms), so this is

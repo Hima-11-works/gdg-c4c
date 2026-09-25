@@ -18,7 +18,9 @@ import type {
   Envelope,
   FireHotspotOut,
   FireReportOut,
+  FireReportStatus,
   FireReportSubmit,
+  FireReportWithStatus,
   ForecastOut,
   ForecastV2Out,
   GridCurrentV2Out,
@@ -279,6 +281,37 @@ export function fetchAlerts(runId?: string): Promise<Envelope<AlertOut[]>> {
 
 export function fetchReports(): Promise<Envelope<FireReportOut[]>> {
   return apiGet('/api/v1/reports')
+}
+
+/** Active reports *with* their lifecycle status.
+ *
+ *  Reads the versioned shape (`/api/v2/reports`) rather than v1, because v1's
+ *  response is deliberately unchanged — ten submission fields and nothing else —
+ *  so it cannot say where a report stands. One call, status on every row; the
+ *  alternative (a detail request per row) would be a request storm to render one
+ *  panel. */
+export function fetchReportsWithStatus(): Promise<Envelope<FireReportWithStatus[]>> {
+  return apiGet('/api/v2/reports')
+}
+
+/** One report's standing, for the "what happened to my report" view. */
+export function fetchReportStatus(
+  reportId: number,
+): Promise<Envelope<FireReportWithStatus>> {
+  return apiGet(`/api/v1/reports/${reportId}`)
+}
+
+/** The lifecycle itself, so the UI can explain a status without hardcoding it. */
+export function fetchReportStatuses(): Promise<
+  Envelope<
+    {
+      status: FireReportStatus
+      meaning: string
+      affects_air_quality_model: boolean
+    }[]
+  >
+> {
+  return apiGet('/api/v1/reports/statuses')
 }
 
 /** NASA FIRMS detections the backend has ingested (GET /api/v1/fires),

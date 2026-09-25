@@ -4,13 +4,14 @@ Pure functions of their inputs: no database, no clock — `timestamp` is
 passed in like every other model in this codebase.
 """
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import h3
 import pytest
 
 from app.domain.h3_grid import cell_center
-from app.domain.types import FireKind, FireReport
+from app.domain.types import FireKind, FireReport, ReportStatus
 from app.services.fire_gradient import PlumeFireGradientModel
 
 NOW = datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
@@ -40,7 +41,17 @@ def report(
     kind=FireKind.CROP_BURNING,
     smoke_intensity=5,
     age_hours=0.0,
+    status=ReportStatus.CORROBORATED,
 ) -> FireReport:
+    """A report as the plume model is allowed to see it.
+
+    Since F1 only a `corroborated` report contributes, so the default here is
+    corroborated: these tests are about the plume *math* (falloff, decay, kind
+    weights, radius), which is only reachable through a qualified report. The
+    gate itself is tested separately below, and by
+    tests/test_report_lifecycle.py.
+    """
+    reported_at = NOW - timedelta(hours=age_hours)
     return FireReport(
         h3_cell=h3.latlng_to_cell(latitude, longitude, 8),
         latitude=latitude,
@@ -48,7 +59,11 @@ def report(
         kind=kind,
         smoke_intensity=smoke_intensity,
         duration_hours=0.0,
-        reported_at=NOW - timedelta(hours=age_hours),
+        reported_at=reported_at,
+        status=status,
+        expires_at=reported_at + timedelta(hours=12.0),
+        # FireReport requires a reviewer for any status above `submitted`.
+        reviewed_by=None if status is ReportStatus.SUBMITTED else "reviewer-1",
     )
 
 
@@ -113,3 +128,48 @@ def test_contributions_never_negative() -> None:
         [CELL, NEIGHBOR], [report(smoke_intensity=1)], timestamp=NOW
     )
     assert all(c >= 0 for c in contributions)
+
+
+# --- the F1 gate: only a corroborated report may move the model ------------
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        ReportStatus.SUBMITTED,
+        ReportStatus.UNDER_REVIEW,
+        ReportStatus.REJECTED,
+    ],
+)
+def test_an_unverified_report_does_not_alter_the_model(status: ReportStatus) -> None:
+    """The F1 acceptance criterion, at the point where the field is changed.
+
+    A maximum-intensity report at the source cell would otherwise contribute
+    144 ug/m3. As a claim it must contribute exactly nothing — not a reduced
+    amount, nothing: an unreviewed anonymous POST must not be able to move
+    modeled air quality at all.
+    """
+    contributions = model().contributions(
+        [CELL], [report(smoke_intensity=5, status=status)], timestamp=NOW
+    )
+    assert contributions[0] == 0.0
+    assert model().qualifying_reports([report(status=status)], timestamp=NOW) == []
+
+
+def test_a_corroborated_report_does_alter_the_model() -> None:
+    """The other half of the same criterion: qualified reports still work."""
+    contributions = model().contributions([CELL], [report()], timestamp=NOW)
+    assert contributions[0] == pytest.approx(180.0 * (5 / 5) * 0.8)
+
+
+def test_a_corroborated_report_that_has_expired_does_not_alter_the_model() -> None:
+    """Corroboration does not outlive the report window.
+
+    Deliberately aged only 2h, well inside the 12h `max_age_hours`, so the
+    contribution is zeroed by the *expiry* gate and not by the age decay that
+    the neighbouring tests cover.
+    """
+    stale = report(age_hours=2.0)
+    expired = replace(stale, expires_at=stale.reported_at + timedelta(hours=1.0))
+    assert NOW > expired.expires_at
+    assert model().contributions([CELL], [expired], timestamp=NOW)[0] == 0.0

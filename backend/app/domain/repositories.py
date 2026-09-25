@@ -11,9 +11,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol
 
-from app.domain.features import FeatureSnapshot
 from app.domain.environmental_observations import FireHotspot, TrafficObservation
+from app.domain.features import FeatureSnapshot
 from app.domain.prediction import PredictionResult, PredictionRun
+from app.domain.report_lifecycle import ReportAuditEvent
 from app.domain.scenario import DatasetVersion, IngestionRun
 from app.domain.training import ModelVersion
 from app.domain.types import Alert, FireReport, Forecast, GridState, SensorReading, WeatherReading
@@ -132,13 +133,75 @@ class FireReportRepository(Protocol):
         """Store a report and return it (with its database id).
 
         Idempotent on `client_report_id` when given: a resubmission with the
-        same client-generated id returns the original row unchanged —
+        same client-generated id returns the original row unchanged -
         retries must not stack reports. Without a client id, every call
         adds a row.
         """
         ...
 
     def list_active(self, *, since: datetime) -> list[FireReport]: ...
+
+    def get(self, report_id: int) -> FireReport | None:
+        """One report by id, or None. Used by the detail read and by review."""
+        ...
+
+    def get_by_client_report_id(self, client_report_id: str) -> FireReport | None:
+        """One report by its client-generated id, or None.
+
+        The idempotency check on submission. A dedicated lookup rather than a
+        scan of `list_active`, because a retry must be answered by one indexed
+        read however many reports exist.
+        """
+        ...
+
+    def list_active_qualified(self, *, since: datetime) -> list[FireReport]:
+        """Reports inside the window whose status may alter the modeled field.
+
+        Separate from `list_active` on purpose: `list_active` is "what a citizen
+        can see" and includes unverified claims, while this is "what the model is
+        allowed to use". The status filter lives here as well as in
+        app.domain.report_lifecycle, because the query needs the index and the
+        model needs the guarantee.
+        """
+        ...
+
+    def count_since(self, *, since: datetime, submitter_prefix: str | None = None) -> int:
+        """How many reports were submitted since `since`, optionally per source.
+
+        The rate limiter's only input. Counting rows rather than tracking state
+        in memory means a restart cannot be used to reset a limit.
+        """
+        ...
+
+    def find_recent_in_cell(self, *, h3_cell: str, kind: str, since: datetime) -> FireReport | None:
+        """The newest still-open report of this kind in this cell, if any.
+
+        Duplicate clustering: a second report of the same event joins the first
+        rather than becoming an independent claim. "Still open" excludes
+        rejected and expired rows, so a genuinely new event after a rejection
+        starts a fresh cluster instead of inheriting the old one's history.
+        """
+        ...
+
+    def update_lifecycle(self, report: FireReport) -> FireReport:
+        """Persist a status/audit-field change and return the stored row."""
+        ...
+
+    def append_event(self, event: ReportAuditEvent) -> None:
+        """Append one immutable audit entry. Never updates or deletes."""
+        ...
+
+    def list_events(self, report_id: int) -> list[ReportAuditEvent]:
+        """A report's history, oldest first."""
+        ...
+
+    def list_open_claims(self, *, now: datetime) -> list[FireReport]:
+        """Unresolved claims (submitted or under review) that have aged out.
+
+        The expiry sweep's work list. Aging out is a fact about the clock, so
+        this is a read, not a judgement.
+        """
+        ...
 
 
 class FireHotspotRepository(Protocol):

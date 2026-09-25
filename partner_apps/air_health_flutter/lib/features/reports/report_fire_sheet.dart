@@ -39,7 +39,13 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
 
   /// Idempotency id for this draft session: a retried submission carries the
   /// same id, so the backend's unique constraint keeps retries from stacking.
-  String get _clientReportId =>
+  ///
+  /// A `late final` field, not a getter: a getter re-evaluated `DateTime.now()`
+  /// on every access, so each retry after a failed submit minted a *new* id and
+  /// the backend correctly treated it as a different report — the exact
+  /// duplicate the id exists to prevent. Initialised once per sheet instance,
+  /// so every submit attempt from this draft reuses it.
+  late final String _clientReportId =
       'flutter-${DateTime.now().microsecondsSinceEpoch}';
 
   Future<void> _refreshLocation() async {

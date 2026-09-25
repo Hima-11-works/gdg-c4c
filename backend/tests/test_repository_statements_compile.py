@@ -22,6 +22,7 @@ from app.db.repositories import model_version as model_version_repo
 from app.db.repositories import sensor_reading as sensor_reading_repo
 from app.db.repositories import weather_reading as weather_reading_repo
 from app.domain.features import CellFeatureVector, FeatureSnapshot, InputKind
+from app.domain.report_lifecycle import AuditEventKind, ReportAuditEvent, ReportStatus
 from app.domain.scenario import DatasetVersion, IngestionRun, IngestionRunStatus
 from app.domain.training import ModelStatus, ModelVersion
 from app.domain.types import (
@@ -232,6 +233,123 @@ def test_fire_report_statements() -> None:
     assert "FROM fire_report" in _sql(fire_report_repo._list_active_stmt(NOW))
     by_client = _sql(fire_report_repo._by_client_report_id_stmt("client-123"))
     assert "client_report_id" in by_client
+
+
+def test_fire_report_lifecycle_statements() -> None:
+    """The F1 lifecycle SQL.
+
+    The one that matters most is `list_active_qualified`: it is the query the
+    plume model is fed from, so its status filter is the difference between
+    "only corroborated reports reach the model" and "every anonymous claim does".
+    Asserting the filter is compiled into the statement - not just present in
+    Python - is what keeps that from being quietly dropped.
+    """
+    report = FireReport(
+        h3_cell=CELL,
+        latitude=LAT,
+        longitude=LON,
+        kind=FireKind.CROP_BURNING,
+        smoke_intensity=4,
+        duration_hours=1.5,
+        reported_at=NOW,
+        client_report_id="client-123",
+        id=7,
+        submitter_prefix="198.51.100.0/24",
+    )
+
+    insert_sql, params = _sql_and_params(fire_report_repo._insert_stmt(report))
+    # Every new column is bound on insert: a lifecycle field with no default in
+    # the INSERT would rely on the server default and drift from the model.
+    for column in (
+        "status",
+        "expires_at",
+        "status_changed_at",
+        "india_geofence_verified",
+        "cluster_id",
+        "corroborating_report_count",
+        "evidence_count",
+        "submitter_prefix",
+    ):
+        assert column in insert_sql, f"fire_report insert omits {column}"
+    assert params["submitter_prefix"] == "198.51.100.0/24"
+
+    qualified = _sql(fire_report_repo._list_active_qualified_stmt(NOW))
+    assert "FROM fire_report" in qualified
+    assert "status IN ('corroborated')" in qualified
+
+    def _where(sql: str) -> str:
+        """The WHERE clause alone, so a SELECT-list column cannot fake a filter."""
+        return sql.split("WHERE", 1)[1].split("ORDER BY", 1)[0]
+
+    # The unfiltered read must NOT gain a status filter: the citizen list is meant
+    # to include unverified claims, and only the model's read is restricted.
+    assert "status" not in _where(_sql(fire_report_repo._list_active_stmt(NOW)))
+    assert "status" in _where(qualified)
+
+    # The rate limiter's two counts. The per-source one must include the prefix
+    # filter, or every source would share one budget.
+    per_source = _sql(fire_report_repo._count_since_stmt(NOW, "198.51.100.0/24"))
+    assert "submitter_prefix" in per_source
+    assert "count(*)" in per_source.lower()
+    assert "submitter_prefix" not in _sql(fire_report_repo._count_since_stmt(NOW, None))
+
+    # Clustering looks only at still-open claims, so a rejected report does not
+    # hand its count to a genuinely new event.
+    cluster = _sql(
+        fire_report_repo._find_recent_in_cell_stmt(
+            h3_cell=CELL, kind="crop_burning", since=NOW
+        )
+    )
+    assert "h3_cell" in cluster and "kind" in cluster
+    assert "submitted" in cluster and "under_review" in cluster
+    assert "rejected" not in cluster and "expired" not in cluster
+
+    # The expiry sweep's work list: open claims whose window has already closed.
+    open_claims = _sql(fire_report_repo._list_open_claims_stmt(NOW))
+    assert "expires_at" in open_claims
+
+    # A review writes only lifecycle columns - never the submission facts, which
+    # are a record of what someone saw.
+    update_sql, update_params = _sql_and_params(fire_report_repo._update_lifecycle_stmt(report))
+    assert "UPDATE fire_report" in update_sql
+    for column in (
+        "latitude",
+        "longitude",
+        "kind",
+        "smoke_intensity",
+        "duration_hours",
+        "notes",
+        "reported_at",
+    ):
+        assert f"SET {column}" not in update_sql, f"a review may not rewrite {column}"
+    assert "status" in update_sql and "corroborating_report_count" in update_params
+
+    by_id = _sql(fire_report_repo._by_id_stmt(7))
+    assert "fire_report.id" in by_id
+
+    event_sql, event_params = _sql_and_params(
+        fire_report_repo._insert_event_stmt(
+            ReportAuditEvent(
+                report_id=7,
+                kind=AuditEventKind.STATUS_CHANGED,
+                at=NOW,
+                from_status=ReportStatus.SUBMITTED,
+                to_status=ReportStatus.CORROBORATED,
+                actor="reviewer-7",
+                note="matched a FIRMS detection",
+            )
+        )
+    )
+    assert "INSERT INTO fire_report_event" in event_sql
+    # The enums go in as .value, never .name.
+    assert "submitted" in event_params.values()
+    assert "corroborated" in event_params.values()
+    assert "reviewer-7" in event_params.values()
+
+    events = _sql(fire_report_repo._list_events_stmt(7))
+    assert "FROM fire_report_event" in events
+    # Oldest first, so a history reads in the order it happened.
+    assert "ORDER BY fire_report_event.at" in events
 
 
 def test_environmental_metadata_statements() -> None:

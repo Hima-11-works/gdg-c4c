@@ -13,6 +13,11 @@ from datetime import datetime
 
 from app.domain.environmental_observations import FireHotspot
 from app.domain.providers import ProviderError
+from app.domain.report_lifecycle import (
+    MODEL_QUALIFIED_STATUSES,
+    ReportAuditEvent,
+    ReportStatus,
+)
 from app.domain.repositories import DuplicateReadingError
 from app.domain.types import (
     Alert,
@@ -170,11 +175,20 @@ class FakeAlertRepository:
 
 class FakeFireReportRepository:
     """In-memory FireReportRepository, idempotent on client_report_id exactly
-    like the SQL implementation, with DB-style auto-incrementing ids."""
+    like the SQL implementation, with DB-style auto-incrementing ids.
+
+    Also implements the F1 lifecycle surface (qualification filter, per-source
+    counting, clustering lookup, audit events, expiry sweep) so the same fake
+    backs both the API contract tests and the lifecycle tests. The status
+    filters here mirror app.domain.report_lifecycle rather than re-deriving
+    them, so a test cannot pass because the fake is more permissive than the
+    model.
+    """
 
     def __init__(self) -> None:
         self.reports: list[FireReport] = []
         self.saved: list[FireReport] = []
+        self.events: list[ReportAuditEvent] = []
 
     def save(self, report: FireReport) -> FireReport:
         self.saved.append(report)
@@ -188,6 +202,69 @@ class FakeFireReportRepository:
 
     def list_active(self, *, since: datetime) -> list[FireReport]:
         return [r for r in self.reports if r.reported_at >= since]
+
+    def get(self, report_id: int) -> FireReport | None:
+        for report in self.reports:
+            if report.id == report_id:
+                return report
+        return None
+
+    def get_by_client_report_id(self, client_report_id: str) -> FireReport | None:
+        for report in self.reports:
+            if report.client_report_id == client_report_id:
+                return report
+        return None
+
+    def list_active_qualified(self, *, since: datetime) -> list[FireReport]:
+        return [
+            r
+            for r in self.reports
+            if r.reported_at >= since
+            and r.status in MODEL_QUALIFIED_STATUSES
+            and (r.expires_at is None or r.expires_at > r.reported_at)
+        ]
+
+    def count_since(self, *, since: datetime, submitter_prefix: str | None = None) -> int:
+        return len(
+            [
+                r
+                for r in self.reports
+                if r.reported_at >= since
+                and (submitter_prefix is None or r.submitter_prefix == submitter_prefix)
+            ]
+        )
+
+    def find_recent_in_cell(self, *, h3_cell: str, kind: str, since: datetime) -> FireReport | None:
+        candidates = [
+            r
+            for r in self.reports
+            if r.h3_cell == h3_cell
+            and r.kind.value == kind
+            and r.reported_at >= since
+            and r.status in (ReportStatus.SUBMITTED, ReportStatus.UNDER_REVIEW)
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda r: r.reported_at)
+
+    def update_lifecycle(self, report: FireReport) -> FireReport:
+        self.reports = [report if r.id == report.id else r for r in self.reports]
+        return report
+
+    def append_event(self, event: ReportAuditEvent) -> None:
+        self.events.append(event)
+
+    def list_events(self, report_id: int) -> list[ReportAuditEvent]:
+        return [e for e in self.events if e.report_id == report_id]
+
+    def list_open_claims(self, *, now: datetime) -> list[FireReport]:
+        return [
+            r
+            for r in self.reports
+            if r.status in (ReportStatus.SUBMITTED, ReportStatus.UNDER_REVIEW)
+            and r.expires_at is not None
+            and r.expires_at <= now
+        ]
 
 
 class FakeFireHotspotRepository:

@@ -334,6 +334,48 @@ class Settings(BaseSettings):
     # negative vegetation weight is the only sink, fire is pure pressure.
     pdi_fire_pressure_weight: float = Field(default=0.25, ge=0)
 
+    # --- Citizen report trust (app.domain.report_lifecycle, app.services.reports) ---
+    # POST /api/v1/reports is the platform's only open write endpoint, so both
+    # its coordinates and its volume are attacker-controlled. See
+    # docs/api/citizen-reports.md.
+    #
+    # Review happens through a shared reviewer key. This is deliberately NOT
+    # per-person identity: the platform has no user accounts, and a fake identity
+    # system would be worse than an honest shared secret. Unset means review is
+    # OFF (503), never open - an unconfigured reviewer path must not mean
+    # "anyone may corroborate".
+    reports_reviewer_key: SecretStr | None = None
+    # Per-source submission cap. The source is the caller's /24 network prefix,
+    # which is coarse enough to blunt a flood and far less identifying than a
+    # full address; it is stored truncated for exactly that reason.
+    reports_rate_limit_per_hour: int = Field(default=5, ge=1, le=1000)
+    # Platform-wide cap, so one abusive source - or many - cannot fill the table
+    # before a human looks at anything.
+    reports_global_limit_per_hour: int = Field(default=500, ge=1, le=100000)
+    # Duplicate clustering: a report landing in the same cell as a recent open
+    # claim of the same kind joins that cluster instead of becoming an
+    # independent claim. Clustering is what makes corroboration countable, and it
+    # is also what stops a burst of near-identical posts from each receiving a
+    # full claim's worth of attention.
+    reports_cluster_window_hours: float = Field(default=6.0, gt=0)
+    # How many reports a cluster needs before it is worth corroborating. A
+    # count, not a probability, and never a substitute for a reviewer.
+    reports_cluster_corroboration_threshold: int = Field(default=2, ge=2)
+    # Whether a report must fall inside the India geofence to be accepted. On by
+    # default: the platform is India-only, and an out-of-country report is not
+    # something it can act on. Turning this off exists to test the fence itself.
+    reports_require_india_geofence: bool = True
+
+    @model_validator(mode="after")
+    def _check_report_rate_limits_ordered(self) -> "Settings":
+        if self.reports_global_limit_per_hour < self.reports_rate_limit_per_hour:
+            raise ValueError(
+                f"REPORTS_GLOBAL_LIMIT_PER_HOUR ({self.reports_global_limit_per_hour}) must be "
+                f">= REPORTS_RATE_LIMIT_PER_HOUR ({self.reports_rate_limit_per_hour}) — the "
+                "platform-wide cap below the per-source cap could never be reached."
+            )
+        return self
+
     @model_validator(mode="after")
     def _check_weather_resolution_not_finer_than_grid(self) -> "Settings":
         if self.weather_h3_resolution > self.h3_resolution:

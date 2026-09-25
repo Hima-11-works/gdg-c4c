@@ -19,6 +19,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Index,
+    Integer,
     MetaData,
     SmallInteger,
     String,
@@ -373,6 +374,70 @@ fire_report = Table(
     UniqueConstraint("client_report_id", name="uq_fire_report_client_report_id"),
     Index("ix_fire_report_reported_at", "reported_at"),
     Index("ix_fire_report_h3_cell", "h3_cell"),
+    # --- F1 lifecycle (app.domain.report_lifecycle, migration 0016) ---
+    # A report's standing. Server default 'submitted' is the safe direction: an
+    # existing row that predates review is an unverified claim, and must not be
+    # treated as a modeled point source.
+    Column("status", String(20), nullable=False, server_default="submitted"),
+    # Fixed at submission from FIRE_REPORT_MAX_AGE_HOURS, so the read side and
+    # the plume model agree on what "active" means and a report cannot be kept
+    # alive by re-reading it.
+    Column("expires_at", DateTime(timezone=True), nullable=True),
+    Column("status_changed_at", DateTime(timezone=True), nullable=True),
+    Column("reviewed_at", DateTime(timezone=True), nullable=True),
+    Column("reviewed_by", String(80), nullable=True),
+    Column("moderation_note", String(500), nullable=True),
+    # Whether the India geofence was checked and passed at submission. Recorded
+    # rather than inferred, so a report accepted with the fence disabled is still
+    # honest about it.
+    Column("india_geofence_verified", Boolean, nullable=False, server_default="false"),
+    Column("cluster_id", String(40), nullable=True),
+    Column("corroborating_report_count", Integer, nullable=False, server_default="0"),
+    # F2 progress, reported to the citizen. Deliberately not an input to
+    # qualification: a report with no photo is a first-class claim.
+    Column("evidence_count", Integer, nullable=False, server_default="0"),
+    # The rate limiter's unit of accounting: a /24 network prefix rather than a
+    # full client address, stored truncated for that reason. Null when a report
+    # arrives without an HTTP client (CLI seed, test, internal caller).
+    Column("submitter_prefix", String(20), nullable=True),
+    CheckConstraint(
+        "status IN ('submitted','under_review','corroborated','rejected','expired')",
+        name="ck_fire_report_status",
+    ),
+    CheckConstraint("corroborating_report_count >= 0", name="ck_fire_report_corroborating_count"),
+    CheckConstraint("evidence_count >= 0", name="ck_fire_report_evidence_count"),
+    CheckConstraint(
+        "expires_at IS NULL OR expires_at >= reported_at",
+        name="ck_fire_report_expiry_after_report",
+    ),
+    Index("ix_fire_report_status_reported", "status", "reported_at"),
+    Index("ix_fire_report_cluster", "cluster_id"),
+)
+
+# Append-only. No update, no delete: this table is the answer to "who decided
+# this report was real, and when", and a trail that can be rewritten is not one.
+fire_report_event = Table(
+    "fire_report_event",
+    metadata,
+    Column("id", BigInteger, primary_key=True),
+    Column(
+        "report_id",
+        BigInteger,
+        ForeignKey("fire_report.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("kind", String(20), nullable=False),
+    Column("at", DateTime(timezone=True), nullable=False),
+    Column("from_status", String(20), nullable=True),
+    Column("to_status", String(20), nullable=True),
+    Column("actor", String(80), nullable=False),
+    Column("note", String(500), nullable=False),
+    Column("detail", JSONB, nullable=True),
+    CheckConstraint(
+        "kind IN ('submitted','status_changed','clustered','expired','evidence_linked')",
+        name="ck_fire_report_event_kind",
+    ),
+    Index("ix_fire_report_event_report", "report_id", "at"),
 )
 
 fire_hotspot = Table(

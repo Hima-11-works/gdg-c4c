@@ -3,7 +3,13 @@ import { fetchCellDetail } from '../lib/api'
 import { PDI_LABEL, PDI_TOOLTIP, compassLabel, formatNumber, pdiFactorLabel } from '../lib/format'
 import { cellCenter } from '../lib/h3Geometry'
 import { regionTitle } from '../lib/regionName'
-import { FIRE_KIND_LABELS, minutesAgo, reportForCell, smokeLabel } from '../lib/citizenReports'
+import {
+  FIRE_KIND_LABELS,
+  REPORT_STATUS_LABELS,
+  minutesAgo,
+  reportForCell,
+  smokeLabel,
+} from '../lib/citizenReports'
 import {
   anomaliesInCell,
   priorityForSeverity,
@@ -14,13 +20,15 @@ import { useApiResource } from '../hooks/useApiResource'
 import type { AsyncResource } from '../hooks/useApiResource'
 import { useStateBoundaries } from '../hooks/useStateBoundaries'
 import { useMapUi } from '../state/MapUiContext'
-import type { CellDetailOut, FireReportOut } from '../lib/types'
+import type { CellDetailOut, FireReportWithStatus } from '../lib/types'
 
 /** The most recent citizen report filed in this cell, from
  *  GET /api/v1/reports. Deliberately NOT framed as evidence behind any
  *  classification: the only modelled explanation of a cell in this drawer is
  *  the backend's PDI factor breakdown. */
-function CitizenReportWidget({ report }: { report: FireReportOut }) {
+/** Takes the v2 row shape so the status fields are available; it is a superset
+ *  of the v1 one, so anything that only reads the submission fields still fits. */
+function CitizenReportWidget({ report }: { report: FireReportWithStatus }) {
   const age = minutesAgo(report.reported_at)
   return (
     <section className="citizen-report">
@@ -28,11 +36,21 @@ function CitizenReportWidget({ report }: { report: FireReportOut }) {
       <div className="citizen-report-meta">
         <strong>{FIRE_KIND_LABELS[report.kind] ?? report.kind}</strong>
         <span className="muted">
+          {/* The status is shown here, not only in the submit form: someone
+              reading another person's report needs to know whether it counts.
+              `affects_air_quality_model` is the backend's own answer, so this
+              label cannot drift from the rule the model actually applies. */}
+          {REPORT_STATUS_LABELS[report.status] ?? report.status}
+          {report.affects_air_quality_model ? '' : ' — not counted in the model yet'}
+        </span>
+        <span className="muted">
           Smoke: {smokeLabel(report.smoke_intensity)} ({report.smoke_intensity}/5) ·{' '}
           {report.duration_hours === 0
             ? 'just started'
             : `~${formatNumber(report.duration_hours)}h`}{' '}
           · {age} mins ago
+          {report.corroborating_report_count > 0 &&
+            ` · ${report.corroborating_report_count} corroborating report(s)`}
         </span>
         {report.notes !== null && report.notes !== '' && (
           <span className="muted">{report.notes}</span>
@@ -86,7 +104,7 @@ function CellDetailContent({
 }: {
   detail: CellDetailOut
   isDemo: boolean
-  report: FireReportOut | null
+  report: FireReportWithStatus | null
 }) {
   const current = detail.current
   const windSpeed = detail.weather?.wind_speed ?? current?.wind_speed ?? null
@@ -427,7 +445,7 @@ export function CellDetailPanel({
   citizenReports,
 }: {
   publishedRunId?: string
-  citizenReports: AsyncResource<FireReportOut[]>
+  citizenReports: AsyncResource<FireReportWithStatus[]>
 }) {
   const { state, dispatch } = useMapUi()
   const selectedCell = state.selectedCell

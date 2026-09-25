@@ -28,9 +28,16 @@ logger = logging.getLogger(__name__)
 
 _CODES_BY_STATUS = {
     400: "bad_request",
+    401: "unauthorized",
+    403: "role_mismatch",
     404: "not_found",
+    409: "conflict",
+    413: "media_too_large",
+    415: "unsupported_media_type",
     422: "validation_error",
+    429: "too_many_requests",
     500: "internal_error",
+    503: "service_unavailable",
 }
 
 
@@ -42,8 +49,27 @@ def _error_body(code: str, message: str, details: list | None = None) -> dict:
 
 
 async def _http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
-    code = _CODES_BY_STATUS.get(exc.status_code, "http_error")
-    return JSONResponse(status_code=exc.status_code, content=_error_body(code, str(exc.detail)))
+    # An endpoint may pin an exact machine code via the exception's
+    # "X-Error-Code" header, because one status can map to more than one
+    # condition (422 is both a malformed body and a refused geofence; 503 is
+    # both an unconfigured reviewer path and an unavailable geofence asset).
+    # Falls back to the status-based default when no override is given.
+    override = None
+    headers = getattr(exc, "headers", None)
+    if headers:
+        for key, value in headers.items():
+            if key.lower() == "x-error-code":
+                override = value
+                break
+    code = override or _CODES_BY_STATUS.get(exc.status_code, "http_error")
+    response = JSONResponse(status_code=exc.status_code, content=_error_body(code, str(exc.detail)))
+    # Forward the headers the endpoint set (Retry-After on a 429 above all), or a
+    # client that reads the machine code from the body and the retry hint from
+    # the header would have to know two places.
+    for key, value in (headers or {}).items():
+        if key.lower() != "x-error-code":
+            response.headers[key] = value
+    return response
 
 
 async def _validation_exception_handler(

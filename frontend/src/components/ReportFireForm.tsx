@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
-import { ApiError, submitReport } from '../lib/api'
-import { FIRE_KIND_LABELS, SMOKE_LABELS } from '../lib/citizenReports'
-import type { FireReportKind } from '../lib/types'
+import { ApiError, fetchReportStatus, submitReport } from '../lib/api'
+import { FIRE_KIND_LABELS, REPORT_STATUS_LABELS, SMOKE_LABELS } from '../lib/citizenReports'
+import type { FireReportKind, FireReportWithStatus } from '../lib/types'
 
 /** Duration buckets, matching the app/back: the answer is fuzzy ("a couple
  *  of hours"), so the form offers buckets rather than a precise number. */
@@ -44,6 +44,11 @@ export function ReportFireForm({
   const [sending, setSending] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
+  // After a successful submit the form shows the report's standing instead of
+  // the fields: the citizen asked "did you get my fire?", and the honest answer
+  // is a status, not a confirmation toast that implies it counted.
+  const [submitted, setSubmitted] = useState<FireReportWithStatus | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
 
   // One idempotency id per open form, minted on first submit (an event
   // handler, so the render stays pure): retrying after a timeout resubmits
@@ -69,7 +74,7 @@ export function ReportFireForm({
     setMessage(null)
     setFailed(false)
     try {
-      await submitReport({
+      const created = await submitReport({
         latitude,
         longitude,
         kind,
@@ -79,7 +84,29 @@ export function ReportFireForm({
         client_report_id: clientReportId(),
       })
       onSubmitted()
-      onClose()
+      // The POST response is the unchanged v1 shape (ten submission fields), so
+      // the standing comes from the detail read. A failure there must not lose
+      // the report: it was accepted, so the id is all we show.
+      try {
+        const detail = await fetchReportStatus(created.data.id)
+        setSubmitted(detail.data)
+      } catch {
+        setSubmitted({
+          ...created.data,
+          status: 'submitted',
+          status_meaning: 'received and waiting for review',
+          is_verified: false,
+          affects_air_quality_model: false,
+          last_status_change_at: null,
+          expires_at: null,
+          seconds_until_expiry: null,
+          corroborating_report_count: 0,
+          cluster_id: null,
+          evidence_count: 0,
+          evidence_expected: false,
+        })
+        setMessage('Report received. Its status is not available right now.')
+      }
     } catch (error) {
       setFailed(true)
       setMessage(
@@ -92,6 +119,19 @@ export function ReportFireForm({
     }
   }
 
+  const refreshStatus = async () => {
+    if (submitted === null) return
+    setRefreshing(true)
+    try {
+      const detail = await fetchReportStatus(submitted.id)
+      setSubmitted(detail.data)
+    } catch {
+      setMessage('Could not refresh the status. Try again in a moment.')
+    } finally {
+      setRefreshing(false)
+    }
+  }
+
   return (
     <section className="panel report-form" aria-label="Report a fire">
       <div className="report-form-header">
@@ -101,10 +141,46 @@ export function ReportFireForm({
         </button>
       </div>
       <p className="muted">
-        At {latitude.toFixed(4)}, {longitude.toFixed(4)} (map centre). The model treats an
-        active report as a source here and picks it up on its next update cycle.
+        At {latitude.toFixed(4)}, {longitude.toFixed(4)} (map centre). Your report is filed as an
+        unverified claim: a reviewer has to corroborate it before it affects the air-quality model.
       </p>
 
+      {submitted ? (
+        <div className="report-status" role="status">
+          <h4>Report #{submitted.id} received</h4>
+          <p>
+            <b>{REPORT_STATUS_LABELS[submitted.status] ?? submitted.status}</b> —{' '}
+            {submitted.status_meaning}
+          </p>
+          <p className="muted">
+            {submitted.affects_air_quality_model
+              ? 'This report is currently contributing to the modeled air quality near the reported location.'
+              : 'This report is not affecting the air-quality model yet.'}
+          </p>
+          <dl className="report-status-facts">
+            <dt>Submitted</dt>
+            <dd>{new Date(submitted.reported_at).toLocaleString()}</dd>
+            {submitted.expires_at && (
+              <>
+                <dt>Actionable until</dt>
+                <dd>{new Date(submitted.expires_at).toLocaleString()}</dd>
+              </>
+            )}
+            <dt>Corroborating reports</dt>
+            <dd>{submitted.corroborating_report_count}</dd>
+            {submitted.evidence_count > 0 && (
+              <>
+                <dt>Evidence attached</dt>
+                <dd>{submitted.evidence_count}</dd>
+              </>
+            )}
+          </dl>
+          <button type="button" onClick={refreshStatus} disabled={refreshing}>
+            {refreshing ? 'Checking…' : 'Check for an update'}
+          </button>
+        </div>
+      ) : (
+        <>
       <label className="report-field">
         <span>What is burning?</span>
         <select value={kind} onChange={(event) => setKind(event.target.value as FireReportKind)}>
@@ -164,6 +240,8 @@ export function ReportFireForm({
       <button type="button" className="report-form-submit" onClick={submit} disabled={sending}>
         {sending ? 'Sending…' : 'Submit report'}
       </button>
+        </>
+      )}
     </section>
   )
 }

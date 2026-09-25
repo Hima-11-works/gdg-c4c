@@ -10,7 +10,15 @@ from datetime import UTC, datetime, timedelta
 
 from app.domain.h3_grid import cell_center
 from app.domain.pdi import CellContext, PDIResult
-from app.domain.types import PM25, BoundingBox, FireKind, FireReport, GridState, SensorReading
+from app.domain.types import (
+    PM25,
+    BoundingBox,
+    FireKind,
+    FireReport,
+    GridState,
+    ReportStatus,
+    SensorReading,
+)
 from app.services.geospatial import GeospatialService
 from app.services.grid_computation import GridComputationService
 from tests.fakes import FakeGridStateRepository, FakeSensorReadingRepository
@@ -147,6 +155,14 @@ class _ConstantFireGradient:
 
 
 class _FakeFireReportRepository:
+    """Minimal repository for the grid computation.
+
+    `list_active_qualified` is the method the service now calls (F1: only
+    corroborated reports may move the model). It filters rather than delegating,
+    so a test that passes an uncorroborated report and still expects a
+    contribution fails here — which is the point.
+    """
+
     def __init__(self, reports: list[FireReport] | None = None) -> None:
         self.reports = reports or []
 
@@ -156,8 +172,11 @@ class _FakeFireReportRepository:
     def list_active(self, *, since):
         return list(self.reports)
 
+    def list_active_qualified(self, *, since):
+        return [r for r in self.reports if r.status is ReportStatus.CORROBORATED]
 
-def _fire_report(cell: str) -> FireReport:
+
+def _fire_report(cell: str, *, status: ReportStatus = ReportStatus.CORROBORATED) -> FireReport:
     latitude, longitude = cell_center(cell)
     return FireReport(
         h3_cell=cell,
@@ -167,6 +186,10 @@ def _fire_report(cell: str) -> FireReport:
         smoke_intensity=4,
         duration_hours=1.0,
         reported_at=TIMESTAMP,
+        status=status,
+        expires_at=TIMESTAMP + timedelta(hours=12.0),
+        # FireReport requires a reviewer for any status above `submitted`.
+        reviewed_by=None if status is ReportStatus.SUBMITTED else "reviewer-1",
     )
 
 

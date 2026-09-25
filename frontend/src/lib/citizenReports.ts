@@ -8,7 +8,12 @@
 // lookups over whatever the API returned. It never fabricates a report.
 
 import type { FeatureCollection, Point } from 'geojson'
-import type { FireReportKind, FireReportOut } from './types'
+import type {
+  FireReportKind,
+  FireReportOut,
+  FireReportStatus,
+  FireReportWithStatus,
+} from './types'
 
 /** Human-readable label per report kind. */
 export const FIRE_KIND_LABELS: Record<FireReportKind, string> = {
@@ -22,18 +27,40 @@ export const FIRE_KIND_LABELS: Record<FireReportKind, string> = {
 /** Smoke slider labels, index 0 = intensity 1. */
 export const SMOKE_LABELS = ['Low', 'Moderate', 'High', 'Very high', 'Extreme'] as const
 
+/** Human-readable label per lifecycle status.
+ *
+ *  The backend is the source of truth for what each status *means*
+ *  (GET /api/v1/reports/statuses, and `status_meaning` on every report); this
+ *  is only the short label for a chip. The wording is deliberately careful:
+ *  "received" and "counted" are different things, and only a corroborated report
+ *  is counted. */
+export const REPORT_STATUS_LABELS: Record<FireReportStatus, string> = {
+  submitted: 'Received — awaiting review',
+  under_review: 'Under review',
+  corroborated: 'Corroborated — counted in the model',
+  rejected: 'Reviewed — not accepted',
+  expired: 'Expired — too old to act on',
+}
+
+/** True when this report is currently allowed to change modeled air quality. */
+export function reportCountsTowardModel(
+  report: Pick<FireReportWithStatus, 'affects_air_quality_model'>,
+): boolean {
+  return report.affects_air_quality_model === true
+}
+
 export function smokeLabel(intensity: number): string {
   const index = Math.min(Math.max(Math.round(intensity), 1), SMOKE_LABELS.length) - 1
   return SMOKE_LABELS[index]
 }
 
 /** The report filed in this exact cell, newest first - or null. */
-export function reportForCell(
-  reports: FireReportOut[],
+export function reportForCell<T extends FireReportOut>(
+  reports: T[],
   h3Cell: string | null | undefined,
-): FireReportOut | null {
+): T | null {
   if (!h3Cell) return null
-  let newest: FireReportOut | null = null
+  let newest: T | null = null
   for (const report of reports) {
     if (report.h3_cell !== h3Cell) continue
     if (newest === null || Date.parse(report.reported_at) > Date.parse(newest.reported_at)) {

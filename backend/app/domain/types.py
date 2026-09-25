@@ -372,6 +372,33 @@ class Alert:
                 raise ValueError(f"confidence must be within [0, 1]: {self.confidence}")
 
 
+class ReportStatus(StrEnum):
+    """A citizen report's standing, ordered by how much authority it carries.
+
+    The default on submission is `submitted`: a **claim**. Only `corroborated`
+    may alter the modeled field. The legal moves between these live in
+    `app.domain.report_lifecycle`, which imports this enum; the enum itself is
+    here so `FireReport` can carry it without a circular import.
+    """
+
+    #: Received and stored. An unverified claim: visible, rate-limited, and
+    #: never allowed to change the modeled field.
+    SUBMITTED = "submitted"
+    #: A reviewer has picked it up and is deciding. Still a claim.
+    UNDER_REVIEW = "under_review"
+    #: Independently supported. The only status that may alter the modeled field
+    #: or, later, raise an authority incident (F8).
+    CORROBORATED = "corroborated"
+    #: Reviewed and refused. Never modelled, kept for audit.
+    REJECTED = "rejected"
+    #: Past its expiry. A time fact, not a judgement about the claim.
+    EXPIRED = "expired"
+
+    @property
+    def is_terminal(self) -> bool:
+        return self is ReportStatus.REJECTED or self is ReportStatus.EXPIRED
+
+
 class FireKind(StrEnum):
     """What a citizen-reported fire/burning event is.
 
@@ -415,6 +442,26 @@ class FireReport:
     notes: str | None = None
     client_report_id: str | None = None
     id: int | None = None
+    # --- lifecycle (app.domain.report_lifecycle) ---
+    # Defaults keep every existing construction valid: a report built without
+    # them is a `submitted` claim, which is the safe direction — it cannot
+    # influence the model.
+    status: ReportStatus = ReportStatus.SUBMITTED
+    expires_at: datetime | None = None
+    status_changed_at: datetime | None = None
+    reviewed_at: datetime | None = None
+    reviewed_by: str | None = None
+    moderation_note: str | None = None
+    india_geofence_verified: bool = False
+    cluster_id: str | None = None
+    corroborating_report_count: int = 0
+    #: How many evidence items F2 has linked. Reported to the citizen for
+    #: progress; deliberately **not** an input to qualification, so a report with
+    #: no photo is a first-class claim rather than an invalid one.
+    evidence_count: int = 0
+    #: The rate limiter's unit of accounting - a /24 network prefix, never a
+    #: full client address. None when a report arrives without an HTTP client.
+    submitter_prefix: str | None = None
 
     MAX_NOTES_LENGTH = 280
     MIN_INTENSITY = 1
@@ -444,3 +491,26 @@ class FireReport:
             raise ValueError(f"notes must be at most {self.MAX_NOTES_LENGTH} characters")
         if self.client_report_id is not None and not self.client_report_id.strip():
             raise ValueError("client_report_id must not be blank when given")
+        if not isinstance(self.status, ReportStatus):
+            raise ValueError(f"status must be a ReportStatus, got {self.status!r}")
+        for name in ("expires_at", "status_changed_at", "reviewed_at"):
+            value = getattr(self, name)
+            if value is not None:
+                _require_utc(value, name)
+        if self.expires_at is not None and self.expires_at < self.reported_at:
+            raise ValueError("expires_at must not precede reported_at")
+        if self.corroborating_report_count < 0:
+            raise ValueError(
+                f"corroborating_report_count must be >= 0, got {self.corroborating_report_count}"
+            )
+        if self.evidence_count < 0:
+            raise ValueError(f"evidence_count must be >= 0, got {self.evidence_count}")
+        if self.reviewed_by is not None and not self.reviewed_by.strip():
+            raise ValueError("reviewed_by must not be blank when given")
+        if self.submitter_prefix is not None and not self.submitter_prefix.strip():
+            raise ValueError("submitter_prefix must not be blank when given")
+        if self.status is not ReportStatus.SUBMITTED and not self.reviewed_by:
+            # Same rule as the hotspot lifecycle: a report that is no longer a
+            # plain claim must name who moved it, so the state cannot be forged
+            # by writing a status directly.
+            raise ValueError(f"a report in status {self.status.value!r} must name reviewed_by")

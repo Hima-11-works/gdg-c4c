@@ -756,6 +756,48 @@ async def _run_prediction_publish(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _run_expire_reports(args: argparse.Namespace) -> int:
+    """Persist `expired` for open claims whose report window has closed.
+
+    Expiry is a fact about the clock, not a judgement, so this is a sweep: the
+    read side already reports an aged-out claim as expired without it (see
+    app.domain.report_lifecycle.effective_status). Running it only makes the
+    *stored* status agree, which matters for the audit trail and for any query
+    that filters on status.
+
+    Safe to run repeatedly, and safe to run alongside submissions: it only
+    touches claims whose window has already closed.
+
+    Exit 0 when the sweep ran (including "nothing to expire"), 1 on failure.
+    """
+    from app.db.repositories import SqlFireReportRepository
+    from app.db.session import get_session_factory
+    from app.services.reports import FireReportService
+
+    settings = get_settings()
+    try:
+        session = get_session_factory()()
+    except Exception as exc:  # noqa: BLE001 - one clear line instead of a traceback
+        print(f"Could not open a database session: {exc}", file=sys.stderr)
+        return 1
+    try:
+        service = FireReportService(SqlFireReportRepository(session), settings)
+        expired = service.expire_due()
+    except Exception as exc:  # noqa: BLE001 - one clear line, not a traceback
+        print(f"Expiry sweep failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        session.close()
+
+    print(f"Expired {len(expired)} report(s) whose window had closed.")
+    for report in expired:
+        print(
+            f"  report {report.id} ({report.h3_cell}) was reported at "
+            f"{report.reported_at.isoformat()}"
+        )
+    return 0
+
+
 def _add_demo_snapshot_parser(subparsers: argparse._SubParsersAction, command: str) -> None:
     demo_parser = subparsers.add_parser(
         command,
@@ -980,6 +1022,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     monitor_parser.add_argument("--out", default="model-monitor-report.json")
     monitor_parser.set_defaults(func=_run_model_monitor)
+
+    expire_parser = subparsers.add_parser(
+        "expire-reports",
+        help=(
+            "Persist 'expired' for citizen reports whose window has closed (F1 "
+            "lifecycle sweep; the read side already reports them as expired)."
+        ),
+    )
+    expire_parser.set_defaults(func=_run_expire_reports)
 
     args = parser.parse_args(argv)
     logging.basicConfig(level=get_settings().log_level)

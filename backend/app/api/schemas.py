@@ -13,11 +13,11 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import IntEnum
-from typing import Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
-from app.domain.types import AlertSeverity, FireKind
+from app.domain.types import AlertSeverity, FireKind, ReportStatus
 
 T = TypeVar("T")
 
@@ -196,6 +196,83 @@ class ReportOut(BaseModel):
     notes: str | None
     client_report_id: str | None
     reported_at: datetime
+
+
+class ReportStatusOut(BaseModel):
+    """One lifecycle state and what it means (GET /api/v1/reports/statuses)."""
+
+    status: str
+    meaning: str
+    affects_air_quality_model: bool
+
+
+class ReportDetailOut(BaseModel):
+    """A report plus its lifecycle standing: GET /api/v1/reports/{id}.
+
+    Reviewer identity and moderation notes are deliberately **absent** - they name
+    a person and this read is public. They are on the reviewer-key-gated
+    moderation and audit responses instead.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    h3_cell: str
+    latitude: float
+    longitude: float
+    kind: FireKind
+    smoke_intensity: int
+    duration_hours: float
+    notes: str | None
+    client_report_id: str | None
+    reported_at: datetime
+    status: str
+    status_meaning: str
+    is_verified: bool
+    affects_air_quality_model: bool
+    last_status_change_at: datetime | None = None
+    expires_at: datetime | None = None
+    seconds_until_expiry: int | None = None
+    corroborating_report_count: int = 0
+    cluster_id: str | None = None
+    # F2 progress, reported for the citizen's benefit and never required: a
+    # report with no photo is a normal claim.
+    evidence_count: int = 0
+    evidence_expected: bool = False
+
+
+class ReportAuditOut(BaseModel):
+    """One immutable history entry. Reviewer-key gated."""
+
+    report_id: int
+    kind: str
+    at: datetime
+    from_status: str | None = None
+    to_status: str | None = None
+    actor: str
+    note: str
+    detail: dict[str, Any] | None = None
+
+
+class ModerationIn(BaseModel):
+    """Body for POST /api/v1/reports/{id}/moderation.
+
+    `status` is the target state; an illegal move is refused with 409 rather
+    than silently applied. `actor` is the name recorded in the audit trail - the
+    key proves the caller is a reviewer, this says who acted.
+    """
+
+    status: ReportStatus
+    actor: str = Field(min_length=1, max_length=80)
+    note: str = Field(min_length=1, max_length=500)
+    detail: dict[str, Any] | None = None
+
+
+class ModerationOut(BaseModel):
+    """The review result: the new standing plus the event that caused it."""
+
+    report: ReportDetailOut
+    event: ReportAuditOut
 
 
 class FireHotspotOut(BaseModel):

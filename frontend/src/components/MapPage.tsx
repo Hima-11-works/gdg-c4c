@@ -3,7 +3,7 @@ import {
   fetchActiveFires,
   fetchGridCurrent,
   fetchPublishedMeta,
-  fetchReports,
+  fetchReportsWithStatus,
   fetchWeather,
 } from '../lib/api'
 import { useApiResource } from '../hooks/useApiResource'
@@ -118,10 +118,18 @@ export function MapPage() {
     },
   )
 
-  // Citizen fire/burning reports (POST/GET /api/v1/reports). Fetched once
-  // here and shared by the map pins and the hex drawer, so the two can't
-  // disagree; polled so a new report appears without a reload.
-  const reports = useApiResource(fetchReports, [], {
+  // Citizen fire/burning reports (POST /api/v1/reports, read back from
+  // GET /api/v2/reports). Fetched once here and shared by the map pins and the
+  // hex drawer, so the two can't disagree; polled so a new report - or a
+  // reviewer's decision about one - appears without a reload.
+  //
+  // The v2 read rather than v1: v1's response is deliberately unchanged (ten
+  // submission fields), so it cannot say whether a report has been corroborated
+  // or is still affecting the model. The layer shows that, because a pin that
+  // looks identical whether or not the report counts is the misreading F1 exists
+  // to prevent. The row type is a superset of the v1 one, so every existing
+  // consumer keeps working.
+  const reports = useApiResource(fetchReportsWithStatus, [], {
     pollIntervalMs: POLL_INTERVAL_MS,
   })
 

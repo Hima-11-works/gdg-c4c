@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from app.domain.h3_grid import cell_center
+from app.domain.report_lifecycle import is_model_qualified
 from app.domain.types import Coordinate, FireKind, FireReport
 
 # How strongly each kind of fire pushes the gradient. A triage weighting
@@ -27,7 +28,7 @@ _KIND_WEIGHTS: dict[FireKind, float] = {
 
 
 class PlumeFireGradientModel:
-    """Turns citizen fire reports into a per-cell extra-PM2.5 field.
+    """Turns **qualified** citizen fire reports into a per-cell extra-PM2.5 field.
 
     Each active report acts as a point source at its snapped location; a
     target cell receives
@@ -46,6 +47,18 @@ class PlumeFireGradientModel:
     dispersion/forecast model's job (it reads the resulting grid_state);
     this model only sharpens the near-field gradient that IDW interpolation
     from a sparse sensor network cannot resolve.
+
+    **Only corroborated reports contribute.** A report arrives as a `submitted`
+    claim from an unauthenticated endpoint, and before F1 every stored report
+    inside the age window moved modeled PM2.5 — one anonymous POST could move the
+    air-quality model. `is_model_qualified` is the single predicate (see
+    app.domain.report_lifecycle) and it is enforced *here*, where the field is
+    actually changed, not only in the query that feeds it: a caller that passes an
+    unqualified report still gets no contribution. The repository's
+    `list_active_qualified` is the matching filter, so the ordinary path is also
+    cheap. Anything that later creates an authority incident (F8) must use the
+    same predicate, so "allowed to affect the model" and "allowed to raise an
+    incident" cannot diverge.
     """
 
     def __init__(
@@ -70,6 +83,20 @@ class PlumeFireGradientModel:
         self._decay_half_life_hours = decay_half_life_hours
         self._max_age_hours = max_age_hours
 
+    def qualifying_reports(
+        self, reports: list[FireReport], *, timestamp: datetime
+    ) -> list[FireReport]:
+        """The subset of `reports` allowed to alter the modeled field.
+
+        Exposed so a caller can log or count what it is about to use, and so the
+        gate is testable without running a whole grid computation.
+        """
+        return [
+            report
+            for report in reports
+            if is_model_qualified(report.status, expires_at=report.expires_at, now=timestamp)
+        ]
+
     def contributions(
         self,
         grid: list[str],
@@ -81,9 +108,11 @@ class PlumeFireGradientModel:
             return [0.0] * len(grid)
 
         # A report older than max_age contributes nothing (and would decay to
-        # zero anyway); dropping it keeps the per-target loop cheap.
+        # zero anyway); dropping it keeps the per-target loop cheap. An
+        # unqualified report is dropped here too — that is the guarantee: no
+        # matter who calls this, only corroborated and unexpired reports count.
         sources = []
-        for report in reports:
+        for report in self.qualifying_reports(reports, timestamp=timestamp):
             age_hours = (timestamp - report.reported_at).total_seconds() / 3600.0
             if age_hours < 0 or age_hours > self._max_age_hours:
                 continue

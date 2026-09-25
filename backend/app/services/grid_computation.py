@@ -183,16 +183,33 @@ class GridComputationService:
         if self._fire_gradient is None or self._fire_repository is None:
             return estimates, 0, [None] * len(estimates)
 
-        reports = self._fire_repository.list_active(since=timestamp - window)
+        # Only reports whose status allows them to (F1). The gradient model
+        # re-checks each one, so the gate holds even if a caller passes
+        # unqualified reports; querying the qualified set just avoids shipping
+        # every anonymous claim into the model to be discarded there.
+        reports = self._fire_repository.list_active_qualified(since=timestamp - window)
         contributions = self._fire_gradient.contributions(grid, reports, timestamp=timestamp)
 
         blended = [
             replace(
                 state,
                 pm25=(
+                    # The cap is optional (fire_pm25_cap_ugm3 defaults to None),
+                    # so guard it exactly as `fire_pressures` below does. Without
+                    # the guard this was min(None, ...) - a TypeError that the
+                    # stage reported as "fire influence/PDI calculation failed"
+                    # for any caller wiring the fire path without a cap.
                     min(self._fire_pm25_cap_ugm3, state.pm25 + contribution)
-                    if state.pm25 is not None and contribution > 0.0
-                    else state.pm25
+                    if (
+                        state.pm25 is not None
+                        and contribution > 0.0
+                        and self._fire_pm25_cap_ugm3 is not None
+                    )
+                    else (
+                        state.pm25 + contribution
+                        if state.pm25 is not None and contribution > 0.0
+                        else state.pm25
+                    )
                 ),
             )
             for state, contribution in zip(estimates, contributions, strict=False)
