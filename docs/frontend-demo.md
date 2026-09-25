@@ -360,7 +360,11 @@ every reason it gives, and shows **no metric at all**:
 Metrics are tabulated only when `verdict` is `evaluated` *and* the slice itself
 says `sufficient`. Slices that do not qualify are listed in a collapsed section
 with their counts and are deliberately not tabulated — a null recall stays null
-rather than becoming 0%, because "no positives" is not "0% recall".
+rather than becoming 0%, because "no positives" is not "0% recall". The quotable
+table carries every metric the contract defines: MAE, RMSE, bias, high-pollution
+**recall and precision**, plus the pair and station counts each one rests on.
+Omitting precision while showing recall would read as "precision was not
+computable", which is a different claim from the one the backend makes.
 
 ### An event is pinned to the publication on screen
 
@@ -381,16 +385,61 @@ showed `prediction-features-…`.
 | --- | --- |
 | The **catalog** (corridor, endpoints, cell count, `geometry_source`) | **Live** — `GET /api/v1/corridors` |
 | **No event for the run on screen** | **Live** — a real `404 not_found`: *"published run … has no results in the Delhi–Kanpur interstate corridor"* |
-| **Insufficient data** | Rendered from the backend's **own committed fixture** (`tests/fixtures/corridors/insufficient_labels.json`), which records the shipped live deployment's actual case: 0 observations in the corridor windows, nearest usable station 61.4 km away |
+| **Insufficient data** | **Live** — demonstrated against a real published run (below), and also covered by the backend's committed fixture `tests/fixtures/corridors/insufficient_labels.json` |
 | **A corridor event that scored against real observations** | **Not producible here, and not faked** |
 
-The last one cannot be produced in this environment: no published run covers the
-Delhi–Kanpur axis (every demo profile is a Delhi-centred disk), and real station
-readings in those windows need an `OPENAQ_API_KEY`. Publishing a run over the
-corridor cells with values copied from Delhi cells would put fabricated numbers
-behind a real place name, so it was not done. The `evaluated` branch of the panel
-is therefore **unexercised** here — the only case that exists is the one the
-contract says must not become a performance claim.
+The last one cannot be produced in this environment: every demo profile is a
+Delhi-centred res-8 disk, and real station readings in the corridor's windows need
+an `OPENAQ_API_KEY` — the nearest station that could serve the axis is ~61 km away,
+so the backend reports `0 candidate reading(s) checked`. The `evaluated` branch of
+the panel is therefore **unexercised**; the only case that exists here is the one
+the contract says must not become a performance claim.
+
+#### Getting an event to load at all
+
+The event id is a backend digest (`corridor:<id>:<run_id>:h<digest>`) that a
+client cannot compute, and the route *validates* the id in the path: a wrong one
+is a `404` whose message names the right one. So the Event id box ships as the
+placeholder `latest`, and `fetchCorridorEvent` reads the named id out of that
+refusal and asks once more. Only that specific refusal is retried — the two 404s
+that are *findings* rather than mistyped ids still reach the panel, and each says
+something different:
+
+| Backend says | Panel treats it as |
+| --- | --- |
+| `… (that one is 'corridor:…')` | A mistyped id — retried with the id the service named |
+| `published run … has no results in the … corridor` | A fact about the run: no event, and no verdict |
+| `no published prediction run with id '…'` | A fact about the run: it does not exist |
+
+#### Reproducing the live insufficient-data case
+
+The shipped `regional-demo` scenario is res-8 Delhi-NCR, so no demo run produces a
+corridor event: the corridor is res-7 and results are looked up by exact cell. To
+exercise the live path, the committed `winter_stagnation` scenario's **own feature
+vectors** were re-indexed onto the corridor's 24 res-7 cells and published:
+
+```
+python -m app.cli prediction-publish \
+  --input df-corridor.json --feature-run-id features-winter_stagnation-corridor \
+  --run-id corridor-demo-<timestamp> --mode demo --scenario-id winter_stagnation \
+  --generated-at 2025-01-16T00:00:00Z
+```
+
+Three things keep this honest rather than a faked corridor reading:
+
+- The run is `mode=demo` and `run_synthetic=true`, and the app's own banner reads
+  *"Demo simulation · illustrative, not measured"* while the map is showing it.
+- The PM2.5 values are the **synthetic scenario's**, carried onto the real axis
+  cells. They are not observations of the corridor, and nothing in the panel
+  presents them as such.
+- `generated_at` must not be later than the scenario's replay hour; a later stamp
+  makes the builder refuse with `valid_at must not precede issued_at`.
+
+It demonstrates that the panel **refuses** to score, not anything about corridor air
+quality. The verdict comes back `insufficient_data`,
+`usable_as_real_world_evidence: false`, all 7 slices below the 5-observation
+minimum, and **no metric rendered at all** — not a zero, not a dash.
+
 
 ## The federation pill
 

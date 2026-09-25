@@ -443,13 +443,27 @@ export function fetchCorridorEvent(
   eventId: string,
   query: CorridorEventQuery = {},
 ): Promise<Envelope<CorridorEventBundle>> {
-  return apiGet<Envelope<CorridorEventBundle>>(
-    `/api/v1/corridors/${encodeURIComponent(corridorId)}/events/${encodeURIComponent(eventId)}${buildQuery({
+  const path = (id: string): string =>
+    `/api/v1/corridors/${encodeURIComponent(corridorId)}/events/${encodeURIComponent(id)}${buildQuery({
       run_id: query.runId,
       min_labels: query.minLabels,
       high_pollution_threshold_ugm3: query.highPollutionThresholdUgm3,
-    })}`,
-  )
+    })}`
+
+  return apiGet<Envelope<CorridorEventBundle>>(path(eventId)).catch((error: unknown) => {
+    // The event id is a backend digest of corridor + run + horizon set, so a
+    // client cannot compute it. The route *validates* the id in the path
+    // instead, and when it is wrong it answers 404 naming the right one. That
+    // makes a placeholder such as `latest` a complete way in: ask, be told,
+    // ask again. Only that specific refusal is retried — a 404 that means
+    // "this run has no results in this corridor" must still reach the caller,
+    // because that is a finding about the run, not a mistyped id.
+    const named = error instanceof ApiError && error.status === 404
+      ? /that one is '([^']+)'/.exec(error.message)?.[1]
+      : undefined
+    if (named === undefined || named === eventId) throw error
+    return apiGet<Envelope<CorridorEventBundle>>(path(named))
+  })
 }
 
 // --- incident workflow (/api/v1/incidents) ---

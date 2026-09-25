@@ -56,6 +56,7 @@ function SliceTable({ slices }: { slices: CorridorSlice[] }) {
           <th>RMSE</th>
           <th>Bias</th>
           <th>Recall</th>
+          <th>Precision</th>
         </tr>
       </thead>
       <tbody>
@@ -69,6 +70,7 @@ function SliceTable({ slices }: { slices: CorridorSlice[] }) {
             <td>{fixed(slice.rmse_ugm3, ' µg/m³')}</td>
             <td>{fixed(slice.bias_ugm3, ' µg/m³')}</td>
             <td>{percent(slice.high_pollution_recall)}</td>
+            <td>{percent(slice.high_pollution_precision)}</td>
           </tr>
         ))}
       </tbody>
@@ -115,7 +117,7 @@ export function CorridorPanel({
   const { state, dispatch } = useMapUi()
   const catalog = useApiResource(() => fetchCorridors(), [], {})
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [eventId, setEventId] = useState('')
+  const [eventId, setEventId] = useState('latest')
   const [bundle, setBundle] = useState<CorridorEventBundle | null>(null)
   const [eventError, setEventError] = useState<{ code: string; message: string } | null>(null)
   const [loadingEvent, setLoadingEvent] = useState(false)
