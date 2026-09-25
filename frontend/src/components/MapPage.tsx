@@ -16,6 +16,7 @@ import {
 import { lodKey, lodQueryFor, weatherResolutionForLod } from '../lib/lod'
 import { runFactsFromGrid, staleness } from '../lib/runFacts'
 import { CorridorPanel } from './CorridorPanel'
+import { HotspotEvidencePanel } from './HotspotEvidencePanel'
 import { useMapUi } from '../state/MapUiContext'
 import type { CorridorCatalogEntry, CorridorEventBundle } from '../lib/types'
 import { AlertsPanel } from './AlertsPanel'
@@ -147,9 +148,12 @@ export function MapPage() {
   // covers all of India, and the endpoint clips by H3 cell at the resolution
   // the detections were stored at, which a viewport-scoped request wouldn't
   // match (see backend/app/services/fires.py).
-  const activeFires = useApiResource(() => fetchActiveFires(), [state.showActiveFires], {
+  // The candidate layer and the detection layer are drawn from these same
+  // records, so one fetch feeds both; either toggle is enough to need it.
+  const firesNeeded = state.showActiveFires || state.showHotspotCandidates
+  const activeFires = useApiResource(() => fetchActiveFires(), [firesNeeded], {
     pollIntervalMs: FIRMS_POLL_INTERVAL_MS,
-    enabled: state.showActiveFires,
+    enabled: firesNeeded,
   })
 
   // A view change (new queryKey) invalidates the forecast cache for this
@@ -254,6 +258,21 @@ export function MapPage() {
           >
             Corridor event…
           </button>
+          <button
+            type="button"
+            className="panel report-open"
+            title="Imagery-derived fire candidates and the evidence behind them. A candidate is not a confirmed fire, and this is not measured PM2.5."
+            onClick={() => {
+              // Turning the layer on with the panel, because a candidate list
+              // whose markers are all hidden reads as though nothing was found.
+              if (!state.showHotspotCandidates) {
+                dispatch({ type: 'TOGGLE_HOTSPOT_CANDIDATES' })
+              }
+              dispatch({ type: 'TOGGLE_HOTSPOT_PANEL' })
+            }}
+          >
+            Fire candidates…
+          </button>
           {reportCenter !== null && (
             <button
               type="button"
@@ -292,6 +311,8 @@ export function MapPage() {
       </div>
 
       <CellDetailPanel publishedRunId={publishedRunId} citizenReports={reports.resource} />
+
+      <HotspotEvidencePanel resource={activeFires.resource} />
 
       <CorridorPanel
         runId={publishedRunId}

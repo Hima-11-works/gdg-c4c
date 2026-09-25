@@ -519,6 +519,97 @@ Two details worth knowing when reading the payload:
   `evaluation.usable_as_real_world_evidence` and the `limitations` block are
   shown as the server sent them.
 
+## Fire candidates: imagery-derived, and never a confirmed fire
+
+**Fire candidates…** (top left) turns on a separate candidate layer and opens its
+evidence panel. A candidate is **one NASA FIRMS thermal detection that the
+detector was reasonably sure about, put forward for a person to look at**. It is
+not a fire, and the panel says so where the evidence begins.
+
+### The four fire-ish layers are four different things
+
+This map carries four layers that a reader could collapse into one. They stay
+separately labelled and separately toggled, because conflating any two of them
+would be the exact error this feature exists to prevent:
+
+| Layer | What it is |
+| --- | --- |
+| **Live Satellite Imagery (VIIRS)** | The NASA GIBS raster basemap — a photograph, carrying no measurement of this app's |
+| **Active Fires (NASA FIRMS)** | Real ingested thermal detections, drawn as the solid glow-and-core marks |
+| **Fire candidates (triage — not confirmed fires)** | The same detections, triaged by the detector's own confidence, drawn hollow and dashed |
+| **Satellite Fire / Thermal Hotspots (illustrative)** | Hand-authored mock shapes — labelled illustrative, and pointed at the two real layers above it |
+
+The candidate styling is chosen so it cannot be read as either neighbour: **no
+fill** (so never a filled PM2.5 hex), **cyan** (in neither the PM2.5 sequential
+ramp nor the FIRMS magenta), and a **dashed outer ring** (a solid disc is how the
+detection layer says "this is a detection"). A below-threshold candidate is
+grey.
+
+### Where the triage comes from
+
+The only thing that puts a detection forward is the detector's own
+`confidence_class`, which is genuine FIRMS output:
+
+| `confidence_class` | Shown as |
+| --- | --- |
+| `high`, `nominal` | **Candidate** — worth a human's time |
+| `low` | **Below candidate threshold** — the detector saw something and judged it weak |
+| `unknown` | **Not classifiable** — no triage is possible |
+
+A `low` detection is listed rather than hidden: the record is real, and hiding it
+would lose the fact that the detector looked and found it unconvincing.
+
+### What each candidate shows
+
+Acquisition time (in **UTC**, because a day/night overpass shifted into local
+time is not a cosmetic problem), confidence class with the raw FIRMS token, the
+satellite and whether the overpass was day or night, FRP, 4 µm brightness, the
+H3 cell the detection was snapped to, and its position.
+
+### What the API does not report
+
+Three of the things this feature would normally carry are **not in
+`FireHotspotOut`**, and `detector`, `review` and `candidate` do not appear
+anywhere in the backend's hotspot path. Rather than fill them in, the panel names
+each as a gap:
+
+- **Detector version** — the record carries no detector or processor version.
+- **Human review state** — no reviewer, decision or timestamp exists, so every
+  candidate is untriaged by a person. A "below candidate threshold" status is the
+  **detector's confidence, not a human decision**, and the panel says exactly
+  that next to the status.
+- **Station corroboration** — no observation or monitor is linked, so a candidate
+  rests on one satellite detection alone.
+
+### Unavailable data is kept apart by cause
+
+| Cause | What the panel says |
+| --- | --- |
+| **The feed cannot be read** | *"Detection feed unavailable"* — and explicitly *not* the same as there being none |
+| **The feed answered with nothing** | *"There are no candidates because nothing was detected — not because candidates were reviewed and cleared."* |
+| **Detections, but none pass** | How many fell below the threshold, and that none is put forward |
+
+### Demonstrating it
+
+| Case | How |
+| --- | --- |
+| **Positive candidate** + **rejected candidate** | A `/api/v1/fires` response carrying a `high` and a `low` confidence detection, so both appear in one list |
+| **Unavailable (empty)** | **Live** — the shipped deployment stores no FIRMS rows, so the endpoint really answers with an empty list |
+| **Unavailable (unreachable)** | The request refused at the transport layer |
+
+The positive/rejected records are fixtures built to the real `FireHotspotOut`
+shape. They are fixtures because this environment **cannot produce live FIRMS
+data**: ingestion needs a NASA `firms_map_key` the demo config does not hold.
+
+### Map and panel cannot disagree
+
+The candidate GeoJSON is built by the same functions, from the same fetched rows,
+that render the panel, and a map click and the panel both key on
+`detection_id`. Verified in the browser by importing the real modules into the
+running app and comparing their output against the API rows: every marker's
+coordinates, snapped cell, acquisition instant, satellite, FRP and status match
+the record, and the panel quotes those same values — **25/25 checks**.
+
 ## Report evidence (photo + local sensor reading)
 
 The report form is two calls, and the report id from the first is what makes the

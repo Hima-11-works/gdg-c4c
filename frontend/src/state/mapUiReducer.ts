@@ -51,6 +51,10 @@ export interface MapUiState {
   showSatelliteImagery: boolean
   /** NASA FIRMS active thermal anomalies (near-real-time satellite feed). */
   showActiveFires: boolean
+  /** Imagery-derived fire *candidates*: the same FIRMS records triaged by
+   *  detector confidence for a human to look at. Deliberately a separate toggle
+   *  from the detection layer, so the two are never read as one thing. */
+  showHotspotCandidates: boolean
   /** NASA GIBS Deep Blue Aerosol Optical Depth (seasonal smog rage). */
   showSeasonalSmog: boolean
   /** Sentinel-5P NO2 industrial-emissions raster (WMS). */
@@ -62,6 +66,8 @@ export interface MapUiState {
   runPanelOpen: boolean
   /** The corridor event view, beside the run panel. */
   corridorPanelOpen: boolean
+  /** Whether the imagery-derived candidate evidence panel is popped out. */
+  hotspotPanelOpen: boolean
   /** Same, for the settings & layer checklist panel (bottom left). */
   settingsOpen: boolean
   /** The searched place the map is scoped to: cells outside its area are
@@ -110,11 +116,13 @@ export type MapUiAction =
   | { type: 'TOGGLE_FREIGHT_CORRIDORS' }
   | { type: 'TOGGLE_SATELLITE_IMAGERY' }
   | { type: 'TOGGLE_ACTIVE_FIRES' }
+  | { type: 'TOGGLE_HOTSPOT_CANDIDATES' }
   | { type: 'TOGGLE_SEASONAL_SMOG' }
   | { type: 'TOGGLE_INDUSTRIAL_EMISSIONS' }
   | { type: 'TOGGLE_LEGEND' }
   | { type: 'TOGGLE_RUN_PANEL' }
   | { type: 'TOGGLE_CORRIDOR_PANEL' }
+  | { type: 'TOGGLE_HOTSPOT_PANEL' }
   | { type: 'TOGGLE_SETTINGS' }
   | { type: 'SELECT_CELL'; cell: string | null; resolution?: number }
   | { type: 'TOGGLE_CELL'; cell: string }
@@ -135,11 +143,13 @@ export const initialMapUiState: MapUiState = {
   showFreightCorridors: false,
   showSatelliteImagery: false,
   showActiveFires: false,
+  showHotspotCandidates: false,
   showSeasonalSmog: false,
   showIndustrialEmissions: false,
   legendOpen: true,
   runPanelOpen: true,
   corridorPanelOpen: false,
+  hotspotPanelOpen: false,
   settingsOpen: true,
   scope: null,
   // Corrected by the map's first SET_VIEWPORT; only read if a scope is
@@ -235,6 +245,8 @@ export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState
       return { ...state, showSatelliteImagery: !state.showSatelliteImagery }
     case 'TOGGLE_ACTIVE_FIRES':
       return { ...state, showActiveFires: !state.showActiveFires }
+    case 'TOGGLE_HOTSPOT_CANDIDATES':
+      return { ...state, showHotspotCandidates: !state.showHotspotCandidates }
     case 'TOGGLE_SEASONAL_SMOG':
       return { ...state, showSeasonalSmog: !state.showSeasonalSmog }
     case 'TOGGLE_INDUSTRIAL_EMISSIONS':
@@ -245,6 +257,8 @@ export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState
       return { ...state, runPanelOpen: !state.runPanelOpen }
     case 'TOGGLE_CORRIDOR_PANEL':
       return { ...state, corridorPanelOpen: !state.corridorPanelOpen }
+    case 'TOGGLE_HOTSPOT_PANEL':
+      return { ...state, hotspotPanelOpen: !state.hotspotPanelOpen }
     case 'TOGGLE_SETTINGS':
       return { ...state, settingsOpen: !state.settingsOpen }
     case 'SELECT_CELL':

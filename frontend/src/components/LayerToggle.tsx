@@ -112,6 +112,18 @@ export function LayerToggle() {
           </label>
 
           <label
+            className="layer-toggle-option layer-toggle-candidates"
+            title="Imagery-derived fire CANDIDATES: the same real FIRMS detections, triaged by the detector's own confidence and drawn hollow and dashed. A candidate is not a confirmed fire, and this is not measured PM2.5. Detector version, human review state and station corroboration are not reported by the API and are shown as gaps in the evidence panel."
+          >
+            <input
+              type="checkbox"
+              checked={state.showHotspotCandidates}
+              onChange={() => dispatch({ type: 'TOGGLE_HOTSPOT_CANDIDATES' })}
+            />
+            Fire candidates (triage — not confirmed fires)
+          </label>
+
+          <label
             className="layer-toggle-option"
             title="NASA GIBS VIIRS Deep Blue Aerosol Optical Depth (550 nm) - a real daily satellite smog proxy over India, drawn at 60% opacity so the hex grid stays visible"
           >
@@ -137,7 +149,7 @@ export function LayerToggle() {
 
           <label
             className="layer-toggle-option"
-            title="Hand-authored mock thermal detections shaped like VIIRS output — illustrative, not a satellite feed, and not a confirmed fire. The real ingested satellite detections are the Active Fires (NASA FIRMS) layer above (see lib/fireAnomalies)."
+            title="Hand-authored mock thermal detections shaped like VIIRS output — illustrative, not a satellite feed, and not a confirmed fire. The real ingested satellite detections are the Active Fires (NASA FIRMS) layer above, and the Fire candidates layer above that triages those same detections (see lib/fireAnomalies)."
           >
             <input
               type="checkbox"

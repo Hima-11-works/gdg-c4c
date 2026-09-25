@@ -1155,6 +1155,180 @@ body,
   line-height: 1.45;
 }
 
+/* --- imagery-derived fire candidates ------------------------------------
+   Cyan, hollow and dashed, in neither the PM2.5 sequential ramp nor the FIRMS
+   magenta: a candidate must not be readable as a measurement or as a confirmed
+   detection. Grey marks a below-threshold candidate. */
+
+.hotspot-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-height: 82vh;
+  overflow-y: auto;
+  background: #12141a;
+  border: 1px solid #3a3f4a;
+  border-radius: 8px;
+}
+
+.hotspot-caveat {
+  margin: 0.2rem 0;
+  padding: 0.4rem 0.55rem;
+  border-left: 3px solid #22d3ee;
+  background: rgba(34, 211, 238, 0.09);
+  border-radius: 3px;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: #cffafe;
+}
+
+.hotspot-tally {
+  font-size: 0.82rem;
+}
+
+.hotspot-unavailable {
+  padding: 0.5rem 0.6rem;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  border-left-width: 3px;
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.08);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.hotspot-unavailable-title {
+  margin: 0 0 0.25rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.hotspot-unavailable-error {
+  margin: 0.35rem 0 0;
+  font-family: ui-monospace, monospace;
+  font-size: 0.76rem;
+  color: #fdba74;
+}
+
+.hotspot-subhead {
+  margin: 0.5rem 0 0.15rem;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #94a3b8;
+}
+
+.hotspot-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.hotspot-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid #2b303a;
+  border-left-width: 3px;
+  border-radius: 4px;
+  background: #171a21;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.hotspot-row:hover {
+  background: #1d212a;
+}
+
+.hotspot-row-selected {
+  border-color: #22d3ee;
+  background: #10242a;
+}
+
+.hotspot-status-candidate {
+  border-left-color: #22d3ee;
+}
+
+.hotspot-status-rejected {
+  border-left-color: #64748b;
+}
+
+.hotspot-status-unclassifiable {
+  border-left-color: #a16207;
+}
+
+.hotspot-row-status {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.hotspot-row-meta {
+  font-size: 0.75rem;
+  color: #94a3b8;
+}
+
+.hotspot-row-id {
+  font-family: ui-monospace, monospace;
+  font-size: 0.7rem;
+  color: #64748b;
+  overflow-wrap: anywhere;
+}
+
+.hotspot-status {
+  margin: 0.15rem 0 0.35rem;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.hotspot-facts {
+  display: grid;
+  grid-template-columns: minmax(8rem, auto) 1fr;
+  gap: 0.2rem 0.6rem;
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.hotspot-facts dt {
+  color: #94a3b8;
+}
+
+.hotspot-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.hotspot-mono {
+  font-family: ui-monospace, monospace;
+  font-size: 0.74rem;
+}
+
+.hotspot-gaps {
+  margin: 0;
+  padding-left: 1.05rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: #cbd5e1;
+}
+
+.hotspot-candidate-popup .fire-popup-gap {
+  display: block;
+  margin-top: 0.25rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.35);
+  font-size: 0.72rem;
+  color: #94a3b8;
+}
+
 /* The details panel is a dropdown, wider than the pill: it carries the
    participating regions, the model versions and the recorded limitations
    verbatim, which does not fit a 20rem column. */

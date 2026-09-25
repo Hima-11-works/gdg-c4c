@@ -51,6 +51,11 @@ import {
   activeFirePopupHtml,
   activeFiresFeatureCollection,
 } from '../lib/activeFires'
+import {
+  hotspotCandidatePopupHtml,
+  hotspotCandidateFromRow,
+  hotspotCandidatesFeatureCollection,
+} from '../lib/hotspotCandidates'
 import type { ActiveFire } from '../lib/activeFires'
 import {
   GIBS_ATTRIBUTION,
@@ -361,6 +366,21 @@ const LAYER_GIBS = 'gibs-true-color-raster'
 const SOURCE_ACTIVE_FIRES = 'active-fires'
 const LAYER_ACTIVE_FIRES_GLOW = 'active-fires-glow'
 const LAYER_ACTIVE_FIRES_CORE = 'active-fires-core'
+
+// Imagery-derived candidates. A separate source from the FIRMS detections above
+// so the two can be toggled, styled and read independently.
+//
+// The styling is chosen to be unreadable as either neighbour:
+//   - hollow, no fill, so it cannot be mistaken for a filled PM2.5 hex
+//   - cyan, which is in neither the PM2.5 sequential ramp (green->yellow->red-
+//     purple) nor the FIRMS magenta glow/core
+//   - a dashed outer ring, because a solid disc is how the detection layer says
+//     "this is a detection"
+const SOURCE_HOTSPOT_CANDIDATES = 'hotspot-candidates'
+const LAYER_CANDIDATE_MARKER = 'hotspot-candidate-marker'
+const LAYER_CANDIDATE_RING = 'hotspot-candidate-ring'
+const CANDIDATE_COLOR = '#22D3EE'
+const CANDIDATE_REJECTED_COLOR = '#64748B'
 const ACTIVE_FIRE_COLOR = '#FF0055'
 const ACTIVE_FIRE_GLOW_OPACITY = 0.45
 const ACTIVE_FIRE_CORE_OPACITY = 0.9
@@ -1433,6 +1453,61 @@ export function MapView({
             },
           })
 
+          // Imagery-derived candidates: the same detections, triaged by the
+          // detector's own confidence. Deliberately hollow and dashed, in a
+          // colour used by neither the PM2.5 ramp nor the FIRMS glow, so a
+          // candidate is never read as a measurement or a confirmed detection.
+          map!.addSource(SOURCE_HOTSPOT_CANDIDATES, {
+            type: 'geojson',
+            data: EMPTY_FEATURE_COLLECTION,
+          })
+          map!.addLayer({
+            id: LAYER_CANDIDATE_MARKER,
+            type: 'circle',
+            source: SOURCE_HOTSPOT_CANDIDATES,
+            layout: { visibility: 'none' },
+            paint: {
+              // Rejected candidates are grey; live ones cyan. No fill-opacity
+              // above zero on the disc - the stroke is the whole mark.
+              'circle-color': [
+                'case',
+                ['==', ['get', 'candidate_status'], 'candidate'],
+                CANDIDATE_COLOR,
+                CANDIDATE_REJECTED_COLOR,
+              ],
+              'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 3, 8, 5, 12, 7],
+              'circle-opacity': 0.18,
+              'circle-stroke-color': [
+                'case',
+                ['==', ['get', 'candidate_status'], 'candidate'],
+                CANDIDATE_COLOR,
+                CANDIDATE_REJECTED_COLOR,
+              ],
+              'circle-stroke-width': 1.75,
+              'circle-stroke-opacity': 0.95,
+            },
+          })
+          map!.addLayer({
+            id: LAYER_CANDIDATE_RING,
+            type: 'circle',
+            source: SOURCE_HOTSPOT_CANDIDATES,
+            layout: { visibility: 'none' },
+            paint: {
+              // The dashed outer ring is what separates this from the solid
+              // detection core it is derived from.
+              'circle-color': 'rgba(0,0,0,0)',
+              'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 7, 8, 11, 12, 15],
+              'circle-stroke-color': [
+                'case',
+                ['==', ['get', 'candidate_status'], 'candidate'],
+                CANDIDATE_COLOR,
+                CANDIDATE_REJECTED_COLOR,
+              ],
+              'circle-stroke-width': 1,
+              'circle-stroke-opacity': 0.55,
+            },
+          })
+
           // Place labels — added after the data layers so names sit on top of
           // the field, but before the scope mask so a greyed-out area greys
           // its labels too. Two layers off one source, each gated by zoom:
@@ -1553,6 +1628,32 @@ export function MapView({
             map!.getCanvas().style.cursor = 'pointer'
           })
           map!.on('mouseleave', LAYER_ACTIVE_FIRES_CORE, () => {
+            map!.getCanvas().style.cursor = ''
+          })
+
+          // Candidate popups. The event carries `detection_id`, which is what
+          // the evidence panel keys on, so the popup and the panel cannot end
+          // up describing two different records.
+          map!.on('click', LAYER_CANDIDATE_RING, (event) => {
+            const feature = event.features?.[0]
+            const props = feature?.properties as Record<string, unknown> | undefined
+            if (!feature || !props) return
+            window.dispatchEvent(
+              new CustomEvent('air-health:hotspot-candidate-selected', { detail: props }),
+            )
+            const geometry = feature.geometry as unknown as { coordinates: [number, number] }
+            togglePopup(
+              `candidate:${props.detection_id}`,
+              geometry.coordinates,
+              'fire-anomaly-popup hotspot-candidate-popup',
+              hotspotCandidatePopupHtml(props),
+              11,
+            )
+          })
+          map!.on('mouseenter', LAYER_CANDIDATE_RING, () => {
+            map!.getCanvas().style.cursor = 'pointer'
+          })
+          map!.on('mouseleave', LAYER_CANDIDATE_RING, () => {
             map!.getCanvas().style.cursor = ''
           })
 
@@ -1785,6 +1886,31 @@ export function MapView({
     map.setLayoutProperty(LAYER_ACTIVE_FIRES_GLOW, 'visibility', visibility)
     map.setLayoutProperty(LAYER_ACTIVE_FIRES_CORE, 'visibility', visibility)
   }, [mapReady, state.showActiveFires])
+
+  // The candidate layer has its own visibility so the detection layer and the
+  // triage view can be shown, hidden or compared independently.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    const map = mapRef.current
+    const visibility: 'visible' | 'none' = state.showHotspotCandidates ? 'visible' : 'none'
+    map.setLayoutProperty(LAYER_CANDIDATE_MARKER, 'visibility', visibility)
+    map.setLayoutProperty(LAYER_CANDIDATE_RING, 'visibility', visibility)
+  }, [mapReady, state.showHotspotCandidates])
+
+  // Candidates are derived from the same FIRMS records the detection layer
+  // draws, so this reuses the one fetch rather than asking twice. A failed or
+  // absent fetch leaves the source empty - which the panel reports as its own
+  // unavailable state rather than as "no candidates".
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    const source = mapRef.current.getSource(SOURCE_HOTSPOT_CANDIDATES)
+    if (!(source instanceof GeoJSONSource)) return
+    const candidates =
+      activeFires.status === 'success'
+        ? activeFires.data.map(hotspotCandidateFromRow)
+        : []
+    source.setData(hotspotCandidatesFeatureCollection(candidates) as never)
+  }, [mapReady, activeFires])
 
   // Feed the map the real FIRMS detections MapPage fetched. A failed or
   // absent fetch leaves the source empty rather than falling back to
