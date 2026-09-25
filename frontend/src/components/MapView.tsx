@@ -59,6 +59,7 @@ import {
   windToFeatureCollection,
 } from '../lib/h3Geometry'
 import { buildSmoothFieldGrid, renderSmoothFieldFromGrid } from '../lib/smoothField'
+import { loadIndiaOutline, type IndiaOutline } from '../lib/indiaOutline'
 import { buildRangeContours, buildSmoothRangeContours } from '../lib/pm25Contours'
 import { INDIA_BBOX, lodBbox, MAX_ZOOM } from '../lib/lod'
 import { scopeContains, scopeMask } from '../lib/scope'
@@ -451,6 +452,12 @@ function firePulseFrame(frame: number): ImageData {
   return ctx.getImageData(0, 0, size, size)
 }
 
+// How far the smooth field is allowed to run past India's coastline, in
+// pixels of the rendered raster (which is capped at MAX_PIXELS square). A few
+// pixels is enough to soften the edge without reading as the field extending
+// meaningfully into another country.
+const SMOOTH_BORDER_MARGIN_PX = 3
+
 // ---------------------------------------------------------------------------
 // Opacity animation — the ONLY per-frame work during a transition. No source
 // data is touched, so there is nothing to re-tessellate: the browser just
@@ -680,6 +687,25 @@ export function MapView({
     states: stateBoundaries,
     districts: districtBoundaries,
   }
+
+  // India's country outline, indexed for point queries. Null until it loads,
+  // and the paint effect treats null as "don't clip" so the first frames
+  // render unclipped rather than briefly empty.
+  const [indiaOutline, setIndiaOutline] = useState<IndiaOutline | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    loadIndiaOutline()
+      .then((outline) => {
+        if (!cancelled) setIndiaOutline(outline)
+      })
+      .catch(() => {
+        // A failed outline fetch leaves clipping off rather than blanking the
+        // map: showing more than we should beats showing nothing.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
   const scopeBoundariesRef = useRef(scopeBoundaries)
   // Live mirrors of the place scope for the map's click handlers. Those are
   // registered once when the map is created, so reading the state directly
@@ -1749,7 +1775,18 @@ export function MapView({
 
     // One source of truth for the frame's (cell, value) pairs, shared by both
     // renderings.
-    const cellValues =
+    //
+    // A bbox query resolves a grid across the whole *requested* box (the
+    // backend's resolve_cells), not across India's coastline, so a viewport
+    // that reaches past the border comes back with cells over Bangladesh,
+    // Nepal and the Bay of Bengal too. Those are dropped here rather than
+    // drawn: a cell that doesn't touch India at all isn't a gap in our data,
+    // it's somewhere the product doesn't cover, and painting it says
+    // otherwise. A cell that straddles the border is kept - the overlap is
+    // genuinely inside the product's area. Until the outline has loaded
+    // nothing is dropped, so the first frames render unclipped rather than
+    // briefly empty.
+    const allCellValues =
       state.forecastMinutes === 0
         ? (currentGrid as Extract<typeof currentGrid, { status: 'success' }>).data.map((cell) => ({
             h3Cell: cell.h3_cell,
@@ -1759,6 +1796,11 @@ export function MapView({
             h3Cell: forecast.h3_cell,
             value: forecast.predicted_pm25,
           }))
+
+    const cellValues =
+      indiaOutline === null
+        ? allCellValues
+        : allCellValues.filter((cell) => indiaOutline.cellTouchesH3(cell.h3Cell))
 
     const hasPainted = paintedDataRef.current !== null
 
@@ -1798,8 +1840,12 @@ export function MapView({
         // mode traces iso-lines across it, so the lines follow exactly the
         // surface the raster shows instead of the hexagons underneath.
         const grid = buildSmoothFieldGrid(points, bbox, hexEdgeKm(state.lod.resolution))
+        const image = renderSmoothFieldFromGrid(grid, bbox, PM25_COLOR_SCALE)
+        // The raster is georeferenced to the viewport bbox, so it would
+        // otherwise be painted across neighbouring countries and the sea.
+        if (indiaOutline !== null) indiaOutline.clipImageToIndia(image, bbox, SMOOTH_BORDER_MARGIN_PX)
         rasterSource.updateImage({
-          image: renderSmoothFieldFromGrid(grid, bbox, PM25_COLOR_SCALE),
+          image,
           coordinates: imageCoords(bbox),
         })
         if (contrast) {
@@ -1874,6 +1920,7 @@ export function MapView({
     currentGrid,
     forecastGrid,
     state.showPdi,
+    indiaOutline,
     reducedMotion,
   ])
 
