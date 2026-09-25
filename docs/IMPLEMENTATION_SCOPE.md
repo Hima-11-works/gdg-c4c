@@ -5,10 +5,10 @@ changed by this document; it adds no code and no schema.
 
 | | |
 | --- | --- |
-| Scoped against | `main` @ `8cb39f1544b9d1126ea903352be57884a1c64d69` |
+| Scoped against | `main` @ `1685e85` (integrated with the one commit that landed during this pass) |
 | Brief | `india_pollution_implementation_prompts.md` (received out-of-band, 2026-09-26) |
-| Assessment baseline in the brief | `origin/main` @ `1685e855` — **not present in this clone** (see §1.3) |
-| F1 owner | **TBD** — §13 defines the hand-off contract so any owner can start |
+| Assessment baseline in the brief | `origin/main` @ `1685e85` — **reached and verified**; the brief writes it as `1685e855`, which is one character longer than the real abbreviated SHA and resolves to nothing (§1.3) |
+| F1 owner | **TBD** — §15 defines the hand-off contract so any owner can start |
 
 ---
 
@@ -35,14 +35,27 @@ changed by this document; it adds no code and no schema.
 | Node / npm | 24.16.0 / 11.13.0 | yes |
 | Flutter / Dart | Flutter on PATH at `C:\src\flutter`, Dart 3.13.3 | yes |
 
-### 1.3 Gap: the brief's assessment baseline is unavailable
+### 1.3 Changes since the assessment baseline: none on `main`
 
-The brief is written against `origin/main` @ `1685e855`. **That commit does not
-exist in this clone** (`fatal: Not a valid object name 1685e855`), so
-"changes since the assessment baseline" **cannot be diffed** and must be taken
-from the brief's own per-feature "current footing" column, cross-checked against
-current code. The closest available anchors are `main` @ `8cb39f1` and the
-`backhima` line (§1.4). This is a data gap, not a finding.
+The brief is written against `origin/main` @ `1685e855`. The real abbreviated
+SHA is **`1685e85`** — the brief has one character too many, and `1685e855`
+resolves to nothing in this repository. That is worth recording, because an
+owner who copies the SHA from the brief will conclude the baseline is missing
+when it is simply misquoted.
+
+With the typo corrected, **`1685e85` is the current tip of `origin/main`**, so
+**no teammate commits have landed on `main` since the assessment.** The brief's
+per-feature "current footing" column can therefore be read directly against
+`main` as it stands, with one qualification:
+
+> One commit landed on `origin/main` *during* this scoping pass —
+> `1685e85` `[fix] Stop the map drawing cells and the smooth field outside
+> India` (+349/−2 across `frontend/src/components/MapView.tsx` and the new
+> `frontend/src/lib/indiaOutline.ts`). The document was rebased onto it and the
+> frontend gates were re-run (§1.5).
+
+The substantive movement since the assessment is therefore **not** on `main` at
+all — it is the unmerged `backhima` line (§1.4).
 
 ### 1.4 Finding: a large body of F1–F11 work is not on `main`
 
@@ -70,7 +83,11 @@ lifecycle), federation is two local processes (no node registry), corridors are
 straight-line illustrative geometry. Each feature in §4–§11 states what the
 backhima line already covers and what the brief still requires.
 
-### 1.5 Baselines (exact, on `main` @ `8cb39f1`)
+### 1.5 Baselines (exact, on `main` @ `1685e85`)
+
+Backend and Flutter figures were taken on `8cb39f1`; the only commit added
+thereafter (`1685e85`) touches `frontend/` alone, so the three frontend rows were
+re-run on the integrated tree and the other five are unaffected.
 
 | Gate | Command | Result |
 | --- | --- | --- |
@@ -79,7 +96,7 @@ backhima line already covers and what the brief still requires.
 | Backend format | `ruff format --check .` | **36 files** would be reformatted, 126 clean — exit 1 |
 | Frontend build | `npm run build` | **pass** (62 modules, 1.54 MB chunk warning) — exit 0 |
 | Frontend lint | `npm run lint` (oxlint) | **pass** — 1 warning, 0 errors (46 files) — exit 0 |
-| Frontend format | `npx prettier --check .` | **22 files** unformatted — exit 1 |
+| Frontend format | `npx prettier --check .` | **23 files** unformatted — exit 1 |
 | Flutter analyze | `flutter analyze` | **58 issues** incl. hard `error`s — exit 1 |
 | Flutter test | `flutter test` | **180 passed, 8 failed (load errors)** — exit 1 |
 
@@ -87,6 +104,10 @@ Ruff error mix: 58 × E501 (line length), 10 × I001 (import order), 6 × UP035,
 F401, 1 × B904, 1 × UP037. Hottest files: `app/api/routes/predictions_v2.py` (17),
 `app/services/prediction_queries.py` (10), `app/models/tables.py` (8),
 `app/services/prediction_publication.py` (6).
+
+On the integrated tree the Prettier count moved from 22 to 23: the new
+`frontend/src/lib/indiaOutline.ts` from `1685e85` is itself unformatted, so the
+format debt grew with the fix. Build and lint are unaffected (exit 0).
 
 The **11 backend failures are inherited, not new**, and are the same 11 the
 `backhima` line also fails: `test_api_grid` (2), `test_environmental_contracts`
