@@ -432,8 +432,12 @@ def test_default_client_stores_are_per_participant() -> None:
     assert a != b
     assert a.parent == b.parent
     assert a.name == "region-a" and b.name == "region-b"
-    # An explicit directory is honoured as given.
-    assert str(resolve_store("region-a", "C:/tmp/one")) == "C:\\tmp\\one"
+    # An explicit directory is honoured as given. Compared by path components,
+    # not by string: Path renders separators per-platform, so asserting the
+    # literal "C:\tmp\one" passed on Windows and failed on the Linux CI runner.
+    explicit = resolve_store("region-a", "C:/tmp/one")
+    assert explicit == Path("C:/tmp/one")
+    assert explicit.name == "one"
 
 
 def test_key_registry_rejects_malformed_entries() -> None:

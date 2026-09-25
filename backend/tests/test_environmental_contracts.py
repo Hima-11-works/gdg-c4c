@@ -26,8 +26,11 @@ from app.domain.features import (
     WeatherFeature,
 )
 
-EXAMPLE_PATH = Path(__file__).parents[2] / "docs" / "api" / "v2-contract-examples.json"
-MANIFEST_DIR = Path(__file__).parents[2] / "docs" / "dummy_data" / "manifests"
+# `.resolve()` as everywhere else in this suite: a bare `__file__` may be
+# relative, which would make parents[2] point somewhere other than the repo
+# root and silently skip the contract check.
+EXAMPLE_PATH = Path(__file__).resolve().parents[2] / "docs" / "api" / "v2-contract-examples.json"
+MANIFEST_DIR = Path(__file__).resolve().parents[2] / "docs" / "dummy_data" / "manifests"
 
 
 def _dataset() -> DatasetRef:

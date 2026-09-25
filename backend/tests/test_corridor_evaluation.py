@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -443,6 +444,30 @@ def test_missing_run_is_404_worthy(monkeypatch) -> None:
     _install(monkeypatch, None, [])
     with pytest.raises(EventNotFoundError):
         event_for_run(object(), corridor=DELHI_KANPUR)
+
+
+def test_a_run_with_no_corridor_results_names_the_corridor_once(monkeypatch) -> None:
+    """Regression: the not-found message appended "corridor" to a name that
+    already ended in it, so it read "... interstate corridor corridor"."""
+    run, _ = _published_run()
+    _install(monkeypatch, run, [])
+    with pytest.raises(EventNotFoundError) as excinfo:
+        event_for_run(object(), corridor=DELHI_KANPUR, run_id=run.run_id)
+    message = str(excinfo.value)
+    assert "corridor corridor" not in message
+    assert message.count("corridor") == message.lower().count("corridor")
+    assert "Delhi" in message
+
+
+def test_a_corridor_not_named_corridor_still_gets_the_word(monkeypatch) -> None:
+    """The label adds the word only when the name does not already carry it."""
+    run, _ = _published_run()
+    _install(monkeypatch, run, [])
+    plain = replace(DELHI_KANPUR, name="Delhi-Kanpur axis")
+    with pytest.raises(EventNotFoundError) as excinfo:
+        event_for_run(object(), corridor=plain, run_id=run.run_id)
+    assert "Delhi-Kanpur axis corridor" in str(excinfo.value)
+    assert "corridor corridor" not in str(excinfo.value)
 
 
 def test_event_peak_finds_the_worst_horizon(monkeypatch) -> None:

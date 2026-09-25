@@ -1,37 +1,59 @@
 {
+  "_comment": "Contract example captured from a real published demo run (prediction-publish of the regional-demo profile). Every block below is a verbatim API response, so this file is checked against the live schemas by tests/test_environmental_contracts.py.",
   "meta": {
-    "region": "delhi-ncr",
+    "region": "india",
+    "latest_run_id": "demo-winter_stagnation-20250115T1200Z",
+    "generated_at": "2025-01-15T12:00:00Z",
     "native_resolution": 8,
-    "supported_display_resolutions": [3, 4, 5, 8],
-    "supported_horizons_hours": [1, 2, 3, 4, 5, 6],
+    "supported_display_resolutions": [
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ],
+    "supported_horizons_hours": [
+      1.0,
+      2.0,
+      3.0,
+      4.0,
+      5.0,
+      6.0
+    ],
     "feature_schema_version": "environmental-v2",
-    "model_version": "baseline-demo-1",
+    "model_version": null,
     "data_mode": "demo"
   },
   "current": {
-    "generated_at": "2025-01-15T08:00:00Z",
-    "run_id": "demo-winter-20250115T080000Z",
-    "mode": "demo",
+    "generated_at": "2025-01-15T12:00:00Z",
     "is_demo": true,
+    "run_id": "demo-winter_stagnation-20250115T1200Z",
+    "mode": "demo",
     "data": [
       {
-        "h3_cell": "8843a136a1fffff",
-        "valid_at": "2025-01-15T08:00:00Z",
-        "pm25": 164.2,
+        "h3_cell": "883da1109bfffff",
+        "valid_at": "2025-01-15T12:00:00Z",
+        "latitude": 28.582877055186817,
+        "longitude": 77.15111649199696,
+        "pm25": 174.342,
         "pm25_unit": "ug/m3",
-        "pdi": 76.4,
-        "pdi_version": "heuristic-v1",
+        "pdi": 25.575487298697848,
+        "pdi_version": "legacy-heuristic-v1",
+        "confidence": 1.0,
+        "wind_speed_ms": 1.1733866540914806,
+        "wind_direction_deg": 267.0200626336612,
         "metadata": {
           "input_kind": "synthetic",
-          "prediction_method": "baseline_demo",
-          "model_version": "baseline-demo-1",
+          "prediction_method": "observed-current",
+          "model_version": null,
           "feature_schema_version": "environmental-v2",
           "dataset_versions": [
             {
               "dataset_id": "air-health-synthetic",
               "source": "Air Health",
               "product": "deterministic environmental scenario",
-              "version": "planned-1",
+              "version": "m1-1",
               "kind": "synthetic",
               "region": "delhi-ncr",
               "attribution": "Air Health synthetic scenario",
@@ -39,91 +61,84 @@
             }
           ],
           "observed_at": null,
-          "issued_at": "2025-01-15T08:00:00Z",
-          "valid_at": "2025-01-15T08:00:00Z",
+          "issued_at": "2025-01-15T12:00:00Z",
+          "valid_at": "2025-01-15T12:00:00Z",
           "synthetic": true,
           "quality": {
             "coverage_fraction": 1.0,
-            "observed_station_count": 32,
-            "max_observation_age_hours": 0.0,
+            "observed_station_count": 1,
+            "max_observation_age_hours": null,
             "missing_fields": [],
-            "warnings": ["synthetic_input"]
-          }
-        }
-      }
-    ],
-    "attribution": [
-      {
-        "dataset_id": "air-health-synthetic",
-        "source": "Air Health",
-        "product": "deterministic environmental scenario",
-        "version": "planned-1",
-        "kind": "synthetic",
-        "region": "delhi-ncr",
-        "attribution": "Air Health synthetic scenario",
-        "license": "project test fixture"
-      }
-    ],
-    "coverage": {
-      "region": "delhi-ncr",
-      "resolution": 8,
-      "requested_cells": 256,
-      "returned_cells": 256,
-      "covered_fraction": 1.0,
-      "unsupported_cells": 0
-    }
-  },
-  "forecast": {
-    "generated_at": "2025-01-15T08:00:00Z",
-    "run_id": "demo-winter-20250115T080000Z",
-    "mode": "demo",
-    "is_demo": true,
-    "data": [
-      {
-        "h3_cell": "8843a136a1fffff",
-        "baseline_pm25": 157.9,
-        "predicted_pm25": 171.3,
-        "lower_pm25": null,
-        "upper_pm25": null,
-        "forecast_hours": 3.0,
-        "forecast_time": "2025-01-15T11:00:00Z",
-        "metadata": {
-          "input_kind": "synthetic",
-          "prediction_method": "baseline_demo",
-          "model_version": "baseline-demo-1",
-          "feature_schema_version": "environmental-v2",
-          "dataset_versions": [],
-          "observed_at": null,
-          "issued_at": "2025-01-15T08:00:00Z",
-          "valid_at": "2025-01-15T11:00:00Z",
-          "synthetic": true,
-          "quality": {
-            "coverage_fraction": 1.0,
-            "observed_station_count": 32,
-            "max_observation_age_hours": 0.0,
-            "missing_fields": [],
-            "warnings": ["synthetic_input", "interval_unavailable"]
+            "warnings": []
           }
         },
         "exposure": {
-          "population_weighted_pm25": 144.6,
-          "residents_above_threshold": 182000.0,
-          "threshold_pm25": 91.0,
-          "covered_population": 1250000.0,
+          "population_weighted_pm25": 174.342,
+          "residents_above_threshold": 9328.03,
+          "threshold_pm25": 60.0,
+          "covered_population": 9328.03,
           "unknown_population": 0.0,
-          "population_dataset_version": "worldpop-demo-1",
-          "scope": "delhi-ncr"
+          "population_dataset_version": null,
+          "scope": "H3 resolution 8 cell 883da1109bfffff; threshold is a caller-selected cutoff, not a health limit"
         }
       }
-    ],
-    "attribution": [],
-    "coverage": {
-      "region": "delhi-ncr",
-      "resolution": 8,
-      "requested_cells": 256,
-      "returned_cells": 256,
-      "covered_fraction": 1.0,
-      "unsupported_cells": 0
-    }
+    ]
+  },
+  "forecast": {
+    "generated_at": "2025-01-15T12:00:00Z",
+    "is_demo": true,
+    "run_id": "demo-winter_stagnation-20250115T1200Z",
+    "mode": "demo",
+    "data": [
+      {
+        "h3_cell": "883da1109bfffff",
+        "baseline_pm25": 174.342,
+        "predicted_pm25": 174.342,
+        "lower_pm25": null,
+        "upper_pm25": null,
+        "forecast_hours": 1.0,
+        "forecast_time": "2025-01-15T13:00:00Z",
+        "generated_at": "2025-01-15T12:00:00Z",
+        "confidence": 1.0,
+        "metadata": {
+          "input_kind": "synthetic",
+          "prediction_method": "persistence-baseline",
+          "model_version": null,
+          "feature_schema_version": "environmental-v2",
+          "dataset_versions": [
+            {
+              "dataset_id": "air-health-synthetic",
+              "source": "Air Health",
+              "product": "deterministic environmental scenario",
+              "version": "m1-1",
+              "kind": "synthetic",
+              "region": "delhi-ncr",
+              "attribution": "Air Health synthetic scenario",
+              "license": "project test fixture"
+            }
+          ],
+          "observed_at": null,
+          "issued_at": "2025-01-15T12:00:00Z",
+          "valid_at": "2025-01-15T13:00:00Z",
+          "synthetic": true,
+          "quality": {
+            "coverage_fraction": 1.0,
+            "observed_station_count": 1,
+            "max_observation_age_hours": null,
+            "missing_fields": [],
+            "warnings": []
+          }
+        },
+        "exposure": {
+          "population_weighted_pm25": 174.342,
+          "residents_above_threshold": 9328.03,
+          "threshold_pm25": 60.0,
+          "covered_population": 9328.03,
+          "unknown_population": 0.0,
+          "population_dataset_version": null,
+          "scope": "H3 resolution 8 cell 883da1109bfffff; threshold is a caller-selected cutoff, not a health limit"
+        }
+      }
+    ]
   }
 }

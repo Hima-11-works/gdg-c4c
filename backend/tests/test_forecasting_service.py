@@ -46,8 +46,12 @@ class _FakeModel:
         self._forecasts = forecasts if forecasts is not None else [_forecast(1), _forecast(3)]
         self._error = error
         self.calls: list[tuple[list[GridState], list, tuple]] = []
+        self.step_minutes: list[float] = []
 
-    def forecast(self, current_state, weather, hours=(1, 3, 6), *, generated_at):
+    def forecast(self, current_state, weather, hours=(1, 3, 6), *, generated_at, step_minutes=60):
+        # The service passes `step_minutes` through to the model; the double
+        # records it so a caller can assert the step actually reached the model.
+        self.step_minutes.append(step_minutes)
         self.calls.append((current_state, weather, tuple(hours)))
         if self._error is not None:
             raise self._error

@@ -189,6 +189,20 @@ def _build_event(
     )
 
 
+def _corridor_label(corridor: Corridor) -> str:
+    """How to name a corridor inside a sentence.
+
+    Corridor names are self-describing and most already end in "corridor"
+    ("Delhi-Kanpur interstate corridor"), so appending the word again produced
+    "... interstate corridor corridor" in the not-found message. Append it only
+    when the name does not already say it.
+    """
+    name = corridor.name.strip()
+    if "corridor" in name.lower():
+        return name
+    return f"{name} corridor"
+
+
 def event_for_run(
     session,
     *,
@@ -214,7 +228,7 @@ def event_for_run(
     corridor_results = [row for row in results if row.h3_cell in cells]
     if not corridor_results:
         raise EventNotFoundError(
-            f"published run {run.run_id} has no results in the {corridor.name} corridor"
+            f"published run {run.run_id} has no results in {_corridor_label(corridor)}"
         )
     wanted = horizons or tuple(sorted({row.horizon_hours for row in corridor_results}))
     event = _build_event(corridor=corridor, run=run, results=corridor_results, horizons=wanted)
