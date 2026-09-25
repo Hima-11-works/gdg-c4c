@@ -1,0 +1,46 @@
+{
+  "case": {
+    "case_id": "authored-unavailable-no-imagery",
+    "title": "Authored fixture: no imagery, so no candidates",
+    "description": "AUTHORED TEST DATA. A FIRMS detection and a strong station reading are supplied with NO imagery artifact. Neither may create a candidate, so the scan reports insufficient evidence rather than a plausible-looking answer."
+  },
+  "h3_resolution": 8,
+  "scan_time": "2025-11-10T07:00:00Z",
+  "label_provenance": "authored-fixture",
+  "fires": [
+    {
+      "detection_id": "fixture-fire-only",
+      "h3_cell": "883da11467fffff",
+      "latitude": 28.61,
+      "longitude": 77.2,
+      "acquired_at": "2025-11-10T06:30:00Z",
+      "available_at": "2025-11-10T06:35:00Z",
+      "frp_mw": 22.0,
+      "confidence_class": "nominal",
+      "satellite": "VIIRS-NOAA20",
+      "source": "firms",
+      "product_version": "VIIRS_NOAA20_NRT"
+    }
+  ],
+  "stations": [
+    {
+      "station_id": "fixture-station-only",
+      "h3_cell": "883da11467fffff",
+      "latitude": 28.61,
+      "longitude": 77.2,
+      "measured_at": "2025-11-10T06:30:00Z",
+      "available_at": "2025-11-10T06:35:00Z",
+      "pm25_ugm3": 201.0,
+      "source": "authored-fixture",
+      "verified": true
+    }
+  ],
+  "labels": [
+    {
+      "h3_cell": "883da11467fffff",
+      "kind": "authored_hotspot",
+      "label_source": "authored-fixture",
+      "note": "a hotspot the fixture knows about but the scan cannot see"
+    }
+  ]
+}

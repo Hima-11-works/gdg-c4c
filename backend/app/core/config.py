@@ -407,6 +407,45 @@ class Settings(BaseSettings):
     # Comma-separated allow-list of accepted citizen sensor pollutants.
     citizen_sensor_pollutants: str = Field(default="pm25,pm10")
 
+    # --- Candidate hotspot detection (app.services.hotspot_detection) ---
+    # See docs/api/hotspots.md. The detector consumes an upstream, georeferenced
+    # imagery index (its own product/version/ licence come with the artifact) and
+    # emits candidate LOCATIONS for human review. It never emits a PM2.5 value,
+    # never attributes a source, and never confirms anything.
+    # Where recorded scans are written, and where GET /api/v1/hotspots reads
+    # them from. Unset means the API reports an empty catalog rather than
+    # inventing runs.
+    hotspot_scan_dir: str = "var/hotspots"
+    # Imagery index value at which a cell becomes a candidate at all.
+    hotspot_smoke_index_threshold: float = Field(default=0.55, gt=0, lt=1)
+    # A stronger index, recorded as a confidence contribution. Must exceed the
+    # trigger threshold (checked below).
+    hotspot_strong_index_threshold: float = Field(default=0.75, gt=0, lt=1)
+    # Tiles with a higher cloud fraction are masked out. An uncorrected
+    # high-cloud cell is a classic false positive, and a detector that cannot
+    # see cloud cannot be assessed for false positives at all.
+    hotspot_max_cloud_fraction: float = Field(default=0.35, ge=0, le=1)
+    # Imagery older than this is not used; a scan with no fresh tile reports
+    # insufficient_evidence rather than a confident answer about stale pixels.
+    hotspot_imagery_max_age_hours: float = Field(default=6.0, gt=0)
+    # Same idea for the supporting signals (FIRMS detections, station readings).
+    hotspot_signal_max_age_hours: float = Field(default=6.0, gt=0)
+    # Minimum fire radiative power for a FIRMS detection to count as support.
+    # A TRIAGE choice, not a scientific threshold: below it a detection says
+    # something is warm, not something is burning enough to matter.
+    hotspot_fire_support_frp_mw: float = Field(default=1.0, ge=0)
+    # Minimum verified station PM2.5 for a reading to count as support. Again a
+    # triage threshold, and it only reorders candidates for review - it never
+    # creates one.
+    hotspot_station_support_pm25_ugm3: float = Field(default=60.0, ge=0)
+    # Clock skew into the future tolerated on an input's acquired/available time,
+    # seconds. Beyond it the input is treated as lookahead and refused.
+    hotspot_max_future_skew_seconds: int = Field(default=300, ge=0)
+    # Ceilings that keep one scan bounded. Exceeding max_tiles is an error;
+    # exceeding max_candidates drops the excess worst-first and records the drop.
+    hotspot_max_tiles: int = Field(default=20_000, ge=1)
+    hotspot_max_candidates: int = Field(default=500, ge=1)
+
     # --- Incident workflow (fire-department simulator) ---
     # Writes to /api/v1/incidents require this key in the X-Simulator-Key
     # header, so anonymous public changes are impossible. When unset, ALL
@@ -439,6 +478,16 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"ALERT_CRITICAL_THRESHOLD_UGM3 ({self.alert_critical_threshold_ugm3}) must be "
                 f"> ALERT_WARNING_THRESHOLD_UGM3 ({self.alert_warning_threshold_ugm3})"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_hotspot_thresholds_ordered(self) -> "Settings":
+        if self.hotspot_strong_index_threshold <= self.hotspot_smoke_index_threshold:
+            raise ValueError(
+                f"HOTSPOT_STRONG_INDEX_THRESHOLD ({self.hotspot_strong_index_threshold}) must be "
+                f"> HOTSPOT_SMOKE_INDEX_THRESHOLD ({self.hotspot_smoke_index_threshold}) — a "
+                "strong reading must score above the trigger it is measured against."
             )
         return self
 

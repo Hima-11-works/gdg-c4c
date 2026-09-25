@@ -39,6 +39,7 @@ from app.services.citizen_intake import CitizenIntakeService
 from app.services.federation import FederationStatusReader
 from app.services.fires import FireHotspotService
 from app.services.grid import GridService
+from app.services.hotspot_detection import HotspotScanStore, build_store
 from app.services.incidents import (
     ActorNotPermittedError,
     IncidentService,
@@ -224,6 +225,17 @@ def require_incident_actor(
 
 def get_fire_hotspot_service(session: Session = Depends(get_db)) -> FireHotspotService:
     return FireHotspotService(SqlFireHotspotRepository(session))
+
+
+def get_hotspot_scan_store() -> HotspotScanStore:
+    """Where recorded candidate-hotspot scans are read from.
+
+    No session: the route serves scans written by `python -m app.cli
+    hotspot-scan` (see docs/api/hotspots.md). It never re-runs the detector on
+    request, and an unconfigured directory yields an empty catalog rather than
+    an invented scan.
+    """
+    return build_store(get_settings())
 
 
 def get_tile_service() -> TileService:
