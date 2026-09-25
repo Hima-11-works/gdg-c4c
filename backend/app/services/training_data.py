@@ -170,14 +170,28 @@ def generate_synthetic_training_dataset(
     hours: int = 24,
     station_count: int = 6,
     anchor_utc: datetime = datetime(2025, 1, 1, tzinfo=UTC),
+    scope_label: str = "delhi-ncr",
+    origin_latitude: float = 28.6139,
+    origin_longitude: float = 77.209,
 ) -> dict[str, Any]:
     """Create deterministic, explicitly synthetic prejoined rows for smoke tests.
 
     The fictional latent formula deliberately varies weather, calendar,
     population, land cover, roads, and traffic. It checks the training
     pipeline only; its scores must never be treated as scientific validation.
+
+    `scope_label` names the synthetic area and prefixes the station ids, so two
+    federated clients can hold genuinely disjoint data stores (their own
+    station ids, cells, region label, and dataset id) instead of two views of
+    one store. The default scope reproduces the previous output exactly, so an
+    existing run's ids and hashes do not change.
     """
 
+    if not scope_label.strip():
+        raise ValueError("scope_label must not be empty")
+    is_default_scope = scope_label == "delhi-ncr"
+    station_prefix = "delhi" if is_default_scope else scope_label
+    id_suffix = "" if is_default_scope else f":{scope_label}"
     if hours < 5:
         raise ValueError("synthetic training data requires at least 5 hourly examples")
     if station_count < 3:
@@ -185,10 +199,12 @@ def generate_synthetic_training_dataset(
     anchor = parse_utc(anchor_utc)
     records = []
     station_cells = [
-        h3.latlng_to_cell(28.6139 + station * 0.008, 77.209 + station * 0.009, 8)
+        h3.latlng_to_cell(
+            origin_latitude + station * 0.008, origin_longitude + station * 0.009, 8
+        )
         for station in range(station_count)
     ]
-    station_ids = [f"delhi-station-{station:03d}" for station in range(station_count)]
+    station_ids = [f"{station_prefix}-station-{station:03d}" for station in range(station_count)]
     ranked_stations = sorted(
         station_ids,
         key=lambda station: hashlib.sha256(station.encode("utf-8")).hexdigest(),
@@ -273,10 +289,10 @@ def generate_synthetic_training_dataset(
             }
             records.append(
                 {
-                    "example_id": f"synthetic-{hour:05d}-{station_index:03d}",
+                    "example_id": f"synthetic-{hour:05d}-{station_index:03d}{id_suffix}",
                     "station_id": station_id,
                     "h3_cell": station_cells[station_index],
-                    "region": "delhi-ncr",
+                    "region": scope_label,
                     "issued_at": issued_at,
                     "target_at": target_at,
                     "horizon_hours": 1.0,
@@ -287,7 +303,7 @@ def generate_synthetic_training_dataset(
                     "data_mode": DataMode.DEMO,
                     "target_kind": InputKind.SYNTHETIC,
                     "feature_schema_version": FEATURE_SCHEMA_VERSION,
-                    "dataset_ids": ["synthetic-training-smoke-v1"],
+                    "dataset_ids": [f"synthetic-training-smoke-v1{id_suffix}"],
                     "spatial_exclusion_verified": True,
                 }
             )
