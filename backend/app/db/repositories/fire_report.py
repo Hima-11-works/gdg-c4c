@@ -280,6 +280,21 @@ class SqlFireReportRepository:
         rows = self._session.execute(_list_events_stmt(report_id)).all()
         return [_event_row_to_domain(row) for row in rows]
 
+    def increment_evidence_count(self, report_id: int) -> int:
+        """Bump `fire_report.evidence_count` and return the new value.
+
+        Computed in SQL rather than read-modify-written, so two photos attached
+        to the same report at the same moment cannot lose an increment. F2 only.
+        """
+        result = self._session.execute(
+            update(fire_report_table)
+            .where(fire_report_table.c.id == report_id)
+            .values(evidence_count=fire_report_table.c.evidence_count + 1)
+            .returning(fire_report_table.c.evidence_count)
+        )
+        self._session.commit()
+        return result.scalar_one()
+
     def list_open_claims(self, *, now: datetime) -> list[FireReport]:
         rows = self._session.execute(_list_open_claims_stmt(now)).all()
         return [_row_to_domain(row) for row in rows]

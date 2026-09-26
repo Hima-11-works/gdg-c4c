@@ -33,6 +33,13 @@ services:
         condition: service_healthy
     volumes:
       - ./backend/app:/app/app
+      # F2: the citizen-photo evidence store. A named volume, not a path inside
+      # the container, because these are the only bytes the platform holds that
+      # nobody can re-derive: a `docker compose up --force-recreate` against an
+      # ephemeral directory silently destroys every uploaded photo while the
+      # database keeps saying the evidence exists. This is the same reason
+      # db_data is a volume.
+      - citizen_media:/var/lib/air-health
     # Overrides the Dockerfile's CMD (which omits --reload) for dev hot-reload;
     # keep the "alembic upgrade head &&" prefix here too, or schema changes
     # won't be applied when iterating with docker-compose.
@@ -49,3 +56,6 @@ services:
 
 volumes:
   db_data:
+  # F2: citizen photo evidence. See the api service's mount for why this is a
+  # volume rather than a directory in the container.
+  citizen_media:

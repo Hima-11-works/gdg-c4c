@@ -15,11 +15,13 @@ from __future__ import annotations
 from fastapi import Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.db.repositories import (
     SqlAlertRepository,
     SqlFireHotspotRepository,
     SqlFireReportRepository,
+
+    SqlEvidenceRepository,
     SqlForecastRepository,
     SqlGridStateRepository,
     SqlPredictionPublicationRepository,
@@ -33,6 +35,12 @@ from app.services.cells import CellService
 from app.services.fires import FireHotspotService
 from app.services.grid import GridService
 from app.services.prediction_queries import PredictionQueryService
+from app.services.evidence import EvidenceService
+from app.services.media_storage import (
+    FilesystemMediaStore,
+    MediaStore,
+    MediaStoreUnavailable,
+)
 from app.services.reports import FireReportService
 from app.services.sensors import SensorService
 from app.services.tiles import TileService
@@ -97,6 +105,34 @@ def get_fire_report_service(session: Session = Depends(get_db)) -> FireReportSer
     return FireReportService(SqlFireReportRepository(session))
 
 
+def get_evidence_service(
+    session: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> EvidenceService:
+    """Build the evidence service, including its storage backend.
+
+    The store is built from settings and is `None` when media is disabled, which
+    is the default. `None` is what makes the endpoint answer 503
+    `media_unavailable` rather than accept-and-drop, so a deployment that has
+    not configured storage cannot appear to be keeping photos.
+    """
+    store: MediaStore | None = None
+    if settings.citizen_media_storage == "filesystem":
+        if not settings.citizen_media_dir:
+            # Configured as filesystem with no directory is an operator error,
+            # and failing loudly here beats a store rooted at the CWD.
+            raise MediaStoreUnavailable(
+                "citizen_media_storage is 'filesystem' but citizen_media_dir is unset"
+            )
+        store = FilesystemMediaStore(settings.citizen_media_dir)
+    return EvidenceService(
+        settings=settings,
+        store=store,
+        repository=SqlEvidenceRepository(session),
+        reports=FireReportService(SqlFireReportRepository(session)),
+    )
+
+
 def get_fire_hotspot_service(session: Session = Depends(get_db)) -> FireHotspotService:
     return FireHotspotService(SqlFireHotspotRepository(session))
 
@@ -105,3 +141,4 @@ def get_tile_service() -> TileService:
     """No session: the tile proxy reads settings and one upstream HTTP call,
     never the database."""
     return TileService(get_settings())
+

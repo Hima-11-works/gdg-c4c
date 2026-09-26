@@ -1,6 +1,13 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ApiError, fetchReportStatus, submitReport } from '../lib/api'
 import { FIRE_KIND_LABELS, REPORT_STATUS_LABELS, SMOKE_LABELS } from '../lib/citizenReports'
+import {
+  EvidenceError,
+  attachPhoto,
+  describePhotoProblem,
+  isMediaUnavailable,
+  type EvidenceOut,
+} from '../lib/evidence'
 import type { FireReportKind, FireReportWithStatus } from '../lib/types'
 
 /** Duration buckets, matching the app/back: the answer is fuzzy ("a couple
@@ -49,6 +56,34 @@ export function ReportFireForm({
   // is a status, not a confirmation toast that implies it counted.
   const [submitted, setSubmitted] = useState<FireReportWithStatus | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+
+  // --- F2: the optional photo -------------------------------------------
+  // The report is submitted first and the photo second, deliberately. A photo
+  // is evidence for a report, not a condition of one, so nothing here can
+  // prevent the report itself from being filed - which is F2's rule that a
+  // report must succeed without a photo.
+  const [photo, setPhoto] = useState<File | null>(null)
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null)
+  const [photoProblem, setPhotoProblem] = useState<string | null>(null)
+  const [consent, setConsent] = useState(false)
+  const [photoProgress, setPhotoProgress] = useState<number | null>(null)
+  const [photoError, setPhotoError] = useState<string | null>(null)
+  const [evidence, setEvidence] = useState<EvidenceOut | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  // The live object URL, held in a ref so unmount can revoke it without
+  // touching state.
+  const previewUrlRef = useRef<string | null>(null)
+
+  // Object URLs leak until revoked, and this form can pick, replace and remove
+  // a photo several times in one sitting. The URL is created and revoked in the
+  // events that cause it to change - `pickPhoto` and `removePhoto` - and this
+  // effect only covers the unmount case, which is the one an event cannot.
+  useEffect(
+    () => () => {
+      if (previewUrlRef.current !== null) URL.revokeObjectURL(previewUrlRef.current)
+    },
+    [],
+  )
 
   // One idempotency id per open form, minted on first submit (an event
   // handler, so the render stays pure): retrying after a timeout resubmits
@@ -107,6 +142,37 @@ export function ReportFireForm({
         })
         setMessage('Report received. Its status is not available right now.')
       }
+
+      // The report exists now, so the photo can be attached. Anything that goes
+      // wrong from here is reported as a photo problem and never un-sends the
+      // report: the honest failure is "your fire was filed, the photo did not
+      // make it", and the form offers a retry rather than a resubmit.
+      if (photo !== null) {
+        try {
+          setPhotoProgress(0)
+          setPhotoError(null)
+          const attached = await attachPhoto({
+            reportId: created.data.id,
+            file: photo,
+            consent,
+            onProgress: setPhotoProgress,
+          })
+          setEvidence(attached.data)
+          clearPhoto()
+        } catch (error) {
+          if (isMediaUnavailable(error)) {
+            setPhotoError(
+              'This deployment is not accepting photos. Your report was filed without one.',
+            )
+          } else if (error instanceof EvidenceError) {
+            setPhotoError(error.message)
+          } else {
+            setPhotoError('The photo did not upload. Your report was filed without it.')
+          }
+        } finally {
+          setPhotoProgress(null)
+        }
+      }
     } catch (error) {
       setFailed(true)
       setMessage(
@@ -116,6 +182,67 @@ export function ReportFireForm({
       )
     } finally {
       setSending(false)
+    }
+  }
+
+  /** Drop the current photo and release its preview URL. */
+  const clearPhoto = () => {
+    if (previewUrlRef.current !== null) {
+      URL.revokeObjectURL(previewUrlRef.current)
+      previewUrlRef.current = null
+    }
+    setPhoto(null)
+    setPhotoPreview(null)
+  }
+
+  const pickPhoto = (file: File | null) => {
+    setPhotoError(null)
+    if (file === null) {
+      clearPhoto()
+      return
+    }
+    const problem = describePhotoProblem(file)
+    clearPhoto()
+    if (problem !== null && problem.includes('The limit')) {
+      // A hard local refusal: there is no point spending the upload. Anything
+      // softer is only a hint, because the server decides from the bytes.
+      setPhotoProblem(problem)
+      return
+    }
+    setPhotoProblem(problem)
+    const url = URL.createObjectURL(file)
+    previewUrlRef.current = url
+    setPhotoPreview(url)
+    setPhoto(file)
+  }
+
+  const removePhoto = () => {
+    setPhotoProblem(null)
+    setPhotoError(null)
+    clearPhoto()
+    if (fileInputRef.current !== null) fileInputRef.current.value = ''
+  }
+
+  /** Re-send just the photo against the report that already exists. */
+  const retryPhoto = async () => {
+    if (submitted === null || photo === null) return
+    try {
+      setPhotoProgress(0)
+      setPhotoError(null)
+      const attached = await attachPhoto({
+        reportId: submitted.id,
+        file: photo,
+        consent,
+        onProgress: setPhotoProgress,
+      })
+      setEvidence(attached.data)
+      clearPhoto()
+    } catch (error) {
+      setPhotoError(
+        error instanceof EvidenceError ? error.message : 'The photo did not upload.',
+      )
+    } finally {
+      setPhotoProgress(null)
     }
   }
 
@@ -231,6 +358,85 @@ export function ReportFireForm({
         />
       </label>
 
+      {/* F2: the photo is optional throughout. Nothing here is required for
+          the report to be filed, and the labels say so, because a citizen who
+          declines to photograph a fire should never be told they have not
+          finished reporting it. */}
+      <div className="report-photo">
+        <span className="report-photo-label">Add a photo (optional)</span>
+
+        {photo === null ? (
+          <label className="report-photo-pick">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              onChange={(event) => pickPhoto(event.target.files?.[0] ?? null)}
+            />
+            <span>Choose a photo…</span>
+          </label>
+        ) : (
+          <div className="report-photo-chosen">
+            {photoPreview !== null && (
+              <img className="report-photo-preview" src={photoPreview} alt="" />
+            )}
+            <span className="report-photo-name">{photo.name}</span>
+            <span className="muted">{(photo.size / 1024).toFixed(0)} KB</span>
+            <button type="button" onClick={removePhoto} disabled={photoProgress !== null}>
+              Remove
+            </button>
+          </div>
+        )}
+
+        {photoProgress !== null && (
+          <progress className="report-photo-progress" value={photoProgress} max={1} />
+        )}
+
+        {photoProblem !== null && (
+          <p className="muted report-photo-hint">
+            {photoProblem}
+          </p>
+        )}
+
+        <label className="report-photo-consent">
+          <input
+            type="checkbox"
+            checked={consent}
+            onChange={(event) => setConsent(event.target.checked)}
+          />
+          <span>
+            I took this photo and agree to it being reviewed. Location data
+            embedded in the picture is removed before anyone sees it, and the
+            photo is deleted after the review window closes.
+          </span>
+        </label>
+      </div>
+
+      {/* After a submission the photo has either landed or failed, and this is
+          where that is said. A retry here re-sends only the photo - the report
+          is already stored, so this must never look like a second report. */}
+      {photoError !== null && submitted !== null && (
+        <div className="report-photo-retry">
+          <p className="report-form-error" role="status">
+            {photoError}
+          </p>
+          {photo !== null && (
+            <button type="button" onClick={retryPhoto} disabled={photoProgress !== null}>
+              {photoProgress !== null ? 'Retrying…' : 'Retry photo'}
+            </button>
+          )}
+        </div>
+      )}
+      {evidence !== null && (
+        <p className="muted" role="status">
+          Photo attached (evidence #{evidence.id}). It is not counted towards the
+          model until a reviewer looks at it.
+          {evidence.scan_state === 'quarantined'
+            ? ' It could not be read as an image, so it is being held rather than shown.'
+            : ''}
+        </p>
+      )}
+
       {message !== null && (
         <p className={failed ? 'report-form-error' : 'muted'} role="status">
           {message}
@@ -245,3 +451,4 @@ export function ReportFireForm({
     </section>
   )
 }
+

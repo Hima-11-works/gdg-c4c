@@ -15,7 +15,16 @@ dependencies = [
     "geoalchemy2>=0.15,<1.0",
     "h3>=4.1,<5.0",
     "httpx>=0.28,<1.0",
-]
+    # F2: decode a submitted photo and re-encode the reviewer-facing derivative
+    # from the decoded pixels, which is the only way to drop EXIF (including GPS)
+    # and to refuse a file that merely claims to be an image. Pinned minor because
+    # 11.x is the first line with the decompression-bomb guard this relies on.
+    "pillow>=11.0,<12.0",
+    # F2: multipart/form-data parsing for the evidence upload. FastAPI refuses to
+    # register a route that takes an UploadFile without it, so this is a hard
+    # requirement of the endpoint, not an optimisation.
+    "python-multipart>=0.0.20",
+    ]
 
 [project.optional-dependencies]
 dev = [

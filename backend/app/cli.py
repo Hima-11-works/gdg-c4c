@@ -1032,6 +1032,21 @@ def main(argv: list[str] | None = None) -> int:
     )
     expire_parser.set_defaults(func=_run_expire_reports)
 
+    media_parser = subparsers.add_parser(
+        "verify-media-storage",
+        help=(
+            "Check the citizen-photo evidence store is configured and writable "
+            "(F2). Writes, reads back and deletes a probe object."
+        ),
+    )
+    media_parser.add_argument(
+        "--sweep-expired",
+        action="store_true",
+        help="Also delete evidence past its retention deadline, then report how "
+        "many rows were swept.",
+    )
+    media_parser.set_defaults(func=_run_verify_media_storage)
+
     args = parser.parse_args(argv)
     logging.basicConfig(level=get_settings().log_level)
     try:
@@ -1043,6 +1058,85 @@ def main(argv: list[str] | None = None) -> int:
         logger.exception("Command failed with an unexpected error")
         print(f"Fatal: {exc!r}", file=sys.stderr)
         return 1
+
+
+async def _run_verify_media_storage(args: argparse.Namespace) -> int:
+    """Prove the F2 evidence store is configured, writable and self-consistent.
+
+    The failure this exists to catch is the quiet one: `CITIZEN_MEDIA_STORAGE`
+    left at the default `disabled`, or `CITIZEN_MEDIA_DIR` pointing somewhere the
+    process cannot write. Neither raises at startup - the API just answers 503
+    `media_unavailable` to every upload, which from a client's side reads as
+    "this deployment does not take photos" rather than as a misconfiguration.
+
+    So this writes a probe object, reads it back and deletes it, rather than
+    stat-ing the directory. A root the process cannot write to passes a stat and
+    fails here.
+
+    Exit 0 when the store verified, 1 when it is disabled or unreachable.
+    """
+    settings = get_settings()
+
+    if settings.citizen_media_storage != "filesystem":
+        print(
+            f"media storage is DISABLED (citizen_media_storage="
+            f"{settings.citizen_media_storage!r}). Uploads answer 503 "
+            "media_unavailable and reports must be filed without a photo. Set "
+            "CITIZEN_MEDIA_STORAGE=filesystem and CITIZEN_MEDIA_DIR to enable "
+            "them.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if not settings.citizen_media_dir:
+        print(
+            "citizen_media_storage is 'filesystem' but citizen_media_dir is unset",
+            file=sys.stderr,
+        )
+        return 1
+
+    from app.services.media_storage import (
+        FilesystemMediaStore,
+        MediaStoreError,
+        MediaStoreUnavailable,
+    )
+
+    try:
+        store = FilesystemMediaStore(settings.citizen_media_dir)
+        print(f"storage: {store.verify()}")
+    except (MediaStoreUnavailable, MediaStoreError) as exc:
+        print(f"Fatal: media store unusable: {exc}", file=sys.stderr)
+        return 1
+
+    print(
+        f"limits: {settings.citizen_media_max_bytes} bytes/file, "
+        f"{settings.citizen_media_max_per_report} per report, "
+        f"derivative max edge {settings.citizen_media_derivative_max_edge}px, "
+        f"retention {settings.citizen_media_retention_hours}h"
+    )
+
+    if args.sweep_expired:
+        from datetime import UTC, datetime
+
+        from app.db.repositories import SqlEvidenceRepository
+        from app.db.session import get_session_factory
+        from app.services.evidence import EvidenceService
+        from app.services.reports import FireReportService
+
+        session = get_session_factory()()
+        try:
+            evidence = EvidenceService(
+                settings=settings,
+                store=store,
+                repository=SqlEvidenceRepository(session),
+                reports=FireReportService(None),
+            )
+            swept = evidence.purge_expired(now=datetime.now(UTC))
+            print(f"retention sweep: {swept} row(s) expired and removed")
+        finally:
+            session.close()
+
+    return 0
 
 
 if __name__ == "__main__":

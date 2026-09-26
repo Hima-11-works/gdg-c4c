@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -349,6 +350,27 @@ class Settings(BaseSettings):
     # which is coarse enough to blunt a flood and far less identifying than a
     # full address; it is stored truncated for exactly that reason.
     reports_rate_limit_per_hour: int = Field(default=5, ge=1, le=1000)
+
+    # --- F2: citizen photo evidence -----------------------------------------
+    # `disabled` is the default and the only safe one to ship unset. It is not
+    # "accept and drop": the evidence endpoint answers 503 media_unavailable,
+    # which the clients treat as "photos are off here" and continue with a
+    # text-only report. F2 requires a report to succeed without a photo, so the
+    # conservative default costs a feature, never a report.
+    citizen_media_storage: Literal["disabled", "filesystem"] = "disabled"
+    citizen_media_dir: str = ""
+    # Per-file ceiling. 8 MB is generous for a phone photo and small enough that
+    # a handful of concurrent uploads cannot exhaust a small container's disk.
+    citizen_media_max_bytes: int = Field(default=8 * 1024 * 1024, gt=0, le=64 * 1024 * 1024)
+    # Per-report ceiling. Three is enough to show a fire from two angles; more
+    # than that is bulk upload, not evidence.
+    citizen_media_max_per_report: int = Field(default=3, ge=1, le=20)
+    # Longest edge of the reviewer-facing derivative. The original is kept at
+    # full resolution for the audit trail and is never served; the derivative is
+    # what a reviewer actually looks at, so it is bounded independently.
+    citizen_media_derivative_max_edge: int = Field(default=1280, ge=256, le=4096)
+    # How long an un-reviewed upload lives before the retention job removes it.
+    citizen_media_retention_hours: int = Field(default=72, ge=1, le=24 * 365)
     # Platform-wide cap, so one abusive source - or many - cannot fill the table
     # before a human looks at anything.
     reports_global_limit_per_hour: int = Field(default=500, ge=1, le=100000)

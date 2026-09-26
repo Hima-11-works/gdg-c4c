@@ -10,6 +10,7 @@ from app.api.errors import register_exception_handlers
 from app.api.router import api_v1_router
 from app.api.routes.health import router as health_router
 from app.api.routes.predictions_v2 import router as api_v2_router
+from app.api.routes.evidence import router as evidence_router
 from app.api.routes.reports_v2 import router as reports_v2_router
 from app.core.config import get_settings
 
@@ -37,8 +38,12 @@ def create_app() -> FastAPI:
     # F1: the versioned citizen-report read. Mounted on the app rather than on
     # api_v1_router, because that router already carries the /api/v1 prefix.
     app.include_router(reports_v2_router)
+    # F2: citizen photo evidence. Mounted on the same /reports prefix as the F1
+    # lifecycle, so a photo is always addressed through the report it belongs to.
+    app.include_router(evidence_router)
 
     return app
 
 
 app = create_app()
+

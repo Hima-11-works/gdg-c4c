@@ -243,6 +243,33 @@ class ReportStatusOut(BaseModel):
     affects_air_quality_model: bool
 
 
+class EvidenceOut(BaseModel):
+    """One photo attached to a report.
+
+    F2. Deliberately has no `storage_key`, no `derivative_key` and no
+    `original_filename`: the first two are private handles into the media store
+    and the third is the uploader's device naming, none of which a client needs
+    in order to show "one photo attached, awaiting review". The bytes come from
+    the reviewer-gated derivative route, which returns them as a response body
+    rather than as a link.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    review_state: str = Field(
+        description="pending until a reviewer decides. Neither approved nor "
+        "pending qualifies the report - evidence never gates the lifecycle."
+    )
+    scan_state: str = Field(
+        description="`clean` = decoded and re-encoded. `quarantined` = the bytes "
+        "are held but were not an image we could read, so nothing serves them."
+    )
+    width: int | None = Field(default=None, description="Derivative width in pixels.")
+    height: int | None = Field(default=None, description="Derivative height in pixels.")
+    byte_count: int = Field(description="Size of the stored original, not the derivative.")
+
+
 class ReportDetailOut(BaseModel):
     """A report plus its lifecycle standing: GET /api/v1/reports/{id}.
 

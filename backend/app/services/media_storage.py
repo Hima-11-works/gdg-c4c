@@ -1,0 +1,213 @@
+"""Private byte storage for citizen photo evidence (F2).
+
+The rule this module exists to enforce: **an upload's bytes are reachable only
+through this module, by a key we generated, on a request the caller proved they
+are allowed to make.** There is no public object URL, no bucket path derived
+from a filename, and no way to turn a report id into a storage location without
+going through the authorisation check in the evidence service.
+
+**Why the keys are ours, not the caller's.** The obvious design - store at
+`<root>/<report_id>/<uploaded_filename>` - is a directory traversal bug with
+extra steps: `../../etc/passwd`, a `..` segment, a NUL, a Windows reserved
+name, a 400-character name. So the caller never contributes a path component.
+They send bytes; we mint a UUID4 key; the filename is recorded as a *label* in
+the database and never touches the filesystem. A traversal attempt in a
+filename becomes a harmless string in a column.
+
+**Why writes are tmp -> fsync -> rename -> read-back.** A crash mid-write must
+not leave a half image that later reads as a valid photo, and a reviewer must
+never be shown a truncated file. The rename is atomic within a filesystem, so a
+reader either sees the old state or the complete new file, never a prefix. The
+read-back is paranoia with a purpose: it is the only way to know the bytes
+reached the disk rather than merely the page cache, and it is the difference
+between "we stored a photo" and "we think we stored a photo".
+
+**Why an interface.** S3 or GCS is the production answer for a deployment with
+more than one API container, and neither can share a POSIX filesystem. The
+adapter is deliberately narrow - put, get, delete, verify - so a second backend
+is a new class rather than a rewrite of the service above it. Nothing above
+this line knows whether the bytes are on a disk or in a bucket.
+"""
+
+from __future__ import annotations
+
+import os
+import uuid
+from abc import ABC, abstractmethod
+from collections.abc import Iterator
+from dataclasses import dataclass
+from pathlib import Path
+
+
+class MediaStoreError(RuntimeError):
+    """Storage failed in a way the caller must not see the detail of."""
+
+
+class MediaStoreUnavailable(MediaStoreError):
+    """The backend is not configured or not reachable.
+
+    Distinct from a write failure on purpose: an unconfigured store is an
+    operator problem and must surface as a 503, never as "your upload failed",
+    and never as a silent accept.
+    """
+
+
+@dataclass(frozen=True)
+class StoredObject:
+    """What a successful write produced.
+
+    `key` is the only handle anyone outside this module needs. There is
+    deliberately no URL field: a URL would be one more thing to leak, and the
+    storage location is not the same thing as authorisation to read it.
+    """
+
+    key: str
+    size_bytes: int
+
+
+class MediaStore(ABC):
+    """Private object storage. Implementations must not be publicly addressable."""
+
+    @abstractmethod
+    def put(self, key: str, data: bytes) -> StoredObject:
+        """Store `data` at `key`, durably. Raise MediaStoreError on failure."""
+
+    @abstractmethod
+    def get(self, key: str) -> bytes:
+        """Return the bytes at `key`. Raise MediaStoreError if absent."""
+
+    @abstractmethod
+    def delete(self, key: str) -> bool:
+        """Remove `key`. True if it existed. Idempotent."""
+
+    @abstractmethod
+    def verify(self) -> str:
+        """Prove the backend is writable, and return a human-readable summary."""
+
+    def exists(self, key: str) -> bool:
+        """Whether `key` is present. Default implementation reads; override if cheap."""
+        try:
+            self.get(key)
+        except MediaStoreError:
+            return False
+        return True
+
+
+def new_media_key() -> str:
+    """Mint a storage key. Hex UUID4, so it is filename-safe on every platform
+    and carries no information about the report or the uploader."""
+    return uuid.uuid4().hex
+
+
+class FilesystemMediaStore(MediaStore):
+    """Private store on a local POSIX/Windows filesystem.
+
+    Suitable for a single-container deployment or a developer machine. Not
+    suitable for a scaled-out one, because the bytes are only on the disk of
+    whichever container wrote them - which is exactly why `MediaStore` exists.
+    """
+
+    def __init__(self, root: str | os.PathLike[str]) -> None:
+        self._root = Path(root).resolve()
+        # Resolve symlinks *before* creating anything, so a symlinked root cannot
+        # be used to redirect writes outside the intended directory.
+        self._root.mkdir(parents=True, exist_ok=True)
+        if not self._root.is_dir():
+            raise MediaStoreUnavailable(f"media root {self._root} is not a directory")
+
+    @property
+    def root(self) -> Path:
+        return self._root
+
+    def _path_for(self, key: str) -> Path:
+        """Map a key to a path, refusing anything that is not a bare hex name.
+
+        Keys are generated by `new_media_key`, so this is a second line of
+        defence rather than the first: if a future caller ever passes
+        user-influenced text in as a key, this is what stops it becoming a
+        traversal. A key containing a separator, a drive letter or a dot-segment
+        is rejected outright instead of being sanitised, because a key that
+        needed sanitising was already a bug.
+        """
+        if not key or len(key) > 64:
+            raise MediaStoreError("invalid media key")
+        if any(sep in key for sep in ("/", "\\")) or key in (".", ".."):
+            raise MediaStoreError("invalid media key")
+        if not all(character in "0123456789abcdef" for character in key):
+            raise MediaStoreError("invalid media key")
+        path = self._root / key
+        # Belt and braces: the resolved path must still be inside the root.
+        try:
+            path.resolve().relative_to(self._root)
+        except ValueError as exc:
+            raise MediaStoreError("invalid media key") from exc
+        return path
+
+    def put(self, key: str, data: bytes) -> StoredObject:
+        path = self._path_for(key)
+        # The temp name is derived from the key, so two concurrent writers to
+        # the same key cannot scribble over each other's partial file.
+        tmp = self._root / f".tmp-{key}"
+        try:
+            with open(tmp, "wb") as handle:
+                handle.write(data)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp, path)
+        except OSError as exc:
+            tmp.unlink(missing_ok=True)
+            raise MediaStoreError(f"could not write media object: {exc}") from exc
+
+        # Read back and compare: the only evidence that the bytes are durable.
+        try:
+            stored = path.read_bytes()
+        except OSError as exc:
+            raise MediaStoreError(f"media object unreadable after write: {exc}") from exc
+        if stored != data:
+            path.unlink(missing_ok=True)
+            raise MediaStoreError("media object did not survive the write intact")
+        return StoredObject(key=key, size_bytes=len(data))
+
+    def get(self, key: str) -> bytes:
+        path = self._path_for(key)
+        try:
+            return path.read_bytes()
+        except FileNotFoundError as exc:
+            raise MediaStoreError("no such media object") from exc
+        except OSError as exc:
+            raise MediaStoreError(f"could not read media object: {exc}") from exc
+
+    def delete(self, key: str) -> bool:
+        path = self._path_for(key)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return False
+        except OSError as exc:
+            raise MediaStoreError(f"could not delete media object: {exc}") from exc
+        return True
+
+    def verify(self) -> str:
+        """Write, read back, delete - the whole contract, exercised for real.
+
+        A health check that only stats the directory would pass on a root the
+        container cannot actually write to, which is the failure that matters.
+        """
+        key = new_media_key()
+        payload = b"media-store-selftest"
+        stored = self.put(key, payload)
+        try:
+            if self.get(key) != payload:
+                raise MediaStoreUnavailable("media store read-back mismatch")
+        finally:
+            self.delete(key)
+        if self.exists(key):
+            raise MediaStoreUnavailable("media store delete did not take effect")
+        return f"filesystem store ok at {self._root} ({stored.size_bytes} byte round trip)"
+
+
+def iter_store_keys(store: FilesystemMediaStore) -> Iterator[str]:
+    """Yield the bare keys held by a filesystem store. Used by the retention job."""
+    for entry in store.root.iterdir():
+        if entry.is_file() and not entry.name.startswith(".tmp-"):
+            yield entry.name

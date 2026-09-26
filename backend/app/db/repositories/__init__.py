@@ -5,6 +5,7 @@ from app.db.repositories.dataset_version import SqlDatasetVersionRepository
 from app.db.repositories.feature_snapshot import SqlFeatureSnapshotRepository
 from app.db.repositories.fire_hotspot import SqlFireHotspotRepository
 from app.db.repositories.fire_report import SqlFireReportRepository
+from app.db.repositories.report_evidence import EvidenceRepository as SqlEvidenceRepository
 from app.db.repositories.forecast import SqlForecastRepository
 from app.db.repositories.grid_state import SqlGridStateRepository
 from app.db.repositories.ingestion_run import SqlIngestionRunRepository
@@ -20,6 +21,7 @@ __all__ = [
     "SqlFeatureSnapshotRepository",
     "SqlFireHotspotRepository",
     "SqlFireReportRepository",
+    "SqlEvidenceRepository",
     "SqlForecastRepository",
     "SqlGridStateRepository",
     "SqlIngestionRunRepository",
@@ -29,3 +31,4 @@ __all__ = [
     "SqlSensorReadingRepository",
     "SqlWeatherReadingRepository",
 ]
+

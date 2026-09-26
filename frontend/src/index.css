@@ -1358,3 +1358,86 @@ body,
   font-size: 0.78rem;
   color: #f87171;
 }
+
+/* --- F2: the optional photo on the report form -------------------------
+   Laid out as a block rather than a `.report-field` because it is a group: a
+   picker, a preview, a progress bar, a consent line and a retry all belong to
+   one decision, and splitting them across the form's field rhythm made the
+   consent line read as just another optional field. */
+.report-photo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.5rem 0 0;
+  border-top: 1px solid #2a2e36;
+}
+
+.report-photo-label {
+  font-size: 0.85rem;
+  color: #e5e7eb;
+}
+
+.report-photo-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+  color: #9ca3af;
+  cursor: pointer;
+}
+
+.report-photo-chosen {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+}
+
+/* The preview is shown small on purpose: it is a confirmation that the right
+   picture was picked, not a claim about what is in it. */
+.report-photo-preview {
+  width: 3rem;
+  height: 3rem;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid #2a2e36;
+}
+
+.report-photo-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.report-photo-progress {
+  width: 100%;
+  height: 0.35rem;
+}
+
+.report-photo-hint {
+  margin: 0;
+  font-size: 0.78rem;
+}
+
+/* Consent is a real question, so it is set apart from the hint text and given
+   the full width of the block. */
+.report-photo-consent {
+  display: flex;
+  gap: 0.45rem;
+  align-items: flex-start;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  color: #9ca3af;
+}
+
+.report-photo-consent input {
+  margin-top: 0.15rem;
+  flex: none;
+}
+
+.report-photo-retry {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}

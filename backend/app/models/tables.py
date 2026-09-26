@@ -440,6 +440,82 @@ fire_report_event = Table(
     Index("ix_fire_report_event_report", "report_id", "at"),
 )
 
+# F2 (docs/IMPLEMENTATION_SCOPE.md section 4, "F2 - Citizen photos"). One row
+# per photo attached to a citizen report.
+#
+# **The two key columns are the whole privacy model.** `storage_key` and
+# `derivative_key` are opaque handles into the private MediaStore, and no route
+# ever turns one into a URL. A reviewer-facing read goes through
+# GET /reports/{id}/evidence/{evidence_id}/derivative, which checks the
+# reviewer key first; the original has no read route at all, because it exists
+# for the audit trail and for a deletion request, not to be looked at. Nothing
+# here is a path, so there is nothing for a caller to traverse.
+#
+# `declared_mime` is kept next to `detected_format` on purpose: the difference
+# between what a client claimed and what the bytes turned out to be is the
+# interesting fact when reviewing an upload, and keeping only the truth would
+# throw it away. Nothing in the accept path reads `declared_mime`.
+#
+# `original_filename` is a display label only. It never reaches the filesystem
+# (see services/media_storage.py) - it is stored so a reviewer can recognise
+# "IMG_20250115_120000.jpg" as something a person plausibly took, and it is
+# length-capped and stripped of control characters for the same reason every
+# other free-text field in F1 is.
+#
+# Deletion is soft: `deleted_at` plus `retention_expires_at` are set and the
+# bytes go, but the row survives. A hard delete would erase the fact that
+# evidence existed, which is the opposite of what an audit trail is for.
+report_evidence = Table(
+    "report_evidence",
+    metadata,
+    Column("id", BigInteger, primary_key=True),
+    Column(
+        "report_id",
+        BigInteger,
+        ForeignKey("fire_report.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    # Private handles. Never serialised into a URL or a public payload.
+    Column("storage_key", String(64), nullable=False),
+    Column("derivative_key", String(64), nullable=True),
+    Column("original_filename", String(255), nullable=True),
+    Column("declared_mime", String(100), nullable=True),
+    Column("detected_format", String(16), nullable=False),
+    Column("byte_count", BigInteger, nullable=False),
+    Column("derivative_width", Integer, nullable=True),
+    Column("derivative_height", Integer, nullable=True),
+    # Malware / integrity workflow. `quarantined` means the bytes are held but
+    # are not treated as an image: nothing decodes them and nothing serves them.
+    Column("scan_state", String(16), nullable=False, server_default="pending"),
+    Column("quarantine_reason", String(200), nullable=True),
+    # A reviewer decides whether this photo supports the report. Default is
+    # `pending`, which counts for nothing - same principle as the report
+    # lifecycle's `submitted`.
+    Column("review_state", String(16), nullable=False, server_default="pending"),
+    Column("consent_at", DateTime(timezone=True), nullable=True),
+    Column("captured_at", DateTime(timezone=True), nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("retention_expires_at", DateTime(timezone=True), nullable=True),
+    Column("deleted_at", DateTime(timezone=True), nullable=True),
+    CheckConstraint(
+        "detected_format IN ('jpeg','png','webp')",
+        name="ck_report_evidence_format",
+    ),
+    CheckConstraint(
+        "scan_state IN ('pending','clean','quarantined')",
+        name="ck_report_evidence_scan_state",
+    ),
+    CheckConstraint(
+        "review_state IN ('pending','approved','rejected')",
+        name="ck_report_evidence_review_state",
+    ),
+    CheckConstraint("byte_count > 0", name="ck_report_evidence_byte_count"),
+    Index("ix_report_evidence_report", "report_id", "created_at"),
+    # The retention job's driving index: everything past its deadline that has
+    # not already been deleted.
+    Index("ix_report_evidence_retention", "retention_expires_at", "deleted_at"),
+)
+
 fire_hotspot = Table(
     "fire_hotspot",
     metadata,

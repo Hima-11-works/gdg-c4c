@@ -296,6 +296,47 @@ class FireReportService:
             raise ReportNotFoundError(f"no report with id {report_id}")
         return report
 
+    def exists(self, report_id: int) -> bool:
+        """Whether a report with this id is stored.
+
+        F2's evidence attach path needs this rather than `get`, because it must
+        refuse an unknown report *before* reading a single uploaded byte - the
+        alternative is a wasted read plus an exception type that reads like a
+        server fault.
+        """
+        return self._repository.get(report_id) is not None
+
+    def note_evidence_linked(
+        self, *, report_id: int, evidence_id: int, at: datetime | None = None
+    ) -> None:
+        """Record that a photo was attached, and keep `evidence_count` honest.
+
+        The event is the F1 audit table's `evidence_linked` kind, which already
+        exists in the CHECK constraint but had no producer until F2. The counter
+        is a denormalised convenience for the UI - the authoritative count is
+        the row count in `report_evidence` - so a failure to bump it must not
+        fail an accepted upload.
+        """
+        moment = at or datetime.now(UTC)
+        try:
+            self._repository.append_event(
+                ReportAuditEvent(
+                    report_id=report_id,
+                    kind=AuditEventKind.EVIDENCE_LINKED,
+                    at=moment,
+                    from_status=None,
+                    to_status=None,
+                    actor="system",
+                    note=f"evidence {evidence_id} attached",
+                    detail={"evidence_id": evidence_id},
+                )
+            )
+            self._repository.increment_evidence_count(report_id)
+        except Exception:
+            # The photo is stored and linked; the counter and the trail can be
+            # rebuilt. Losing the row would be far worse than losing the count.
+            pass
+
     def report_detail(self, report_id: int, *, now: datetime | None = None) -> dict:
         """The citizen-facing record: the report itself plus where it stands.
 

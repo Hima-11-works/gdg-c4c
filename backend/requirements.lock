@@ -47,6 +47,7 @@ psycopg==3.3.5
     # via pollution-backend (pyproject.toml)
 psycopg-binary==3.3.5
     # via psycopg
+pillow==11.3.0
 pydantic==2.13.5
     # via
     #   fastapi
@@ -55,6 +56,7 @@ pydantic-core==2.46.5
     # via pydantic
 pydantic-settings==2.15.0
     # via pollution-backend (pyproject.toml)
+python-multipart==0.0.32
 python-dotenv==1.2.3
     # via
     #   pydantic-settings
