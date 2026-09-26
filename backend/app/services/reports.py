@@ -297,11 +297,20 @@ class FireReportService:
         return report
 
     def report_detail(self, report_id: int, *, now: datetime | None = None) -> dict:
-        """The citizen-facing record: status, timing, and what it means.
+        """The citizen-facing record: the report itself plus where it stands.
 
         Reviewer identity and moderation notes are deliberately absent — they
         name a person, and this read is public. They are available on the
         reviewer-key-gated moderation and audit responses.
+
+        `report_view` alone is only the lifecycle block, and this read is
+        documented as "a report plus its lifecycle standing" (see
+        api.schemas.ReportDetailOut), so the report's own submitted fields are
+        merged in here. Without them every field on the response model is
+        `missing`, and both this read and the moderation response that reuses
+        it fail validation - which the report form cannot recover from, because
+        its status lookup is the only thing that can say a report was later
+        corroborated.
         """
         moment = now or datetime.now(UTC)
         report = self.get(report_id)
@@ -311,6 +320,19 @@ class FireReportService:
             reported_at=report.reported_at,
             expires_at=report.expires_at,
             now=moment,
+        )
+        # The submitted fields, exactly as stored. `reported_at` is already in
+        # the lifecycle view as an ISO string, so it is not overwritten here.
+        view.update(
+            id=report.id or report_id,
+            h3_cell=report.h3_cell,
+            latitude=report.latitude,
+            longitude=report.longitude,
+            kind=report.kind,
+            smoke_intensity=report.smoke_intensity,
+            duration_hours=report.duration_hours,
+            notes=report.notes,
+            client_report_id=report.client_report_id,
         )
         view["last_status_change_at"] = (
             None if report.status_changed_at is None else report.status_changed_at.isoformat()

@@ -77,15 +77,28 @@ export function minutesAgo(reportedAt: string, now: number = Date.now()): number
   return Math.max(0, Math.round((now - filed) / 60_000))
 }
 
-/** Feature collection of report pins for the map symbol layer. */
+/** Feature collection of report pins for the map symbol layer.
+ *
+ *  `counts` rides along as a feature property so the symbol layer can pick a
+ *  pin per report. It is the backend's `affects_air_quality_model` copied
+ *  straight through, so the map's idea of "this one counts" is the same answer
+ *  the model itself uses - the pin cannot disagree with the arithmetic.
+ *
+ *  Takes the v2 row shape. `FireReportWithStatus` is a superset of the v1 one,
+ *  so a caller still holding v1 rows type-checks and every feature simply
+ *  reports `counts: false` until the v2 read lands. */
 export function reportsFeatureCollection(
-  reports: FireReportOut[],
-): FeatureCollection<Point, { id: number; kind: FireReportKind }> {
+  reports: FireReportWithStatus[],
+): FeatureCollection<Point, { id: number; kind: FireReportKind; counts: boolean }> {
   return {
     type: 'FeatureCollection',
     features: reports.map((report) => ({
       type: 'Feature',
-      properties: { id: report.id, kind: report.kind },
+      properties: {
+        id: report.id,
+        kind: report.kind,
+        counts: reportCountsTowardModel(report),
+      },
       geometry: { type: 'Point', coordinates: [report.longitude, report.latitude] },
     })),
   }
@@ -98,13 +111,25 @@ export const EMPTY_REPORTS: FeatureCollection = {
 }
 
 /** Amber camera pin for the map symbol layer, drawn to a canvas so it
- *  renders offline with no image asset to load. */
-export function cameraPinImage(): ImageData {
+ *  renders offline with no image asset to load.
+ *
+ *  `counts` is the report's own `affects_air_quality_model`, straight from the
+ *  backend - never re-derived here. A pin that looks the same whether or not
+ *  the report counts is the exact misreading F1 exists to prevent, so the badge
+ *  and its ring change: a claim nobody has reviewed is deliberately recessive
+ *  (plain white badge, slate ring), and a corroborated one is affirmatively
+ *  marked (green-tinted badge, green ring). The amber camera glyph is
+ *  unchanged in both, because it says "a person reported a fire here" either
+ *  way - only the standing changes. */
+export function cameraPinImage(counts: boolean): ImageData {
   const size = 52
   const canvas = document.createElement('canvas')
   canvas.width = size
   canvas.height = size
   const ctx = canvas.getContext('2d')!
+
+  const badgeFill = counts ? '#e7f8ed' : '#f4f5f7'
+  const ringStroke = counts ? 'rgba(22, 163, 74, 0.95)' : 'rgba(148, 163, 184, 0.95)'
 
   // White circular pill/badge with a dark drop shadow, so the amber
   // camera reads against the hot orange/red landed palette beneath it.
@@ -117,12 +142,13 @@ export function cameraPinImage(): ImageData {
   ctx.shadowOffsetY = 2
   ctx.beginPath()
   ctx.arc(badgeX, badgeY, badgeR, 0, Math.PI * 2)
-  ctx.fillStyle = '#f4f5f7'
+  ctx.fillStyle = badgeFill
   ctx.fill()
   ctx.restore()
-  // Hairline ring so the badge survives bright fire-glow adjacency.
-  ctx.lineWidth = 1.5
-  ctx.strokeStyle = 'rgba(30, 36, 44, 0.55)'
+  // Ring carries the lifecycle signal; thicker and green once corroborated,
+  // hairline and slate while it is only a claim.
+  ctx.lineWidth = counts ? 2.5 : 1.5
+  ctx.strokeStyle = ringStroke
   ctx.stroke()
 
   // Pin tail
@@ -131,13 +157,22 @@ export function cameraPinImage(): ImageData {
   ctx.lineTo(size / 2 - 4, badgeY + badgeR - 3)
   ctx.lineTo(size / 2 + 4, badgeY + badgeR - 3)
   ctx.closePath()
-  ctx.fillStyle = '#f4f5f7'
+  ctx.fillStyle = badgeFill
   ctx.shadowColor = 'rgba(0, 0, 0, 0.5)'
   ctx.shadowBlur = 3
   ctx.fill()
   ctx.shadowColor = 'transparent'
   ctx.shadowBlur = 0
   ctx.shadowOffsetY = 0
+
+  // Tail edge in the same ring colour, so the pin reads as one badge rather
+  // than a white circle sitting on an unrelated triangle.
+  ctx.beginPath()
+  ctx.moveTo(size / 2 - 4, badgeY + badgeR - 3)
+  ctx.lineTo(size / 2 + 4, badgeY + badgeR - 3)
+  ctx.lineWidth = counts ? 2 : 1
+  ctx.strokeStyle = ringStroke
+  ctx.stroke()
 
   // Amber camera glyph inside the badge.
   const bodyW = 15

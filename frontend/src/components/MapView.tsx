@@ -93,7 +93,13 @@ import type { ScopeBoundaries } from '../lib/scope'
 import { loadLocations } from '../lib/locations'
 import { placeLabelsFeatureCollection } from '../lib/placeLabels'
 import type { IndiaLocation } from '../lib/locations'
-import type { BoundingBox, FireReportOut, ForecastOut, GridStateOut, WeatherReadingOut } from '../lib/types'
+import type {
+  BoundingBox,
+  FireReportWithStatus,
+  ForecastOut,
+  GridStateOut,
+  WeatherReadingOut,
+} from '../lib/types'
 import type { MultiLineString, Position } from 'geojson'
 
 // The app is scoped to India: on load, fit the whole country in view
@@ -262,6 +268,11 @@ const FREIGHT_LINE_OPACITY = 0.95
 const SOURCE_CITIZEN = 'citizen-reports'
 const LAYER_CITIZEN_PINS = 'citizen-report-pins'
 const CITIZEN_IMAGE = 'citizen-camera-pin'
+// The same pin for a report that currently affects modeled air quality, which
+// today means `status = corroborated`. Two registered images rather than a
+// paint change, because the signal has to survive on top of the hot landed
+// palette - a tint over red/amber would not.
+const CITIZEN_IMAGE_COUNTED = 'citizen-camera-pin-counted'
 
 // VIIRS 375m active-fire detections — the spec-named `satellite-fires-layer`
 // is the blurred glowing halo; under it sit an animated pulse ring and a
@@ -634,7 +645,10 @@ interface MapViewProps {
   currentGrid: AsyncResource<GridStateOut[]>
   forecastGrid: AsyncResource<ForecastOut[]>
   weather: AsyncResource<WeatherReadingOut[]>
-  citizenReports: AsyncResource<FireReportOut[]>
+  /** Citizen reports, read from GET /api/v2/reports so each row carries its
+   *  lifecycle status. The pin image is chosen per report from that status -
+   *  see the citizen-report-pins layer. */
+  citizenReports: AsyncResource<FireReportWithStatus[]>
   /** Real NASA FIRMS detections, fetched by MapPage. */
   activeFires: AsyncResource<ActiveFire[]>
 }
@@ -1158,13 +1172,24 @@ export function MapView({
             type: 'geojson',
             data: EMPTY_REPORTS as never,
           })
-          map!.addImage(CITIZEN_IMAGE, cameraPinImage())
+          map!.addImage(CITIZEN_IMAGE, cameraPinImage(false))
+          map!.addImage(CITIZEN_IMAGE_COUNTED, cameraPinImage(true))
           map!.addLayer({
             id: LAYER_CITIZEN_PINS,
             type: 'symbol',
             source: SOURCE_CITIZEN,
             layout: {
-              'icon-image': CITIZEN_IMAGE,
+              // Two pins, chosen per feature: an unreviewed claim is a
+              // recessive slate-ringed pin, a corroborated one is green. F1
+              // reads the v2 shape precisely so this distinction is possible -
+              // a pin that looks identical either way is the misreading the
+              // lifecycle exists to prevent.
+              'icon-image': [
+                'case',
+                ['==', ['get', 'counts'], true],
+                CITIZEN_IMAGE_COUNTED,
+                CITIZEN_IMAGE,
+              ],
               'icon-size': 0.72,
               'icon-allow-overlap': true,
               visibility: 'none',

@@ -11,11 +11,12 @@ resource.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 from enum import IntEnum
 from typing import Any, Generic, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 from app.domain.types import AlertSeverity, FireKind, ReportStatus
 
@@ -165,6 +166,37 @@ class CellDetailOut(BaseModel):
     )
 
 
+def _reject_control_characters(field: str) -> Callable[[Any], Any]:
+    """Build a validator refusing control characters the storage layer can't hold.
+
+    A NUL byte is not exotic input here: these endpoints are unauthenticated or
+    key-gated but the body is still caller-controlled, and PostgreSQL raises
+    `psycopg.DataError: text fields cannot contain NUL (0x00) bytes` on the
+    INSERT. Untranslated, that surfaced as a 500 `internal_error` on a
+    perfectly ordinary-looking request - a client bug reported as a server
+    fault. Rejecting it at the edge turns it into the 422 the client can
+    actually act on.
+
+    The other C0 controls and DEL are refused for the same reason one step
+    removed: they are never legitimate in a one-line note, and every consumer
+    downstream (review queues, audit exports) has to be able to treat this text
+    as text. Tab, newline and carriage return stay legal because the report
+    form is a textarea and people do use them.
+    """
+
+    def _validate(value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        if any(ord(ch) < 0x20 and ch not in "\t\n\r" or ord(ch) == 0x7F for ch in value):
+            raise ValueError(
+                f"{field} may not contain control characters; use plain text "
+                "(tab, newline and carriage return are fine)"
+            )
+        return value
+
+    return _validate
+
+
 class FireReportIn(BaseModel):
     """Request body for POST /api/v1/reports.
 
@@ -181,6 +213,11 @@ class FireReportIn(BaseModel):
     duration_hours: float = Field(ge=0, le=24)
     notes: str | None = Field(default=None, max_length=280)
     client_report_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+    _check_notes = field_validator("notes")(_reject_control_characters("notes"))
+    _check_client_report_id = field_validator("client_report_id")(
+        _reject_control_characters("client_report_id")
+    )
 
 
 class ReportOut(BaseModel):
@@ -266,6 +303,9 @@ class ModerationIn(BaseModel):
     actor: str = Field(min_length=1, max_length=80)
     note: str = Field(min_length=1, max_length=500)
     detail: dict[str, Any] | None = None
+
+    _check_actor = field_validator("actor")(_reject_control_characters("actor"))
+    _check_note = field_validator("note")(_reject_control_characters("note"))
 
 
 class ModerationOut(BaseModel):

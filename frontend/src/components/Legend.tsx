@@ -51,6 +51,35 @@ export function Legend() {
           </div>
         </section>
 
+        {/* The two citizen-report pins differ only in their ring, so the key
+            has to say so, or a green ring reads as decoration. Gated on the
+            layer actually being drawn, like the boundary rows below. */}
+        {state.showCitizenSensors && (
+          <section>
+            <h3>Citizen fire reports</h3>
+            <div
+              className="legend-row"
+              title="A report a reviewer corroborated. Only these affect modeled PM2.5 — the plume model drops every other report."
+            >
+              <span
+                className="swatch"
+                style={{ background: 'transparent', border: '2.5px solid #16a34a' }}
+              />
+              Counted in the model
+            </div>
+            <div
+              className="legend-row"
+              title="Received and stored, but unverified. It does not move modeled air quality and may never do so."
+            >
+              <span
+                className="swatch"
+                style={{ background: 'transparent', border: '1.5px solid #94a3b8' }}
+              />
+              Claim only — not counted
+            </div>
+          </section>
+        )}
+
         <section>
           <div className="legend-row">
             <span className="swatch" style={{ backgroundColor: BASEMAP.stateBorder }} />
