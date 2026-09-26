@@ -42,6 +42,7 @@ def _insert_stmt(alert: Alert) -> Insert:
             forecast_hours=alert.forecast_hours,
             confidence=alert.confidence,
             forecast_time=alert.forecast_time,
+            run_id=alert.run_id,
         )
         .returning(alert_table)
     )

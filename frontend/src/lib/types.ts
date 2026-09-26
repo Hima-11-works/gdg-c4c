@@ -97,6 +97,15 @@ export interface V2Envelope<T> extends Envelope<T> {
   coverage: CoverageOut | null
 }
 
+export interface SourceHealthOut {
+  dataset_id: string
+  status: 'present' | 'empty' | 'stale' | 'missing' | 'failed'
+  item_count: number
+  latency_ms: number | null
+  fetched_at: string | null
+  error_summary: string | null
+}
+
 export interface MetaV2Out {
   region: string
   latest_run_id: string
@@ -107,6 +116,18 @@ export interface MetaV2Out {
   feature_schema_version: string
   model_version: string | null
   data_mode: DataMode
+  /**
+   * F3. `is_fallback` means the response was synthesised from stored grid
+   * rows because no run was published - not that a pipeline produced it. The
+   * run id rolls over on the hour, so without these a client cannot tell a
+   * healthy pipeline from a fallback that looks identical.
+   */
+  is_demo: boolean
+  is_fallback: boolean
+  fallback_reason: string | null
+  age_seconds: number | null
+  is_stale: boolean
+  source_health: SourceHealthOut[]
 }
 
 export interface GridCurrentV2Out {

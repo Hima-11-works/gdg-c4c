@@ -18,20 +18,33 @@ from app.domain.features import (
     InputKind,
 )
 from app.domain.h3_grid import cell_center
-from app.domain.prediction import PredictionResult, PredictionRun
+from app.domain.prediction import DEFAULT_REGION, PredictionResult, PredictionRun
+from app.db.repositories.source_health import SourceHealth, SourceHealthRepository
 from app.domain.repositories import PredictionPublicationRepository
 from app.services import demo_data
 
 DEFAULT_EXPOSURE_THRESHOLD_PM25 = 60.0
+
+#: Marks a run this service synthesised rather than one that was published.
+#: Used by `is_fallback`, by the id re-parse in `_demo_publication`, and by
+#: the several places that must not ship a claim into the model, so the word
+#: "fallback" has exactly one spelling in this file.
+DEMO_FALLBACK_PREFIX = "demo-fallback-"
+
+#: How old a run's data may be before it is called stale. 24h, matching the
+#: web client's `STALE_RUN_HOURS`. It now lives here so the API and the client
+#: cannot drift; the client's copy is a reimplementation of this.
+STALE_RUN_SECONDS = 24 * 60 * 60
+
 _DEMO_DATASET = DatasetRef(
-    dataset_id="air-health-demo-v1",
-    source="Air Health demo generator",
-    product="illustrative regional pollution field",
-    version="1",
-    kind=InputKind.SYNTHETIC,
-    region="india-demo",
-    attribution="Air Health demo data",
-    license="Project-generated synthetic data",
+  dataset_id="air-health-demo-v1",
+  source="Air Health demo generator",
+  product="illustrative regional pollution field",
+  version="1",
+  kind=InputKind.SYNTHETIC,
+  region="india-demo",
+  attribution="Air Health demo data",
+  license="Project-generated synthetic data",
 )
 
 
@@ -76,24 +89,49 @@ class PredictionCellView:
 
 class PredictionQueryService:
     def __init__(
-        self,
-        repository: PredictionPublicationRepository,
-        *,
-        native_resolution: int | None = None,
-        region: str | None = None,
-    ) -> None:
+    self,
+    repository: PredictionPublicationRepository,
+    *,
+    native_resolution: int | None = None,
+    region: str | None = None,
+    source_health: SourceHealthRepository | None = None,
+  ) -> None:
         self._repository = repository
         settings = get_settings()
         self.native_resolution = settings.h3_resolution if native_resolution is None else native_resolution
-        self.region = region or "india"
+        self.region = region or DEFAULT_REGION
         self._demo_run: PredictionRun | None = None
+        # F3: optional, because the read service is constructed in tests and in
+        # the v1 paths without a health repository. Absent means "no health
+        # recorded", which the envelope reports as an empty list - itself a
+        # signal, rather than a reason to fail a read.
+        self._health = source_health
+
+    def source_health(self, run: PredictionRun | None = None) -> list[SourceHealth]:
+        """Per-source health behind the data being served.
+
+        Deliberately *not* run-pinned to `run`. An ingestion run and a
+        prediction run are separate records with no foreign key between them, so
+        correlating them by identity would be a fabrication. This returns the
+        most recent ingestion run's health and is presented as a diagnostic -
+        "was anything actually working when this data was produced" - rather
+        than as provenance for the run itself.
+        """
+        if self._health is None:
+            return []
+        try:
+            return self._health.list_latest_run()
+        except Exception:
+            # Health is diagnostic. A read must not fail because the diagnostic
+            # table is unavailable.
+            return []
 
     def run(self, run_id: str | None = None) -> PredictionRun:
         if run_id is not None:
             stored = self._repository.get_run(run_id)
             if stored is not None:
                 return stored
-            if run_id.startswith("demo-fallback-"):
+            if run_id.startswith(DEMO_FALLBACK_PREFIX):
                 demo_run = self._demo_publication(run_id=run_id)
                 if demo_run is not None:
                     return demo_run[0]
@@ -103,6 +141,58 @@ class PredictionQueryService:
             return stored
         return self._demo_publication()[0]
 
+    def is_fallback(self, run: PredictionRun) -> bool:
+        """Whether `run` was synthesised rather than published.
+
+        F3. The read path above fabricates a `demo-fallback-<hour>` run whenever
+        no publication exists, and hands it back as an ordinary result. That is
+        the right behaviour for a demo - an empty dashboard is worse than an
+        honest synthetic one - and the wrong behaviour for anything that then
+        *cannot tell*, because the run id rolls over on the hour and looks like
+        a healthy pipeline. So the fact is recorded here and surfaced on the
+        envelope as `is_fallback`, rather than left for a client to infer from
+        the shape of a run id.
+
+        The test is the id prefix, which is the same marker `_demo_publication`
+        mints and the route re-parses, so there is one definition of
+        "fallback" rather than two that can drift.
+        """
+        return run.run_id.startswith(DEMO_FALLBACK_PREFIX)
+
+    def fallback_reason(self, run: PredictionRun) -> str | None:
+        """One sentence saying why this is a fallback, or None for a real run."""
+        if not self.is_fallback(run):
+            return None
+        return (
+            "no prediction run has been published for this region, so this "
+            "response is synthesised from stored grid rows; it is not a "
+            "publication and no hourly pipeline produced it"
+        )
+
+    def age_seconds(self, run: PredictionRun, *, now: datetime | None = None) -> float:
+        """Age of the run's data in seconds. Never negative.
+
+        Clamped at zero rather than allowed to go negative on a clock skew: a
+        negative age would render as a staleness bug when it is really a time
+        problem, and the honest reading of "generated in the future" is "age
+        unknown, so treat it as fresh", which is what clamping produces.
+        """
+        moment = now or datetime.now(UTC)
+        return max(0.0, (moment - run.generated_at).total_seconds())
+
+    def is_stale(
+        self, run: PredictionRun, *, now: datetime | None = None
+    ) -> bool:
+        """Whether the data is older than the staleness budget.
+
+        The rule lives in the service so the envelope, the CLI and any future
+        scheduler all answer it identically. It used to exist only in the web
+        client's `format.ts` (`STALE_RUN_HOURS = 24`), which meant the same
+        question had two implementations and a client could disagree with the
+        API about whether data was stale.
+        """
+        return self.age_seconds(run, now=now) > STALE_RUN_SECONDS
+
     def results(
         self,
         run: PredictionRun,
@@ -110,7 +200,7 @@ class PredictionQueryService:
         cells: list[str] | None = None,
         horizons: set[float] | None = None,
     ) -> list[PredictionResult]:
-        if run.run_id.startswith("demo-fallback-"):
+        if run.run_id.startswith(DEMO_FALLBACK_PREFIX):
             return self._demo_results(run, cells or [], horizons)
         results = self._repository.list_results(run.run_id)
         cell_set = None if cells is None else set(cells)
@@ -122,7 +212,7 @@ class PredictionQueryService:
         ]
 
     def target_cells(self, run: PredictionRun, resolution: int) -> list[str]:
-        if run.run_id.startswith("demo-fallback-"):
+        if run.run_id.startswith(DEMO_FALLBACK_PREFIX):
             return sorted(state.h3_cell for state in demo_data.demo_grid_states(resolution))
         rows = self.results(run)
         cells = {
@@ -174,7 +264,7 @@ class PredictionQueryService:
             horizon=0,
             threshold_pm25=threshold_pm25,
         )[0]
-        rows = self.results(run, cells=[h3_cell] if run.run_id.startswith("demo-fallback-") else None)
+        rows = self.results(run, cells=[h3_cell] if run.run_id.startswith(DEMO_FALLBACK_PREFIX) else None)
         available = {
             row.horizon_hours
             for row in rows
@@ -189,7 +279,7 @@ class PredictionQueryService:
         return view
 
     def horizons(self, run: PredictionRun) -> list[float]:
-        if run.run_id.startswith("demo-fallback-"):
+        if run.run_id.startswith(DEMO_FALLBACK_PREFIX):
             return [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
         return sorted({row.horizon_hours for row in self.results(run) if row.horizon_hours > 0})
 
@@ -198,7 +288,7 @@ class PredictionQueryService:
     ) -> list[PredictionResult]:
         stored = self.results(
             run,
-            cells=target_cells if run.run_id.startswith("demo-fallback-") else None,
+            cells=target_cells if run.run_id.startswith(DEMO_FALLBACK_PREFIX) else None,
         )
         exact = [row for row in stored if row.horizon_hours == horizon]
         if exact or horizon == 0:
@@ -297,16 +387,16 @@ class PredictionQueryService:
     ) -> tuple[PredictionRun, list[PredictionResult]] | None:
         if run_id is None:
             hour = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
-            canonical_run_id = f"demo-fallback-{hour:%Y%m%dT%H}Z"
+            canonical_run_id = f"{DEMO_FALLBACK_PREFIX}{hour:%Y%m%dT%H}Z"
         else:
-            prefix = "demo-fallback-"
+            prefix = DEMO_FALLBACK_PREFIX
             try:
                 hour = datetime.strptime(run_id.removeprefix(prefix), "%Y%m%dT%HZ").replace(
                     tzinfo=UTC
                 )
             except ValueError:
                 return None
-            canonical_run_id = f"demo-fallback-{hour:%Y%m%dT%H}Z"
+            canonical_run_id = f"{DEMO_FALLBACK_PREFIX}{hour:%Y%m%dT%H}Z"
             if run_id != canonical_run_id:
                 return None
 

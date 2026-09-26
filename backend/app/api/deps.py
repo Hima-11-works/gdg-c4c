@@ -18,29 +18,29 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings, get_settings
 from app.db.repositories import (
     SqlAlertRepository,
+    SqlEvidenceRepository,
     SqlFireHotspotRepository,
     SqlFireReportRepository,
-
-    SqlEvidenceRepository,
     SqlForecastRepository,
     SqlGridStateRepository,
     SqlPredictionPublicationRepository,
     SqlSensorReadingRepository,
+    SqlSourceHealthRepository,
     SqlWeatherReadingRepository,
 )
 from app.db.session import get_db
 from app.domain.types import BoundingBox
 from app.services.alerts import AlertService
 from app.services.cells import CellService
+from app.services.evidence import EvidenceService
 from app.services.fires import FireHotspotService
 from app.services.grid import GridService
-from app.services.prediction_queries import PredictionQueryService
-from app.services.evidence import EvidenceService
 from app.services.media_storage import (
     FilesystemMediaStore,
     MediaStore,
     MediaStoreUnavailable,
 )
+from app.services.prediction_queries import PredictionQueryService
 from app.services.reports import FireReportService
 from app.services.sensors import SensorService
 from app.services.tiles import TileService
@@ -94,7 +94,10 @@ def get_cell_service(session: Session = Depends(get_db)) -> CellService:
 
 
 def get_prediction_query_service(session: Session = Depends(get_db)) -> PredictionQueryService:
-    return PredictionQueryService(SqlPredictionPublicationRepository(session))
+    return PredictionQueryService(
+    SqlPredictionPublicationRepository(session),
+    source_health=SqlSourceHealthRepository(session),
+  )
 
 
 def get_alert_service(session: Session = Depends(get_db)) -> AlertService:

@@ -42,7 +42,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import math
 import sys
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -55,23 +57,28 @@ from app.db.repositories import (
     SqlFireReportRepository,
     SqlForecastRepository,
     SqlGridStateRepository,
+    SqlPredictionPublicationRepository,
     SqlSensorReadingRepository,
     SqlWeatherReadingRepository,
 )
 from app.db.session import get_session_factory
-from app.domain.types import BoundingBox, Forecast
+from app.domain.features import DataMode, InputKind, WeatherFeature
+from app.domain.prediction import DEFAULT_REGION
+from app.domain.types import BoundingBox, Forecast, WeatherReading
 from app.ingestion.demo_reports import demo_fire_reports
 from app.ingestion.factory import build_pollution_provider, build_weather_provider
 from app.services.alert_generation import AlertGenerationService
 from app.services.dispersion import DeterministicH3DispersionModel
 from app.services.estimation import IDWPollutionEstimator
+from app.services.features import FeatureBuilder
 from app.services.fire_gradient import PlumeFireGradientModel
 from app.services.forecasting import ForecastingService
 from app.services.geospatial import GeospatialService
 from app.services.grid_computation import GridComputationService
 from app.services.ingestion import SensorIngestionService, WeatherIngestionService
 from app.services.pdi import HeuristicPDIModel
-from app.services.reports import FireReportService
+from app.services.prediction_publication import PredictionPublicationService
+from app.services.reports import FireReportService, ReportRateLimitedError
 
 logger = logging.getLogger(__name__)
 
@@ -92,14 +99,198 @@ class PipelineReport:
         return all(stage.succeeded for stage in self.stages)
 
 
+def _weather_features(
+    readings: list[WeatherReading], *, fallback_time: datetime
+) -> list[WeatherFeature]:
+    """Stored weather readings -> the feature inputs the model consumes.
+
+    `WeatherReading` stores speed and the meteorological direction the wind
+    blows *from*; `WeatherFeature` wants the u/v components. Converting here
+    rather than at write time keeps the stored reading faithful to what the
+    provider actually said. The sign convention (negated, "from" not "to") is
+    the one the demo scenario generator already uses, so demo and live agree.
+    """
+    return [
+        WeatherFeature(
+            h3_cell=reading.h3_cell,
+            issued_at=reading.measured_at,
+            valid_at=reading.measured_at,
+            wind_u_ms=round(
+                -reading.wind_speed * math.sin(math.radians(reading.wind_direction)), 4
+            ),
+            wind_v_ms=round(
+                -reading.wind_speed * math.cos(math.radians(reading.wind_direction)), 4
+            ),
+            wind_speed_ms=round(reading.wind_speed, 4),
+            wind_direction_deg=round(reading.wind_direction, 4),
+            precipitation_mm=reading.precipitation,
+            boundary_layer_height_m=reading.boundary_layer_height,
+            temperature_c=reading.temperature,
+            relative_humidity_pct=reading.humidity,
+            input_kind=InputKind.OBSERVED,
+        )
+        for reading in readings
+    ]
+
+
+def _publish(
+    session: Session,
+    settings: Settings,
+    pipeline_run_id: str,
+    timestamp: datetime,
+) -> StageOutcome:
+    """Publish this run's grid as an immutable, queryable v2 result (F3).
+
+    Everything above this stage wrote rows that nothing in the v2 read path
+    looks at: the grid is computed, forecasts are generated, alerts are raised,
+    and then the API serves a `demo-fallback-<hour>` run synthesised from those
+    same rows, flagged as a fallback because no publication exists. So the
+    pipeline ran and reported success while producing no publication at all -
+    the exact failure mode F3 is about.
+
+    This stage is what makes the run real. It is the only stage whose failure
+    changes what every other stage meant: the grid, forecast and alerts above
+    are all persisted and still useful, so a publication failure is reported as
+    a failed stage and the rest of the report still prints. Letting it
+    propagate would abandon the run's own contract - no stage failure aborts
+    the process - and would discard a successful run's worth of work over the
+    one step that only affects the v2 read path.
+    """
+    try:
+        return _publish_inner(session, settings, pipeline_run_id, timestamp)
+    except Exception as exc:  # noqa: BLE001 - see docstring
+        logger.exception("Publication stage failed for run %s", pipeline_run_id)
+        return StageOutcome(
+            "publication",
+            False,
+            f"could not publish run {pipeline_run_id}: {type(exc).__name__}: {exc}",
+        )
+
+
+def _publish_inner(
+    session: Session,
+    settings: Settings,
+    pipeline_run_id: str,
+    timestamp: datetime,
+) -> StageOutcome:
+    states = SqlGridStateRepository(session).latest()
+    if not states:
+        # Not a crash: with no grid there is genuinely nothing to publish, and
+        # saying so beats publishing an empty run that looks successful.
+        return StageOutcome(
+            "publication", False, "no grid state available, nothing to publish"
+        )
+
+    cells = [state.h3_cell for state in states]
+    sensors = SqlSensorReadingRepository(session).list_since(
+        timestamp - timedelta(hours=settings.ingest_max_reading_age_hours)
+    )
+    weather = SqlWeatherReadingRepository(session).list_latest_in_cells(cells)
+
+    snapshots = FeatureBuilder(resolution=settings.h3_resolution).build(
+        cells=cells,
+        issued_at=timestamp,
+        valid_at=timestamp,
+        sensor_readings=sensors,
+        weather_features=_weather_features(weather, fallback_time=timestamp),
+    )
+    if not snapshots:
+        return StageOutcome(
+            "publication", False, "feature builder produced no snapshots, nothing published"
+        )
+
+    run, results = PredictionPublicationService(
+        SqlPredictionPublicationRepository(session)
+    ).publish(
+        run_id=pipeline_run_id,
+        feature_run_id=f"{pipeline_run_id}-features",
+        region=DEFAULT_REGION,
+        mode=DataMode.DEMO if settings.demo_mode else DataMode.LIVE,
+        generated_at=timestamp,
+        snapshots=snapshots,
+    )
+
+    return StageOutcome(
+        "publication",
+        True,
+        f"published run={run.run_id} cells={len(snapshots)} results={len(results)}",
+    )
+
+
+def _new_run_id(timestamp: datetime) -> str:
+    """One run identity per pipeline execution (F3).
+
+    Unique per *execution*, not per hour, and that is not a detail. A published
+    run is immutable by design - see SqlPredictionPublicationRepository.publish,
+    which refuses to re-publish an id with different content. An hour-derived id
+    therefore collides the moment anyone retries (a re-run, a manual invocation,
+    a CI re-run), because the retry recomputes the grid from fresher readings
+    and the content differs; that collision aborted the entire pipeline
+    mid-run. Each execution is a genuine separate observation, so each gets its
+    own id and the read path serves the newest.
+
+    The `run-<timestamp>-<suffix>` shape is deliberate: the timestamp prefix
+    keeps ids sortable and recognisable in a log line and on the envelope, which
+    matters when an operator is reading one off a dashboard.
+    """
+    return f"run-{timestamp:%Y%m%dT%H%M%SZ}-{uuid.uuid4().hex[:6]}"
+
+
+def _record_source_health(
+    session: Session,
+    *,
+    pipeline_run_id: str,
+    dataset_id: str,
+    called: bool,
+    failed: bool,
+    item_count: int,
+    error_summary: str | None = None,
+) -> None:
+    """Record one source's health for the run in progress (F3).
+
+    Best-effort by design. Health is a diagnostic, and a run that produced good
+    data must not be reported as failed because the diagnostic could not be
+    written - so a failure here is logged at warning level and swallowed. The
+    opposite mistake, which this exists to prevent, is the silent one: a source
+    that returned nothing used to be indistinguishable from a source that was
+    never asked.
+    """
+    from app.db.repositories.source_health import SqlSourceHealthRepository, classify
+
+    try:
+        SqlSourceHealthRepository(session).record(
+            pipeline_run_id=pipeline_run_id,
+            dataset_id=dataset_id,
+            status=classify(item_count=item_count, failed=failed, called=called),
+            item_count=item_count,
+            error_summary=error_summary,
+            fetched_at=datetime.now(UTC),
+        )
+    except Exception as exc:  # noqa: BLE001 - a diagnostic must not fail a run
+        logger.warning("could not record source health for %s: %s", dataset_id, exc)
+
+
 async def _ingest_sensors(
-    session: Session, settings: Settings, bbox: BoundingBox, since: datetime
+    session: Session,
+    settings: Settings,
+    bbox: BoundingBox,
+    since: datetime,
+    pipeline_run_id: str,
 ) -> StageOutcome:
     async with httpx.AsyncClient(timeout=settings.openaq_timeout_seconds) as client:
         provider = build_pollution_provider(settings, client)
         if provider is None:
             message = "OPENAQ_API_KEY is not set — skipping sensor ingestion for this run"
             logger.warning(message)
+            _record_source_health(
+                session,
+                pipeline_run_id=pipeline_run_id,
+                dataset_id="openaq",
+                called=False,
+                failed=False,
+                item_count=0,
+                error_summary="not configured",
+            )
             return StageOutcome("sensor_ingestion", False, message)
 
         result = await SensorIngestionService(provider, SqlSensorReadingRepository(session)).run(
@@ -109,7 +300,24 @@ async def _ingest_sensors(
     if not result.succeeded:
         message = f"OpenAQ ingestion failed: {'; '.join(result.errors)}"
         logger.error(message)
+        _record_source_health(
+            session,
+            pipeline_run_id=pipeline_run_id,
+            dataset_id="openaq",
+            called=True,
+            failed=True,
+            item_count=0,
+            error_summary="; ".join(result.errors)[:500],
+        )
         return StageOutcome("sensor_ingestion", False, message)
+    _record_source_health(
+        session,
+        pipeline_run_id=pipeline_run_id,
+        dataset_id="openaq",
+        called=True,
+        failed=False,
+        item_count=result.saved,
+    )
     return StageOutcome(
         "sensor_ingestion",
         True,
@@ -118,7 +326,12 @@ async def _ingest_sensors(
     )
 
 
-async def _ingest_weather(session: Session, settings: Settings, bbox: BoundingBox) -> StageOutcome:
+async def _ingest_weather(
+    session: Session,
+    settings: Settings,
+    bbox: BoundingBox,
+    pipeline_run_id: str,
+) -> StageOutcome:
     async with httpx.AsyncClient(timeout=settings.open_meteo_timeout_seconds) as client:
         provider = build_weather_provider(settings, client)
         result = await WeatherIngestionService(provider, SqlWeatherReadingRepository(session)).run(
@@ -128,7 +341,24 @@ async def _ingest_weather(session: Session, settings: Settings, bbox: BoundingBo
     if not result.succeeded:
         message = f"Open-Meteo ingestion failed: {'; '.join(result.errors)}"
         logger.error(message)
+        _record_source_health(
+            session,
+            pipeline_run_id=pipeline_run_id,
+            dataset_id="open-meteo",
+            called=True,
+            failed=True,
+            item_count=0,
+            error_summary="; ".join(result.errors)[:500],
+        )
         return StageOutcome("weather_ingestion", False, message)
+    _record_source_health(
+        session,
+        pipeline_run_id=pipeline_run_id,
+        dataset_id="open-meteo",
+        called=True,
+        failed=False,
+        item_count=result.saved,
+    )
     return StageOutcome(
         "weather_ingestion",
         True,
@@ -154,19 +384,54 @@ def _seed_fire_reports(session: Session, settings: Settings, timestamp: datetime
             "fire_reports", True, "live mode - citizen reports only, nothing seeded"
         )
 
+    # F3. Seeding demo sightings must never be able to fail the *forecast*
+    # run. It did: `service.submit` enforces F1's per-/24 submission cap, so on
+    # a shared egress address - a CI runner, or a developer who has just been
+    # clicking the form - the cap was already spent, the seed raised
+    # ReportRateLimitedError, and the whole hourly pipeline aborted with
+    # "Fatal: pipeline aborted". The grid, the forecast and the alerts were all
+    # fine; the run died on two rows of demo data.
+    #
+    # So a refusal is now counted and reported rather than raised. Seeding is
+    # cosmetic (it gives a demo run a visible plume), and a run that skipped it
+    # is strictly better than a run that produced nothing. An unexpected error
+    # is still caught for the same reason - but it is reported as skipped so it
+    # is visible, rather than passing as success.
     service = FireReportService(SqlFireReportRepository(session))
     sightings = demo_fire_reports(reported_at=timestamp, resolution=settings.h3_resolution)
     bucket = timestamp.strftime("%Y%m%d%H%M")
+    seeded = 0
+    skipped = 0
+    last_error: str | None = None
     for index, report in enumerate(sightings):
-        service.submit(
-            latitude=report.latitude,
-            longitude=report.longitude,
-            kind=report.kind,
-            smoke_intensity=report.smoke_intensity,
-            duration_hours=report.duration_hours,
-            notes=report.notes,
-            client_report_id=f"demo-fire-{index}-{bucket}",
-            reported_at=report.reported_at,
+        try:
+            service.submit(
+                latitude=report.latitude,
+                longitude=report.longitude,
+                kind=report.kind,
+                smoke_intensity=report.smoke_intensity,
+                duration_hours=report.duration_hours,
+                notes=report.notes,
+                client_report_id=f"demo-fire-{index}-{bucket}",
+                reported_at=report.reported_at,
+            )
+            seeded += 1
+        except ReportRateLimitedError as exc:
+            # Expected and benign: the cap is doing its job. Every remaining
+            # sighting will hit the same wall, so stop asking.
+            skipped += 1
+            last_error = str(exc)
+            break
+        except Exception as exc:  # noqa: BLE001 - deliberately broad
+            skipped += 1
+            last_error = f"{type(exc).__name__}: {exc}"
+
+    if skipped and last_error is not None:
+        return StageOutcome(
+            "fire_reports",
+            True,
+            f"seeded={seeded} skipped={skipped} of {len(sightings)} "
+            f"(non-fatal: {last_error})",
         )
     return StageOutcome(
         "fire_reports",
@@ -267,7 +532,11 @@ def _forecast(
 
 
 def _generate_alerts(
-    session: Session, settings: Settings, timestamp: datetime, forecasts: list[Forecast]
+    session: Session,
+    settings: Settings,
+    timestamp: datetime,
+    forecasts: list[Forecast],
+    pipeline_run_id: str,
 ) -> StageOutcome:
     # Read fresh rather than reusing GridComputationResult.states: this
     # way alerts always evaluate the same "current state" forecasting
@@ -283,7 +552,9 @@ def _generate_alerts(
         pdi_worsening_min_increase_ugm3=settings.alert_pdi_worsening_min_increase_ugm3,
         active_lookback=timedelta(hours=settings.alert_active_lookback_hours),
     )
-    result = service.run(current_state, forecasts, generated_at=timestamp)
+    result = service.run(
+        current_state, forecasts, generated_at=timestamp, run_id=pipeline_run_id
+    )
 
     if not result.succeeded:
         message = f"Alert generation failed: {'; '.join(result.errors)}"
@@ -305,17 +576,29 @@ async def run_pipeline(bbox: BoundingBox, *, timestamp: datetime) -> PipelineRep
     settings = get_settings()
     since = timestamp - timedelta(hours=settings.ingest_max_reading_age_hours)
 
+    # F3: one run identity for everything this execution produces - source
+    # health rows, the published prediction_run, and the alerts pinned to it.
+    pipeline_run_id = _new_run_id(timestamp)
+    logger.info("pipeline run id: %s", pipeline_run_id)
+
     session = get_session_factory()()
     try:
         stages = [
-            await _ingest_sensors(session, settings, bbox, since),
-            await _ingest_weather(session, settings, bbox),
+            await _ingest_sensors(session, settings, bbox, since, pipeline_run_id),
+            await _ingest_weather(session, settings, bbox, pipeline_run_id),
             _seed_fire_reports(session, settings, timestamp),
             _compute_grid(session, settings, bbox, timestamp),
         ]
         forecast_outcome, forecasts = _forecast(session, settings, timestamp)
         stages.append(forecast_outcome)
-        stages.append(_generate_alerts(session, settings, timestamp, forecasts))
+        stages.append(
+            _generate_alerts(session, settings, timestamp, forecasts, pipeline_run_id)
+        )
+        # Publication comes last, deliberately: it publishes the grid and
+        # forecast that the stages above just produced, so anything that failed
+        # above is visible as a failed stage before its output is presented as a
+        # published run.
+        stages.append(_publish(session, settings, pipeline_run_id, timestamp))
     finally:
         session.close()
 

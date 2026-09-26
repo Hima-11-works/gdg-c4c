@@ -5,6 +5,10 @@ from app.db.repositories.dataset_version import SqlDatasetVersionRepository
 from app.db.repositories.feature_snapshot import SqlFeatureSnapshotRepository
 from app.db.repositories.fire_hotspot import SqlFireHotspotRepository
 from app.db.repositories.fire_report import SqlFireReportRepository
+from app.db.repositories.source_health import (
+    SqlSourceHealthRepository,
+    SourceHealthRepository,
+)
 from app.db.repositories.report_evidence import EvidenceRepository as SqlEvidenceRepository
 from app.db.repositories.forecast import SqlForecastRepository
 from app.db.repositories.grid_state import SqlGridStateRepository
@@ -22,6 +26,8 @@ __all__ = [
     "SqlFireHotspotRepository",
     "SqlFireReportRepository",
     "SqlEvidenceRepository",
+    "SqlSourceHealthRepository",
+    "SourceHealthRepository",
     "SqlForecastRepository",
     "SqlGridStateRepository",
     "SqlIngestionRunRepository",

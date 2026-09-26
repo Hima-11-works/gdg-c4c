@@ -15,6 +15,13 @@ from app.domain.features import (
 )
 from app.domain.types import _require_finite, _require_utc
 
+#: The region a run covers when the caller does not say. F3: this was a bare
+#: `"india"` default in the read service, which meant the publisher and the
+#: reader could each carry their own copy of the answer. A run published under
+#: one spelling and read under another is not found, and the symptom is an
+#: empty dashboard rather than an error - so the value is defined once, here.
+DEFAULT_REGION = "india"
+
 
 @dataclass(frozen=True, slots=True)
 class PredictionRun:

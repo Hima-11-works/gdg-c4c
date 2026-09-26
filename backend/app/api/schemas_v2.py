@@ -7,7 +7,7 @@ routes remain stable for existing clients during the publication migration.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Generic, TypeVar
+from typing import Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -204,6 +204,24 @@ class V2Envelope(BaseModel, Generic[T]):
     _validate_generated_at = field_validator("generated_at")(_utc)
 
 
+class SourceHealthOut(BaseModel):
+    """One source's health within a run. F3.
+
+    Exists so "the grid is empty" and "we never got any data" stop being the
+    same observation. `status` is the five-valued answer; `empty` means the call
+    worked and the source had nothing, `failed` means we never got an answer.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    dataset_id: str
+    status: Literal["present", "empty", "stale", "missing", "failed"]
+    item_count: int = Field(ge=0)
+    latency_ms: int | None = None
+    fetched_at: datetime | None = None
+    error_summary: str | None = None
+
+
 class MetaV2Out(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -216,5 +234,42 @@ class MetaV2Out(BaseModel):
     feature_schema_version: str
     model_version: str | None
     data_mode: DataMode
+
+    # --- F3: freshness and provenance, said out loud -------------------
+    #
+    # These four exist because of a specific failure: with no published run in
+    # the database, the read service synthesised a `demo-fallback-<hour>` run
+    # from whatever grid rows it could find and returned it as though it were a
+    # real publication. The envelope had `data_mode` and no way to say "this
+    # is not a real run", so a client could not tell a genuine publication from
+    # a fabrication - and the run id rolled over every hour, which looked like
+    # a working hourly pipeline.
+
+    is_demo: bool = Field(
+        description="True when the data is illustrative rather than measured."
+    )
+    is_fallback: bool = Field(
+        description="True when no published run exists and this response is "
+        "synthesised from stored grid rows. Clients must not treat a "
+        "fallback as a publication."
+    )
+    fallback_reason: str | None = Field(
+        default=None,
+        description="Why the fallback happened, in one sentence."
+    )
+    age_seconds: float | None = Field(
+        default=None,
+        description="How old the underlying data is. Null when unknown."
+    )
+    is_stale: bool = Field(
+        description="True when the data is older than the staleness budget. "
+        "Computed here so a client does not have to reimplement the rule and "
+        "get it subtly different."
+    )
+    source_health: list[SourceHealthOut] = Field(
+        default_factory=list,
+        description="Per-source health for the run this data came from. Empty "
+        "when no run has recorded any, which is itself the signal.",
+    )
 
     _validate_generated_at = field_validator("generated_at")(_utc)

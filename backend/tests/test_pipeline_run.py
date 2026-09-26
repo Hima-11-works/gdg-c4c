@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from app.core.config import Settings
 from app.domain.types import BoundingBox
 from app.pipeline.run import PipelineReport, StageOutcome, _ingest_sensors
@@ -57,7 +59,9 @@ def test_report_with_no_stages_is_vacuously_successful() -> None:
 # --- sensor ingestion stage: missing API key ---
 
 
-async def test_ingest_sensors_without_an_api_key_is_a_clear_failure_not_a_crash() -> None:
+async def test_ingest_sensors_without_an_api_key_is_a_clear_failure_not_a_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # demo_mode is pinned explicitly (not just left at Settings' False
     # default): this test reads the real repo-root .env via Settings'
     # env_file, and DEMO_MODE=true there (a valid thing for a developer to
@@ -65,10 +69,40 @@ async def test_ingest_sensors_without_an_api_key_is_a_clear_failure_not_a_crash(
     # _ingest_sensors this test actually exercises.
     settings = _settings(openaq_api_key=None, demo_mode=False)
 
-    # This branch returns before touching `session` at all, so a real
-    # database session is unnecessary here.
-    outcome = await _ingest_sensors(None, settings, BBOX, GENERATED_AT)  # type: ignore[arg-type]
+    # F3: the unconfigured path is the clearest case of "a source that was
+    # never asked" - the API returned nothing *because nobody called it*. It
+    # records `missing` rather than `empty`, and the distinction is only
+    # meaningful if it is asserted somewhere, so it is asserted here.
+    recorded: list[dict[str, object]] = []
+
+    class _RecordingHealthRepo:
+        def __init__(self, session: object) -> None:
+            pass
+
+        def record(self, **kwargs: object) -> None:
+            recorded.append(kwargs)
+
+    monkeypatch.setattr(
+        "app.db.repositories.source_health.SqlSourceHealthRepository", _RecordingHealthRepo
+    )
+
+    outcome = await _ingest_sensors(
+        None,  # type: ignore[arg-type]
+        settings,
+        BBOX,
+        GENERATED_AT,
+        "run-test",
+    )
 
     assert outcome.name == "sensor_ingestion"
     assert outcome.succeeded is False
     assert "OPENAQ_API_KEY" in outcome.summary
+
+    assert len(recorded) == 1
+    [call] = recorded
+    assert call["dataset_id"] == "openaq"
+    assert call["pipeline_run_id"] == "run-test"
+    # `called` is folded into `status` by classify() rather than stored, so the
+    # distinction survives as the word itself.
+    assert call["status"] == "missing"
+    assert call["error_summary"] == "not configured"

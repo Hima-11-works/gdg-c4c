@@ -349,6 +349,12 @@ class Alert:
     confidence: float | None = None
     forecast_time: datetime | None = None
     id: int | None = None
+    # F3: the prediction run this alert was derived from, so "alerts for run X"
+    # is answerable and an alert can be traced to the inputs that raised it.
+    # Nullable on purpose: an alert raised before any v2 run was published is
+    # still a real alert, and inventing a run id would be a worse lie than a
+    # null.
+    run_id: str | None = None
 
     def __post_init__(self) -> None:
         _require_utc(self.created_at, "created_at")

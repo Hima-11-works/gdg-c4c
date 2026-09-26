@@ -94,6 +94,9 @@ class AlertGenerationService:
             raise ValueError(
                 f"pdi_worsening_min_increase_ugm3 must be >= 0: {pdi_worsening_min_increase_ugm3}"
             )
+        # Set by run(); None until then, which is what an alert raised outside a
+        # pipeline run records.
+        self._run_id: str | None = None
         if active_lookback <= timedelta(0):
             raise ValueError(f"active_lookback must be positive: {active_lookback}")
         self._repository = repository
@@ -110,7 +113,14 @@ class AlertGenerationService:
         forecasts: list[Forecast],
         *,
         generated_at: datetime,
+        run_id: str | None = None,
     ) -> AlertGenerationResult:
+        # F3: stamped onto every alert this call raises, so each one names the
+        # run that produced it. Held on the instance because alert construction
+        # happens several levels down in _build_alert; a parameter threaded
+        # through every private helper would be noise. Single-threaded per run,
+        # and an unpinning bug is a null run_id, never a wrong one.
+        self._run_id = run_id
         forecasts_by_cell: dict[str, list[Forecast]] = defaultdict(list)
         for forecast in forecasts:
             forecasts_by_cell[forecast.h3_cell].append(forecast)
@@ -266,6 +276,7 @@ class AlertGenerationService:
             forecast_hours=forecast.forecast_hours if forecast is not None else None,
             confidence=confidence,
             forecast_time=forecast_time,
+            run_id=self._run_id,
         )
 
     def _level_crossed(self, pm25: float) -> tuple[AlertSeverity, str] | None:

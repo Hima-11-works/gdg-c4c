@@ -17,6 +17,7 @@ from app.api.schemas_v2 import (
     ForecastV2Out,
     GridCurrentV2Out,
     MetaV2Out,
+    SourceHealthOut,
     PredictionMetadataOut,
     QualityFlagsOut,
     StaticFeaturesV2Out,
@@ -506,4 +507,27 @@ def get_meta_v2(
         feature_schema_version=run.feature_schema_version,
         model_version=", ".join(run.model_versions) if run.model_versions else None,
         data_mode=run.mode,
+        # F3: say what this data is, instead of letting a client infer it.
+        #
+        # `_run_or_404` hands back a synthesised `demo-fallback-<hour>` run
+        # whenever nothing has been published, and that id changes every hour -
+        # which reads exactly like a healthy hourly pipeline. A client had no
+        # way to tell. These four fields make the distinction explicit, and
+        # `source_health` says whether the run behind them actually got data.
+        is_demo=run.mode is DataMode.DEMO,
+        is_fallback=service.is_fallback(run),
+        fallback_reason=service.fallback_reason(run),
+        age_seconds=service.age_seconds(run),
+        is_stale=service.is_stale(run),
+        source_health=[
+            SourceHealthOut(
+                dataset_id=row.dataset_id,
+                status=row.status,
+                item_count=row.item_count,
+                latency_ms=row.latency_ms,
+                fetched_at=row.fetched_at,
+                error_summary=row.error_summary,
+            )
+            for row in service.source_health(run)
+        ],
     )

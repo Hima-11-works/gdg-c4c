@@ -304,6 +304,20 @@ alert = Table(
     metadata,
     Column("id", BigInteger, primary_key=True),
     Column("h3_cell", String(H3_CELL_LENGTH), nullable=False),
+    # F3: the prediction run this alert was derived from, so an alert is
+    # traceable to the inputs and model version that produced it and
+    # "alerts for run X" is answerable. Nullable on purpose - an alert raised
+    # when no v2 run has been published is still a real alert, and inventing a
+    # run id for it would be a worse lie than a null. `SET NULL` on delete, so
+    # removing a run cannot cascade away operational history.
+  Column(
+  "run_id",
+  # prediction_run.id is a varchar(120) run key, not a surrogate key - it is the
+  # caller-facing run id, which is why the FK is a string and not a bigint.
+  String(120),
+  ForeignKey("prediction_run.id", ondelete="SET NULL"),
+  nullable=True,
+  ),
     # Bound to the AlertSeverity enum's values so the DB's CHECK constraint
     # can never drift from the Python-side severities.
     Column(
@@ -514,6 +528,47 @@ report_evidence = Table(
     # The retention job's driving index: everything past its deadline that has
     # not already been deleted.
     Index("ix_report_evidence_retention", "retention_expires_at", "deleted_at"),
+)
+
+# F3. One row per source per run: did this run actually get data from
+# OpenAQ / Open-Meteo / FIRMS, or did it quietly get nothing?
+#
+# `empty` and `failed` are the distinction this table exists to preserve. Both
+# present zero rows to anything that only counts, so before this a source outage
+# and a city with no monitors today were the same observation. `fetched_at` and
+# `latency_ms` are there because "we asked and got nothing" and "we did not ask"
+# are different failures, and only one of them shows up as a row count.
+ingestion_source_health = Table(
+    "ingestion_source_health",
+    metadata,
+    Column("id", BigInteger, primary_key=True),
+    Column(
+        # No FK, on purpose: `ingestion_run` is never written to by the
+        # pipeline, so an FK here would be a column nothing could populate.
+        # The pipeline generates its own run id and publication stamps the same
+        # value onto prediction_run, which is what links sources to output.
+        "pipeline_run_id",
+        String(120),
+        nullable=False,
+    ),
+    Column("dataset_id", String(80), nullable=False),
+    Column("status", String(16), nullable=False),
+    Column("item_count", Integer, nullable=False, server_default="0"),
+    Column("latency_ms", Integer, nullable=True),
+    Column("fetched_at", DateTime(timezone=True), nullable=True),
+    Column("error_summary", String(500), nullable=True),
+    CheckConstraint(
+        "status IN ('present','empty','stale','missing','failed')",
+        name="ck_ingestion_source_health_status",
+    ),
+    CheckConstraint("item_count >= 0", name="ck_ingestion_source_health_count"),
+    UniqueConstraint(
+        "pipeline_run_id",
+        "dataset_id",
+        name="uq_ingestion_source_health_run_source",
+    ),
+    Index("ix_ingestion_source_health_run", "pipeline_run_id"),
+    Index("ix_ingestion_source_health_status", "status", "fetched_at"),
 )
 
 fire_hotspot = Table(

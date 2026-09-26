@@ -25,6 +25,7 @@ import { ReportFireForm } from './ReportFireForm'
 import { ScopeChip } from './ScopeChip'
 import { SearchBar } from './SearchBar'
 import { StatusBanner } from './StatusBanner'
+import { ProvenanceBanner } from './ProvenanceBanner'
 import { TimelineControl } from './TimelineControl'
 import type { AsyncResource } from '../hooks/useApiResource'
 import type { LodQuery } from '../lib/api'
@@ -185,6 +186,7 @@ export function MapPage() {
           warming={warming}
           interpolated={!isNow && isInterpolated}
         />
+        <ProvenanceBanner meta={publishedMeta.resource} />
       </div>
 
       <MapView
