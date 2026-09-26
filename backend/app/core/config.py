@@ -109,6 +109,36 @@ class Settings(BaseSettings):
     # A reading older than this is considered stale and dropped.
     ingest_max_reading_age_hours: float = Field(default=3.0, gt=0)
 
+    # --- nationwide coarse tier -------------------------------------------
+    # H3 resolution of the coarse, country-wide overview layer, published in
+    # the same run as the fine detail grid. 0 disables it.
+    #
+    # Why this exists: the fine grid is computed over INGEST_BBOX_*, which is a
+    # city-sized box. So a published run holds cells for that box only, and a
+    # country-zoom read - which aggregates the run's own cells upward - found
+    # nothing to draw anywhere else. The country view only ever worked because
+    # of the pre-publication demo fallback; once a real run was published, the
+    # rest of India went blank.
+    #
+    # This is a second, coarser product rather than a wider INGEST_BBOX. At
+    # H3_RESOLUTION=8 a country-sized box is ~11M cells (see the weather fan-out
+    # ceiling below); res 4 is a few hundred, which is what a country overview
+    # actually needs. A coarse request reads this tier; a request finer than
+    # `national_overview_resolution` reads the fine grid, so zooming into the
+    # city still shows the real per-cell detail.
+    #
+    # Only Demo Mode has a nationwide source (app.services.demo_data's city
+    # scenario). In live mode this stays empty unless a coarse national feed is
+    # added - see app.services.national_overview, which reports the reason
+    # rather than inventing values.
+    #
+    # There is deliberately no "crossover resolution" setting. The read path
+    # already does the right thing without one: it aggregates a run's own cells
+    # upward and skips any cell finer than the request, so a coarse cell
+    # contributes to a coarse request and is invisible to a finer one. A knob
+    # for that would be a second place to get it wrong.
+    national_overview_resolution: int = Field(default=4, ge=0, le=15)
+
     # --- Open-Meteo weather ingestion (app.ingestion.open_meteo) ---
     open_meteo_base_url: str = "https://api.open-meteo.com/v1/forecast"
     open_meteo_timeout_seconds: float = Field(default=10.0, gt=0)

@@ -31,6 +31,7 @@ focused on what exists and how to run it.
 15. [Running tests](#running-tests)
 16. [Demo mode](#demo-mode)
 17. [Level of detail](#level-of-detail)
+    1. [Two-tier grid](#two-tier-grid)
 18. [Render modes](#render-modes)
 19. [API overview](#api-overview)
 20. [PDI: current definition and disclaimer](#pdi-current-definition-and-disclaimer)
@@ -210,11 +211,11 @@ npm run dev
 ### 7. Open the app
 
 **http://localhost:5173.** The app is scoped to India: you should see the
-whole country on load, state boundaries included, with a coarse,
-generalized PM2.5 hex covering every part of the country, plus wind
-arrows — see ["Level of detail"](#level-of-detail) below. Zoom into a
-city (e.g. Delhi, the Demo Mode pipeline scenario's hotspot) to see
-those give way to a real, finer per-hex grid for just that area. Check
+whole country on load, state boundaries included, with a coarse PM2.5 hex at
+each of the Demo Mode scenario's cities, plus wind arrows — see
+["Level of detail"](#level-of-detail) below. Zoom into a city (e.g. Delhi,
+the Demo Mode pipeline scenario's hotspot) to see those give way to a real,
+finer per-hex grid for just that area. Check
 **Show Pollution Development Index (PDI) layer** to switch to the
 pressure score (only visible once zoomed in past the country tier);
 click **+1h / +3h / +6h** to watch hotspots visibly move and disperse
@@ -537,6 +538,7 @@ separate and only holds `VITE_API_BASE_URL`.
 | `WEATHER_MAX_CELLS` | ingestion | Safety ceiling (default 50000) on one weather run's fan-out; an oversized bbox is refused rather than building millions of rows |
 | `WEATHER_H3_RESOLUTION` | ingestion | Coarser resolution (default 5) weather is sampled at, fanned out to every `H3_RESOLUTION` cell inside. Must be ≤ `H3_RESOLUTION` (enforced by a `Settings` validator) |
 | `INGEST_BBOX_MIN_LAT`/`MIN_LON`/`MAX_LAT`/`MAX_LON` | ingestion | Bounding box, shared by `ingest` and `ingest-weather` (default: Delhi NCR — a single city/region, not all of India; see [Level of detail](#level-of-detail)) |
+| `NATIONAL_OVERVIEW_RESOLUTION` | publication | H3 resolution of the coarse country-wide tier published alongside the fine grid (default 4; `0` disables it). Demo Mode only — see [Two-tier grid](#two-tier-grid) |
 | `INGEST_MAX_READING_AGE_HOURS` | ingestion | A fetched PM2.5 reading older than this is dropped as stale (default 3h) |
 | `IDW_MAX_DISTANCE_KM` | estimation | Max distance (default 15km) a sensor may be from a cell center to count as evidence |
 | `IDW_MIN_SENSORS` | estimation | Min sensors (default 2) required in range before a cell gets an estimate at all |
@@ -868,6 +870,49 @@ times out. `GET /api/v2/meta` reports the range as
 `supported_display_resolutions`, which is every resolution from 3 to the
 run's native one.
 
+### Two-tier grid
+
+A published run holds cells at **two** resolutions, and which one you get
+depends on the request:
+
+| Tier | Resolution | Scope | Populated from |
+|---|---|---|---|
+| Coarse (country overview) | `NATIONAL_OVERVIEW_RESOLUTION` (default 4) | All of India | `app/services/national_overview.py` |
+| Fine (detail) | `H3_RESOLUTION` (default 8) | `INGEST_BBOX_*` only | The ingestion pipeline |
+
+The v2 read aggregates a run's own cells upward and skips any cell *finer*
+than the request, so the crossover needs no configuration: a request at
+res ≤ 4 sees the national tier, and a request at res 5-8 sees only the
+fine grid. A coarse cell therefore never answers a fine question, which
+is the point — it cannot be refined into detail that was never measured.
+
+**Why a second product rather than a bigger `INGEST_BBOX`.** At
+`H3_RESOLUTION=8` a country-sized box is ~11M cells (see the weather
+fan-out ceiling), which is neither storable nor meaningful. Res 4 is a
+few thousand. Widening the fine grid would also mean claiming res-8
+detail over the whole country, which is exactly the claim that would not
+survive contact with a reader.
+
+**What the coarse tier will not do.** It does not stretch the city's
+measurements across the rest of India. `app/services/estimation.py`
+returns `pm25=None` for a cell with no station within `max_distance_km`,
+and that is deliberate: "no evidence" must not render as "clean air".
+Relaxing the search radius would paint Delhi's reading over Kerala and
+make an unmeasured region look safe.
+
+**Where its data comes from today.** Only Demo Mode has a nationwide
+source, so the coarse tier is only populated there — from
+`app/services/demo_data.py`'s continuous synthetic field, the same one
+the pre-publication fallback used. Every coarse cell carries
+`InputKind.SYNTHETIC` and a quality warning saying so. In live mode the
+tier is **empty** and the map correctly shows no data outside
+`INGEST_BBOX_*`; `app/services/national_overview.py` returns the reason
+rather than an empty list, and the publication stage prints it, because
+"no data" and "not configured" need different fixes and look identical
+on a blank map. Wiring a real national coarse feed (a government
+monitoring network, a satellite AOD product) is the thing that would
+make this tier meaningful outside the demo.
+
 Weather (wind
 arrows) uses this same resolution at every tier *except* country, where
 it deliberately requests a coarser resolution (2, not 3) than the PM2.5
@@ -880,11 +925,17 @@ On load the map fits all of India (`INDIA_BOUNDS` in
 tier: a full nationwide PM2.5 choropleth (not sparse dots — see "Where
 the data comes from today" below) plus wind currents — "generalized"
 because the resolution itself is coarse, not because anything is
-hidden. Zoom into a region and the same hex/wind/PDI layers this README
-describes elsewhere start rendering denser, finer cells for just that
-area, up to level 4. PDI renders at every tier, the bare country overview
-included: the backend area-weights the per-cell score when a read is
-coarser than the published native resolution (see
+hidden. That coarse tier is a **second published product**, not a wider
+ingestion box: one run carries the city-scale `H3_RESOLUTION` grid *and*
+a country-wide grid at `NATIONAL_OVERVIEW_RESOLUTION`, and the v2 read
+serves whichever fits the request — a coarse read sees the national
+tier, a read finer than that sees only the fine grid. See
+[Two-tier grid](#two-tier-grid) for why it is built this way and what
+it deliberately does not do. Zoom into a region and the same hex/wind/PDI
+layers this README describes elsewhere start rendering denser, finer
+cells for just that area, up to level 4. PDI renders at every tier, the
+bare country overview included: the backend area-weights the per-cell
+score when a read is coarser than the published native resolution (see
 `app/services/prediction_queries.py`), so a level-1 cell carries an
 aggregated PDI rather than no value. Clicking any hex opens the same
 full detail panel (location, PM2.5, PDI + its factor breakdown, wind,

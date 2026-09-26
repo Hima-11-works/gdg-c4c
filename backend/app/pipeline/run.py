@@ -76,6 +76,7 @@ from app.services.forecasting import ForecastingService
 from app.services.geospatial import GeospatialService
 from app.services.grid_computation import GridComputationService
 from app.services.ingestion import SensorIngestionService, WeatherIngestionService
+from app.services.national_overview import build_national_overview
 from app.services.pdi import HeuristicPDIModel
 from app.services.prediction_publication import PredictionPublicationService
 from app.services.reports import FireReportService, ReportRateLimitedError
@@ -199,6 +200,29 @@ def _publish_inner(
             "publication", False, "feature builder produced no snapshots, nothing published"
         )
 
+    # The coarse country-wide tier, published into the *same* run. A run may
+    # hold cells at more than one resolution: the read path aggregates a run's
+    # own cells upward and skips any finer than the request, so a coarse request
+    # sees the nationwide cells and a request finer than the coarse resolution
+    # sees only the fine grid. That is what makes "coarse everywhere, detailed
+    # where measured" one product rather than two competing ones.
+    overview = build_national_overview(settings, issued_at=timestamp)
+    if overview.unavailable_reason is not None:
+        # Reported, not swallowed: an operator seeing a blank country needs to
+        # know whether that is "no data" or "not configured", and those need
+        # different fixes.
+        logger.info("national overview unavailable: %s", overview.unavailable_reason)
+
+    # Deduped: the fine grid and the coarse tier could name the same cell if
+    # the coarse resolution ever equalled the fine one, and publish() requires
+    # unique cells per horizon.
+    fine_cells = {snapshot.h3_cell for snapshot in snapshots}
+    all_snapshots = snapshots + [
+        snapshot
+        for snapshot in overview.snapshots
+        if snapshot.h3_cell not in fine_cells
+    ]
+
     run, results = PredictionPublicationService(
         SqlPredictionPublicationRepository(session)
     ).publish(
@@ -207,13 +231,20 @@ def _publish_inner(
         region=DEFAULT_REGION,
         mode=DataMode.DEMO if settings.demo_mode else DataMode.LIVE,
         generated_at=timestamp,
-        snapshots=snapshots,
+        snapshots=all_snapshots,
     )
 
+    coarse = len(all_snapshots) - len(snapshots)
     return StageOutcome(
         "publication",
         True,
-        f"published run={run.run_id} cells={len(snapshots)} results={len(results)}",
+        f"published run={run.run_id} fine_cells={len(snapshots)} "
+        f"coarse_cells={coarse} results={len(results)}"
+        + (
+            ""
+            if overview.unavailable_reason is None
+            else f" (coarse tier absent: {overview.unavailable_reason})"
+        ),
     )
 
 
