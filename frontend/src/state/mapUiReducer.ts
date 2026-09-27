@@ -7,7 +7,7 @@
 // NOT kept here, see hooks/useApiResource.ts.
 
 import { resolutionOfCell } from '../lib/h3Geometry'
-import { lodForZoom } from '../lib/lod'
+import { lodForZoom, MAX_UNSCOPED_ZOOM } from '../lib/lod'
 import { scopeForPlace } from '../lib/scope'
 import type { Lod } from '../lib/lod'
 import type { MapScope } from '../lib/scope'
@@ -17,10 +17,6 @@ import type { BoundingBox } from '../lib/types'
 /** How the pollution field is drawn: discrete H3 hexagons, or a smooth
  *  continuous raster (Gaussian-smoothed value field). */
 export type MapViewMode = 'hex' | 'smooth'
-
-/** How far clearing a place scope is allowed to zoom back out to. One step
- *  per clear, and never past a slightly-wider-than-country framing. */
-const MIN_ZOOM_OUT = 4
 
 export interface MapUiState {
   /** Forecast horizon in minutes. 0 = current conditions; in-between frames
@@ -71,6 +67,8 @@ export interface MapUiState {
    * rejected by the backend (a cell string only means anything at the
    * resolution it was minted at). Null exactly when selectedCell is. */
   selectedCellResolution: number | null
+  /** Whether the selected fine map cell is showing its coarser parent. */
+  selectedCellGeneralized: boolean
   /** The current zoom tier + resolution — see lib/lod.ts. */
   lod: Lod
   /** The current map viewport, or null before MapView has reported one
@@ -105,7 +103,7 @@ export type MapUiAction =
   | { type: 'TOGGLE_LEGEND' }
   | { type: 'TOGGLE_SETTINGS' }
   | { type: 'SELECT_CELL'; cell: string | null; resolution?: number }
-  | { type: 'TOGGLE_CELL'; cell: string }
+  | { type: 'TOGGLE_CELL'; cell: string; generalized?: boolean }
   | { type: 'SET_VIEWPORT'; zoom: number; bbox: BoundingBox }
 
 // The app opens fitted to all of India (see MapView's INDIA_BOUNDS), so
@@ -133,7 +131,8 @@ export const initialMapUiState: MapUiState = {
   zoom: 4,
   selectedCell: null,
   selectedCellResolution: null,
-  lod: { tier: 'country', resolution: 3, scopedToViewport: false },
+  selectedCellGeneralized: false,
+  lod: { tier: 'country', level: 1, resolution: 3, scopedToViewport: false },
   bbox: null,
 }
 
@@ -147,12 +146,14 @@ function withSelectedCell(
   state: MapUiState,
   cell: string | null,
   fallbackResolution?: number,
+  generalized = false,
 ): MapUiState {
   return {
     ...state,
     selectedCell: cell,
     selectedCellResolution:
       cell === null ? null : (resolutionOfCell(cell) ?? fallbackResolution ?? null),
+    selectedCellGeneralized: cell !== null && generalized,
   }
 }
 
@@ -186,11 +187,9 @@ export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState
       }
     }
     case 'CLEAR_SCOPE': {
-      // Drop the mask and step one zoom level back out, holding the middle of
-      // the current view (or the scope's own point, before the map has
-      // reported a viewport). MIN_ZOOM_OUT keeps repeated clears from
-      // drifting out past the country view.
-      const zoom = Math.max(MIN_ZOOM_OUT, state.zoom - 1)
+      // Closing a search returns to the ordinary map ceiling, Resolution 2,
+      // while keeping the current map centre in view.
+      const zoom = MAX_UNSCOPED_ZOOM
       const centre =
         state.bbox === null
           ? state.scope === null
@@ -233,7 +232,12 @@ export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState
       // any other cell selects it. The comparison lives here rather than in
       // the click handler, which is registered once and would otherwise need
       // the current selection pushed into it through a ref.
-      return withSelectedCell(state, state.selectedCell === action.cell ? null : action.cell)
+      return withSelectedCell(
+        state,
+        state.selectedCell === action.cell ? null : action.cell,
+        undefined,
+        action.generalized,
+      )
     case 'SET_VIEWPORT': {
       const lod = lodForZoom(action.zoom)
       return { ...state, zoom: action.zoom, lod, bbox: lod.scopedToViewport ? action.bbox : null }

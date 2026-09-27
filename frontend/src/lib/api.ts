@@ -88,11 +88,12 @@ function lodParams(query: LodQuery): Record<string, string | number | undefined>
   }
 }
 
-async function apiGet<T>(path: string): Promise<T> {
+async function apiGet<T>(path: string, signal?: AbortSignal): Promise<T> {
   let response: Response
   try {
-    response = await fetch(`${API_BASE_URL}${path}`)
-  } catch {
+    response = await fetch(`${API_BASE_URL}${path}`, { signal })
+  } catch (error) {
+    if (signal?.aborted) throw error
     throw new ApiError(0, 'network_error', 'Could not reach the backend. Is it running?')
   }
 
@@ -147,12 +148,17 @@ export async function fetchPublishedMeta(): Promise<Envelope<MetaV2Out>> {
   }
 }
 
-async function apiGetV2<T>(path: string, pinnedRunId?: string): Promise<V2Envelope<T>> {
+async function apiGetV2<T>(
+  path: string,
+  pinnedRunId?: string,
+  signal?: AbortSignal,
+): Promise<V2Envelope<T>> {
   const runId = pinnedRunId ?? (await publishedRunId())
+  if (signal?.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError')
   const [pathname, queryString] = path.split('?', 2)
   const query = new URLSearchParams(queryString ?? '')
   query.set('run_id', runId)
-  return apiGet<V2Envelope<T>>(`${pathname}?${query.toString()}`)
+  return apiGet<V2Envelope<T>>(`${pathname}?${query.toString()}`, signal)
 }
 
 function preserveV2Envelope<T, U>(envelope: V2Envelope<T>, data: U): Envelope<U> {
@@ -246,31 +252,38 @@ async function apiPost<T>(path: string, payload: unknown): Promise<T> {
 export function fetchGridCurrent(
   query: LodQuery = {},
   runId?: string,
+  signal?: AbortSignal,
 ): Promise<Envelope<GridStateOut[]>> {
   return apiGetV2<GridCurrentV2Out[]>(
     `/api/v2/grid/current${buildQuery(lodParams(query))}`,
     runId,
-).then((envelope) => preserveV2Envelope(envelope, envelope.data.map(fromCurrentV2)))
+    signal,
+  ).then((envelope) => preserveV2Envelope(envelope, envelope.data.map(fromCurrentV2)))
 }
 
 export function fetchGridForecast(
   minutes: number,
   query: LodQuery = {},
   runId?: string,
+  signal?: AbortSignal,
 ): Promise<Envelope<ForecastOut[]>> {
   return apiGetV2<ForecastV2Out[]>(
     `/api/v2/grid/forecast${buildQuery({ hours: minutes / 60, ...lodParams(query) })}`,
     runId,
+    signal,
   ).then((envelope) => preserveV2Envelope(envelope, envelope.data.map(fromForecastV2)))
 }
 
 export function fetchWeather(
   query: LodQuery = {},
   runId?: string,
+  signal?: AbortSignal,
 ): Promise<Envelope<WeatherReadingOut[]>> {
-  return apiGetV2<WeatherV2Out[]>(`/api/v2/weather${buildQuery(lodParams(query))}`, runId).then(
-    (envelope) => preserveV2Envelope(envelope, envelope.data.map(fromWeatherV2)),
-  )
+  return apiGetV2<WeatherV2Out[]>(
+    `/api/v2/weather${buildQuery(lodParams(query))}`,
+    runId,
+    signal,
+  ).then((envelope) => preserveV2Envelope(envelope, envelope.data.map(fromWeatherV2)))
 }
 
 export function fetchAlerts(runId?: string): Promise<Envelope<AlertOut[]>> {
@@ -295,9 +308,7 @@ export function fetchReportsWithStatus(): Promise<Envelope<FireReportWithStatus[
 }
 
 /** One report's standing, for the "what happened to my report" view. */
-export function fetchReportStatus(
-  reportId: number,
-): Promise<Envelope<FireReportWithStatus>> {
+export function fetchReportStatus(reportId: number): Promise<Envelope<FireReportWithStatus>> {
   return apiGet(`/api/v1/reports/${reportId}`)
 }
 
@@ -324,17 +335,15 @@ export function fetchReportStatuses(): Promise<
  *  detections were stored at (a viewport-scoped request would have to match
  *  that resolution exactly; see backend/app/services/fires.py). */
 export function fetchActiveFires(query: LodQuery = {}): Promise<Envelope<ActiveFire[]>> {
-  return apiGet<Envelope<FireHotspotOut[]>>(
-    `/api/v1/fires${buildQuery(lodParams(query))}`,
-  ).then((envelope) => ({
-    ...envelope,
-    data: envelope.data.map(activeFireFromHotspot),
-  }))
+  return apiGet<Envelope<FireHotspotOut[]>>(`/api/v1/fires${buildQuery(lodParams(query))}`).then(
+    (envelope) => ({
+      ...envelope,
+      data: envelope.data.map(activeFireFromHotspot),
+    }),
+  )
 }
 
-export function submitReport(
-  payload: FireReportSubmit,
-): Promise<Envelope<FireReportOut>> {
+export function submitReport(payload: FireReportSubmit): Promise<Envelope<FireReportOut>> {
   return apiPost('/api/v1/reports', payload)
 }
 

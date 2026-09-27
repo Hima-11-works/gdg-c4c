@@ -1,12 +1,13 @@
 // The only module that touches the h3-js library — mirrors the backend's
 // own rule (app.domain.h3_grid is its one H3 entry point) so cell-geometry
-// calls never scatter across components. Pure data shaping only: turning
-// (h3_cell, value) pairs already computed by the backend into GeoJSON for
-// MapLibre. No interpolation, estimation, or forecasting happens here.
+// calls never scatter across components. Helpers shape backend values for
+// MapLibre. A missing child may inherit its parent's display value, but the
+// parent's identity stays attached and no numeric interpolation is done.
 
 import {
   cellToBoundary,
   cellToLatLng,
+  cellToParent,
   getHexagonEdgeLengthAvg,
   getResolution,
   latLngToCell,
@@ -16,6 +17,56 @@ import type { Feature, FeatureCollection, Point, Polygon, Position } from 'geojs
 export interface CellValue {
   h3Cell: string
   value: number | null
+  /** True when the map uses a coarser cell's value to shade this cell. */
+  generalized?: boolean
+  /** Source H3 cell shown when a generalized child is clicked. */
+  sourceCell?: string
+  /** App-facing resolution level of the source cell. */
+  sourceLevel?: number
+}
+
+export interface CoarseCellLayer {
+  resolution: number
+  cells: CellValue[]
+}
+
+/** Fill missing display values from the nearest available parent cell. This
+ *  is map presentation only: the child retains its own geometry, and clicks
+ *  can open the real parent cell that supplied the generalized value. */
+export function inheritMissingCellValues(
+  cells: CellValue[],
+  coarseLayers: CoarseCellLayer[],
+): CellValue[] {
+  const available = coarseLayers
+    .slice()
+    .sort((a, b) => b.resolution - a.resolution)
+    .map((layer) => ({
+      resolution: layer.resolution,
+      values: new Map(
+        layer.cells
+          .filter((cell): cell is CellValue & { value: number } => cell.value !== null)
+          .map((cell) => [cell.h3Cell, cell.value]),
+      ),
+    }))
+
+  return cells.map((cell) => {
+    if (cell.value !== null) return cell
+    for (const layer of available) {
+      if (getResolution(cell.h3Cell) <= layer.resolution) continue
+      const parent = cellToParent(cell.h3Cell, layer.resolution)
+      const value = layer.values.get(parent)
+      if (value !== undefined) {
+        return {
+          ...cell,
+          value,
+          generalized: true,
+          sourceCell: parent,
+          sourceLevel: layer.resolution - 2,
+        }
+      }
+    }
+    return cell
+  })
 }
 
 export interface WindPoint {
@@ -26,7 +77,16 @@ export interface WindPoint {
   windDirection: number
 }
 
-type CellFeature = Feature<Polygon, { h3_cell: string; value: number | null }>
+type CellFeature = Feature<
+  Polygon,
+  {
+    h3_cell: string
+    value: number | null
+    generalized: boolean
+    source_h3_cell: string
+    source_level: number | null
+  }
+>
 type WindFeature = Feature<Point, { wind_speed: number; rotation: number }>
 
 export const EMPTY_FEATURE_COLLECTION: FeatureCollection = {
@@ -123,7 +183,13 @@ export function cellsToFeatureCollection(
 ): FeatureCollection<Polygon, CellFeature['properties']> {
   const features: CellFeature[] = cells.map((cell) => ({
     type: 'Feature',
-    properties: { h3_cell: cell.h3Cell, value: cell.value },
+    properties: {
+      h3_cell: cell.h3Cell,
+      value: cell.value,
+      generalized: cell.generalized === true,
+      source_h3_cell: cell.generalized ? (cell.sourceCell ?? cell.h3Cell) : cell.h3Cell,
+      source_level: cell.generalized ? (cell.sourceLevel ?? null) : null,
+    },
     geometry: {
       type: 'Polygon',
       coordinates: [boundaryFor(cell.h3Cell)],

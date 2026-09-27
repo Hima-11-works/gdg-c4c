@@ -25,6 +25,8 @@ export const INDIA_BBOX: BoundingBox = { minLat: 6.5, minLon: 68.0, maxLat: 37.5
 
 export interface Lod {
   tier: LodTier
+  /** App-facing level: 1 is the India overview. Search can reach level 5. */
+  level: 1 | 2 | 3 | 4 | 5
   /** H3 resolution to request from the backend at this tier. */
   resolution: number
   /** Whether a request at this tier should be scoped to the current
@@ -36,46 +38,39 @@ export interface Lod {
   scopedToViewport: boolean
 }
 
-// Level of detail, counting the country-wide view as level 1:
-//   level 1 — H3 res 3, whole country (zoom < 6)
-//   level 2 — H3 res 4, viewport-scoped (zoom 6–7)
-//   level 3 — H3 res 5, viewport-scoped (zoom 7–8)
-//   level 4 — H3 res 6, viewport-scoped (zoom >= 9)   ← finest
-// Each step is one H3 resolution (~7x cell density), and every tier stays well
-// under GRID_QUERY_MAX_CELLS for an ordinary desktop viewport.
-//
-// Level 4 needs no new data to exist. A published run has a native resolution
-// (8 in this deployment) and the v2 read aggregates its native cells up into
-// whatever display resolution is asked for, refusing only a resolution *finer*
-// than native — so res 6 is the same measurements averaged into smaller
-// parents than res 5, which is exactly the extra detail. That is also why the
-// zoom ceiling stops here rather than going deeper: res 7 is 1,340 cells for a
-// city-sized viewport and res 8 times out, so those two are past what a
-// viewport read can serve, not past what the data holds.
+// App levels map to raw H3 resolutions 3–7. Without a place search the map
+// is capped before level 3; a searched scope can reach level 5.
 const COUNTRY_MAX_ZOOM = 6
-const LEVEL3_MIN_ZOOM = 7
-const LEVEL4_MIN_ZOOM = 9
+const RESOLUTION_4_MIN_ZOOM = 7
+const RESOLUTION_5_MIN_ZOOM = 9
+const RESOLUTION_6_MIN_ZOOM = 10.5
 const COUNTRY_RESOLUTION = 3
 const LEVEL2_RESOLUTION = 4
 const LEVEL3_RESOLUTION = 5
 const LEVEL4_RESOLUTION = 6
+const LEVEL5_RESOLUTION = 7
 
-/** Hard zoom ceiling on the map — the zoom at which level 4 (res 6) is
- *  reached, plus a little range inside it. Consumed by MapView's `maxZoom`
- *  and by the search bar's per-location zoom. */
-export const MAX_ZOOM = 10
+/** Without search, the map stops at Resolution 2 (raw H3 resolution 4). */
+export const MAX_UNSCOPED_ZOOM = 6.99
+/** A searched state/place can zoom through app Resolution 5 (raw H3 7). */
+export const MAX_SEARCH_ZOOM = 12
+// Kept as the general search ceiling for callers that need a location target.
+export const MAX_ZOOM = MAX_SEARCH_ZOOM
 
 export function lodForZoom(zoom: number): Lod {
   if (zoom < COUNTRY_MAX_ZOOM) {
-    return { tier: 'country', resolution: COUNTRY_RESOLUTION, scopedToViewport: false }
+    return { tier: 'country', level: 1, resolution: COUNTRY_RESOLUTION, scopedToViewport: false }
   }
-  if (zoom < LEVEL3_MIN_ZOOM) {
-    return { tier: 'state', resolution: LEVEL2_RESOLUTION, scopedToViewport: true }
+  if (zoom < RESOLUTION_4_MIN_ZOOM) {
+    return { tier: 'state', level: 2, resolution: LEVEL2_RESOLUTION, scopedToViewport: true }
   }
-  if (zoom < LEVEL4_MIN_ZOOM) {
-    return { tier: 'state', resolution: LEVEL3_RESOLUTION, scopedToViewport: true }
+  if (zoom < RESOLUTION_5_MIN_ZOOM) {
+    return { tier: 'state', level: 3, resolution: LEVEL3_RESOLUTION, scopedToViewport: true }
   }
-  return { tier: 'state', resolution: LEVEL4_RESOLUTION, scopedToViewport: true }
+  if (zoom < RESOLUTION_6_MIN_ZOOM) {
+    return { tier: 'state', level: 4, resolution: LEVEL4_RESOLUTION, scopedToViewport: true }
+  }
+  return { tier: 'state', level: 5, resolution: LEVEL5_RESOLUTION, scopedToViewport: true }
 }
 
 // The wind-arrow layer only ever displays a thinned-down, sparse subset
@@ -84,13 +79,16 @@ export function lodForZoom(zoom: number): Lod {
 // PM2.5 grid resolution (802 cells nationwide) worth of weather points
 // on every load and every 60s poll is mostly wasted payload: measured at
 // ~210KB for res 3 versus ~30KB for res 2 (113 cells, already close to
-// the ~100 the map actually renders). State/local tiers are left at the
-// grid's own resolution — those are already viewport-scoped and small
-// enough that a second resolution isn't worth the extra parameter.
+// the ~100 the map actually renders). Local weather stays at the grid's
+// resolution through res 6; res 7/8 weather is capped at 6 because the wind
+// overlay is spatially thinned and doesn't need pollution-grid detail.
 const COUNTRY_WEATHER_RESOLUTION = 2
+const MAX_WEATHER_RESOLUTION = 6
 
 export function weatherResolutionForLod(lod: Lod): number {
-  return lod.tier === 'country' ? COUNTRY_WEATHER_RESOLUTION : lod.resolution
+  return lod.tier === 'country'
+    ? COUNTRY_WEATHER_RESOLUTION
+    : Math.min(lod.resolution, MAX_WEATHER_RESOLUTION)
 }
 
 /** A stable primitive key for a level-of-detail query — the cache key for

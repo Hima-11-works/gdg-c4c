@@ -10,11 +10,7 @@ import {
   reportForCell,
   smokeLabel,
 } from '../lib/citizenReports'
-import {
-  anomaliesInCell,
-  priorityForSeverity,
-  worstAnomalyInCell,
-} from '../lib/fireAnomalies'
+import { anomaliesInCell, priorityForSeverity, worstAnomalyInCell } from '../lib/fireAnomalies'
 import type { FireSeverity, ThermalAnomaly } from '../lib/fireAnomalies'
 import { useApiResource } from '../hooks/useApiResource'
 import type { AsyncResource } from '../hooks/useApiResource'
@@ -176,9 +172,7 @@ function CellDetailContent({
         <dd>{formatNumber(staticFeatures?.population_count ?? null, 0)}</dd>
 
         <dt>Population density</dt>
-        <dd>
-          {formatNumber(staticFeatures?.population_density_per_km2 ?? null, 0)} people/km²
-        </dd>
+        <dd>{formatNumber(staticFeatures?.population_density_per_km2 ?? null, 0)} people/km²</dd>
 
         <dt>Road length</dt>
         <dd>
@@ -202,9 +196,7 @@ function CellDetailContent({
         </dd>
 
         <dt>Population-weighted PM2.5</dt>
-        <dd>
-          {formatNumber(exposure?.population_weighted_pm25 ?? null)} µg/m³
-        </dd>
+        <dd>{formatNumber(exposure?.population_weighted_pm25 ?? null)} µg/m³</dd>
 
         <dt>Residents over threshold</dt>
         <dd>
@@ -240,10 +232,18 @@ function CellDetailContent({
               +{forecast.forecast_hours}h: {formatNumber(forecast.predicted_pm25)} µg/m³
               {forecast.lower_pm25 != null && forecast.upper_pm25 != null && (
                 <span className="muted">
-                  {' '}(80% interval {formatNumber(forecast.lower_pm25)}–{formatNumber(forecast.upper_pm25)})
+                  {' '}
+                  (80% interval {formatNumber(forecast.lower_pm25)}–
+                  {formatNumber(forecast.upper_pm25)})
                 </span>
               )}
-              <span className="muted"> ({forecast.metadata?.prediction_method ?? `${Math.round(forecast.confidence * 100)}% feature coverage`})</span>
+              <span className="muted">
+                {' '}
+                (
+                {forecast.metadata?.prediction_method ??
+                  `${Math.round(forecast.confidence * 100)}% feature coverage`}
+                )
+              </span>
             </li>
           ))}
         </ul>
@@ -501,6 +501,13 @@ export function CellDetailPanel({
       </div>
 
       <PriorityBadge h3Cell={selectedCell} />
+
+      {state.selectedCellGeneralized && (
+        <p className="banner banner-demo" role="status">
+          This finer map cell uses its nearest coarser estimate. Details below are for the parent
+          cell that supplied the map color.
+        </p>
+      )}
 
       {resource.status === 'loading' && <p>Loading…</p>}
 

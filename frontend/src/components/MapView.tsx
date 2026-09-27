@@ -23,20 +23,9 @@ import {
   freightLinesFeatureCollection,
   freightNodesFeatureCollection,
 } from '../lib/freightCorridors'
-import {
-  EMPTY_REPORTS,
-  cameraPinImage,
-  reportsFeatureCollection,
-} from '../lib/citizenReports'
-import {
-  anomalyById,
-  anomalyPopupHtml,
-  fireAnomalyFeatureCollection,
-} from '../lib/fireAnomalies'
-import {
-  activeFirePopupHtml,
-  activeFiresFeatureCollection,
-} from '../lib/activeFires'
+import { EMPTY_REPORTS, cameraPinImage, reportsFeatureCollection } from '../lib/citizenReports'
+import { anomalyById, anomalyPopupHtml, fireAnomalyFeatureCollection } from '../lib/fireAnomalies'
+import { activeFirePopupHtml, activeFiresFeatureCollection } from '../lib/activeFires'
 import type { ActiveFire } from '../lib/activeFires'
 import {
   GIBS_ATTRIBUTION,
@@ -56,12 +45,13 @@ import {
   cellsToFeatureCollection,
   EMPTY_FEATURE_COLLECTION,
   hexEdgeKm,
+  inheritMissingCellValues,
   windToFeatureCollection,
 } from '../lib/h3Geometry'
 import { buildSmoothFieldGrid, renderSmoothFieldFromGrid } from '../lib/smoothField'
 import { loadIndiaOutline, type IndiaOutline } from '../lib/indiaOutline'
 import { buildRangeContours, buildSmoothRangeContours } from '../lib/pm25Contours'
-import { INDIA_BBOX, lodBbox, MAX_ZOOM } from '../lib/lod'
+import { INDIA_BBOX, lodBbox, MAX_SEARCH_ZOOM, MAX_UNSCOPED_ZOOM } from '../lib/lod'
 import { scopeContains, scopeMask } from '../lib/scope'
 import { INDIA_OUTLINE_URL, STATE_BOUNDARIES_URL } from '../lib/stateBoundaries'
 import { DISTRICT_BOUNDARIES_URL, MAJOR_HIGHWAYS_URL, MAJOR_ROADS_URL } from '../lib/staticLayers'
@@ -150,6 +140,10 @@ const LAYER_PM25_OUTLINE: Record<Pm25Set, string> = {
   a: 'cells-pm25-outline-a',
   b: 'cells-pm25-outline-b',
 }
+const LAYER_PM25_GENERALIZED: Record<Pm25Set, string> = {
+  a: 'pm25-generalized-a',
+  b: 'pm25-generalized-b',
+}
 const otherSet = (set: Pm25Set): Pm25Set => (set === 'a' ? 'b' : 'a')
 
 // The smooth view double-buffer: each set is a MapLibre `image` source (a
@@ -206,12 +200,17 @@ function pm25PaintLayers(viewMode: MapViewMode, contrast: boolean, set: Pm25Set)
       : [
           { layer: LAYER_PM25_FILL[set], property: 'fill-opacity', base: PM25_FILL_OPACITY },
           { layer: LAYER_PM25_OUTLINE[set], property: 'line-opacity', base: 1 },
+          { layer: LAYER_PM25_GENERALIZED[set], property: 'line-opacity', base: 1 },
         ]
   // Contrast mode adds the range boundary as part of this set, so it dissolves
   // with the field rather than popping between frames. Both views have one:
   // hex edges between the hexagons, iso-lines across the smoothed surface.
   if (contrast) {
-    layers.push({ layer: LAYER_PM25_CONTOUR[set], property: 'line-opacity', base: CONTRAST_LINE_OPACITY })
+    layers.push({
+      layer: LAYER_PM25_CONTOUR[set],
+      property: 'line-opacity',
+      base: CONTRAST_LINE_OPACITY,
+    })
   }
   return layers
 }
@@ -221,7 +220,10 @@ function pm25PaintLayers(viewMode: MapViewMode, contrast: boolean, set: Pm25Set)
 function setContourData(source: GeoJSONSource, contours: MultiLineString | null): void {
   source.setData(
     contours
-      ? { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: contours }] }
+      ? {
+          type: 'FeatureCollection',
+          features: [{ type: 'Feature', properties: {}, geometry: contours }],
+        }
       : EMPTY_FEATURE_COLLECTION,
   )
 }
@@ -600,8 +602,10 @@ function animatePm25Dissolve(
   const a = PM25_FILL_OPACITY
 
   const apply = (outNorm: number, inNorm: number) => {
-    for (const layer of fromLayers) map.setPaintProperty(layer.layer, layer.property, layer.base * outNorm)
-    for (const layer of toLayers) map.setPaintProperty(layer.layer, layer.property, layer.base * inNorm)
+    for (const layer of fromLayers)
+      map.setPaintProperty(layer.layer, layer.property, layer.base * outNorm)
+    for (const layer of toLayers)
+      map.setPaintProperty(layer.layer, layer.property, layer.base * inNorm)
   }
 
   const applyAt = (t: number) => {
@@ -644,6 +648,10 @@ function animatePm25Dissolve(
 interface MapViewProps {
   currentGrid: AsyncResource<GridStateOut[]>
   forecastGrid: AsyncResource<ForecastOut[]>
+  overviewGrid: AsyncResource<GridStateOut[]>
+  parentGrid: AsyncResource<GridStateOut[]>
+  overviewForecastGrid: AsyncResource<ForecastOut[]>
+  parentForecastGrid: AsyncResource<ForecastOut[]>
   weather: AsyncResource<WeatherReadingOut[]>
   /** Citizen reports, read from GET /api/v2/reports so each row carries its
    *  lifecycle status. The pin image is chosen per report from that status -
@@ -651,33 +659,49 @@ interface MapViewProps {
   citizenReports: AsyncResource<FireReportWithStatus[]>
   /** Real NASA FIRMS detections, fetched by MapPage. */
   activeFires: AsyncResource<ActiveFire[]>
+  /** Stop viewport-specific reads immediately when the camera begins moving. */
+  onViewportMoveStart: () => void
+  /** Resume viewport reads after the settled bounds have been published. */
+  onViewportSettled: () => void
 }
 
 /** Full-screen MapLibre map. Owns the map instance imperatively (MapLibre
  * isn't a React-first library); React only decides which GeoJSON feeds
  * each source and which layers are visible, driven by props and the
  * shared UI context (horizon, PDI toggle, click -> selected cell,
- * viewport -> level of detail). No pollution math happens here, and no
- * fetching either — every value rendered is exactly what MapPage's
- * level-of-detail-scoped fetch returned for the current viewport. */
+ * viewport -> level of detail). It does no pollution math or fetching;
+ * demo cells with missing local estimates may carry a clearly marked
+ * display value from their fetched parent cell. */
 export function MapView({
   currentGrid,
   forecastGrid,
+  overviewGrid,
+  parentGrid,
+  overviewForecastGrid,
+  parentForecastGrid,
   weather,
   citizenReports,
   activeFires,
+  onViewportMoveStart,
+  onViewportSettled,
 }: MapViewProps) {
   const { state, dispatch } = useMapUi()
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
   const [mapReady, setMapReady] = useState(false)
+  const viewportCallbacksRef = useRef({ onViewportMoveStart, onViewportSettled })
+  useEffect(() => {
+    viewportCallbacksRef.current = { onViewportMoveStart, onViewportSettled }
+  }, [onViewportMoveStart, onViewportSettled])
 
   // Which double-buffer set is currently visible.
   const visibleSetRef = useRef<Pm25Set>('a')
   // The exact data array (currentGrid.data / forecastGrid.data) painted on
   // the visible set — so a stale-while-revalidate frame (same array) is a
   // no-op instead of a pointless dissolve.
-  const paintedDataRef = useRef<unknown>(null)
+  const paintedDataRef = useRef<{ primary: unknown; parent: unknown; overview: unknown } | null>(
+    null,
+  )
   // Handle of any in-flight layer animation (dissolve or PDI fade), so a new
   // one can finalize the previous before it starts.
   const animationFinishRef = useRef<PaintAnimation | null>(null)
@@ -795,7 +819,7 @@ export function MapView({
           bounds: INDIA_BOUNDS,
           fitBoundsOptions: { padding: 20 },
           maxBounds: MAX_PAN_BOUNDS,
-          maxZoom: MAX_ZOOM,
+          maxZoom: MAX_UNSCOPED_ZOOM,
           renderWorldCopies: false,
         })
         mapRef.current = map
@@ -803,6 +827,7 @@ export function MapView({
 
         // Reports the current viewport (zoom + bounds) to MapUiContext,
         // which derives the level-of-detail tier from it.
+        const onMoveStart = () => viewportCallbacksRef.current.onViewportMoveStart()
         const reportViewport = () => {
           clearTimeout(debounceHandle)
           debounceHandle = setTimeout(() => {
@@ -817,8 +842,10 @@ export function MapView({
                 maxLon: bounds.getEast(),
               },
             })
+            viewportCallbacksRef.current.onViewportSettled()
           }, VIEWPORT_DEBOUNCE_MS)
         }
+        map.on('movestart', onMoveStart)
         map.on('moveend', reportViewport)
 
         map.on('load', () => {
@@ -941,6 +968,18 @@ export function MapView({
                 'line-opacity': set === 'a' ? 1 : 0,
               },
             })
+            map!.addLayer({
+              id: LAYER_PM25_GENERALIZED[set],
+              type: 'line',
+              source: SOURCE_PM25[set],
+              filter: ['==', ['get', 'generalized'], true],
+              paint: {
+                'line-color': '#f8fafc',
+                'line-width': 1.1,
+                'line-dasharray': [2, 2],
+                'line-opacity': set === 'a' ? 1 : 0,
+              },
+            })
           }
 
           // Smooth view double buffer: client-rendered rasters of the same
@@ -968,7 +1007,10 @@ export function MapView({
           // Contrast-mode contours: boundaries between PM2.5 bands, drawn
           // above the fills. Same double buffer as the fills.
           for (const set of PM25_SETS) {
-            map!.addSource(SOURCE_PM25_CONTOUR[set], { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
+            map!.addSource(SOURCE_PM25_CONTOUR[set], {
+              type: 'geojson',
+              data: EMPTY_FEATURE_COLLECTION,
+            })
             map!.addLayer({
               id: LAYER_PM25_CONTOUR[set],
               type: 'line',
@@ -1267,17 +1309,7 @@ export function MapView({
             paint: {
               'circle-color': FIRE_GLOW_COLOR,
               // radius 8–12px halo, blurred to read as thermal bloom.
-              'circle-radius': [
-                'interpolate',
-                ['linear'],
-                ['zoom'],
-                3,
-                6,
-                8,
-                11,
-                12,
-                15,
-              ],
+              'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 6, 8, 11, 12, 15],
               'circle-blur': 1,
               'circle-opacity': FIRE_GLOW_OPACITY,
             },
@@ -1375,11 +1407,7 @@ export function MapView({
             type: 'symbol',
             source: SOURCE_PLACES,
             minzoom: CITY_LABEL_MIN_ZOOM,
-            filter: [
-              'any',
-              ['==', ['get', 'kind'], 'city'],
-              ['==', ['get', 'kind'], 'district'],
-            ],
+            filter: ['any', ['==', ['get', 'kind'], 'city'], ['==', ['get', 'kind'], 'district']],
             layout: {
               'text-field': ['get', 'name'],
               'text-font': PLACE_LABEL_FONT,
@@ -1487,8 +1515,11 @@ export function MapView({
 
           const clickableLayers = [LAYER_PM25_FILL.a, LAYER_PM25_FILL.b, LAYER_PDI_FILL]
           map!.on('click', clickableLayers, (event) => {
-            const h3Cell = event.features?.[0]?.properties?.h3_cell
+            const properties = event.features?.[0]?.properties
+            const h3Cell = properties?.h3_cell
             if (typeof h3Cell !== 'string') return
+            const sourceCell = properties?.source_h3_cell
+            const generalized = properties?.generalized === true && typeof sourceCell === 'string'
             // A greyed-out cell is outside the scoped place: there is no
             // drawer for a cell the user can't see, so those clicks do
             // nothing. Judged against the same geometry the mask is drawn
@@ -1504,7 +1535,11 @@ export function MapView({
             // No resolution is passed — the reducer derives it from the cell
             // string itself, which is the only thing that knows it (a cell
             // is valid only at its own resolution - see resolutionOfCell).
-            dispatch({ type: 'TOGGLE_CELL', cell: h3Cell })
+            dispatch({
+              type: 'TOGGLE_CELL',
+              cell: generalized ? (sourceCell as string) : h3Cell,
+              generalized,
+            })
           })
           map!.on('mouseenter', clickableLayers, () => {
             map!.getCanvas().style.cursor = 'pointer'
@@ -1532,6 +1567,11 @@ export function MapView({
   // fresh object per dispatch, so picking the same place twice re-flies.
   // `moveend` then reports the new viewport, which drives level-of-detail
   // fetching exactly as a manual zoom would.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    mapRef.current.setMaxZoom(state.scope === null ? MAX_UNSCOPED_ZOOM : MAX_SEARCH_ZOOM)
+  }, [mapReady, state.scope])
+
   useEffect(() => {
     if (!mapReady || !mapRef.current) return
     const focus = state.focus
@@ -1617,12 +1657,22 @@ export function MapView({
 
     const steps: PaintStep[] = state.showPdi
       ? [
-          ...shownLayers.map((l) => ({ layer: l.layer, property: l.property, from: l.base, to: 0 })),
+          ...shownLayers.map((l) => ({
+            layer: l.layer,
+            property: l.property,
+            from: l.base,
+            to: 0,
+          })),
           ...hiddenLayers.map((l) => ({ layer: l.layer, property: l.property, from: 0, to: 0 })),
           { layer: LAYER_PDI_FILL, property: 'fill-opacity', from: 0, to: PDI_FILL_OPACITY },
         ]
       : [
-          ...shownLayers.map((l) => ({ layer: l.layer, property: l.property, from: 0, to: l.base })),
+          ...shownLayers.map((l) => ({
+            layer: l.layer,
+            property: l.property,
+            from: 0,
+            to: l.base,
+          })),
           ...hiddenLayers.map((l) => ({ layer: l.layer, property: l.property, from: 0, to: 0 })),
           { layer: LAYER_PDI_FILL, property: 'fill-opacity', from: PDI_FILL_OPACITY, to: 0 },
         ]
@@ -1651,9 +1701,7 @@ export function MapView({
   useEffect(() => {
     if (!mapReady || !mapRef.current) return
     const map = mapRef.current
-    const visibility: 'visible' | 'none' = state.showFreightCorridors
-      ? 'visible'
-      : 'none'
+    const visibility: 'visible' | 'none' = state.showFreightCorridors ? 'visible' : 'none'
     map.setLayoutProperty(LAYER_FREIGHT_GLOW, 'visibility', visibility)
     map.setLayoutProperty(LAYER_FREIGHT_LINE, 'visibility', visibility)
     map.setLayoutProperty(LAYER_FREIGHT_NODES, 'visibility', visibility)
@@ -1758,9 +1806,18 @@ export function MapView({
     const pdiOn = showPdiRef.current
     for (const set of PM25_SETS) {
       const on = set === 'a' && !pdiOn
-      map.setPaintProperty(LAYER_PM25_FILL[set], 'fill-opacity', showHex && on ? PM25_FILL_OPACITY : 0)
+      map.setPaintProperty(
+        LAYER_PM25_FILL[set],
+        'fill-opacity',
+        showHex && on ? PM25_FILL_OPACITY : 0,
+      )
       map.setPaintProperty(LAYER_PM25_OUTLINE[set], 'line-opacity', showHex && on ? 1 : 0)
-      map.setPaintProperty(LAYER_PM25_RASTER[set], 'raster-opacity', !showHex && on ? PM25_FILL_OPACITY : 0)
+      map.setPaintProperty(LAYER_PM25_GENERALIZED[set], 'line-opacity', showHex && on ? 1 : 0)
+      map.setPaintProperty(
+        LAYER_PM25_RASTER[set],
+        'raster-opacity',
+        !showHex && on ? PM25_FILL_OPACITY : 0,
+      )
       map.setPaintProperty(
         LAYER_PM25_CONTOUR[set],
         'line-opacity',
@@ -1796,7 +1853,30 @@ export function MapView({
         ? (currentGrid as Extract<typeof currentGrid, { status: 'success' }>).data
         : (forecastGrid as Extract<typeof forecastGrid, { status: 'success' }>).data
 
-    if (cellsData === paintedDataRef.current) return
+    const parentData =
+      state.forecastMinutes === 0
+        ? parentGrid.status === 'success' && parentGrid.isDemo
+          ? parentGrid.data
+          : null
+        : parentForecastGrid.status === 'success' && parentForecastGrid.isDemo
+          ? parentForecastGrid.data
+          : null
+    const overviewData =
+      state.forecastMinutes === 0
+        ? overviewGrid.status === 'success' && overviewGrid.isDemo
+          ? overviewGrid.data
+          : null
+        : overviewForecastGrid.status === 'success' && overviewForecastGrid.isDemo
+          ? overviewForecastGrid.data
+          : null
+    const painted = paintedDataRef.current
+    if (
+      painted?.primary === cellsData &&
+      painted.parent === parentData &&
+      painted.overview === overviewData
+    ) {
+      return
+    }
 
     // One source of truth for the frame's (cell, value) pairs, shared by both
     // renderings.
@@ -1811,16 +1891,49 @@ export function MapView({
     // genuinely inside the product's area. Until the outline has loaded
     // nothing is dropped, so the first frames render unclipped rather than
     // briefly empty.
-    const allCellValues =
+    const primaryCellValues =
       state.forecastMinutes === 0
         ? (currentGrid as Extract<typeof currentGrid, { status: 'success' }>).data.map((cell) => ({
             h3Cell: cell.h3_cell,
             value: cell.pm25,
           }))
-        : (forecastGrid as Extract<typeof forecastGrid, { status: 'success' }>).data.map((forecast) => ({
-            h3Cell: forecast.h3_cell,
-            value: forecast.predicted_pm25,
-          }))
+        : (forecastGrid as Extract<typeof forecastGrid, { status: 'success' }>).data.map(
+            (forecast) => ({
+              h3Cell: forecast.h3_cell,
+              value: forecast.predicted_pm25,
+            }),
+          )
+    const coarseLayers = [
+      ...(parentData === null
+        ? []
+        : [
+            {
+              resolution: 4,
+              cells: parentData.map((cell) => ({
+                h3Cell: cell.h3_cell,
+                value:
+                  state.forecastMinutes === 0
+                    ? (cell as GridStateOut).pm25
+                    : (cell as ForecastOut).predicted_pm25,
+              })),
+            },
+          ]),
+      ...(overviewData === null
+        ? []
+        : [
+            {
+              resolution: 3,
+              cells: overviewData.map((cell) => ({
+                h3Cell: cell.h3_cell,
+                value:
+                  state.forecastMinutes === 0
+                    ? (cell as GridStateOut).pm25
+                    : (cell as ForecastOut).predicted_pm25,
+              })),
+            },
+          ]),
+    ]
+    const allCellValues = inheritMissingCellValues(primaryCellValues, coarseLayers)
 
     const cellValues =
       indiaOutline === null
@@ -1868,7 +1981,8 @@ export function MapView({
         const image = renderSmoothFieldFromGrid(grid, bbox, PM25_COLOR_SCALE)
         // The raster is georeferenced to the viewport bbox, so it would
         // otherwise be painted across neighbouring countries and the sea.
-        if (indiaOutline !== null) indiaOutline.clipImageToIndia(image, bbox, SMOOTH_BORDER_MARGIN_PX)
+        if (indiaOutline !== null)
+          indiaOutline.clipImageToIndia(image, bbox, SMOOTH_BORDER_MARGIN_PX)
         rasterSource.updateImage({
           image,
           coordinates: imageCoords(bbox),
@@ -1934,7 +2048,7 @@ export function MapView({
       })
     }
 
-    paintedDataRef.current = cellsData
+    paintedDataRef.current = { primary: cellsData, parent: parentData, overview: overviewData }
   }, [
     mapReady,
     state.forecastMinutes,
@@ -1944,6 +2058,10 @@ export function MapView({
     state.bbox,
     currentGrid,
     forecastGrid,
+    overviewGrid,
+    parentGrid,
+    overviewForecastGrid,
+    parentForecastGrid,
     state.showPdi,
     indiaOutline,
     reducedMotion,
@@ -1956,13 +2074,15 @@ export function MapView({
   useEffect(() => {
     if (!mapReady || !mapRef.current) return
     if (weather.status !== 'success') return
-    const points = weather.data.filter((reading) => reading.wind_speed !== null && reading.wind_direction !== null).map((reading) => ({
-      h3Cell: reading.h3_cell,
-      latitude: reading.latitude,
-      longitude: reading.longitude,
-      windSpeed: reading.wind_speed as number,
-      windDirection: reading.wind_direction as number,
-    }))
+    const points = weather.data
+      .filter((reading) => reading.wind_speed !== null && reading.wind_direction !== null)
+      .map((reading) => ({
+        h3Cell: reading.h3_cell,
+        latitude: reading.latitude,
+        longitude: reading.longitude,
+        windSpeed: reading.wind_speed as number,
+        windDirection: reading.wind_direction as number,
+      }))
     const effectiveBbox = lodBbox(state.lod, state.bbox) ?? INDIA_BBOX
     const thinned = thinBySpatialGrid(points, effectiveBbox)
     const source = mapRef.current.getSource(SOURCE_WIND)
@@ -2006,9 +2126,7 @@ export function MapView({
   useEffect(() => {
     if (!mapReady || !mapRef.current) return
     const map = mapRef.current
-    const visibility: 'visible' | 'none' = state.showFireHotspots
-      ? 'visible'
-      : 'none'
+    const visibility: 'visible' | 'none' = state.showFireHotspots ? 'visible' : 'none'
     map.setLayoutProperty(LAYER_FIRE_HEATMAP, 'visibility', visibility)
     map.setLayoutProperty(LAYER_FIRE_PULSE, 'visibility', visibility)
     map.setLayoutProperty(LAYER_FIRE_CORE, 'visibility', visibility)

@@ -45,7 +45,13 @@ function keyframesFor(horizonsHours: number[] = DEFAULT_HORIZONS_HOURS): number[
 export const WARM_WINDOW = 8
 
 const cache = new Map<string, Envelope<ForecastOut[]>>()
-const inFlight = new Map<string, Promise<void>>()
+interface InFlightForecast {
+  queryKey: string
+  controller: AbortController
+  promise: Promise<void>
+}
+const inFlight = new Map<string, InFlightForecast>()
+const failed = new Set<string>()
 const listeners = new Set<() => void>()
 
 // Explicit warm-up operations, keyed by view (queryKey). Present only while
@@ -73,19 +79,44 @@ export function ensureForecastFrame(
   const key = cacheKey(minutes, queryKey)
   if (cache.has(key)) return Promise.resolve()
   const existing = inFlight.get(key)
-  if (existing) return existing
-  const promise = fetchGridForecast(minutes, query, runId)
+  if (existing) return existing.promise
+  failed.delete(key)
+  const controller = new AbortController()
+  const request: InFlightForecast = {
+    queryKey,
+    controller,
+    promise: Promise.resolve(),
+  }
+  request.promise = fetchGridForecast(minutes, query, runId, controller.signal)
     .then((envelope) => {
+      if (controller.signal.aborted || inFlight.get(key) !== request) return
       cache.set(key, envelope)
       inFlight.delete(key)
+      failed.delete(key)
       notify()
     })
     .catch(() => {
+      if (inFlight.get(key) !== request) return
       inFlight.delete(key)
+      if (!controller.signal.aborted) failed.add(key)
       notify()
     })
-  inFlight.set(key, promise)
-  return promise
+  inFlight.set(key, request)
+  return request.promise
+}
+
+/** Abort active frame reads belonging to a viewport that has just changed. */
+export function cancelForecastRequests(queryKey: string): void {
+  let cancelledAny = false
+  for (const [key, request] of inFlight) {
+    if (request.queryKey !== queryKey) continue
+    request.controller.abort()
+    inFlight.delete(key)
+    failed.delete(key)
+    cancelledAny = true
+  }
+  const hadWarmup = warmups.delete(queryKey)
+  if (cancelledAny || hadWarmup) notify()
 }
 
 /**
@@ -130,6 +161,9 @@ export function warmForecastWindow(
 
   for (const minutes of missing) {
     ensureForecastFrame(minutes, queryKey, query, runId).finally(() => {
+      // The viewport may have changed while this batch was in flight. Its
+      // completion must not clear a newer warm-up for the same query key.
+      if (warmups.get(queryKey) !== warmup) return
       warmup.pending -= 1
       if (warmup.pending <= 0) {
         warmups.delete(queryKey)
@@ -239,7 +273,7 @@ export function useForecastFrame(
       const cached = cache.get(key)
       if (cached) {
         setLatest({ queryKey, frame: stateFromEnvelope(cached) })
-      } else if (!inFlight.has(key)) {
+      } else if (!inFlight.has(key) && failed.has(key)) {
         // A fetch failed with no prior data for this frame.
         setLatest((previous) => {
           if (previous.queryKey === queryKey && previous.frame.data) {

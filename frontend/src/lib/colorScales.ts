@@ -43,8 +43,9 @@ export const PDI_COLOR_SCALE: ColorStop[] = [
 ]
 
 /** Color used for a cell whose value is null (no estimate yet) — distinct
- * from every ramp so "no data" is never confused with "measured zero". */
-export const NO_DATA_COLOR = '#2a2e36'
+ * from every ramp and bright enough to keep fine-resolution cell geometry
+ * visible on the dark basemap without implying a pollution value. */
+export const NO_DATA_COLOR = '#485260'
 
 /** Builds a MapLibre `interpolate` expression from a color scale, with a
  * `case` wrapper so a null `value` (no estimate for that cell) renders as

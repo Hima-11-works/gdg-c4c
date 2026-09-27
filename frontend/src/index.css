@@ -59,6 +59,16 @@ body,
   left: 0.75rem;
 }
 
+.resolution-indicator {
+  width: max-content;
+  padding: 0.3rem 0.6rem;
+  color: #e5e7eb;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  pointer-events: none;
+}
+
 .overlay-top-right {
   top: 0.75rem;
   right: 0.75rem;
@@ -183,7 +193,9 @@ body,
   color: #9ca3af;
   cursor: pointer;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
-  transition: color 0.15s, border-color 0.15s;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
 }
 
 .side-panel-toggle:hover {
@@ -296,7 +308,10 @@ body,
   color: #9ca3af;
   font-size: 0.78rem;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
 }
 
 .view-mode-option:hover {
@@ -359,7 +374,9 @@ body,
   background: #2563eb;
   color: #fff;
   cursor: pointer;
-  transition: background 0.15s, transform 0.1s;
+  transition:
+    background 0.15s,
+    transform 0.1s;
 }
 
 .timeline-playbtn:hover {
@@ -394,7 +411,9 @@ body,
   background: transparent;
   color: #9ca3af;
   cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
 }
 
 .timeline-resetbtn:hover {
@@ -560,7 +579,9 @@ body,
   font-size: 0.7rem;
   line-height: 1;
   cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
 }
 
 .scope-chip-close:hover {
@@ -846,7 +867,9 @@ body,
   line-height: 1;
   font-size: 0.9rem;
   color: #9ca3af;
-  transition: color 0.15s, border-color 0.15s;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
   pointer-events: auto;
 }
 
@@ -988,7 +1011,7 @@ body,
   flex-direction: column;
   gap: 0.15rem;
   background: rgba(18, 20, 26, 0.96);
-  border: 1px solid #00F5D455;
+  border: 1px solid #00f5d455;
   border-radius: 8px;
   padding: 0.5rem 0.7rem;
   color: #e5e7eb;
@@ -1001,7 +1024,7 @@ body,
 }
 
 .freight-node-popup .freight-popup-corridor {
-  color: #00F5D4;
+  color: #00f5d4;
   font-size: 0.68rem;
 }
 
@@ -1012,7 +1035,7 @@ body,
   flex-direction: column;
   gap: 0.15rem;
   background: rgba(18, 20, 26, 0.96);
-  border: 1px solid #FF950055;
+  border: 1px solid #ff950055;
   border-radius: 8px;
   padding: 0.5rem 0.7rem;
   color: #e5e7eb;
@@ -1079,7 +1102,10 @@ body,
   letter-spacing: 0.01em;
   padding: 0.55rem 0.75rem;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, transform 0.08s;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    transform 0.08s;
 }
 
 .intervention-cta:hover:not(:disabled) {
@@ -1238,7 +1264,9 @@ body,
   font-weight: 600;
   padding: 0.2rem 0.45rem;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
 }
 
 .alert-cta:hover {

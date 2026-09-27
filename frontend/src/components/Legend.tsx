@@ -18,6 +18,13 @@ export function Legend() {
     >
       <div className="panel legend">
         <section>
+          <h3>Resolution {state.lod.level}</h3>
+          <p className="muted legend-note">
+            {state.lod.level === 1 ? 'India overview' : 'Zoomed map detail'}
+          </p>
+        </section>
+
+        <section>
           <h3>PM2.5 (µg/m³)</h3>
           {PM25_COLOR_SCALE.map((stop) => (
             <div className="legend-row" key={stop.value}>
@@ -117,11 +124,25 @@ export function Legend() {
           )}
         </section>
 
+        {state.lod.level >= 2 && (
+          <section>
+            <h3>Generalized values</h3>
+            <div className="legend-row">
+              <span
+                className="swatch"
+                style={{ background: 'transparent', border: '1.5px dashed #f8fafc' }}
+              />
+              Nearest coarser estimate
+            </div>
+            <p className="muted legend-note">
+              In demo data, a fine cell without an estimate uses its nearest coarser value. Dashed
+              outlines mark these cells in hex view; clicking opens the source cell.
+            </p>
+          </section>
+        )}
+
         <section>
-          <p className="muted legend-note">
-            Zoomed out: a generalized nationwide picture. Zoom in for finer detail, or click any hex
-            for its full readings.
-          </p>
+          <p className="muted legend-note">Click a hex to inspect the cell and its readings.</p>
         </section>
       </div>
     </SidePanel>

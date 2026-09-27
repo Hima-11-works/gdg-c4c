@@ -31,16 +31,18 @@ interface UseApiResourceOptions {
 export interface ApiResource<T> {
   resource: AsyncResource<T>
   refetch: () => void
+  cancel: () => void
 }
 
 export function useApiResource<T>(
-  fetcher: () => Promise<Envelope<T>>,
+  fetcher: (signal: AbortSignal) => Promise<Envelope<T>>,
   deps: DependencyList,
   { pollIntervalMs, enabled = true }: UseApiResourceOptions = {},
 ): ApiResource<T> {
   const [resource, setResource] = useState<AsyncResource<T>>({ status: 'idle' })
   const [reloadToken, setReloadToken] = useState(0)
   const fetcherRef = useRef(fetcher)
+  const activeControllerRef = useRef<AbortController | null>(null)
 
   // Keep the latest fetcher without making it a dependency of the effect
   // below (a new inline `() => fetchX(...)` every render must not
@@ -51,21 +53,34 @@ export function useApiResource<T>(
   })
 
   const refetch = useCallback(() => setReloadToken((token) => token + 1), [])
+  const cancel = useCallback(() => {
+    const controller = activeControllerRef.current
+    if (!controller) return
+    activeControllerRef.current = null
+    controller.abort()
+    setResource((current) => (current.status === 'loading' ? { status: 'idle' } : current))
+  }, [])
 
   useEffect(() => {
     if (!enabled) return
 
     let cancelled = false
+    let activeController: AbortController | null = null
     const load = (isBackgroundRefresh: boolean) => {
+      // A slow poll must not overlap the next poll or a newer viewport load.
+      activeController?.abort()
+      const controller = new AbortController()
+      activeController = controller
+      activeControllerRef.current = controller
       // Only a background poll tick skips this: a fresh run (mount, or
       // any dependency change — e.g. a different cell selected) always
       // shows loading, rather than risking the *previous* dependency's
       // stale data being mistaken for the new one's while it's in flight.
       if (!isBackgroundRefresh) setResource({ status: 'loading' })
       fetcherRef
-        .current()
+        .current(controller.signal)
         .then((envelope) => {
-          if (!cancelled)
+          if (!cancelled && !controller.signal.aborted)
             setResource({
               status: 'success',
               data: envelope.data,
@@ -78,9 +93,13 @@ export function useApiResource<T>(
         .catch((error: unknown) => {
           // A failed background refresh keeps showing the last good data
           // rather than replacing it with an error banner.
-          if (cancelled || isBackgroundRefresh) return
+          if (cancelled || controller.signal.aborted || isBackgroundRefresh) return
           const message = error instanceof ApiError ? error.message : 'Unknown error'
           setResource({ status: 'error', message })
+        })
+        .finally(() => {
+          if (activeController === controller) activeController = null
+          if (activeControllerRef.current === controller) activeControllerRef.current = null
         })
     }
 
@@ -100,6 +119,8 @@ export function useApiResource<T>(
 
     return () => {
       cancelled = true
+      activeController?.abort()
+      if (activeControllerRef.current === activeController) activeControllerRef.current = null
       if (interval) clearInterval(interval)
     }
     // `deps` is caller-supplied (mirrors useEffect's own API) so this
@@ -107,7 +128,8 @@ export function useApiResource<T>(
     // can't statically verify a spread of an arbitrary-length caller-
     // supplied array, but the array itself is still recomputed fresh
     // every render like any other dependency list, so this is safe.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, pollIntervalMs, reloadToken, ...deps])
 
-  return { resource, refetch }
+  return { resource, refetch, cancel }
 }

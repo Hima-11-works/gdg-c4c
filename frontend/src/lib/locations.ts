@@ -29,11 +29,11 @@ export interface IndiaLocation {
 
 export const LOCATIONS_URL = '/data/india_locations.json'
 
-/** Zoom to fly to for each kind, clamped to lib/lod.ts's MAX_ZOOM (level 3
- *  is the finest detail, so zooming past it reveals nothing new). */
+/** Initial zoom by result kind: a state opens at app Resolution 3, a district
+ *  at Resolution 4, and city/locality searches at Resolution 5. */
 export const ZOOM_BY_KIND: Record<LocationKind, number> = {
-  state: 6,
-  district: 7,
+  state: 7,
+  district: 9,
   city: MAX_ZOOM,
   locality: MAX_ZOOM,
 }

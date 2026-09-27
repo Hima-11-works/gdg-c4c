@@ -851,22 +851,32 @@ current **zoom level**, via `frontend/src/lib/lod.ts`'s `lodForZoom`:
 
 | Level | Zoom | H3 resolution | ~Cell area | Scope of the request |
 |---|---|---|---|---|
-| 1 (country) | < 6 | 3 | ~12,400 km² | Always all of India (`INDIA_BBOX`) - always ~800 cells, too small to bother scoping to viewport |
-| 2 (state) | 6 - 7 | 4 | ~1,770 km² | The current map viewport |
-| 3 (state) | 7 - 8 | 5 | ~253 km² | The current map viewport |
-| 4 (state) | ≥ 9 | 6 | ~36 km² | The current map viewport |
+| 1 (India overview) | < 6 | 3 | ~12,400 km² | All of India - about 800 cells |
+| 2 | 6 to < 7 | 4 | ~1,770 km² | Current viewport; this is the normal zoom ceiling |
+| 3 | 7 to < 9 | 5 | ~253 km² | Current viewport; available after selecting a place |
+| 4 | 9 to < 10.5 | 6 | ~36 km² | Current viewport; a district search starts here |
+| 5 | 10.5 to 12 | 7 | ~5.2 km² | Current viewport; city/locality searches can reach here |
 
-Resolution steps up by exactly one H3 level per tier (a ~7x jump in cell
-density each time), and the ceiling is `MAX_ZOOM` (= 10).
+The map normally stops at zoom 6.99 (Resolution 2). Selecting a search result
+raises the ceiling to zoom 12. State searches start at Resolution 3, district
+searches at Resolution 4, and city/locality searches at Resolution 5. State and
+district scopes show their official boundary and grey out everything outside
+it. Clearing the search returns the map to Resolution 2.
 
-**Why level 4 needs no new data.** A published run carries a native
+Each step uses the next H3 resolution and requests only the visible viewport.
+The backend leaves cells without supported fine estimates empty. In demo mode,
+the web map shades those gaps from the nearest coarser cell and draws a dashed
+outline; clicking one opens the source cell. This display fallback is labeled
+as generalized and does not change API data. Live mode continues to show cells
+without estimates in the no-estimate color.
+
+**Why the fine levels need no new data.** A published run carries a native
 resolution (8 in this deployment) and the v2 read aggregates its native
 cells up into whatever display resolution is asked for, refusing only a
 resolution *finer* than native. Res 6 is therefore the same measurements
 averaged into smaller parents than res 5 - genuinely finer detail, not
-interpolation. The ceiling sits at res 6 because that is what a viewport
-read can serve: res 7 is ~1,340 cells for a city-sized viewport and res 8
-times out. `GET /api/v2/meta` reports the range as
+interpolation. Resolutions 7 and 8 use the same rule. `GET /api/v2/meta`
+reports the supported range as
 `supported_display_resolutions`, which is every resolution from 3 to the
 run's native one.
 
@@ -884,7 +894,10 @@ The v2 read aggregates a run's own cells upward and skips any cell *finer*
 than the request, so the crossover needs no configuration: a request at
 res ≤ 4 sees the national tier, and a request at res 5-8 sees only the
 fine grid. A coarse cell therefore never answers a fine question, which
-is the point — it cannot be refined into detail that was never measured.
+is the point — it cannot be refined into detail that was never measured. In
+demo mode, the web map can still shade a missing fine cell with the nearest
+coarser estimate, using a dashed outline and linking clicks to the source
+cell. The API continues to report the fine estimate as missing.
 
 **Why a second product rather than a bigger `INGEST_BBOX`.** At
 `H3_RESOLUTION=8` a country-sized box is ~11M cells (see the weather

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   fetchActiveFires,
   fetchGridCurrent,
@@ -9,11 +9,12 @@ import {
 import { useApiResource } from '../hooks/useApiResource'
 import {
   ensureForecastFrame,
+  cancelForecastRequests,
   useForecastFrame,
   useForecastWarming,
   warmForecastWindow,
 } from '../lib/forecastFrames'
-import { lodKey, lodQueryFor, weatherResolutionForLod } from '../lib/lod'
+import { lodForZoom, lodKey, lodQueryFor, weatherResolutionForLod } from '../lib/lod'
 import { useMapUi } from '../state/MapUiContext'
 import { AlertsPanel } from './AlertsPanel'
 import { CellDetailPanel } from './CellDetailPanel'
@@ -44,6 +45,7 @@ export function MapPage() {
   // The submit form is open/closed here so its map-centre location and the
   // reports list it refetches both come from this component's data.
   const [reportOpen, setReportOpen] = useState(false)
+  const [viewportMoving, setViewportMoving] = useState(false)
 
   // A report is filed where the user is looking: the viewport centre. The
   // backend snaps it to an H3 cell and returns that in the response.
@@ -71,15 +73,55 @@ export function MapPage() {
     publishedMeta.resource.status === 'success'
       ? publishedMeta.resource.data.latest_run_id
       : undefined
+  const demoMode =
+    publishedMeta.resource.status === 'success' &&
+    publishedMeta.resource.data.data_mode === 'demo' &&
+    publishedMeta.resource.data.is_demo
 
-  const currentGrid = useApiResource(
-    () => fetchGridCurrent(query, publishedRunId),
+  const detailedGrid = useApiResource(
+    (signal) => fetchGridCurrent(query, publishedRunId, signal),
     [viewKey, publishedRunId],
     {
       pollIntervalMs: POLL_INTERVAL_MS,
-      enabled: viewportReady && publishedRunId !== undefined,
+      enabled:
+        !viewportMoving &&
+        viewportReady &&
+        publishedRunId !== undefined &&
+        (!demoMode || lod.level >= 2),
     },
   )
+  // Keep a coarse India grid available as a visual fallback when detailed
+  // cells have no estimate. Fine map cells inherit only the nearest parent
+  // estimate; the map marks these values as generalized and opens the source
+  // parent when clicked. This runs only in demo mode, where that overview is
+  // explicitly illustrative.
+  const overviewQuery = lodQueryFor(lodForZoom(0), null)
+  const overviewGrid = useApiResource(
+    () => fetchGridCurrent(overviewQuery, publishedRunId),
+    [lodKey(overviewQuery), publishedRunId],
+    {
+      pollIntervalMs: POLL_INTERVAL_MS,
+      enabled: demoMode && publishedRunId !== undefined,
+    },
+  )
+  const parentLod = { ...lod, tier: 'state' as const, resolution: 4, scopedToViewport: true }
+  const parentQuery = lodQueryFor(parentLod, bbox)
+  const parentGrid = useApiResource(
+    (signal) => fetchGridCurrent(parentQuery, publishedRunId, signal),
+    [lodKey(parentQuery), publishedRunId],
+    {
+      pollIntervalMs: POLL_INTERVAL_MS,
+      enabled:
+        !viewportMoving &&
+        demoMode &&
+        lod.level >= 3 &&
+        viewportReady &&
+        publishedRunId !== undefined,
+    },
+  )
+  // The nationwide query is the Resolution 1 view itself, so keep it as the
+  // source at that level and reuse it as fallback after zooming in.
+  const currentGrid = lod.level === 1 && demoMode ? overviewGrid : detailedGrid
   const queryKey = `${viewKey}:${publishedRunId ?? 'pending'}:${supportedHours.join(',')}`
 
   const isNow = forecastMinutes === 0
@@ -93,7 +135,7 @@ export function MapPage() {
     forecastMinutes,
     queryKey,
     query,
-    viewportReady && !isNow && publishedRunId !== undefined,
+    !viewportMoving && viewportReady && !isNow && publishedRunId !== undefined,
     publishedRunId,
   )
   const forecastGrid = {
@@ -108,14 +150,63 @@ export function MapPage() {
     } as AsyncResource<ForecastOut[]>,
     refetch: () => ensureForecastFrame(forecastMinutes, queryKey, query, publishedRunId),
   }
+  const overviewForecastKey = `${lodKey(overviewQuery)}:${publishedRunId ?? 'pending'}:${supportedHours.join(',')}`
+  const overviewForecastFrame = useForecastFrame(
+    forecastMinutes,
+    overviewForecastKey,
+    overviewQuery,
+    demoMode && !isNow && publishedRunId !== undefined,
+    publishedRunId,
+  )
+  const overviewForecastGrid = {
+    status: overviewForecastFrame.status,
+    data: overviewForecastFrame.data,
+    isDemo: overviewForecastFrame.isDemo,
+    runId: overviewForecastFrame.runId,
+    mode: overviewForecastFrame.mode,
+    generatedAt: overviewForecastFrame.generatedAt,
+    message: overviewForecastFrame.message,
+  } as AsyncResource<ForecastOut[]>
+  const parentForecastKey = `${lodKey(parentQuery)}:${publishedRunId ?? 'pending'}:${supportedHours.join(',')}`
+  const parentForecastFrame = useForecastFrame(
+    forecastMinutes,
+    parentForecastKey,
+    parentQuery,
+    !viewportMoving &&
+      demoMode &&
+      !isNow &&
+      lod.level >= 3 &&
+      viewportReady &&
+      publishedRunId !== undefined,
+    publishedRunId,
+  )
+  const parentForecastGrid = {
+    status: parentForecastFrame.status,
+    data: parentForecastFrame.data,
+    isDemo: parentForecastFrame.isDemo,
+    runId: parentForecastFrame.runId,
+    mode: parentForecastFrame.mode,
+    generatedAt: parentForecastFrame.generatedAt,
+    message: parentForecastFrame.message,
+  } as AsyncResource<ForecastOut[]>
+
+  // Abort frame and warm-up requests for both viewport-bound queries when
+  // moving starts or the component leaves this view.
+  useEffect(
+    () => () => {
+      cancelForecastRequests(queryKey)
+      cancelForecastRequests(parentForecastKey)
+    },
+    [queryKey, parentForecastKey],
+  )
 
   const weatherQuery: LodQuery = { ...query, resolution: weatherResolutionForLod(lod) }
   const weather = useApiResource(
-    () => fetchWeather(weatherQuery, publishedRunId),
+    (signal) => fetchWeather(weatherQuery, publishedRunId, signal),
     [lodKey(weatherQuery), publishedRunId],
     {
       pollIntervalMs: POLL_INTERVAL_MS,
-      enabled: viewportReady && publishedRunId !== undefined,
+      enabled: !viewportMoving && viewportReady && publishedRunId !== undefined,
     },
   )
 
@@ -149,6 +240,19 @@ export function MapPage() {
     enabled: state.showActiveFires,
   })
 
+  const cancelDetailedGrid = detailedGrid.cancel
+  const cancelParentGrid = parentGrid.cancel
+  const cancelWeather = weather.cancel
+  const handleViewportMoveStart = useCallback(() => {
+    setViewportMoving(true)
+    cancelDetailedGrid()
+    cancelParentGrid()
+    cancelWeather()
+    cancelForecastRequests(queryKey)
+    cancelForecastRequests(parentForecastKey)
+  }, [cancelDetailedGrid, cancelParentGrid, cancelWeather, queryKey, parentForecastKey])
+  const handleViewportSettled = useCallback(() => setViewportMoving(false), [])
+
   // A view change (new queryKey) invalidates the forecast cache for this
   // view: warm the current position plus the next WARM_WINDOW keyframes so
   // playback is smooth from the moment it starts. The warm-up is an explicit
@@ -170,13 +274,19 @@ export function MapPage() {
     minutesRef.current = forecastMinutes
   })
   useEffect(() => {
-    if (!viewportReady || publishedRunId === undefined) return
-    if (forecastMinutes === 0) return
-    warmForecastWindow(queryKey, queryRef.current, minutesRef.current, supportedHours, publishedRunId)
+    if (viewportMoving || !viewportReady || publishedRunId === undefined) return
+    if (isNow) return
+    warmForecastWindow(
+      queryKey,
+      queryRef.current,
+      minutesRef.current,
+      supportedHours,
+      publishedRunId,
+    )
     // Re-warms on a view change or when the user first engages, not on every
     // playback tick.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queryKey, viewportReady, supportedHours, publishedRunId, forecastMinutes === 0])
+  }, [queryKey, viewportReady, viewportMoving, supportedHours, publishedRunId, isNow])
 
   const warming = useForecastWarming(queryKey)
   const isInterpolated = forecastMinutes > 0 && !supportedHours.includes(forecastMinutes / 60)
@@ -202,19 +312,24 @@ export function MapPage() {
       <MapView
         currentGrid={currentGrid.resource}
         forecastGrid={forecastGrid.resource}
+        overviewGrid={overviewGrid.resource}
+        parentGrid={parentGrid.resource}
+        overviewForecastGrid={overviewForecastGrid}
+        parentForecastGrid={parentForecastGrid}
         weather={weather.resource}
         citizenReports={reports.resource}
         activeFires={activeFires.resource}
+        onViewportMoveStart={handleViewportMoveStart}
+        onViewportSettled={handleViewportSettled}
       />
 
       <div className="overlay overlay-top-left">
         <Legend />
+        <div className="panel resolution-indicator" role="status" aria-live="polite">
+          Resolution {lod.level}
+        </div>
         {reportCenter !== null && (
-          <button
-            type="button"
-            className="panel report-open"
-            onClick={() => setReportOpen(true)}
-          >
+          <button type="button" className="panel report-open" onClick={() => setReportOpen(true)}>
             Report a fire
           </button>
         )}
@@ -242,10 +357,7 @@ export function MapPage() {
 
       <div className="overlay overlay-bottom-center">
         <ScopeChip />
-        <TimelineControl
-          publishedRunId={publishedRunId}
-          supportedHours={supportedHours}
-        />
+        <TimelineControl publishedRunId={publishedRunId} supportedHours={supportedHours} />
       </div>
 
       <CellDetailPanel publishedRunId={publishedRunId} citizenReports={reports.resource} />
