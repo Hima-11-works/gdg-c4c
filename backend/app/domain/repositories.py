@@ -8,6 +8,7 @@ without touching anything above this layer.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Protocol
 
@@ -281,4 +282,22 @@ class PredictionPublicationRepository(Protocol):
 
     def latest_run(self, *, region: str | None = None) -> PredictionRun | None: ...
 
-    def list_results(self, run_id: str) -> list[PredictionResult]: ...
+    def list_results(
+        self, run_id: str, *, horizons: Sequence[float] | None = None
+    ) -> list[PredictionResult]:
+        """Every result in the run, or only those at `horizons`.
+
+        `horizons` exists because a run holds one row per cell per horizon and
+        a read only ever needs one (or the two bracketing an interpolation).
+        Selecting the whole run made a country read cost the same as a
+        single-cell one.
+        """
+        ...
+
+    def list_horizons(self, run_id: str) -> list[float]:
+        """The horizons the run published, ascending. Cheap: ~25 numbers."""
+        ...
+
+    def list_result_cells(self, run_id: str) -> list[str]:
+        """Every distinct cell in the run, without loading any result row."""
+        ...

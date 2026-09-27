@@ -19,7 +19,9 @@ import h3
 import pytest
 
 from app.core.config import Settings
+from app.domain.features import DataMode
 from app.domain.h3_grid import cell_center
+from app.domain.prediction import PredictionRun
 from app.services.national_overview import (
     NATIONAL_OVERVIEW_DATASET,
     build_national_overview,
@@ -263,3 +265,85 @@ def test_the_pipeline_publishes_one_shared_horizon_set() -> None:
     assert FORECAST_HORIZONS_HOURS[-1] == 6.0
     # Every horizon a client may ask for must exist in the published set.
     assert {0.25, 1.0, 3.0, 6.0}.issubset(set(FORECAST_HORIZONS_HOURS))
+
+
+# --- the read path must not read the whole run -----------------------------
+# A run holds one row per cell per horizon across 25 horizons, so a read that
+# selects the run and filters in Python pays for ~200k rows. It cost a country
+# read 103 seconds; horizon-scoping it in SQL brought that to ~1s.
+
+
+def _published_run() -> PredictionRun:
+    return PredictionRun(
+        run_id="run-20260101T0000Z",
+        generated_at=NOW,
+        region="india",
+        mode=DataMode.DEMO,
+        feature_run_id="feat-1",
+        feature_schema_version="1",
+    )
+
+
+def test_horizons_are_read_without_loading_result_rows() -> None:
+    """The meta, the forecast validation and every aggregate ask this first.
+
+    Deriving it from a full result load made each of those as expensive as the
+    read it was about to do.
+    """
+    from app.services.prediction_queries import PredictionQueryService
+
+    class _Repo:
+        def __init__(self) -> None:
+            self.list_results_calls = 0
+
+        def list_horizons(self, run_id: str) -> list[float]:
+            return [1.0, 3.0, 6.0]
+
+        def list_results(self, run_id, *, horizons=None):
+            self.list_results_calls += 1
+            return []
+
+        def list_result_cells(self, run_id: str) -> list[str]:
+            return []
+
+    repo = _Repo()
+    service = PredictionQueryService(repo)  # type: ignore[arg-type]
+    run = _published_run()
+
+    assert service.horizons(run) == [1.0, 3.0, 6.0]
+    assert repo.list_results_calls == 0
+
+
+def test_horizon_zero_is_still_a_valid_interpolation_anchor() -> None:
+    """Regression: +15m returned nothing.
+
+    `horizons()` reports forecast horizons only - 0 is not a position a client
+    scrubs to - but it is a legitimate lower anchor. Filtering it out of the
+    set used to pick bracketing anchors left a +15m read with no lower anchor,
+    so it returned no rows instead of interpolating up from the current frame.
+    """
+    from app.services.prediction_queries import PredictionQueryService
+
+    run = _published_run()
+
+    requested: list[object] = []
+
+    class _Repo:
+        def list_horizons(self, run_id: str) -> list[float]:
+            # What the run actually published, current frame included.
+            return [0.0, 1.0, 2.0]
+
+        def list_results(self, run_id, *, horizons=None):
+            requested.append(horizons)
+            return []
+
+        def list_result_cells(self, run_id: str) -> list[str]:
+            return []
+
+    service = PredictionQueryService(_Repo())  # type: ignore[arg-type]
+
+    # 0.25h is not published; it must be answered from the 0 and 1 anchors.
+    service._rows_at_horizon(run, ["8928308280fffff"], 0.25)
+
+    assert requested, "no rows were requested"
+    assert set(requested[0]) == {0.0, 1.0}

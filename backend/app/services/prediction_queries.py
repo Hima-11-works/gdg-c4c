@@ -202,7 +202,14 @@ class PredictionQueryService:
     ) -> list[PredictionResult]:
         if run.run_id.startswith(DEMO_FALLBACK_PREFIX):
             return self._demo_results(run, cells or [], horizons)
-        results = self._repository.list_results(run.run_id)
+        # Pushed into SQL. A run holds one row per cell per horizon across 25
+        # horizons, and a read needs one of them; selecting the run and
+        # filtering here meant every request paid for the whole run, three JSON
+        # columns included. That is what made a country read take over a
+        # minute.
+        results = self._repository.list_results(
+            run.run_id, horizons=sorted(horizons) if horizons is not None else None
+        )
         cell_set = None if cells is None else set(cells)
         return [
             row
@@ -214,13 +221,14 @@ class PredictionQueryService:
     def target_cells(self, run: PredictionRun, resolution: int) -> list[str]:
         if run.run_id.startswith(DEMO_FALLBACK_PREFIX):
             return sorted(state.h3_cell for state in demo_data.demo_grid_states(resolution))
-        rows = self.results(run)
+        # Only the cell ids, so working out a resolution's coverage costs a
+        # distinct-column scan rather than a full result load.
         cells = {
-            row.h3_cell
-            if h3.get_resolution(row.h3_cell) == resolution
-            else h3.cell_to_parent(row.h3_cell, resolution)
-            for row in rows
-            if h3.get_resolution(row.h3_cell) >= resolution
+            cell
+            if h3.get_resolution(cell) == resolution
+            else h3.cell_to_parent(cell, resolution)
+            for cell in self._repository.list_result_cells(run.run_id)
+            if h3.get_resolution(cell) >= resolution
         }
         return sorted(cells)
 
@@ -281,15 +289,41 @@ class PredictionQueryService:
     def horizons(self, run: PredictionRun) -> list[float]:
         if run.run_id.startswith(DEMO_FALLBACK_PREFIX):
             return [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
-        return sorted({row.horizon_hours for row in self.results(run) if row.horizon_hours > 0})
+        # A distinct list of ~25 numbers, not a load of every result row. This
+        # is called by the meta route, by the forecast route's validation, and
+        # by every aggregate; deriving it from a full result load made each of
+        # those as expensive as the read it was about to do.
+        return [h for h in self._repository.list_horizons(run.run_id) if h > 0]
 
     def _rows_at_horizon(
         self, run: PredictionRun, target_cells: list[str], horizon: float
     ) -> list[PredictionResult]:
-        stored = self.results(
-            run,
-            cells=target_cells if run.run_id.startswith(DEMO_FALLBACK_PREFIX) else None,
-        )
+        if run.run_id.startswith(DEMO_FALLBACK_PREFIX):
+            # The fallback is synthesised in memory, so there is nothing to
+            # narrow and it filters as it always did.
+            stored = self.results(run, cells=target_cells)
+        else:
+            # Work out which horizons can answer this request *before*
+            # materialising any rows, then load only those. A run publishes 25
+            # horizons and a read needs one, or the two bracketing an
+            # interpolation - so this is ~10k rows instead of the run's ~200k.
+            #
+            # The full anchor list, horizon 0 included: `horizons()` reports the
+            # *forecast* horizons (0 is not one a client can ask to scrub to),
+            # but 0 is a legitimate lower anchor to interpolate up from, and
+            # using the filtered list made a +15m read find no lower anchor and
+            # return nothing.
+            anchors = self._repository.list_horizons(run.run_id)
+            if horizon in anchors or horizon == 0:
+                wanted = {horizon}
+            else:
+                lower = [anchor for anchor in anchors if anchor < horizon]
+                upper = [anchor for anchor in anchors if anchor > horizon]
+                if not lower or not upper:
+                    return []
+                wanted = {max(lower), min(upper)}
+            stored = self.results(run, horizons=wanted)
+
         exact = [row for row in stored if row.horizon_hours == horizon]
         if exact or horizon == 0:
             return exact

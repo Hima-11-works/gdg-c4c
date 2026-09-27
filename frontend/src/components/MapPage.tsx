@@ -155,6 +155,14 @@ export function MapPage() {
   // operation (see lib/forecastFrames.ts) — it reports `warming` to the
   // banner and the timeline's play/restart buttons, and clears once every
   // frame in the window is cached.
+  //
+  // It runs only once the user has actually asked for a forecast, i.e.
+  // forecastMinutes > 0, which is exactly when they have scrubbed or pressed
+  // play. On first load this fetched WARM_WINDOW + 1 frames the user never
+  // looked at, alongside the one country-tier current frame that is actually
+  // displayed — so opening the map cost ten requests to draw one. Deferring it
+  // to engagement makes the first paint a single request, and the detail
+  // arrives when it is asked for.
   const queryRef = useRef(query)
   const minutesRef = useRef(forecastMinutes)
   useEffect(() => {
@@ -163,10 +171,12 @@ export function MapPage() {
   })
   useEffect(() => {
     if (!viewportReady || publishedRunId === undefined) return
+    if (forecastMinutes === 0) return
     warmForecastWindow(queryKey, queryRef.current, minutesRef.current, supportedHours, publishedRunId)
-    // Only re-warm on a view change (queryKey), not on every playback tick.
+    // Re-warms on a view change or when the user first engages, not on every
+    // playback tick.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queryKey, viewportReady, supportedHours, publishedRunId])
+  }, [queryKey, viewportReady, supportedHours, publishedRunId, forecastMinutes === 0])
 
   const warming = useForecastWarming(queryKey)
   const isInterpolated = forecastMinutes > 0 && !supportedHours.includes(forecastMinutes / 60)

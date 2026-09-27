@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from sqlalchemy import Select, select
@@ -151,11 +152,33 @@ def _latest_run_stmt(region: str | None) -> Select:
     return stmt.order_by(prediction_run.c.published_at.desc(), prediction_run.c.id).limit(1)
 
 
-def _results_stmt(run_id: str) -> Select:
+def _results_stmt(run_id: str, horizons: Sequence[float] | None = None) -> Select:
+    stmt = select(prediction_result).where(prediction_result.c.run_id == run_id)
+    if horizons is not None:
+        # The read path asks for one horizon, or the two bracketing an
+        # interpolated one. Filtering here rather than in Python is the
+        # difference between ~10k rows and the run's full ~200k, each carrying
+        # three JSON columns.
+        stmt = stmt.where(prediction_result.c.horizon_hours.in_(list(horizons)))
+    return stmt.order_by(prediction_result.c.h3_cell, prediction_result.c.horizon_hours)
+
+
+def _horizons_stmt(run_id: str) -> Select:
     return (
-        select(prediction_result)
+        select(prediction_result.c.horizon_hours)
         .where(prediction_result.c.run_id == run_id)
-        .order_by(prediction_result.c.h3_cell, prediction_result.c.horizon_hours)
+        .distinct()
+        .order_by(prediction_result.c.horizon_hours)
+    )
+
+
+def _cells_stmt(run_id: str) -> Select:
+    # Only the cell ids: no JSON, no measurements. Used to decide which target
+    # cells a resolution needs, which cares about nothing else.
+    return (
+        select(prediction_result.c.h3_cell)
+        .where(prediction_result.c.run_id == run_id)
+        .distinct()
     )
 
 
@@ -214,6 +237,27 @@ class SqlPredictionPublicationRepository:
         row = self._session.execute(_latest_run_stmt(region)).first()
         return None if row is None else _row_to_run(row)
 
-    def list_results(self, run_id: str) -> list[PredictionResult]:
-        rows = self._session.execute(_results_stmt(run_id)).all()
+    def list_results(
+        self, run_id: str, *, horizons: Sequence[float] | None = None
+    ) -> list[PredictionResult]:
+        rows = self._session.execute(_results_stmt(run_id, horizons)).all()
         return [_row_to_result(row) for row in rows]
+
+    def list_horizons(self, run_id: str) -> list[float]:
+        """The horizons this run published, ascending.
+
+        A distinct list of ~25 numbers, so the read path can decide which
+        horizon(s) it needs before materialising any result rows.
+        """
+        return [
+            row.horizon_hours
+            for row in self._session.execute(_horizons_stmt(run_id)).all()
+        ]
+
+    def list_result_cells(self, run_id: str) -> list[str]:
+        """Every distinct cell in the run, at whatever resolution it was stored.
+
+        Lets the read path work out which target cells a display resolution
+        covers without loading a single result row.
+        """
+        return [row.h3_cell for row in self._session.execute(_cells_stmt(run_id)).all()]

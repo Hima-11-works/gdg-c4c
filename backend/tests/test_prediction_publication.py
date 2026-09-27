@@ -39,8 +39,22 @@ class MemoryPublicationRepository:
     def latest_run(self, *, region=None):
         return self.run_value if region is None or self.run_value.region == region else None
 
-    def list_results(self, run_id):
-        return [item for item in self.result_values if item.run_id == run_id]
+    def list_results(self, run_id, *, horizons=None):
+        rows = [item for item in self.result_values if item.run_id == run_id]
+        if horizons is None:
+            return rows
+        wanted = set(horizons)
+        return [item for item in rows if item.horizon_hours in wanted]
+
+    def list_horizons(self, run_id):
+        return sorted(
+            {item.horizon_hours for item in self.result_values if item.run_id == run_id}
+        )
+
+    def list_result_cells(self, run_id):
+        return sorted(
+            {item.h3_cell for item in self.result_values if item.run_id == run_id}
+        )
 
 
 def _snapshot(cell, horizon, issued_at, *, pm25=20.0, refs=()):
