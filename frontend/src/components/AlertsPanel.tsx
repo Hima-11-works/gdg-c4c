@@ -13,6 +13,13 @@ const SEVERITY_LABEL: Record<AlertSeverity, string> = {
   critical: 'Critical',
 }
 
+function formatForecastTime(value: string): string {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime())
+    ? 'unreadable time'
+    : `${date.toLocaleString('en-GB', { timeZone: 'UTC' })} UTC`
+}
+
 /** Suggested escalation path per severity - a prompt for whoever is reading
  *  the alert, NOT an assignment: this dashboard has no authority-routing
  *  backend, so nothing is dispatched, notified or recorded. */
@@ -51,7 +58,8 @@ function AlertItem({
           {alert.forecast_pm25 !== null && (
             <>
               {' '}
-              · +{alert.forecast_hours}h: {formatNumber(alert.forecast_pm25)} µg/m³
+              · +{alert.forecast_hours ?? '?'}h: {formatNumber(alert.forecast_pm25)} µg/m³
+              {alert.forecast_time && <> · valid {formatForecastTime(alert.forecast_time)}</>}
             </>
           )}
           {alert.confidence !== null && <> · {Math.round(alert.confidence * 100)}% confidence</>}
@@ -178,7 +186,15 @@ export function AlertsPanel({ publishedRunId }: { publishedRunId?: string }) {
               <AlertItem
                 key={`${alert.h3_cell}-${alert.created_at}`}
                 alert={alert}
-                onSelect={() => dispatch({ type: 'SELECT_CELL', cell: alert.h3_cell })}
+                onSelect={() => {
+                  if (alert.forecast_hours !== null) {
+                    dispatch({
+                      type: 'SELECT_FORECAST',
+                      minutes: Math.round(alert.forecast_hours * 60),
+                    })
+                  }
+                  dispatch({ type: 'SELECT_CELL', cell: alert.h3_cell })
+                }}
                 done={(action) => checked.has(keyFor(alert, action))}
                 onToggle={(action) => toggle(alert, action)}
               />
