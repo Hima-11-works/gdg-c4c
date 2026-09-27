@@ -14,6 +14,14 @@ from typing import Protocol
 
 from app.domain.environmental_observations import FireHotspot, TrafficObservation
 from app.domain.features import FeatureSnapshot
+from app.domain.incidents import (
+    Incident,
+    IncidentDelivery,
+    IncidentEvent,
+    IncidentSourceType,
+    IncidentStatus,
+    ResponderRole,
+)
 from app.domain.prediction import PredictionResult, PredictionRun
 from app.domain.report_lifecycle import ReportAuditEvent
 from app.domain.scenario import DatasetVersion, IngestionRun
@@ -211,6 +219,33 @@ class FireReportRepository(Protocol):
         this is a read, not a judgement.
         """
         ...
+
+
+class IncidentRepository(Protocol):
+    def create(self, incident: Incident, event: IncidentEvent) -> Incident: ...
+    def get(self, incident_id: int) -> Incident | None: ...
+    def get_by_source(
+        self, source_type: IncidentSourceType, *, source_id: int | None = None,
+        source_ref: str | None = None,
+    ) -> Incident | None: ...
+    def update(self, incident: Incident, event: IncidentEvent) -> Incident: ...
+    def append_event(self, event: IncidentEvent) -> IncidentEvent: ...
+    def list(
+        self, *, status: IncidentStatus | None = None,
+        role: ResponderRole | None = None,
+    ) -> list[Incident]: ...
+    def history(self, incident_id: int) -> list[IncidentEvent]: ...
+
+
+class IncidentDeliveryRepository(Protocol):
+    def create(self, delivery: IncidentDelivery) -> IncidentDelivery: ...
+    def acknowledge_open(
+        self, incident_id: int, *, acknowledged_at: datetime
+    ) -> list[IncidentDelivery]: ...
+    def list_for_incident(self, incident_id: int) -> list[IncidentDelivery]: ...
+    def list_for_role(
+        self, role: ResponderRole, *, only_open: bool = False
+    ) -> list[IncidentDelivery]: ...
 
 
 class FireHotspotRepository(Protocol):

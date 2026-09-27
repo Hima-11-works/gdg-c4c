@@ -12,7 +12,7 @@ validation can't drift between them.
 
 from __future__ import annotations
 
-from fastapi import Depends, HTTPException, Query, status
+from fastapi import Depends, Header, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
@@ -21,6 +21,8 @@ from app.db.repositories import (
     SqlEvidenceRepository,
     SqlFireHotspotRepository,
     SqlFireReportRepository,
+    SqlIncidentDeliveryRepository,
+    SqlIncidentRepository,
     SqlForecastRepository,
     SqlGridStateRepository,
     SqlPredictionPublicationRepository,
@@ -30,6 +32,7 @@ from app.db.repositories import (
 )
 from app.db.session import get_db
 from app.domain.types import BoundingBox
+from app.domain.incidents import IncidentActor
 from app.services.alerts import AlertService
 from app.services.cells import CellService
 from app.services.evidence import EvidenceService
@@ -42,6 +45,12 @@ from app.services.media_storage import (
 )
 from app.services.prediction_queries import PredictionQueryService
 from app.services.reports import FireReportService
+from app.services.incidents import (
+    ActorNotPermittedError,
+    IncidentService,
+    SimulatorDisabledError,
+)
+from app.services.published_alerts import PublishedAlertService
 from app.services.sensors import SensorService
 from app.services.tiles import TileService
 from app.services.weather import WeatherService
@@ -106,6 +115,50 @@ def get_alert_service(session: Session = Depends(get_db)) -> AlertService:
 
 def get_fire_report_service(session: Session = Depends(get_db)) -> FireReportService:
     return FireReportService(SqlFireReportRepository(session))
+
+
+def get_incident_service(session: Session = Depends(get_db)) -> IncidentService:
+    return IncidentService(
+        incident_repository=SqlIncidentRepository(session),
+        alert_repository=SqlAlertRepository(session),
+        report_repository=SqlFireReportRepository(session),
+        delivery_repository=SqlIncidentDeliveryRepository(session),
+        published_alerts=PublishedAlertService(
+            PredictionQueryService(SqlPredictionPublicationRepository(session))
+        ),
+    )
+
+
+def require_simulator_key(
+    x_simulator_key: str | None = Header(default=None, alias="X-Simulator-Key"),
+) -> None:
+    configured = get_settings().simulator_api_key
+    if configured is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="simulator writes are not configured",
+            headers={"X-Error-Code": "simulator_disabled"},
+        )
+    if x_simulator_key is None or x_simulator_key != configured.get_secret_value():
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="a valid X-Simulator-Key header is required")
+
+
+def require_incident_actor(
+    x_simulator_key: str | None = Header(default=None, alias="X-Simulator-Key"),
+    x_actor_id: str | None = Header(default=None, alias="X-Actor-Id"),
+    service: IncidentService = Depends(get_incident_service),
+) -> IncidentActor:
+    require_simulator_key(x_simulator_key=x_simulator_key)
+    try:
+        return service.resolve_actor(actor_id=x_actor_id)
+    except ActorNotPermittedError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    except SimulatorDisabledError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+            headers={"X-Error-Code": "simulator_disabled"},
+        ) from exc
 
 
 def get_evidence_service(

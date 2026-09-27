@@ -166,6 +166,7 @@ class CellDetailV2Out(BaseModel):
 class AlertV2Out(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    alert_id: str
     h3_cell: str
     severity: str
     message: str

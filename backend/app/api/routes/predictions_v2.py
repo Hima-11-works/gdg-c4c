@@ -28,6 +28,7 @@ from app.core.config import get_settings
 from app.domain.features import DataMode, DatasetRef
 from app.domain.h3_grid import assert_valid_cell
 from app.domain.prediction import PredictionRun
+from app.domain.published_alerts import PublishedAlertIdentity
 from app.domain.types import BoundingBox
 from app.services.prediction_queries import (
     DEFAULT_EXPOSURE_THRESHOLD_PM25,
@@ -36,6 +37,7 @@ from app.services.prediction_queries import (
     PredictionQueryService,
 )
 from app.services.grid_query import resolve_cells
+from app.services.published_alerts import ALERT_WARNING_PM25, classify_published_alert
 
 router = APIRouter(prefix="/api/v2", tags=["environmental predictions v2"])
 _RESOLUTION_QUERY = Query(None, ge=0, le=15)
@@ -397,12 +399,22 @@ def get_alerts_v2(
     current_by_cell = {row.h3_cell: row for row in rows if row.horizon_hours == 0}
     alerts = []
     for row in rows:
-        if row.horizon_hours <= 0 or row.predicted_pm25 is None or row.predicted_pm25 < 91:
+        if (
+            row.horizon_hours <= 0
+            or row.predicted_pm25 is None
+            or row.predicted_pm25 < ALERT_WARNING_PM25
+        ):
             continue
         current = current_by_cell.get(row.h3_cell)
-        severity = "critical" if row.predicted_pm25 >= 250 else "warning" if row.predicted_pm25 >= 91 else "watch"
+        identity = PublishedAlertIdentity(
+            run_id=run.run_id,
+            h3_cell=row.h3_cell,
+            forecast_minutes=round(row.horizon_hours * 60),
+        )
+        severity = classify_published_alert(row.predicted_pm25)
         alerts.append(
             AlertV2Out(
+                alert_id=identity.alert_id,
                 h3_cell=row.h3_cell,
                 severity=severity,
                 message=f"Published run forecasts PM2.5 at {row.predicted_pm25:.0f} µg/m³.",

@@ -382,6 +382,12 @@ class Settings(BaseSettings):
     # full address; it is stored truncated for exactly that reason.
     reports_rate_limit_per_hour: int = Field(default=5, ge=1, le=1000)
 
+    # Authority response simulator. Every write requires this shared simulator
+    # key plus a registered X-Actor-Id; actor role and jurisdiction are resolved
+    # from the server-side registry. Blank configuration disables writes.
+    simulator_api_key: SecretStr | None = None
+    simulator_actors: str = ""
+
     # --- F2: citizen photo evidence -----------------------------------------
     # `disabled` is the default and the only safe one to ship unset. It is not
     # "accept and drop": the evidence endpoint answers 503 media_unavailable,
