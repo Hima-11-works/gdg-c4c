@@ -28,7 +28,8 @@ class IncidentsScreen extends StatefulWidget {
   State<IncidentsScreen> createState() => _IncidentsScreenState();
 }
 
-class _IncidentsScreenState extends State<IncidentsScreen> {
+class _IncidentsScreenState extends State<IncidentsScreen>
+    with WidgetsBindingObserver {
   List<Incident> _incidents = const [];
   int _pendingAssignments = 0;
   bool _loading = true;
@@ -36,6 +37,8 @@ class _IncidentsScreenState extends State<IncidentsScreen> {
   bool _requestInFlight = false;
   bool _dispatching = false;
   Timer? _refreshTimer;
+  final Set<int> _seenDeliveryIds = {};
+  bool _hasInboxSnapshot = false;
 
   /// Only fire-department incidents by default: this console acts as the fire
   /// department, and the API refuses a role that does not own an incident, so
@@ -45,13 +48,32 @@ class _IncidentsScreenState extends State<IncidentsScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _load();
     _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) => _load());
   }
 
   @override
+  void didUpdateWidget(covariant IncidentsScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.api != widget.api ||
+        oldWidget.config.role != widget.config.role ||
+        oldWidget.config.actorId != widget.config.actorId) {
+      _seenDeliveryIds.clear();
+      _hasInboxSnapshot = false;
+      _load();
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _load();
+  }
+
+  @override
   void dispose() {
     _refreshTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
@@ -70,11 +92,22 @@ class _IncidentsScreenState extends State<IncidentsScreen> {
       final incidents = results[0] as List<Incident>;
       final inbox = results[1] as List<IncidentInboxItem>;
       if (!mounted) return;
+
+      final newlyAssigned = _hasInboxSnapshot
+          ? inbox
+              .where((item) =>
+                  item.isOpen && !_seenDeliveryIds.contains(item.delivery.id))
+              .toList(growable: false)
+          : const <IncidentInboxItem>[];
+      _seenDeliveryIds.addAll(inbox.map((item) => item.delivery.id));
+      _hasInboxSnapshot = true;
+
       setState(() {
         _incidents = incidents;
         _pendingAssignments = inbox.length;
         _loading = false;
       });
+      if (newlyAssigned.isNotEmpty) _showAssignmentAlert(newlyAssigned);
     } on ApiException catch (error) {
       if (!mounted) return;
       setState(() {
@@ -84,6 +117,28 @@ class _IncidentsScreenState extends State<IncidentsScreen> {
     } finally {
       _requestInFlight = false;
     }
+  }
+
+  void _showAssignmentAlert(List<IncidentInboxItem> items) {
+    if (!mounted) return;
+    final latest = items.first;
+    final message = items.length == 1
+        ? 'New ${latest.incident.severity.toUpperCase()} assignment · '
+            'incident #${latest.incident.id}'
+        : '${items.length} new authority assignments received';
+    final messenger = ScaffoldMessenger.of(context);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          duration: const Duration(seconds: 8),
+          action: SnackBarAction(
+            label: 'Open',
+            onPressed: () => _open(latest.incident),
+          ),
+        ),
+      );
   }
 
   Future<void> _dispatchAlert() async {
@@ -233,7 +288,8 @@ class _IncidentsScreenState extends State<IncidentsScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               child: Text(
                 '$_pendingAssignments simulated assignment${_pendingAssignments == 1 ? '' : 's'} '
-                'awaiting acknowledgement. No push notifications are sent.',
+                'awaiting acknowledgement. New assignments alert in this app while it is open; '
+                'the inbox refreshes again when you return.',
                 style: TextStyle(color: Theme.of(context).colorScheme.onSecondaryContainer),
               ),
             ),

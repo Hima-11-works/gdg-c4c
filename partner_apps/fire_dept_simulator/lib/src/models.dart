@@ -281,12 +281,18 @@ class PublishedAlert {
 }
 
 class IncidentDelivery {
-  const IncidentDelivery({required this.incidentId, required this.status});
+  const IncidentDelivery({
+    required this.id,
+    required this.incidentId,
+    required this.status,
+  });
 
+  final int id;
   final int incidentId;
   final String status;
 
   factory IncidentDelivery.fromJson(Map<String, dynamic> json) => IncidentDelivery(
+        id: (json['id'] as num).toInt(),
         incidentId: (json['incident_id'] as num).toInt(),
         status: json['status'] as String,
       );

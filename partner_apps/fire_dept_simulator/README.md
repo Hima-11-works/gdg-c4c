@@ -3,8 +3,9 @@
 A response console for the Air Health **incident workflow** — the fire-department
 side of `docs/api/incidents.md`.
 
-> **This is a simulation.** It works on synthetic records, sends no
-> notifications, and contacts no emergency service. The status changes it makes
+> **This is a simulation.** It works on synthetic records, shows in-app alerts
+> for newly received inbox assignments, and contacts no emergency service. It
+> does not use remote push notifications. The status changes it makes
 > *are* real, persistent writes to the incident database, which is why the API
 > requires a simulator key.
 
@@ -12,8 +13,9 @@ side of `docs/api/incidents.md`.
 
 - **Queue** — incidents from `GET /api/v1/incidents`, filtered to the selected
   authority role by default (a toggle shows every role). The queue polls every
-  30 seconds, shows pending simulated inbox assignments, and supports manual
-  refresh. Each row shows id, status, severity, jurisdiction, coordinates,
+  30 seconds, shows pending simulated inbox assignments, alerts when a new
+  assignment arrives while the app is open, refreshes on app resume, and
+  supports manual refresh. Each row shows id, status, severity, jurisdiction, coordinates,
   assignee and how long ago it moved.
 - **Detail** — location, jurisdiction, H3 cell, source (alert or report),
   assignee, timing, the linked published run, the **evidence** (the incident's

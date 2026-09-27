@@ -198,10 +198,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         const SizedBox(height: 6),
                         Text(
                           'A simulator for the fire-department side of the Air Health incident '
-                          'workflow. It reads and writes incidents on the backend; it sends no '
-                          'notifications, contacts no emergency service, and shows only synthetic '
-                          'records. Status changes it makes are real, persistent changes to the '
-                          'incident database — which is exactly why the API requires the key.',
+                          'workflow. It reads and writes incidents on the backend and shows new '
+                          'inbox assignments as in-app alerts while open. It uses no remote push '
+                          'service, contacts no emergency service, and shows only synthetic records. '
+                          'Status changes are persistent simulator changes, which is why the API '
+                          'requires the key.',
                           style: theme.textTheme.bodySmall,
                         ),
                         const SizedBox(height: 8),

@@ -1,5 +1,5 @@
 name: fire_dept_simulator
-description: "Simulated fire-department response console for the Air Health incident workflow. A SIMULATION: no real dispatch, no notifications."
+description: "Simulated fire-department response console with in-app assignment alerts; no remote push or emergency dispatch."
 publish_to: 'none'
 version: 1.0.0+1
 

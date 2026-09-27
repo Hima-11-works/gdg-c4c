@@ -4,10 +4,11 @@
 /// This is a **simulation**. It reads and writes the backend's incident records
 /// (the same rows the web console and any other client see), which makes it a
 /// genuine operational tool for practising the workflow — and not a real
-/// dispatch system. Nothing here notifies anyone.
+/// dispatch system. New inbox assignments produce an in-app alert; there is no
+/// remote push service and no emergency dispatch.
 ///
-/// Built on nothing but the Flutter SDK: no pub packages. See README.md for why,
-/// and for the run command that points it at a backend.
+/// Built on nothing but the Flutter SDK. See README.md for the run command that
+/// points it at a backend.
 library;
 
 import 'package:flutter/material.dart';
