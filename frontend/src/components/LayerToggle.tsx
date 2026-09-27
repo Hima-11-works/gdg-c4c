@@ -5,7 +5,11 @@ import type { MapViewMode } from '../state/mapUiReducer'
 
 const VIEW_MODES: { mode: MapViewMode; label: string; title: string }[] = [
   { mode: 'hex', label: 'Hex cells', title: 'Discrete H3 hexagons (one value per cell)' },
-  { mode: 'smooth', label: 'Smooth', title: 'Smooth continuous field rendered from the same values' },
+  {
+    mode: 'smooth',
+    label: 'Smooth',
+    title: 'Smooth continuous field rendered from the same values',
+  },
 ]
 
 export function LayerToggle() {
@@ -79,6 +83,18 @@ export function LayerToggle() {
               onChange={() => dispatch({ type: 'TOGGLE_ACTIVE_FIRES' })}
             />
             Active Fires (NASA FIRMS)
+          </label>
+
+          <label
+            className="layer-toggle-option"
+            title="Candidate triage from FIRMS detector confidence. It is not a confirmed fire and has no human review or station corroboration yet."
+          >
+            <input
+              type="checkbox"
+              checked={state.showHotspotCandidates}
+              onChange={() => dispatch({ type: 'TOGGLE_HOTSPOT_CANDIDATES' })}
+            />
+            Hidden pollution candidates (FIRMS)
           </label>
 
           <label

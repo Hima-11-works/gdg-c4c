@@ -28,6 +28,11 @@ import { anomalyById, anomalyPopupHtml, fireAnomalyFeatureCollection } from '../
 import { activeFirePopupHtml, activeFiresFeatureCollection } from '../lib/activeFires'
 import type { ActiveFire } from '../lib/activeFires'
 import {
+  hotspotCandidatePopupHtml,
+  hotspotCandidatesFeatureCollection,
+  hotspotCandidateFromRow,
+} from '../lib/hotspotCandidates'
+import {
   GIBS_ATTRIBUTION,
   GIBS_AOD_ATTRIBUTION,
   GIBS_AOD_MAX_ZOOM,
@@ -321,6 +326,8 @@ const LAYER_ACTIVE_FIRES_CORE = 'active-fires-core'
 const ACTIVE_FIRE_COLOR = '#FF0055'
 const ACTIVE_FIRE_GLOW_OPACITY = 0.45
 const ACTIVE_FIRE_CORE_OPACITY = 0.9
+const SOURCE_HOTSPOT_CANDIDATES = 'hotspot-candidates'
+const LAYER_HOTSPOT_CANDIDATES = 'hotspot-candidate-rings'
 
 // Place labels — city and district names from the state tier up (level 2),
 // then localities at the local tier (level 3), so the map gains named detail
@@ -1394,6 +1401,34 @@ export function MapView({
             },
           })
 
+          // A separate triage layer over the same real FIRMS rows. Hollow
+          // markers distinguish detector-confidence candidates from the
+          // active-fire glow; low-confidence records remain visible in slate.
+          map!.addSource(SOURCE_HOTSPOT_CANDIDATES, {
+            type: 'geojson',
+            data: EMPTY_FEATURE_COLLECTION,
+          })
+          map!.addLayer({
+            id: LAYER_HOTSPOT_CANDIDATES,
+            type: 'circle',
+            source: SOURCE_HOTSPOT_CANDIDATES,
+            layout: { visibility: 'none' },
+            paint: {
+              'circle-color': 'rgba(0, 0, 0, 0)',
+              'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 6, 8, 9, 12, 12],
+              'circle-stroke-color': [
+                'match',
+                ['get', 'candidate_status'],
+                'candidate',
+                '#22D3EE',
+                'rejected',
+                '#64748B',
+                '#A78BFA',
+              ],
+              'circle-stroke-width': 2.5,
+            },
+          })
+
           // Place labels — added after the data layers so names sit on top of
           // the field, but before the scope mask so a greyed-out area greys
           // its labels too. Two layers off one source, each gated by zoom:
@@ -1510,6 +1545,29 @@ export function MapView({
             map!.getCanvas().style.cursor = 'pointer'
           })
           map!.on('mouseleave', LAYER_ACTIVE_FIRES_CORE, () => {
+            map!.getCanvas().style.cursor = ''
+          })
+
+          map!.on('click', LAYER_HOTSPOT_CANDIDATES, (event) => {
+            const feature = event.features?.[0]
+            const props = feature?.properties as Record<string, unknown> | undefined
+            if (!feature || !props) return
+            window.dispatchEvent(
+              new CustomEvent('air-health:hotspot-candidate-selected', { detail: props }),
+            )
+            const geometry = feature.geometry as unknown as { coordinates: [number, number] }
+            togglePopup(
+              `candidate:${props.detection_id}`,
+              geometry.coordinates,
+              'fire-anomaly-popup firms-fire-popup',
+              hotspotCandidatePopupHtml(props),
+              10,
+            )
+          })
+          map!.on('mouseenter', LAYER_HOTSPOT_CANDIDATES, () => {
+            map!.getCanvas().style.cursor = 'pointer'
+          })
+          map!.on('mouseleave', LAYER_HOTSPOT_CANDIDATES, () => {
             map!.getCanvas().style.cursor = ''
           })
 
@@ -1763,6 +1821,15 @@ export function MapView({
     map.setLayoutProperty(LAYER_ACTIVE_FIRES_CORE, 'visibility', visibility)
   }, [mapReady, state.showActiveFires])
 
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    mapRef.current.setLayoutProperty(
+      LAYER_HOTSPOT_CANDIDATES,
+      'visibility',
+      state.showHotspotCandidates ? 'visible' : 'none',
+    )
+  }, [mapReady, state.showHotspotCandidates])
+
   // Feed the map the real FIRMS detections MapPage fetched. A failed or
   // absent fetch leaves the source empty rather than falling back to
   // anything invented — the illustrative layer is a separate toggle.
@@ -1772,6 +1839,15 @@ export function MapView({
     if (!(source instanceof GeoJSONSource)) return
     const fires = activeFires.status === 'success' ? activeFires.data : []
     source.setData(activeFiresFeatureCollection(fires) as never)
+  }, [mapReady, activeFires])
+
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    const source = mapRef.current.getSource(SOURCE_HOTSPOT_CANDIDATES)
+    if (!(source instanceof GeoJSONSource)) return
+    const candidates =
+      activeFires.status === 'success' ? activeFires.data.map(hotspotCandidateFromRow) : []
+    source.setData(hotspotCandidatesFeatureCollection(candidates) as never)
   }, [mapReady, activeFires])
 
   // Feed the map the reports the backend actually returned. Only real

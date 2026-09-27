@@ -42,6 +42,10 @@ export interface MapUiState {
   showSatelliteImagery: boolean
   /** NASA FIRMS active thermal anomalies (near-real-time satellite feed). */
   showActiveFires: boolean
+  /** FIRMS detections elevated to imagery-derived candidates for review. */
+  showHotspotCandidates: boolean
+  /** Whether the candidate evidence panel is open. */
+  hotspotPanelOpen: boolean
   /** NASA GIBS Deep Blue Aerosol Optical Depth (seasonal smog rage). */
   showSeasonalSmog: boolean
   /** Sentinel-5P NO2 industrial-emissions raster (WMS). */
@@ -98,6 +102,8 @@ export type MapUiAction =
   | { type: 'TOGGLE_FREIGHT_CORRIDORS' }
   | { type: 'TOGGLE_SATELLITE_IMAGERY' }
   | { type: 'TOGGLE_ACTIVE_FIRES' }
+  | { type: 'TOGGLE_HOTSPOT_CANDIDATES' }
+  | { type: 'TOGGLE_HOTSPOT_PANEL' }
   | { type: 'TOGGLE_SEASONAL_SMOG' }
   | { type: 'TOGGLE_INDUSTRIAL_EMISSIONS' }
   | { type: 'TOGGLE_LEGEND' }
@@ -120,6 +126,8 @@ export const initialMapUiState: MapUiState = {
   showFreightCorridors: false,
   showSatelliteImagery: false,
   showActiveFires: false,
+  showHotspotCandidates: false,
+  hotspotPanelOpen: false,
   showSeasonalSmog: false,
   showIndustrialEmissions: false,
   legendOpen: true,
@@ -217,6 +225,10 @@ export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState
       return { ...state, showSatelliteImagery: !state.showSatelliteImagery }
     case 'TOGGLE_ACTIVE_FIRES':
       return { ...state, showActiveFires: !state.showActiveFires }
+    case 'TOGGLE_HOTSPOT_CANDIDATES':
+      return { ...state, showHotspotCandidates: !state.showHotspotCandidates }
+    case 'TOGGLE_HOTSPOT_PANEL':
+      return { ...state, hotspotPanelOpen: !state.hotspotPanelOpen }
     case 'TOGGLE_SEASONAL_SMOG':
       return { ...state, showSeasonalSmog: !state.showSeasonalSmog }
     case 'TOGGLE_INDUSTRIAL_EMISSIONS':

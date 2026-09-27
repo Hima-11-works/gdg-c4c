@@ -28,6 +28,7 @@ import { SearchBar } from './SearchBar'
 import { StatusBanner } from './StatusBanner'
 import { ProvenanceBanner } from './ProvenanceBanner'
 import { PhotoReviewPanel } from './PhotoReviewPanel'
+import { HotspotEvidencePanel } from './HotspotEvidencePanel'
 import { TimelineControl } from './TimelineControl'
 import type { AsyncResource } from '../hooks/useApiResource'
 import type { LodQuery } from '../lib/api'
@@ -41,7 +42,7 @@ const FALLBACK_SUPPORTED_HOURS = [1, 3, 6]
 const FIRMS_POLL_INTERVAL_MS = 10 * 60 * 1000
 
 export function MapPage() {
-  const { state } = useMapUi()
+  const { state, dispatch } = useMapUi()
   const { lod, bbox, forecastMinutes } = state
   // The submit form is open/closed here so its map-centre location and the
   // reports list it refetches both come from this component's data.
@@ -237,9 +238,10 @@ export function MapPage() {
   // covers all of India, and the endpoint clips by H3 cell at the resolution
   // the detections were stored at, which a viewport-scoped request wouldn't
   // match (see backend/app/services/fires.py).
-  const activeFires = useApiResource(() => fetchActiveFires(), [state.showActiveFires], {
+  const firesNeeded = state.showActiveFires || state.showHotspotCandidates
+  const activeFires = useApiResource(() => fetchActiveFires(), [firesNeeded], {
     pollIntervalMs: FIRMS_POLL_INTERVAL_MS,
-    enabled: state.showActiveFires,
+    enabled: firesNeeded,
   })
 
   const cancelDetailedGrid = detailedGrid.cancel
@@ -343,6 +345,17 @@ export function MapPage() {
         >
           Review citizen photos
         </button>
+        <button
+          type="button"
+          className="panel report-open"
+          onClick={() => {
+            if (!state.showHotspotCandidates) dispatch({ type: 'TOGGLE_HOTSPOT_CANDIDATES' })
+            if (!state.hotspotPanelOpen) dispatch({ type: 'TOGGLE_HOTSPOT_PANEL' })
+          }}
+          aria-haspopup="dialog"
+        >
+          Review fire candidates
+        </button>
         {reportOpen && reportCenter !== null && (
           <ReportFireForm
             latitude={reportCenter.latitude}
@@ -354,10 +367,7 @@ export function MapPage() {
       </div>
 
       {photoReviewOpen && (
-        <PhotoReviewPanel
-          onClose={() => setPhotoReviewOpen(false)}
-          onReviewed={reports.refetch}
-        />
+        <PhotoReviewPanel onClose={() => setPhotoReviewOpen(false)} onReviewed={reports.refetch} />
       )}
 
       <div className="overlay overlay-top-right">
@@ -378,6 +388,7 @@ export function MapPage() {
       </div>
 
       <CellDetailPanel publishedRunId={publishedRunId} citizenReports={reports.resource} />
+      <HotspotEvidencePanel resource={activeFires.resource} />
     </div>
   )
 }

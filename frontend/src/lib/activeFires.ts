@@ -29,6 +29,15 @@ export interface ActiveFire {
   confidence: number | null
   /** The raw FIRMS confidence token (`l`/`n`/`h` or a 0-100 string). */
   confidenceLabel: string
+  /** The backend's normalised class verbatim: `low`|`nominal`|`high`|`unknown`.
+   *  Carried separately from the token so the candidate triage can quote the
+   *  detector's own classification rather than re-deriving it. */
+  confidenceClass: string
+  /** The overpass as an ISO instant, so a consumer does not have to reassemble
+   *  it from the FIRMS date/time pair. */
+  acquiredAt: string
+  /** The H3 cell the detection was snapped to at ingest time. */
+  h3Cell: string
   acqDate: string
   acqTime: string
   satellite: string
@@ -46,7 +55,8 @@ function parseConfidence(raw: string): { value: number | null; label: string } {
   if (lower === 'n') return { value: 0.6, label: 'Nominal' }
   if (lower === 'h') return { value: 0.9, label: 'High' }
   const numeric = Number(token)
-  if (Number.isFinite(numeric)) return { value: Math.min(1, Math.max(0, numeric / 100)), label: token }
+  if (Number.isFinite(numeric))
+    return { value: Math.min(1, Math.max(0, numeric / 100)), label: token }
   return { value: null, label: token }
 }
 
@@ -71,6 +81,9 @@ export function activeFireFromHotspot(row: FireHotspotOut): ActiveFire {
     brightness: row.brightness_ti4_k,
     confidence: confidence.value,
     confidenceLabel: confidence.label,
+    confidenceClass: row.confidence_class,
+    acquiredAt: iso,
+    h3Cell: row.h3_cell,
     acqDate: iso.slice(0, 10),
     acqTime: iso.slice(11, 16).replace(':', ''),
     satellite: row.satellite,
