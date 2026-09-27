@@ -291,7 +291,9 @@ def test_publication_failure_is_a_failed_stage_not_a_crash(monkeypatch) -> None:
 
     monkeypatch.setattr("app.pipeline.run.SqlGridStateRepository", _ExplodingGridRepo)
 
-    outcome = _publish(_UnusedSession(), Settings(demo_mode=True), "run-x", NOW)
+    outcome = _publish(
+        _UnusedSession(), Settings(demo_mode=True), "run-x", NOW, forecasts=[]
+    )
 
     assert outcome.name == "publication"
     assert outcome.succeeded is False

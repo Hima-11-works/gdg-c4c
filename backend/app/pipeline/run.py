@@ -45,7 +45,7 @@ import logging
 import math
 import sys
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -62,7 +62,7 @@ from app.db.repositories import (
     SqlWeatherReadingRepository,
 )
 from app.db.session import get_session_factory
-from app.domain.features import DataMode, InputKind, WeatherFeature
+from app.domain.features import DataMode, FeatureSnapshot, InputKind, WeatherFeature
 from app.domain.prediction import DEFAULT_REGION
 from app.domain.types import BoundingBox, Forecast, WeatherReading
 from app.ingestion.demo_reports import demo_fire_reports
@@ -82,6 +82,14 @@ from app.services.prediction_publication import PredictionPublicationService
 from app.services.reports import FireReportService, ReportRateLimitedError
 
 logger = logging.getLogger(__name__)
+
+#: The forecast horizons this run publishes, as quarter-hours from now out to
+#: 6h. One definition, used by the forecasting stage, by the publication stage
+#: (which has to write a row per cell per horizon) and by the coarse national
+#: tier - a run whose two tiers advertised different horizons would break the
+#: client's timeline, and the client's timeline is built from whatever the meta
+#: advertises.
+FORECAST_HORIZONS_HOURS: tuple[float, ...] = tuple(i * 0.25 for i in range(1, 25))
 
 
 @dataclass(frozen=True)
@@ -139,6 +147,7 @@ def _publish(
     settings: Settings,
     pipeline_run_id: str,
     timestamp: datetime,
+    forecasts: list[Forecast],
 ) -> StageOutcome:
     """Publish this run's grid as an immutable, queryable v2 result (F3).
 
@@ -158,7 +167,7 @@ def _publish(
     one step that only affects the v2 read path.
     """
     try:
-        return _publish_inner(session, settings, pipeline_run_id, timestamp)
+        return _publish_inner(session, settings, pipeline_run_id, timestamp, forecasts)
     except Exception as exc:  # noqa: BLE001 - see docstring
         logger.exception("Publication stage failed for run %s", pipeline_run_id)
         return StageOutcome(
@@ -168,11 +177,43 @@ def _publish(
         )
 
 
+def _horizon_snapshots(
+    base: list[FeatureSnapshot],
+    baselines: dict[tuple[str, float], float],
+    *,
+    issued_at: datetime,
+) -> list[FeatureSnapshot]:
+    """One snapshot per (cell, horizon) the forecasting stage produced.
+
+    `publish()` derives a result row's horizon from its snapshot's
+    `horizon_hours`, so a run only advertises the horizons it has snapshots
+    for. The vector is the cell's issue-time vector reused verbatim: these rows
+    describe a forecast, and the predicted number is supplied separately as a
+    baseline, so nothing here claims to be a later observation.
+    """
+    horizons_by_cell: dict[str, list[float]] = {}
+    for cell, horizon in baselines:
+        horizons_by_cell.setdefault(cell, []).append(horizon)
+
+    extra: list[FeatureSnapshot] = []
+    for snapshot in base:
+        for horizon in sorted(horizons_by_cell.get(snapshot.h3_cell, ())):
+            extra.append(
+                replace(
+                    snapshot,
+                    horizon_hours=horizon,
+                    valid_at=issued_at + timedelta(hours=horizon),
+                )
+            )
+    return extra
+
+
 def _publish_inner(
     session: Session,
     settings: Settings,
     pipeline_run_id: str,
     timestamp: datetime,
+    forecasts: list[Forecast],
 ) -> StageOutcome:
     states = SqlGridStateRepository(session).latest()
     if not states:
@@ -206,7 +247,9 @@ def _publish_inner(
     # sees the nationwide cells and a request finer than the coarse resolution
     # sees only the fine grid. That is what makes "coarse everywhere, detailed
     # where measured" one product rather than two competing ones.
-    overview = build_national_overview(settings, issued_at=timestamp)
+    overview = build_national_overview(
+        settings, issued_at=timestamp, forecast_horizons=FORECAST_HORIZONS_HOURS
+    )
     if overview.unavailable_reason is not None:
         # Reported, not swallowed: an operator seeing a blank country needs to
         # know whether that is "no data" or "not configured", and those need
@@ -217,11 +260,31 @@ def _publish_inner(
     # the coarse resolution ever equalled the fine one, and publish() requires
     # unique cells per horizon.
     fine_cells = {snapshot.h3_cell for snapshot in snapshots}
-    all_snapshots = snapshots + [
+    coarse_snapshots = [
         snapshot
         for snapshot in overview.snapshots
         if snapshot.h3_cell not in fine_cells
     ]
+    all_snapshots = snapshots + coarse_snapshots
+
+    # The forecast horizons. Without a snapshot per (cell, horizon) the run
+    # advertises no horizons at all: the meta reports an empty
+    # supported_horizons_hours, the client builds no timeline, and every frame
+    # except "now" is empty. The predicted value travels as the publication
+    # service's baseline map rather than inside `current_pm25`, so a forecast is
+    # never relabelled as a measurement and the rows are marked
+    # deterministic-dispersion-baseline.
+    fine_baselines = {
+        (forecast.h3_cell, forecast.forecast_hours): forecast.predicted_pm25
+        for forecast in forecasts
+    }
+    baseline_by_cell_horizon: dict[tuple[str, float], float] = {
+        **overview.forecasts,
+        **fine_baselines,
+    }
+    all_snapshots = all_snapshots + _horizon_snapshots(
+        snapshots, fine_baselines, issued_at=timestamp
+    )
 
     run, results = PredictionPublicationService(
         SqlPredictionPublicationRepository(session)
@@ -232,14 +295,19 @@ def _publish_inner(
         mode=DataMode.DEMO if settings.demo_mode else DataMode.LIVE,
         generated_at=timestamp,
         snapshots=all_snapshots,
+        baseline_by_cell_horizon=baseline_by_cell_horizon,
     )
 
-    coarse = len(all_snapshots) - len(snapshots)
+    # Distinct cells, not snapshots: the coarse count includes one snapshot per
+    # forecast horizon, so counting snapshots would report 25x the cells.
+    coarse_cell_count = len({s.h3_cell for s in coarse_snapshots})
+    horizons_published = sorted({h for _, h in baseline_by_cell_horizon})
     return StageOutcome(
         "publication",
         True,
-        f"published run={run.run_id} fine_cells={len(snapshots)} "
-        f"coarse_cells={coarse} results={len(results)}"
+        f"published run={run.run_id} fine_cells={len({s.h3_cell for s in snapshots})} "
+        f"coarse_cells={coarse_cell_count} horizons={len(horizons_published)} "
+        f"results={len(results)}"
         + (
             ""
             if overview.unavailable_reason is None
@@ -543,7 +611,7 @@ def _forecast(
     )
     result = service.run(
         generated_at=timestamp,
-        hours=[i * 0.25 for i in range(1, 25)],
+        hours=list(FORECAST_HORIZONS_HOURS),
         step_minutes=15,
     )
 
@@ -629,7 +697,7 @@ async def run_pipeline(bbox: BoundingBox, *, timestamp: datetime) -> PipelineRep
         # forecast that the stages above just produced, so anything that failed
         # above is visible as a failed stage before its output is presented as a
         # published run.
-        stages.append(_publish(session, settings, pipeline_run_id, timestamp))
+        stages.append(_publish(session, settings, pipeline_run_id, timestamp, forecasts))
     finally:
         session.close()
 

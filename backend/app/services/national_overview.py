@@ -34,6 +34,7 @@ ingested box, until a coarse national feed is configured.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -81,10 +82,19 @@ class NationalOverview:
 
     snapshots: list[FeatureSnapshot]
     resolution: int
+    #: (cell, horizon_hours) -> predicted pm25, for the horizons this tier
+    #: forecasts. Fed to the publication service as its baseline map, which is
+    #: what labels those rows "deterministic-dispersion-baseline" rather than
+    #: presenting a forecast as if it were a measurement.
+    forecasts: dict[tuple[str, float], float]
     #: None when the tier is legitimately empty; a sentence saying why when it
     #: is not. Never silently empty - "no data" and "not configured" are
     #: different facts and the operator is told which.
     unavailable_reason: str | None
+
+
+def _empty(resolution: int, reason: str) -> NationalOverview:
+    return NationalOverview([], resolution, {}, reason)
 
 
 def _dataset_ref() -> DatasetRef:
@@ -112,17 +122,27 @@ def _quality() -> FeatureQuality:
     )
 
 
-def build_national_overview(settings: Settings, *, issued_at: datetime) -> NationalOverview:
-    """Coarse country-wide snapshots for this run, or a stated reason why not."""
+def build_national_overview(
+    settings: Settings,
+    *,
+    issued_at: datetime,
+    forecast_horizons: Sequence[float],
+) -> NationalOverview:
+    """Coarse country-wide snapshots for this run, or a stated reason why not.
+
+    `forecast_horizons` is passed in rather than derived, so the coarse tier
+    forecasts exactly the horizons the fine grid forecasts. Two definitions of
+    "the horizons this product publishes" would drift, and a run whose two
+    tiers advertised different ones would break the client's timeline.
+    """
     resolution = settings.national_overview_resolution
     if resolution == 0:
-        return NationalOverview([], 0, "disabled by NATIONAL_OVERVIEW_RESOLUTION=0")
+        return _empty(0, "disabled by NATIONAL_OVERVIEW_RESOLUTION=0")
 
     if resolution > settings.h3_resolution:
         # A "coarse" tier finer than the fine grid is not coarse, and would
         # shadow the detail it is meant to sit behind.
-        return NationalOverview(
-            [],
+        return _empty(
             resolution,
             f"national overview resolution {resolution} is finer than the fine "
             f"grid resolution {settings.h3_resolution}; it would shadow detail",
@@ -132,8 +152,7 @@ def build_national_overview(settings: Settings, *, issued_at: datetime) -> Natio
         # The honest answer. There is no nationwide live feed configured, and
         # inventing one from the city's stations is the thing this module
         # exists to prevent.
-        return NationalOverview(
-            [],
+        return _empty(
             resolution,
             "no nationwide coarse source is configured in live mode; the coarse "
             "tier is only populated from the demo synthetic field",
@@ -147,11 +166,12 @@ def build_national_overview(settings: Settings, *, issued_at: datetime) -> Natio
         # resolve_cells refuses to return a truncated result rather than
         # guessing. Report that as the reason instead of publishing a partial
         # country, which would look like missing data rather than a ceiling.
-        return NationalOverview([], resolution, f"could not enumerate India: {exc}")
+        return _empty(resolution, f"could not enumerate India: {exc}")
 
     ref = _dataset_ref()
     quality = _quality()
     snapshots: list[FeatureSnapshot] = []
+    forecasts: dict[tuple[str, float], float] = {}
     for cell in cells:
         if not demo_data.is_within_demo_domain(cell):
             # Outside the scenario's domain. Skipped, not zero-filled: a cell
@@ -161,6 +181,18 @@ def build_national_overview(settings: Settings, *, issued_at: datetime) -> Natio
         if state.pm25 is None:
             continue
         weather = demo_data.generate_weather_reading(cell, timestamp=issued_at)
+        vector = CellFeatureVector(
+            current_pm25=state.pm25,
+            wind_speed_ms=weather.wind_speed,
+            wind_direction_deg=weather.wind_direction,
+            # The vector expresses precipitation as rain over trailing
+            # windows; WeatherReading carries a single sample, so it becomes
+            # the 1h window rather than being dropped.
+            rain_1h_mm=weather.precipitation,
+            boundary_layer_height_m=weather.boundary_layer_height,
+            temperature_c=weather.temperature,
+            relative_humidity_pct=weather.humidity,
+        )
         snapshots.append(
             FeatureSnapshot(
                 h3_cell=cell,
@@ -170,33 +202,49 @@ def build_national_overview(settings: Settings, *, issued_at: datetime) -> Natio
                 # Must match the fine grid's: publish() rejects a run whose
                 # snapshots disagree on the feature schema.
                 feature_schema_version=FEATURE_SCHEMA_VERSION,
-                vector=CellFeatureVector(
-                    current_pm25=state.pm25,
-                    wind_speed_ms=weather.wind_speed,
-                    wind_direction_deg=weather.wind_direction,
-                    # The vector expresses precipitation as rain over trailing
-                    # windows; WeatherReading carries a single sample, so it
-                    # becomes the 1h window rather than being dropped.
-                    rain_1h_mm=weather.precipitation,
-                    boundary_layer_height_m=weather.boundary_layer_height,
-                    temperature_c=weather.temperature,
-                    relative_humidity_pct=weather.humidity,
-                ),
+                vector=vector,
                 quality=quality,
                 dataset_refs=(ref,),
             )
         )
 
+        # The horizon rows. Without these the run advertises no forecast
+        # horizons at all (see PredictionQueryService.horizons), the meta
+        # reports an empty supported_horizons_hours, and the client builds no
+        # timeline - so the country view would work at "now" and be empty at
+        # every other frame.
+        for horizon in forecast_horizons:
+            forecast = demo_data.generate_forecast(
+                cell, horizon, timestamp=issued_at
+            )
+            forecasts[(cell, horizon)] = forecast.predicted_pm25
+            snapshots.append(
+                FeatureSnapshot(
+                    h3_cell=cell,
+                    issued_at=issued_at,
+                    valid_at=forecast.forecast_time,
+                    horizon_hours=horizon,
+                    feature_schema_version=FEATURE_SCHEMA_VERSION,
+                    # The vector still describes the cell as issued. The
+                    # predicted value travels in the publication service's
+                    # baseline map, not smuggled in as `current_pm25`, which
+                    # would relabel a forecast as a measurement.
+                    vector=vector,
+                    quality=quality,
+                    dataset_refs=(ref,),
+                )
+            )
+
     if not snapshots:
-        return NationalOverview(
-            [],
-            resolution,
-            f"the demo scenario produced no values at resolution {resolution}",
+        return _empty(
+            resolution, f"the demo scenario produced no values at resolution {resolution}"
         )
 
     logger.info(
-        "national overview: %d coarse cell(s) at resolution %d across India",
-        len(snapshots),
+        "national overview: %d coarse cell(s) at resolution %d across India, "
+        "%d forecast horizon(s)",
+        len(snapshots) - len(forecasts),
         resolution,
+        len(forecast_horizons),
     )
-    return NationalOverview(snapshots, resolution, None)
+    return NationalOverview(snapshots, resolution, forecasts, None)
