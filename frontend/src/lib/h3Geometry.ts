@@ -10,6 +10,7 @@ import {
   cellToParent,
   getHexagonEdgeLengthAvg,
   getResolution,
+  gridDisk,
   latLngToCell,
 } from 'h3-js'
 import type { Feature, FeatureCollection, Point, Polygon, Position } from 'geojson'
@@ -119,6 +120,16 @@ const boundaryCache = new Map<string, Position[]>()
  * rendering (the polygon boundary above is what's drawn). */
 export function cellCenter(h3Cell: string): [number, number] {
   return cellToLatLng(h3Cell) as [number, number]
+}
+
+/** Immediate H3 neighbors for local comparisons. Keep H3 operations in this
+ *  module so rendering and analysis use the same cell-geometry boundary. */
+export function neighboringCells(h3Cell: string): string[] {
+  try {
+    return gridDisk(h3Cell, 1).filter((cell) => cell !== h3Cell)
+  } catch {
+    return []
+  }
 }
 
 /** The H3 resolution a cell string was minted at, or undefined if it isn't

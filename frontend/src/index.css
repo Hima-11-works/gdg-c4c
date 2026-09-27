@@ -1806,6 +1806,10 @@ body,
   border-radius: 7px;
   background: #08242b88;
 }
+.local-hotspot-rule {
+  border-color: #fbbf2455;
+  background: #30260c88;
+}
 .hotspot-unavailable {
   border-color: #fbbf2455;
   background: #30260c88;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   fetchActiveFires,
   fetchGridCurrent,
@@ -33,6 +33,7 @@ import { TimelineControl } from './TimelineControl'
 import type { AsyncResource } from '../hooks/useApiResource'
 import type { LodQuery } from '../lib/api'
 import type { ForecastOut } from '../lib/types'
+import { findLocalPollutionHotspots } from '../lib/localHotspots'
 
 const POLL_INTERVAL_MS = 60_000
 const FALLBACK_SUPPORTED_HOURS = [1, 3, 6]
@@ -125,6 +126,13 @@ export function MapPage() {
   // The nationwide query is the Resolution 1 view itself, so keep it as the
   // source at that level and reuse it as fallback after zooming in.
   const currentGrid = lod.level === 1 && demoMode ? overviewGrid : detailedGrid
+  const localHotspots = useMemo(
+    () =>
+      lod.level >= 3 && forecastMinutes === 0 && currentGrid.resource.status === 'success'
+        ? findLocalPollutionHotspots(currentGrid.resource.data, currentGrid.resource.isDemo)
+        : [],
+    [currentGrid.resource, forecastMinutes, lod.level],
+  )
   const queryKey = `${viewKey}:${publishedRunId ?? 'pending'}:${supportedHours.join(',')}`
 
   const isNow = forecastMinutes === 0
@@ -324,6 +332,7 @@ export function MapPage() {
         weather={weather.resource}
         citizenReports={reports.resource}
         activeFires={activeFires.resource}
+        localHotspots={localHotspots}
         onViewportMoveStart={handleViewportMoveStart}
         onViewportSettled={handleViewportSettled}
       />
@@ -355,7 +364,7 @@ export function MapPage() {
           }}
           aria-haspopup="dialog"
         >
-          Review fire candidates
+          Review pollution candidates
         </button>
         {reportOpen && reportCenter !== null && (
           <ReportFireForm
@@ -393,7 +402,13 @@ export function MapPage() {
         citizenReports={reports.resource}
         activeFires={activeFires.resource}
       />
-      <HotspotEvidencePanel resource={activeFires.resource} />
+      <HotspotEvidencePanel
+        resource={activeFires.resource}
+        localHotspots={localHotspots}
+        gridResource={currentGrid.resource}
+        resolutionLevel={lod.level}
+        forecastMinutes={forecastMinutes}
+      />
     </div>
   )
 }

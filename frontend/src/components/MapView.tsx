@@ -27,6 +27,8 @@ import { EMPTY_REPORTS, cameraPinImage, reportsFeatureCollection } from '../lib/
 import { anomalyById, anomalyPopupHtml, fireAnomalyFeatureCollection } from '../lib/fireAnomalies'
 import { activeFirePopupHtml, activeFiresFeatureCollection } from '../lib/activeFires'
 import type { ActiveFire } from '../lib/activeFires'
+import { localHotspotsFeatureCollection } from '../lib/localHotspots'
+import type { LocalPollutionHotspot } from '../lib/localHotspots'
 import {
   hotspotCandidatePopupHtml,
   hotspotCandidatesFeatureCollection,
@@ -328,6 +330,8 @@ const ACTIVE_FIRE_GLOW_OPACITY = 0.45
 const ACTIVE_FIRE_CORE_OPACITY = 0.9
 const SOURCE_HOTSPOT_CANDIDATES = 'hotspot-candidates'
 const LAYER_HOTSPOT_CANDIDATES = 'hotspot-candidate-rings'
+const SOURCE_LOCAL_HOTSPOTS = 'local-pm25-hotspots'
+const LAYER_LOCAL_HOTSPOTS = 'local-pm25-hotspot-rings'
 
 // Place labels — city and district names from the state tier up (level 2),
 // then localities at the local tier (level 3), so the map gains named detail
@@ -666,6 +670,8 @@ interface MapViewProps {
   citizenReports: AsyncResource<FireReportWithStatus[]>
   /** Real NASA FIRMS detections, fetched by MapPage. */
   activeFires: AsyncResource<ActiveFire[]>
+  /** Local PM2.5 outliers, derived only from the current fine-resolution grid. */
+  localHotspots: LocalPollutionHotspot[]
   /** Stop viewport-specific reads immediately when the camera begins moving. */
   onViewportMoveStart: () => void
   /** Resume viewport reads after the settled bounds have been published. */
@@ -689,6 +695,7 @@ export function MapView({
   weather,
   citizenReports,
   activeFires,
+  localHotspots,
   onViewportMoveStart,
   onViewportSettled,
 }: MapViewProps) {
@@ -1429,6 +1436,26 @@ export function MapView({
             },
           })
 
+          // Amber rings distinguish PM2.5 outlier triage from FIRMS thermal
+          // detections. This layer is fed only by the current fine grid.
+          map!.addSource(SOURCE_LOCAL_HOTSPOTS, {
+            type: 'geojson',
+            data: EMPTY_FEATURE_COLLECTION,
+          })
+          map!.addLayer({
+            id: LAYER_LOCAL_HOTSPOTS,
+            type: 'circle',
+            source: SOURCE_LOCAL_HOTSPOTS,
+            layout: { visibility: 'none' },
+            paint: {
+              'circle-color': 'rgba(251, 191, 36, 0.16)',
+              'circle-radius': ['interpolate', ['linear'], ['zoom'], 6, 7, 10, 15, 12, 20],
+              'circle-stroke-color': '#FBBF24',
+              'circle-stroke-width': 3,
+              'circle-opacity': 0.98,
+            },
+          })
+
           // Place labels — added after the data layers so names sit on top of
           // the field, but before the scope mask so a greyed-out area greys
           // its labels too. Two layers off one source, each gated by zoom:
@@ -1568,6 +1595,18 @@ export function MapView({
             map!.getCanvas().style.cursor = 'pointer'
           })
           map!.on('mouseleave', LAYER_HOTSPOT_CANDIDATES, () => {
+            map!.getCanvas().style.cursor = ''
+          })
+
+          map!.on('click', LAYER_LOCAL_HOTSPOTS, (event) => {
+            const h3Cell = event.features?.[0]?.properties?.h3_cell
+            if (typeof h3Cell !== 'string') return
+            dispatch({ type: 'TOGGLE_CELL', cell: h3Cell, generalized: false })
+          })
+          map!.on('mouseenter', LAYER_LOCAL_HOTSPOTS, () => {
+            map!.getCanvas().style.cursor = 'pointer'
+          })
+          map!.on('mouseleave', LAYER_LOCAL_HOTSPOTS, () => {
             map!.getCanvas().style.cursor = ''
           })
 
@@ -1830,6 +1869,15 @@ export function MapView({
     )
   }, [mapReady, state.showHotspotCandidates])
 
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    mapRef.current.setLayoutProperty(
+      LAYER_LOCAL_HOTSPOTS,
+      'visibility',
+      state.showHotspotCandidates && state.lod.level >= 3 ? 'visible' : 'none',
+    )
+  }, [mapReady, state.showHotspotCandidates, state.lod.level])
+
   // Feed the map the real FIRMS detections MapPage fetched. A failed or
   // absent fetch leaves the source empty rather than falling back to
   // anything invented — the illustrative layer is a separate toggle.
@@ -1849,6 +1897,13 @@ export function MapView({
       activeFires.status === 'success' ? activeFires.data.map(hotspotCandidateFromRow) : []
     source.setData(hotspotCandidatesFeatureCollection(candidates) as never)
   }, [mapReady, activeFires])
+
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    const source = mapRef.current.getSource(SOURCE_LOCAL_HOTSPOTS)
+    if (!(source instanceof GeoJSONSource)) return
+    source.setData(localHotspotsFeatureCollection(localHotspots) as never)
+  }, [mapReady, localHotspots])
 
   // Feed the map the reports the backend actually returned. Only real
   // submitted reports become pins; a failed/absent fetch leaves the source

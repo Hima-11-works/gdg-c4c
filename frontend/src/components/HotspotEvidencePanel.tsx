@@ -12,6 +12,8 @@ import {
 import type { CandidatesUnavailableReason, HotspotCandidate } from '../lib/hotspotCandidates'
 import type { ActiveFire } from '../lib/activeFires'
 import type { HotspotScanOut, HotspotScanSummaryOut } from '../lib/types'
+import type { GridStateOut } from '../lib/types'
+import type { LocalPollutionHotspot } from '../lib/localHotspots'
 import type { AsyncResource } from '../hooks/useApiResource'
 import { SidePanel } from './SidePanel'
 
@@ -40,7 +42,19 @@ const STATUS_CLASS: Record<string, string> = {
  * literal record, and the three fields the API does not carry are printed as
  * named gaps rather than left blank or filled with something plausible.
  */
-export function HotspotEvidencePanel({ resource }: { resource: AsyncResource<ActiveFire[]> }) {
+export function HotspotEvidencePanel({
+  resource,
+  localHotspots,
+  gridResource,
+  resolutionLevel,
+  forecastMinutes,
+}: {
+  resource: AsyncResource<ActiveFire[]>
+  localHotspots: LocalPollutionHotspot[]
+  gridResource: AsyncResource<GridStateOut[]>
+  resolutionLevel: number
+  forecastMinutes: number
+}) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [selectedScanId, setSelectedScanId] = useState<string | null>(null)
   const { state, dispatch } = useMapUi()
@@ -103,6 +117,62 @@ export function HotspotEvidencePanel({ resource }: { resource: AsyncResource<Act
           Imagery-index candidates, optionally supported by FIRMS and verified stations. These are
           not measured PM2.5 values or confirmed pollution events; they await human review.
         </p>
+
+        <h4 className="hotspot-subhead">Local PM2.5 outlier candidates</h4>
+        <p className="muted">
+          A spatial triage of the current fine-resolution PM2.5 grid. It points to an unusual local
+          rise; it does not identify the emission source.
+        </p>
+        <div className="hotspot-caveat local-hotspot-rule">
+          Candidate rule: PM2.5 at least 60 µg/m³, at least 25 µg/m³ and 1.5× above the nearby-cell
+          median, with at least three neighbors. Live data also needs a contributing station reading
+          no older than six hours. These are screening cutoffs, not health thresholds. Demo results
+          are labeled and are not measurements.
+        </div>
+        {resolutionLevel < 3 ? (
+          <p className="muted">Zoom to Resolution 3 or closer to check local cells.</p>
+        ) : forecastMinutes !== 0 ? (
+          <p className="muted">Switch the timeline to Now to review observed-backed candidates.</p>
+        ) : gridResource.status === 'idle' || gridResource.status === 'loading' ? (
+          <p className="muted">Loading the current local PM2.5 grid…</p>
+        ) : gridResource.status === 'error' ? (
+          <p className="hotspot-unavailable-error">
+            The local grid is unavailable: {gridResource.message}
+          </p>
+        ) : localHotspots.length === 0 ? (
+          <p className="muted">No cells in this view pass the local-outlier and evidence checks.</p>
+        ) : (
+          <ul className="hotspot-list">
+            {localHotspots.slice(0, 10).map((hotspot) => (
+              <li key={hotspot.h3Cell}>
+                <button
+                  type="button"
+                  className={`hotspot-row ${
+                    state.selectedCell === hotspot.h3Cell ? 'hotspot-row-selected' : ''
+                  }`}
+                  onClick={() => dispatch({ type: 'SELECT_CELL', cell: hotspot.h3Cell })}
+                >
+                  <span className="hotspot-row-status">Possible local PM2.5 anomaly</span>
+                  <span className="hotspot-row-meta">
+                    {hotspot.pm25.toFixed(0)} µg/m³ vs nearby median{' '}
+                    {hotspot.nearbyMedian.toFixed(0)} (+{hotspot.delta.toFixed(0)})
+                  </span>
+                  <span className="hotspot-row-meta">
+                    {hotspot.nearbyCellCount} nearby cells ·{' '}
+                    {hotspot.isDemo
+                      ? 'illustrative demo grid'
+                      : `${hotspot.stationCount} station(s) · observations ${
+                          hotspot.observationAgeHours === null
+                            ? 'freshness unavailable'
+                            : `${hotspot.observationAgeHours.toFixed(1)}h old`
+                        }`}
+                  </span>
+                  <span className="hotspot-row-id">{hotspot.h3Cell}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
 
         <h4 className="hotspot-subhead">Potential pollution events</h4>
         {(eventCatalog.resource.status === 'loading' ||

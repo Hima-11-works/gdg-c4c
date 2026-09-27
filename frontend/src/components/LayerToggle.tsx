@@ -87,14 +87,14 @@ export function LayerToggle() {
 
           <label
             className="layer-toggle-option"
-            title="Candidate triage from FIRMS detector confidence. It is not a confirmed fire and has no human review or station corroboration yet."
+            title="Show FIRMS thermal detections and local PM2.5 outlier candidates. Local outliers appear from Resolution 3 and are not confirmed sources."
           >
             <input
               type="checkbox"
               checked={state.showHotspotCandidates}
               onChange={() => dispatch({ type: 'TOGGLE_HOTSPOT_CANDIDATES' })}
             />
-            Hidden pollution candidates (FIRMS)
+            Pollution hotspot candidates
           </label>
 
           <label
