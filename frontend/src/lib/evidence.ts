@@ -135,6 +135,63 @@ export async function fetchEvidence(reportId: number): Promise<EvidenceOut[]> {
   return payload.data
 }
 
+/** Fetch the metadata-free reviewer image. The shared reviewer key is entered
+ *  at runtime and never persisted by this client. */
+export async function fetchEvidenceDerivative(
+  reportId: number,
+  evidenceId: number,
+  reviewerKey: string,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  const response = await fetch(
+    `${API_BASE_URL}/reports/${reportId}/evidence/${evidenceId}/derivative`,
+    {
+      headers: { 'X-Reviewer-Key': reviewerKey },
+      cache: 'no-store',
+      signal,
+    },
+  )
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    throw new EvidenceError(
+      body?.error?.message ?? `Could not load the photo (HTTP ${response.status}).`,
+      body?.error?.code ?? 'preview_failed',
+      response.status,
+    )
+  }
+  return response.blob()
+}
+
+/** Record a reviewer decision about the photo only, never the report itself. */
+export async function setEvidenceReviewState(
+  reportId: number,
+  evidenceId: number,
+  reviewerKey: string,
+  reviewState: 'approved' | 'rejected',
+): Promise<EvidenceOut> {
+  const response = await fetch(
+    `${API_BASE_URL}/reports/${reportId}/evidence/${evidenceId}/review`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Reviewer-Key': reviewerKey,
+      },
+      body: JSON.stringify({ review_state: reviewState }),
+    },
+  )
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    throw new EvidenceError(
+      body?.error?.message ?? `Could not review the photo (HTTP ${response.status}).`,
+      body?.error?.code ?? 'review_failed',
+      response.status,
+    )
+  }
+  const payload = (await response.json()) as Envelope<EvidenceOut>
+  return payload.data
+}
+
 /** Client-side size gate, so an oversized file is refused before it is sent.
  *
  *  Only a convenience: the server enforces the same limit on the bytes it

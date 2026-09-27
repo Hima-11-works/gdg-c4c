@@ -1387,6 +1387,225 @@ body,
   color: #f87171;
 }
 
+/* --- reviewer-gated citizen photo queue ------------------------------- */
+
+.photo-review-backdrop {
+  position: fixed;
+  z-index: 20;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(4, 6, 10, 0.76);
+}
+
+.photo-review-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  width: min(58rem, calc(100vw - 2rem));
+  max-height: min(92vh, 54rem);
+  overflow: auto;
+}
+
+.photo-review-header,
+.photo-review-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.photo-review-header h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.photo-review-header p,
+.photo-review-note {
+  margin: 0;
+  font-size: 0.78rem;
+}
+
+.photo-review-key {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+}
+
+.photo-review-key input {
+  padding: 0.5rem;
+  border: 1px solid #3a3f4a;
+  border-radius: 6px;
+  background: #12141a;
+  color: #e5e7eb;
+  font: inherit;
+}
+
+.photo-review-toolbar {
+  padding-top: 0.25rem;
+  font-size: 0.82rem;
+}
+
+.photo-review-refresh,
+.photo-review-item,
+.photo-review-actions button {
+  padding: 0.45rem 0.6rem;
+  border: 1px solid #3a3f4a;
+  border-radius: 6px;
+  background: #161920;
+  color: #e5e7eb;
+  font: inherit;
+  cursor: pointer;
+}
+
+.photo-review-refresh:disabled,
+.photo-review-actions button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.photo-review-content {
+  display: grid;
+  grid-template-columns: minmax(13rem, 0.85fr) minmax(0, 1.5fr);
+  gap: 0.75rem;
+  min-height: 20rem;
+}
+
+.photo-review-queue {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-height: 50vh;
+  overflow: auto;
+}
+
+.photo-review-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+  text-align: left;
+  font-size: 0.76rem;
+}
+
+.photo-review-item span {
+  overflow-wrap: anywhere;
+}
+
+.photo-review-item.is-selected {
+  border-color: #60a5fa;
+  background: rgba(59, 130, 246, 0.15);
+}
+
+.photo-review-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.photo-review-report {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.photo-review-report p {
+  margin: 0.2rem 0 0;
+}
+
+.photo-review-preview {
+  display: grid;
+  place-items: center;
+  min-height: 12rem;
+  max-height: 42vh;
+  overflow: hidden;
+  border: 1px solid #2a2e36;
+  border-radius: 8px;
+  background: #0b0d12;
+  text-align: center;
+}
+
+.photo-review-preview img {
+  display: block;
+  width: 100%;
+  max-height: 42vh;
+  object-fit: contain;
+}
+
+.photo-review-preview p {
+  padding: 1rem;
+}
+
+.photo-review-quarantine {
+  padding: 0.8rem;
+  border: 1px solid #f59e0b88;
+  border-radius: 8px;
+  color: #fcd34d;
+  font-size: 0.8rem;
+}
+
+.photo-review-metadata {
+  margin: 0;
+  font-size: 0.74rem;
+}
+
+.photo-review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.photo-review-actions .photo-review-approve {
+  border-color: #34d39988;
+  background: rgba(16, 185, 129, 0.16);
+}
+
+.photo-review-actions .photo-review-reject {
+  border-color: #f8717188;
+  background: rgba(239, 68, 68, 0.14);
+}
+
+.photo-review-notice {
+  margin: 0;
+  color: #6ee7b7;
+  font-size: 0.78rem;
+}
+
+@media (max-width: 42rem) {
+  .photo-review-backdrop {
+    padding: 0.45rem;
+  }
+
+  .photo-review-panel {
+    width: calc(100vw - 0.9rem);
+    max-height: calc(100dvh - 0.9rem);
+    padding: 0.8rem;
+  }
+
+  .photo-review-content {
+    grid-template-columns: 1fr;
+  }
+
+  .photo-review-queue {
+    flex-direction: row;
+    max-height: 8rem;
+  }
+
+  .photo-review-item {
+    flex: 0 0 min(72vw, 15rem);
+  }
+
+  .photo-review-preview,
+  .photo-review-preview img {
+    max-height: 30vh;
+  }
+}
+
 /* --- F2: the optional photo on the report form -------------------------
    Laid out as a block rather than a `.report-field` because it is a group: a
    picker, a preview, a progress bar, a consent line and a retry all belong to

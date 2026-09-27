@@ -371,6 +371,7 @@ export function ReportFireForm({
               ref={fileInputRef}
               type="file"
               accept="image/jpeg,image/png,image/webp"
+              capture="environment"
               onChange={(event) => pickPhoto(event.target.files?.[0] ?? null)}
             />
             <span>Choose a photo…</span>

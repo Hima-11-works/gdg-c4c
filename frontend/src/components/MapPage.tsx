@@ -27,6 +27,7 @@ import { ScopeChip } from './ScopeChip'
 import { SearchBar } from './SearchBar'
 import { StatusBanner } from './StatusBanner'
 import { ProvenanceBanner } from './ProvenanceBanner'
+import { PhotoReviewPanel } from './PhotoReviewPanel'
 import { TimelineControl } from './TimelineControl'
 import type { AsyncResource } from '../hooks/useApiResource'
 import type { LodQuery } from '../lib/api'
@@ -45,6 +46,7 @@ export function MapPage() {
   // The submit form is open/closed here so its map-centre location and the
   // reports list it refetches both come from this component's data.
   const [reportOpen, setReportOpen] = useState(false)
+  const [photoReviewOpen, setPhotoReviewOpen] = useState(false)
   const [viewportMoving, setViewportMoving] = useState(false)
 
   // A report is filed where the user is looking: the viewport centre. The
@@ -333,6 +335,14 @@ export function MapPage() {
             Report a fire
           </button>
         )}
+        <button
+          type="button"
+          className="panel report-open"
+          onClick={() => setPhotoReviewOpen(true)}
+          aria-haspopup="dialog"
+        >
+          Review citizen photos
+        </button>
         {reportOpen && reportCenter !== null && (
           <ReportFireForm
             latitude={reportCenter.latitude}
@@ -342,6 +352,13 @@ export function MapPage() {
           />
         )}
       </div>
+
+      {photoReviewOpen && (
+        <PhotoReviewPanel
+          onClose={() => setPhotoReviewOpen(false)}
+          onReviewed={reports.refetch}
+        />
+      )}
 
       <div className="overlay overlay-top-right">
         <div className="top-right-row">
