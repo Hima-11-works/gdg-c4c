@@ -108,7 +108,7 @@ class DioFireReportApiClient implements FireReportApiClient {
     return _parseEnvelope(
       json,
       (data) => FireReportDto.fromJson(data as Map<String, dynamic>).toDomain(),
-    );
+    ).data;
   }
 
   @override
@@ -119,7 +119,7 @@ class DioFireReportApiClient implements FireReportApiClient {
       (data) => (data as List<dynamic>)
           .map((e) => FireReportDto.fromJson(e as Map<String, dynamic>).toDomain())
           .toList(),
-    );
+    ).data;
   }
 
   Future<Map<String, dynamic>> _get(String path) async {

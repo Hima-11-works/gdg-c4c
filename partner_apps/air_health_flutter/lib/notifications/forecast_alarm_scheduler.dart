@@ -125,6 +125,7 @@ class ForecastAlarmScheduler {
       forecast: forecast,
       rules: rules,
       preferences: preferences,
+      freshness: freshness,
       now: effectiveNow,
     );
     final desiredByKey = {for (final a in desired) a.key: a};

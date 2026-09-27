@@ -68,9 +68,17 @@ class NotificationService {
   Future<void> initialise({
     void Function(String? payload)? onNotificationTap,
   }) async {
-    const androidSettings =
-        AndroidInitializationSettings('ic_notification');
-    final initSettings = InitializationSettings(android: androidSettings);
+    const androidSettings = AndroidInitializationSettings('ic_notification');
+    const darwinSettings = DarwinInitializationSettings(
+      requestAlertPermission: false,
+      requestBadgePermission: false,
+      requestSoundPermission: false,
+    );
+    const initSettings = InitializationSettings(
+      android: androidSettings,
+      iOS: darwinSettings,
+      macOS: darwinSettings,
+    );
     await _plugin.initialize(
       initSettings,
       onDidReceiveNotificationResponse: (response) {
@@ -109,7 +117,7 @@ class NotificationService {
     final android = _plugin.resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin>();
     if (android == null) return true;
-    return await android.canScheduleExactAlarms() ?? true;
+    return await android.canScheduleExactNotifications() ?? true;
   }
 
   /// Ask Android (12+) for the exact-alarm grant, opening the system's
@@ -122,8 +130,7 @@ class NotificationService {
         AndroidFlutterLocalNotificationsPlugin>();
     if (android == null) return true;
     if (await canScheduleExactAlarms()) return true;
-    final status = await Permission.alarm.request();
-    if (status.isGranted) return true;
+    await android.requestExactAlarmsPermission();
     return canScheduleExactAlarms();
   }
 
@@ -174,9 +181,17 @@ class NotificationService {
           fullScreenIntent: urgent,
           styleInformation: BigTextStyleInformation(body),
         ),
+        iOS: const DarwinNotificationDetails(
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
+        ),
+        macOS: const DarwinNotificationDetails(
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
+        ),
       ),
-      uiLocalNotificationDateInterpretation:
-          UILocalNotificationDateInterpretation.absoluteTime,
       androidScheduleMode: exact
           ? AndroidScheduleMode.exactAllowWhileIdle
           : AndroidScheduleMode.inexactAllowWhileIdle,
@@ -193,12 +208,13 @@ class NotificationService {
   /// On Android 13+ this triggers the runtime permission dialog.
   /// Returns the permission state.
   Future<NotificationPermissionResult> requestPermissions() async {
-    final android = _plugin.resolvePlatformSpecificImplementation<
-        AndroidFlutterLocalNotificationsPlugin>();
-    if (android == null) return NotificationPermissionResult.denied;
-
-    final granted = await android.requestNotificationsPermission();
-    if (granted == true) return NotificationPermissionResult.granted;
+    final status = await Permission.notification.request();
+    if (status.isGranted || status.isProvisional || status.isLimited) {
+      return NotificationPermissionResult.granted;
+    }
+    if (status.isPermanentlyDenied || status.isRestricted) {
+      return NotificationPermissionResult.permanentlyDenied;
+    }
     return NotificationPermissionResult.denied;
   }
 
@@ -229,7 +245,19 @@ class NotificationService {
       priority: urgent ? Priority.max : Priority.high,
       styleInformation: BigTextStyleInformation(body),
     );
-    final details = NotificationDetails(android: androidDetails);
+    final details = NotificationDetails(
+      android: androidDetails,
+      iOS: const DarwinNotificationDetails(
+        presentAlert: true,
+        presentBadge: true,
+        presentSound: true,
+      ),
+      macOS: const DarwinNotificationDetails(
+        presentAlert: true,
+        presentBadge: true,
+        presentSound: true,
+      ),
+    );
     await _plugin.show(id, title, body, details, payload: payload);
   }
 
