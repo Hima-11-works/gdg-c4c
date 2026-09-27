@@ -155,6 +155,7 @@ class Settings(BaseSettings):
         default="VIIRS_NOAA21_NRT",
         pattern=r"^VIIRS_(NOAA21|NOAA20|SNPP)_NRT$",
     )
+    firms_region: str = "delhi-ncr"
     firms_timeout_seconds: float = Field(default=20.0, gt=0)
     firms_max_retries: int = Field(default=3, ge=1, le=10)
     # A quality warning threshold only. Older valid detections are retained

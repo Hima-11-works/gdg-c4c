@@ -27,6 +27,9 @@ from app.domain.features import (
 from app.domain.h3_grid import average_cell_area_km2, cell_center, cell_for
 from app.domain.types import Coordinate, SensorReading
 
+FIRE_FEATURE_MAX_DISTANCE_KM = 50.0
+FIRE_UPWIND_HALF_ANGLE_DEG = 60.0
+
 
 def _parse_datetime(value: datetime | str) -> datetime:
     if isinstance(value, datetime):
@@ -163,7 +166,7 @@ class FeatureBuilder:
         *,
         resolution: int = 8,
         timezone: str = "Asia/Kolkata",
-        max_weather_distance_km: float = 50.0,
+        max_weather_distance_km: float = FIRE_FEATURE_MAX_DISTANCE_KM,
         max_observation_age_hours: float = 48.0,
         feature_schema_version: str = FEATURE_SCHEMA_VERSION,
     ) -> None:
@@ -303,7 +306,7 @@ class FeatureBuilder:
         if traffic is None or traffic_value is None:
             missing.add("traffic")
         fire_values = self._fire_values(
-            cell, issued_at, valid_at, current_weather, fires, missing
+            cell, issued_at, valid_at, current_weather, fires, missing, warnings
         )
         local = valid_at.astimezone(self.timezone)
         day_count = (
@@ -530,27 +533,68 @@ class FeatureBuilder:
         weather: WeatherFeature | None,
         fires: Sequence[Mapping[str, Any]] | None,
         missing: set[str],
+        warnings: set[str],
     ) -> dict[str, float | None]:
         if fires is None:
             missing.add("fires")
             return {"frp": None, "count": None, "age": None}
+        if not fires:
+            return {"frp": 0.0, "count": 0.0, "age": None}
+
         target = Coordinate(*cell_center(cell))
-        selected = []
+        nearby = []
+        stale_nearby = False
+        unknown_availability = False
         for fire in fires:
             acquired = _parse_datetime(fire["acquired_at"])
             available = fire.get("available_at")
-            if acquired > valid_at or (
-                available is not None and _parse_datetime(available) > issued_at
-            ):
+            if available is None:
+                missing.add("fire_availability")
+                warnings.add("fire_availability_unknown")
+                unknown_availability = True
+                continue
+            if acquired > valid_at or _parse_datetime(available) > issued_at:
                 continue
             fire_point = Coordinate(float(fire["latitude"]), float(fire["longitude"]))
-            if target.distance_km(fire_point) > self.max_weather_distance_km:
+            distance_km = target.distance_km(fire_point)
+            if distance_km > self.max_weather_distance_km:
                 continue
-            if weather and weather.wind_direction_deg is not None:
-                bearing = target.bearing_to(fire_point)
-                if _angular_distance(bearing, weather.wind_direction_deg) > 120:
-                    continue
-            selected.append((fire, acquired))
+            flags = set(fire.get("quality_flags") or ())
+            age_hours = (valid_at - acquired).total_seconds() / 3600
+            if "stale_detection" in flags or age_hours > self.max_observation_age_hours:
+                stale_nearby = True
+                continue
+            confidence = str(fire.get("confidence_class", "unknown")).lower()
+            if confidence == "unknown" or "confidence_unknown" in flags:
+                warnings.add("fire_confidence_unknown")
+            elif confidence == "low":
+                warnings.add("fire_confidence_low")
+            nearby.append((fire, acquired, fire_point, distance_km))
+
+        if stale_nearby:
+            warnings.add("fire_detections_stale")
+        if not nearby:
+            if stale_nearby:
+                missing.add("fires")
+                return {"frp": None, "count": None, "age": None}
+            if unknown_availability:
+                missing.add("fires")
+                return {"frp": None, "count": None, "age": None}
+            return {"frp": 0.0, "count": 0.0, "age": None}
+
+        if weather is None or weather.wind_direction_deg is None:
+            missing.add("fire_wind_context")
+            warnings.add("fire_upwind_unavailable")
+            return {"frp": None, "count": None, "age": None}
+
+        selected = [
+            (fire, acquired)
+            for fire, acquired, fire_point, _distance_km in nearby
+            if _angular_distance(
+                target.bearing_to(fire_point), weather.wind_direction_deg
+            )
+            <= FIRE_UPWIND_HALF_ANGLE_DEG
+        ]
         if not selected:
             return {"frp": 0.0, "count": 0.0, "age": None}
         return {

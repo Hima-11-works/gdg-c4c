@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from geoalchemy2 import WKTElement
 
 from app.domain.environmental_observations import FireHotspot
+from app.domain.types import BoundingBox
 from app.models.tables import fire_hotspot as fire_hotspot_table
 
 
@@ -90,6 +91,7 @@ class SqlFireHotspotRepository:
         acquired_to,
         available_by,
         h3_cells: list[str] | None = None,
+        bbox: BoundingBox | None = None,
     ) -> list[FireHotspot]:
         stmt = select(fire_hotspot_table).where(
             fire_hotspot_table.c.acquired_at >= acquired_from,
@@ -98,6 +100,11 @@ class SqlFireHotspotRepository:
         )
         if h3_cells is not None:
             stmt = stmt.where(fire_hotspot_table.c.h3_cell.in_(h3_cells))
+        if bbox is not None:
+            stmt = stmt.where(
+                fire_hotspot_table.c.latitude.between(bbox.min_lat, bbox.max_lat),
+                fire_hotspot_table.c.longitude.between(bbox.min_lon, bbox.max_lon),
+            )
         rows = self._session.execute(
             stmt.order_by(fire_hotspot_table.c.acquired_at, fire_hotspot_table.c.detection_id)
         ).all()

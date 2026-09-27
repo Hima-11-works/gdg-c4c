@@ -299,6 +299,7 @@ class FakeFireHotspotRepository:
         acquired_to: datetime,
         available_by: datetime,
         h3_cells: list[str] | None = None,
+        bbox: BoundingBox | None = None,
     ) -> list[FireHotspot]:
         cell_set = None if h3_cells is None else set(h3_cells)
         matches = [
@@ -307,6 +308,8 @@ class FakeFireHotspotRepository:
             if acquired_from <= h.acquired_at <= acquired_to
             and h.available_at <= available_by
             and (cell_set is None or h.h3_cell in cell_set)
+            and (bbox is None or bbox.min_lat <= h.latitude <= bbox.max_lat)
+            and (bbox is None or bbox.min_lon <= h.longitude <= bbox.max_lon)
         ]
         return sorted(matches, key=lambda h: (h.acquired_at, h.detection_id))
 

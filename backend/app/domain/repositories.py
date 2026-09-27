@@ -18,7 +18,15 @@ from app.domain.prediction import PredictionResult, PredictionRun
 from app.domain.report_lifecycle import ReportAuditEvent
 from app.domain.scenario import DatasetVersion, IngestionRun
 from app.domain.training import ModelVersion
-from app.domain.types import Alert, FireReport, Forecast, GridState, SensorReading, WeatherReading
+from app.domain.types import (
+    Alert,
+    BoundingBox,
+    FireReport,
+    Forecast,
+    GridState,
+    SensorReading,
+    WeatherReading,
+)
 
 
 class DuplicateReadingError(Exception):
@@ -217,6 +225,7 @@ class FireHotspotRepository(Protocol):
         acquired_to: datetime,
         available_by: datetime,
         h3_cells: list[str] | None = None,
+        bbox: BoundingBox | None = None,
     ) -> list[FireHotspot]: ...
 
 

@@ -190,3 +190,87 @@ def test_future_weather_is_allowed_only_when_issued_before_the_cutoff() -> None:
 
     assert snapshot.vector.rain_1h_mm == 2.0
     assert snapshot.valid_at == future_valid
+
+
+def _fire(*, longitude: float, available_at: datetime | None = NOW) -> dict[str, object]:
+    latitude, _ = h3.cell_to_latlng(CELL)
+    fire: dict[str, object] = {
+        "latitude": latitude,
+        "longitude": longitude,
+        "acquired_at": NOW - timedelta(minutes=20),
+        "frp_mw": 12.5,
+        "confidence_class": "nominal",
+        "quality_flags": (),
+    }
+    if available_at is not None:
+        fire["available_at"] = available_at
+    return fire
+
+
+def test_fire_features_only_count_available_upwind_detections() -> None:
+    _, longitude = h3.cell_to_latlng(CELL)
+    west = _fire(longitude=longitude - 0.08)
+    east = _fire(longitude=longitude + 0.08)
+    snapshot = FeatureBuilder().build(
+        cells=[CELL],
+        issued_at=NOW,
+        valid_at=NOW,
+        weather_features=[_weather()],
+        fire_detections=[west, east],
+    )[0]
+
+    assert snapshot.vector.fire_count_upwind == 1.0
+    assert snapshot.vector.fire_frp_upwind_mw == 12.5
+
+
+def test_fire_detections_available_after_issue_time_do_not_leak() -> None:
+    _, longitude = h3.cell_to_latlng(CELL)
+    snapshot = FeatureBuilder().build(
+        cells=[CELL],
+        issued_at=NOW,
+        valid_at=NOW,
+        weather_features=[_weather()],
+        fire_detections=[
+            _fire(
+                longitude=longitude - 0.08,
+                available_at=NOW + timedelta(minutes=1),
+            )
+        ],
+    )[0]
+
+    assert snapshot.vector.fire_count_upwind == 0.0
+    assert snapshot.vector.fire_frp_upwind_mw == 0.0
+
+
+def test_fire_detection_without_availability_time_is_missing_not_zero() -> None:
+    _, longitude = h3.cell_to_latlng(CELL)
+    snapshot = FeatureBuilder().build(
+        cells=[CELL],
+        issued_at=NOW,
+        valid_at=NOW,
+        weather_features=[_weather()],
+        fire_detections=[_fire(longitude=longitude - 0.08, available_at=None)],
+    )[0]
+
+    assert snapshot.vector.fire_count_upwind is None
+    assert snapshot.vector.fire_frp_upwind_mw is None
+    assert "fire_availability" in snapshot.quality.missing_fields
+    assert "fire_availability_unknown" in snapshot.quality.warnings
+
+
+def test_stale_fire_detection_is_missing_not_zero() -> None:
+    _, longitude = h3.cell_to_latlng(CELL)
+    stale = _fire(longitude=longitude - 0.08)
+    stale["quality_flags"] = ("stale_detection",)
+    snapshot = FeatureBuilder().build(
+        cells=[CELL],
+        issued_at=NOW,
+        valid_at=NOW,
+        weather_features=[_weather()],
+        fire_detections=[stale],
+    )[0]
+
+    assert snapshot.vector.fire_count_upwind is None
+    assert snapshot.vector.fire_frp_upwind_mw is None
+    assert "fires" in snapshot.quality.missing_fields
+    assert "fire_detections_stale" in snapshot.quality.warnings

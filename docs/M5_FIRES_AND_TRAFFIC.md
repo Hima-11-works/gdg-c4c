@@ -1,9 +1,10 @@
 # M5: FIRMS fire detections and sampled traffic
 
-M5 adds retained source observations and quality accounting. It does **not**
-connect either source to live prediction features. New inputs remain out of
-model inference until an as-of historical join and an observed-label
-incremental evaluation have been reviewed.
+M5 adds retained source observations and quality accounting. F4 connects
+available FIRMS detections to published, issue-time feature snapshots for
+analysis. FIRMS and traffic remain out of forecast-model inference until an
+as-of historical join and an observed-label incremental evaluation have been
+reviewed.
 
 ## NASA FIRMS
 
@@ -39,6 +40,28 @@ retain their individually valid rows, but the run is marked failed/incomplete.
 FIRMS hotspots are satellite thermal detections, not ground-confirmed fires;
 confidence categories are kept categorical rather than represented as
 probabilities.
+
+## Scheduled F4 feature snapshots
+
+The hourly pipeline attempts FIRMS in live mode when `FIRMS_MAP_KEY` is set.
+It requests the configured ingestion region expanded by 50 km to include
+nearby upwind sources, with a two-day provider window. Demo runs skip the live
+feed. The configured `FIRMS_REGION` labels the dataset provenance.
+
+For publication, detections are loaded only when `acquired_at` is no later
+than the feature valid time and `available_at` is no later than the forecast
+issue time. The feature builder limits influence to 50 km and meteorologically
+upwind detections, carries FRP/count/minimum age, and records the dataset
+attribution, license, and version on the feature snapshot. Missing or failed
+feeds remain null/missing; a successful empty response is known zero. The
+pipeline advances the live issue time past the fetch completion before
+publishing, so a just-fetched detection can be used without look-ahead.
+
+These fields are collected for audit and later ablation. They do not alter the
+current deterministic baseline or activate a learned model. GIBS/AOD and
+NO2 map layers are display imagery; no licensed quantitative product with
+units, spatial resolution, uncertainty, and issue-time availability is
+configured, so those layers are not model features.
 
 ## Optional sampled traffic import
 

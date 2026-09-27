@@ -16,13 +16,12 @@ this module only wires them together in order, against one shared
 session/timestamp/bounding box, and prints a clear per-stage pass/fail
 summary. It is not itself where any pollution/forecast/PDI logic lives.
 
-Demo Mode (DEMO_MODE=true): the two ingestion stages substitute a fixed,
+Demo Mode (DEMO_MODE=true): sensor and weather ingestion use the fixed,
 deterministic dataset (app.ingestion.demo) for OpenAQ/Open-Meteo — see
-app.ingestion.factory, the single place that decision is made. Every
-stage after ingestion is completely unaware of it and runs identically
-either way, on whatever ended up persisted.
+app.ingestion.factory. FIRMS is skipped in demo mode so live satellite data
+cannot be mixed into synthetic runs; its features are marked unavailable.
 
-Failure handling: a failed EXTERNAL data source (OpenAQ or Open-Meteo) is
+Failure handling: a failed EXTERNAL data source (OpenAQ, Open-Meteo, or FIRMS) is
 reported as a clear per-stage failure but does NOT abort the run. Every
 downstream stage already has a well-defined, tested behavior for
 missing/stale/absent upstream data — IDWPollutionEstimator's min_sensors
@@ -45,7 +44,7 @@ import logging
 import math
 import sys
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -54,23 +53,29 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings, get_settings
 from app.db.repositories import (
     SqlAlertRepository,
+    SqlDatasetVersionRepository,
+    SqlFireHotspotRepository,
     SqlFireReportRepository,
     SqlForecastRepository,
     SqlGridStateRepository,
+    SqlIngestionRunRepository,
     SqlPredictionPublicationRepository,
     SqlSensorReadingRepository,
+    SqlTrafficObservationRepository,
     SqlWeatherReadingRepository,
 )
 from app.db.session import get_session_factory
-from app.domain.features import DataMode, FeatureSnapshot, InputKind, WeatherFeature
+from app.domain.features import DataMode, DatasetRef, FeatureSnapshot, InputKind, WeatherFeature
 from app.domain.prediction import DEFAULT_REGION
 from app.domain.types import BoundingBox, Forecast, WeatherReading
 from app.ingestion.demo_reports import demo_fire_reports
+from app.ingestion.firms import FirmsProvider
 from app.ingestion.factory import build_pollution_provider, build_weather_provider
 from app.services.alert_generation import AlertGenerationService
 from app.services.dispersion import DeterministicH3DispersionModel
 from app.services.estimation import IDWPollutionEstimator
-from app.services.features import FeatureBuilder
+from app.services.environmental_ingestion import EnvironmentalIngestionService
+from app.services.features import FIRE_FEATURE_MAX_DISTANCE_KM, FeatureBuilder
 from app.services.fire_gradient import PlumeFireGradientModel
 from app.services.forecasting import ForecastingService
 from app.services.geospatial import GeospatialService
@@ -148,6 +153,9 @@ def _publish(
     pipeline_run_id: str,
     timestamp: datetime,
     forecasts: list[Forecast],
+    *,
+    fire_feed_available: bool = False,
+    fire_dataset_id: str | None = None,
 ) -> StageOutcome:
     """Publish this run's grid as an immutable, queryable v2 result (F3).
 
@@ -167,7 +175,15 @@ def _publish(
     one step that only affects the v2 read path.
     """
     try:
-        return _publish_inner(session, settings, pipeline_run_id, timestamp, forecasts)
+        return _publish_inner(
+            session,
+            settings,
+            pipeline_run_id,
+            timestamp,
+            forecasts,
+            fire_feed_available=fire_feed_available,
+            fire_dataset_id=fire_dataset_id,
+        )
     except Exception as exc:  # noqa: BLE001 - see docstring
         logger.exception("Publication stage failed for run %s", pipeline_run_id)
         return StageOutcome(
@@ -214,6 +230,9 @@ def _publish_inner(
     pipeline_run_id: str,
     timestamp: datetime,
     forecasts: list[Forecast],
+    *,
+    fire_feed_available: bool = False,
+    fire_dataset_id: str | None = None,
 ) -> StageOutcome:
     states = SqlGridStateRepository(session).latest()
     if not states:
@@ -228,6 +247,14 @@ def _publish_inner(
         timestamp - timedelta(hours=settings.ingest_max_reading_age_hours)
     )
     weather = SqlWeatherReadingRepository(session).list_latest_in_cells(cells)
+    fire_detections, fire_dataset_refs = _fire_feature_inputs(
+        session,
+        settings,
+        timestamp,
+        _expand_bbox(bbox=_cells_bbox(cells), distance_km=FIRE_FEATURE_MAX_DISTANCE_KM),
+        feed_available=fire_feed_available,
+        dataset_id=fire_dataset_id,
+    )
 
     snapshots = FeatureBuilder(resolution=settings.h3_resolution).build(
         cells=cells,
@@ -235,6 +262,8 @@ def _publish_inner(
         valid_at=timestamp,
         sensor_readings=sensors,
         weather_features=_weather_features(weather, fallback_time=timestamp),
+        fire_detections=fire_detections,
+        dataset_refs=fire_dataset_refs,
     )
     if not snapshots:
         return StageOutcome(
@@ -343,6 +372,7 @@ def _record_source_health(
     called: bool,
     failed: bool,
     item_count: int,
+    stale: bool = False,
     error_summary: str | None = None,
 ) -> None:
     """Record one source's health for the run in progress (F3).
@@ -360,7 +390,9 @@ def _record_source_health(
         SqlSourceHealthRepository(session).record(
             pipeline_run_id=pipeline_run_id,
             dataset_id=dataset_id,
-            status=classify(item_count=item_count, failed=failed, called=called),
+            status=classify(
+                item_count=item_count, failed=failed, called=called, stale=stale
+            ),
             item_count=item_count,
             error_summary=error_summary,
             fetched_at=datetime.now(UTC),
@@ -423,6 +455,199 @@ async def _ingest_sensors(
         f"fetched={result.fetched} saved={result.saved} "
         f"skipped_duplicates={result.skipped_duplicates}",
     )
+
+
+async def _ingest_fires(
+    session: Session,
+    settings: Settings,
+    bbox: BoundingBox,
+    pipeline_run_id: str,
+) -> tuple[StageOutcome, bool, str | None]:
+    """Refresh bounded FIRMS data for this run; baseline inference is optional.
+
+    Returns whether this run has a complete feed that is safe to join into its
+    feature snapshots. Demo runs never mix real detections into synthetic
+    inputs, and an empty successful response remains distinct from a failure.
+    """
+    dataset_id = "nasa-firms"
+    if settings.demo_mode or settings.firms_map_key is None:
+        reason = "demo mode" if settings.demo_mode else "FIRMS_MAP_KEY not configured"
+        _record_source_health(
+            session,
+            pipeline_run_id=pipeline_run_id,
+            dataset_id=dataset_id,
+            called=False,
+            failed=False,
+            item_count=0,
+            error_summary=reason,
+        )
+        return (
+            StageOutcome("fire_ingestion", True, f"skipped ({reason}); baseline continues"),
+            False,
+            None,
+        )
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.firms_timeout_seconds) as client:
+            provider = FirmsProvider(
+                client,
+                map_key=settings.firms_map_key.get_secret_value(),
+                source=settings.firms_source,
+                base_url=settings.firms_base_url,
+                timeout_seconds=settings.firms_timeout_seconds,
+                max_retries=settings.firms_max_retries,
+                h3_resolution=settings.h3_resolution,
+                stale_after_hours=settings.firms_stale_after_hours,
+            )
+            service = EnvironmentalIngestionService(
+                fire_provider=provider,
+                fire_repository=SqlFireHotspotRepository(session),
+                traffic_repository=SqlTrafficObservationRepository(session),
+                dataset_repository=SqlDatasetVersionRepository(session),
+                run_repository=SqlIngestionRunRepository(session),
+            )
+            result = await service.ingest_firms(
+                _expand_bbox(bbox=bbox, distance_km=FIRE_FEATURE_MAX_DISTANCE_KM),
+                day_range=2,
+                region=settings.firms_region,
+                source=settings.firms_source,
+                stale_after_hours=settings.firms_stale_after_hours,
+            )
+    except Exception as exc:  # noqa: BLE001 - one upstream source must not abort baseline stages
+        message = f"FIRMS ingestion setup failed: {type(exc).__name__}"
+        logger.exception(message)
+        _record_source_health(
+            session,
+            pipeline_run_id=pipeline_run_id,
+            dataset_id=dataset_id,
+            called=True,
+            failed=True,
+            item_count=0,
+            error_summary=message,
+        )
+        return StageOutcome("fire_ingestion", False, message), False, None
+
+    metrics = result.run.metrics
+    fetched = int(metrics.get("fetched_records", 0))
+    fresh = int(metrics.get("fresh_records", 0))
+    succeeded = result.succeeded
+    errors = "; ".join(result.run.errors)
+    _record_source_health(
+        session,
+        pipeline_run_id=pipeline_run_id,
+        dataset_id=dataset_id,
+        called=True,
+        failed=not succeeded,
+        item_count=fetched,
+        stale=fetched > 0 and fresh == 0,
+        error_summary=errors[:500] if errors else None,
+    )
+    if not succeeded:
+        return (
+            StageOutcome(
+                "fire_ingestion", False, f"FIRMS feed failed: {errors or 'incomplete'}"
+            ),
+            False,
+            None,
+        )
+    feature_available = not (fetched > 0 and fresh == 0)
+    summary = (
+        f"fetched={fetched} saved={result.saved} duplicates={result.skipped_duplicates} "
+        f"stale={metrics.get('stale_records', 0)}"
+    )
+    if not feature_available:
+        summary += "; stale-only feed leaves fire features unavailable"
+    return (
+        StageOutcome("fire_ingestion", True, summary),
+        feature_available,
+        result.run.dataset_id if feature_available else None,
+    )
+
+
+def _expand_bbox(*, bbox: BoundingBox, distance_km: float) -> BoundingBox:
+    """Add a bounded neighborhood so upwind sources outside the view are included."""
+    latitude_margin = distance_km / 110.574
+    middle_latitude = (bbox.min_lat + bbox.max_lat) / 2
+    longitude_scale = max(0.15, abs(math.cos(math.radians(middle_latitude))))
+    longitude_margin = distance_km / (111.320 * longitude_scale)
+    return BoundingBox(
+        min_lat=max(-90.0, bbox.min_lat - latitude_margin),
+        min_lon=max(-180.0, bbox.min_lon - longitude_margin),
+        max_lat=min(90.0, bbox.max_lat + latitude_margin),
+        max_lon=min(180.0, bbox.max_lon + longitude_margin),
+    )
+
+
+def _cells_bbox(cells: list[str]) -> BoundingBox:
+    """Return a tight coordinate box around persisted grid cell centers."""
+    from app.domain.h3_grid import cell_center
+
+    centers = [cell_center(cell) for cell in cells]
+    min_lat = min(point[0] for point in centers)
+    max_lat = max(point[0] for point in centers)
+    min_lon = min(point[1] for point in centers)
+    max_lon = max(point[1] for point in centers)
+    if min_lat == max_lat:
+        min_lat, max_lat = min_lat - 0.000001, max_lat + 0.000001
+    if min_lon == max_lon:
+        min_lon, max_lon = min_lon - 0.000001, max_lon + 0.000001
+    return BoundingBox(
+        min_lat=min_lat, min_lon=min_lon, max_lat=max_lat, max_lon=max_lon
+    )
+
+
+def _fire_feature_inputs(
+    session: Session,
+    settings: Settings,
+    issued_at: datetime,
+    bbox: BoundingBox,
+    *,
+    feed_available: bool,
+    dataset_id: str | None,
+) -> tuple[list[dict[str, object]] | None, tuple[DatasetRef, ...]]:
+    """Load detections available at issue time and attach source provenance."""
+    if not feed_available:
+        return None, ()
+    rows = SqlFireHotspotRepository(session).list_for_window(
+        acquired_from=issued_at - timedelta(hours=settings.firms_stale_after_hours),
+        acquired_to=issued_at,
+        available_by=issued_at,
+        bbox=bbox,
+    )
+    versions = SqlDatasetVersionRepository(session)
+    refs: dict[str, DatasetRef] = {}
+    if dataset_id is not None:
+        version = versions.get(dataset_id)
+        if version is not None:
+            refs[dataset_id] = DatasetRef(
+                dataset_id=version.dataset_id,
+                source=version.source,
+                product=version.product,
+                version=version.version,
+                kind=version.kind,
+                region=version.region,
+                attribution=version.attribution,
+                license=version.license,
+            )
+    detections: list[dict[str, object]] = []
+    for row in rows:
+        detections.append(asdict(row))
+        if row.dataset_id in refs:
+            continue
+        version = versions.get(row.dataset_id)
+        if version is None:
+            continue
+        refs[row.dataset_id] = DatasetRef(
+            dataset_id=version.dataset_id,
+            source=version.source,
+            product=version.product,
+            version=version.version,
+            kind=version.kind,
+            region=version.region,
+            attribution=version.attribution,
+            license=version.license,
+        )
+    return detections, tuple(refs.values())
 
 
 async def _ingest_weather(
@@ -682,22 +907,47 @@ async def run_pipeline(bbox: BoundingBox, *, timestamp: datetime) -> PipelineRep
 
     session = get_session_factory()()
     try:
+        sensor_outcome = await _ingest_sensors(
+            session, settings, bbox, since, pipeline_run_id
+        )
+        weather_outcome = await _ingest_weather(session, settings, bbox, pipeline_run_id)
+        fire_outcome, fire_feed_available, fire_dataset_id = await _ingest_fires(
+            session, settings, bbox, pipeline_run_id
+        )
+        # FIRMS's available_at is the fetch completion time. Issue the forecast
+        # after that time so only data already fetched can enter its features.
+        issue_timestamp = (
+            max(timestamp, datetime.now(UTC)) if fire_feed_available else timestamp
+        )
         stages = [
-            await _ingest_sensors(session, settings, bbox, since, pipeline_run_id),
-            await _ingest_weather(session, settings, bbox, pipeline_run_id),
-            _seed_fire_reports(session, settings, timestamp),
-            _compute_grid(session, settings, bbox, timestamp),
+            sensor_outcome,
+            weather_outcome,
+            fire_outcome,
+            _seed_fire_reports(session, settings, issue_timestamp),
+            _compute_grid(session, settings, bbox, issue_timestamp),
         ]
-        forecast_outcome, forecasts = _forecast(session, settings, timestamp)
+        forecast_outcome, forecasts = _forecast(session, settings, issue_timestamp)
         stages.append(forecast_outcome)
         stages.append(
-            _generate_alerts(session, settings, timestamp, forecasts, pipeline_run_id)
+            _generate_alerts(
+                session, settings, issue_timestamp, forecasts, pipeline_run_id
+            )
         )
         # Publication comes last, deliberately: it publishes the grid and
         # forecast that the stages above just produced, so anything that failed
         # above is visible as a failed stage before its output is presented as a
         # published run.
-        stages.append(_publish(session, settings, pipeline_run_id, timestamp, forecasts))
+        stages.append(
+            _publish(
+                session,
+                settings,
+                pipeline_run_id,
+                issue_timestamp,
+                forecasts,
+                fire_feed_available=fire_feed_available,
+                fire_dataset_id=fire_dataset_id,
+            )
+        )
     finally:
         session.close()
 
