@@ -19,6 +19,7 @@ from app.core.config import Settings, get_settings
 from app.db.repositories import (
     SqlAlertRepository,
     SqlEvidenceRepository,
+    SqlFederationRepository,
     SqlFireHotspotRepository,
     SqlFireReportRepository,
     SqlIncidentDeliveryRepository,
@@ -37,6 +38,7 @@ from app.services.alerts import AlertService
 from app.services.cells import CellService
 from app.services.evidence import EvidenceService
 from app.services.fires import FireHotspotService
+from app.services.federation import FederationStatusReader
 from app.services.grid import GridService
 from app.services.media_storage import (
     FilesystemMediaStore,
@@ -191,6 +193,12 @@ def get_evidence_service(
 
 def get_fire_hotspot_service(session: Session = Depends(get_db)) -> FireHotspotService:
     return FireHotspotService(SqlFireHotspotRepository(session))
+
+
+def get_federation_status_service(
+    session: Session = Depends(get_db),
+) -> FederationStatusReader:
+    return FederationStatusReader(SqlFederationRepository(session))
 
 
 def get_tile_service() -> TileService:

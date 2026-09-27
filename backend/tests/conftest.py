@@ -18,6 +18,7 @@ from app.api.deps import (  # noqa: E402
     get_cell_service,
     get_fire_hotspot_service,
     get_fire_report_service,
+    get_federation_status_service,
     get_grid_service,
     get_sensor_service,
     get_weather_service,
@@ -26,6 +27,7 @@ from app.main import create_app  # noqa: E402
 from app.services.alerts import AlertService  # noqa: E402
 from app.services.cells import CellService  # noqa: E402
 from app.services.fires import FireHotspotService  # noqa: E402
+from app.services.federation import FederationStatusReader  # noqa: E402
 from app.services.grid import GridService  # noqa: E402
 from app.services.reports import FireReportService  # noqa: E402
 from app.services.sensors import SensorService  # noqa: E402
@@ -33,6 +35,7 @@ from app.services.weather import WeatherService  # noqa: E402
 from tests.fakes import (  # noqa: E402
     FakeAlertRepository,
     FakeFireHotspotRepository,
+    FakeFederationRepository,
     FakeFireReportRepository,
     FakeForecastRepository,
     FakeGridStateRepository,
@@ -60,6 +63,7 @@ class FakeRepos:
         self.alert = FakeAlertRepository()
         self.fire = FakeFireReportRepository()
         self.fire_hotspots = FakeFireHotspotRepository()
+        self.federation = FakeFederationRepository()
 
 
 @pytest.fixture
@@ -85,6 +89,9 @@ def api_client(fake_repos: FakeRepos) -> TestClient:
     app.dependency_overrides[get_fire_report_service] = lambda: FireReportService(fake_repos.fire)
     app.dependency_overrides[get_fire_hotspot_service] = lambda: FireHotspotService(
         fake_repos.fire_hotspots
+    )
+    app.dependency_overrides[get_federation_status_service] = lambda: FederationStatusReader(
+        fake_repos.federation
     )
     return TestClient(app)
 

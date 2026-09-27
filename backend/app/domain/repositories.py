@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Protocol
 
 from app.domain.environmental_observations import FireHotspot, TrafficObservation
+from app.domain.federation import FederationParticipant, FederationRun
 from app.domain.features import FeatureSnapshot
 from app.domain.incidents import (
     Incident,
@@ -262,6 +263,16 @@ class FireHotspotRepository(Protocol):
         h3_cells: list[str] | None = None,
         bbox: BoundingBox | None = None,
     ) -> list[FireHotspot]: ...
+
+
+class FederationRepository(Protocol):
+    def save(self, run: FederationRun, participants: list[FederationParticipant]) -> None: ...
+
+    def latest(self) -> FederationRun | None: ...
+
+    def get(self, run_id: str) -> FederationRun | None: ...
+
+    def list_participants(self, run_id: str) -> list[FederationParticipant]: ...
 
 
 class TrafficObservationRepository(Protocol):

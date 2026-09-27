@@ -32,6 +32,25 @@ export function formatNumber(value: number | null | undefined, digits = 1): stri
   return value === null || value === undefined ? '—' : value.toFixed(digits)
 }
 
+export function formatCount(value: number | null | undefined): string {
+  return value === null || value === undefined ? '—' : Math.round(value).toLocaleString()
+}
+
+export function relativeTime(iso: string | null | undefined, now = new Date()): string | null {
+  if (iso === null || iso === undefined || iso === '') return null
+  const then = new Date(iso)
+  if (Number.isNaN(then.getTime())) return null
+  const minutes = Math.round((now.getTime() - then.getTime()) / 60_000)
+  const past = minutes >= 0
+  const magnitude = Math.abs(minutes)
+  if (magnitude < 1) return 'just now'
+  if (magnitude < 60) return past ? `${magnitude} min ago` : `in ${magnitude} min`
+  const hours = Math.round(magnitude / 60)
+  if (hours < 48) return past ? `${hours}h ago` : `in ${hours}h`
+  const days = Math.round(hours / 24)
+  return past ? `${days}d ago` : `in ${days}d`
+}
+
 // The one place the app names PDI — every label/tooltip on it should
 // come from here so the wording can't drift between the legend, the
 // layer toggle, and the cell detail panel.

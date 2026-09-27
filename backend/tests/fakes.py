@@ -12,6 +12,7 @@ from dataclasses import replace
 from datetime import datetime
 
 from app.domain.environmental_observations import FireHotspot
+from app.domain.federation import FederationParticipant, FederationRun
 from app.domain.providers import ProviderError
 from app.domain.report_lifecycle import (
     MODEL_QUALIFIED_STATUSES,
@@ -312,6 +313,27 @@ class FakeFireHotspotRepository:
             and (bbox is None or bbox.min_lon <= h.longitude <= bbox.max_lon)
         ]
         return sorted(matches, key=lambda h: (h.acquired_at, h.detection_id))
+
+
+class FakeFederationRepository:
+    """In-memory store for persisted federation run status."""
+
+    def __init__(self) -> None:
+        self.runs: dict[str, FederationRun] = {}
+        self.participants: dict[str, list[FederationParticipant]] = {}
+
+    def save(self, run: FederationRun, participants: list[FederationParticipant]) -> None:
+        self.runs.setdefault(run.run_id, run)
+        self.participants.setdefault(run.run_id, list(participants))
+
+    def latest(self) -> FederationRun | None:
+        return max(self.runs.values(), key=lambda run: (run.finished_at, run.run_id), default=None)
+
+    def get(self, run_id: str) -> FederationRun | None:
+        return self.runs.get(run_id)
+
+    def list_participants(self, run_id: str) -> list[FederationParticipant]:
+        return list(self.participants.get(run_id, []))
 
 
 class FakePollutionDataProvider:

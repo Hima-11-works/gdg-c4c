@@ -93,6 +93,7 @@ from app.services.corridor_evaluation import (
     event_for_run,
     event_peak,
 )
+from app.services.federation import run_federation_demo
 from app.services.training_data import (
     export_training_dataset,
     generate_synthetic_training_dataset,
@@ -1242,6 +1243,24 @@ def main(argv: list[str] | None = None) -> int:
     corridor_parser.add_argument("--out", default=None, help="Write the JSON report here.")
     corridor_parser.set_defaults(func=_run_corridor_evaluate)
 
+    federation_parser = subparsers.add_parser(
+        "federation-demo",
+        help=(
+            "Train two synthetic regional partitions locally, exchange parameter "
+            "updates, aggregate and evaluate."
+        ),
+    )
+    federation_parser.add_argument("--out-dir", default="var/federation")
+    federation_parser.add_argument("--hours", type=int, default=60)
+    federation_parser.add_argument("--station-count", type=int, default=6)
+    federation_parser.add_argument("--run-id", default=None)
+    federation_parser.add_argument(
+        "--no-db",
+        action="store_true",
+        help="Write local artifacts without persisting a run to PostgreSQL.",
+    )
+    federation_parser.set_defaults(func=_run_federation_demo)
+
     args = parser.parse_args(argv)
     logging.basicConfig(level=get_settings().log_level)
     try:
@@ -1332,6 +1351,41 @@ async def _run_verify_media_storage(args: argparse.Namespace) -> int:
             session.close()
 
     return 0
+
+
+async def _run_federation_demo(args: argparse.Namespace) -> int:
+    """Run the deterministic two-partition federation demonstration."""
+    payload = run_federation_demo(
+        out_dir=Path(args.out_dir),
+        hours=args.hours,
+        station_count=args.station_count,
+        run_id=args.run_id,
+        persist=not args.no_db,
+    )
+    print(
+        f"Federation demonstration: run_id={payload['run_id']} "
+        f"status={payload['status']} participants={payload['participant_count']} "
+        f"raw_rows_sent={payload['raw_rows_exchanged_to_aggregator']}"
+    )
+    for participant in payload["participants"]:
+        print(
+            f"  {participant['participant_id']} ({participant['region_label']}): "
+            f"train={participant['train_count']} heldout={participant['test_count']} "
+            f"update_sha256={participant['update_sha256'][:12]}…"
+        )
+    print(f"aggregate: {payload['aggregate']['artifact_path']}")
+    evaluation = payload["evaluation"]
+    for horizon in evaluation.get("horizons", []):
+        print(
+            f"  evaluation h={horizon['horizon_hours']}: "
+            f"mae={horizon['mae_ugm3']:.3f} "
+            f"baseline_mae={horizon['baseline_mae_ugm3']:.3f} "
+            f"n={horizon['heldout_count']} (synthetic-only)"
+        )
+    if not evaluation.get("horizons"):
+        print(f"  evaluation: {evaluation['status']} — {evaluation['reason']}")
+    print("  limitations: no privacy guarantee; not a nationwide deployment")
+    return 0 if payload["status"] == "succeeded" else 1
 
 
 if __name__ == "__main__":

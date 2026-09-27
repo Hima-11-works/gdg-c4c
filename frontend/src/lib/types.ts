@@ -267,6 +267,83 @@ export interface AlertOut {
   forecast_time: string | null
 }
 
+export interface FederationParticipantOut {
+  participant_id: string
+  region_label: string
+  example_count: number
+  train_count: number
+  validation_count: number
+  test_count: number
+  station_count: number
+  horizon_count: number
+  update_path: string
+  update_sha256: string
+  weight_fraction: number
+  joined_at?: string
+}
+
+export interface FederationModelVersionOut {
+  model_id: string
+  region: string
+  horizon_hours: number
+  status: string
+  synthetic_only: boolean
+}
+
+export interface FederationAggregateOut {
+  artifact_path: string
+  artifact_sha256: string
+  algorithm: string
+  synthetic_only: boolean
+}
+
+export interface FederationEvaluationHorizonOut {
+  horizon_hours: number
+  mae_ugm3: number
+  baseline_mae_ugm3: number
+  rmse_ugm3: number
+  bias_ugm3: number | null
+  heldout_count: number
+  seasons_seen?: string[]
+}
+
+export interface FederationEvaluationOut {
+  status: string
+  usable_as_real_world_evidence: boolean
+  reason: string
+  heldout_examples?: number | null
+  horizons?: FederationEvaluationHorizonOut[] | null
+}
+
+export interface FederationLimitationsOut {
+  privacy?: string
+  geography?: string
+  accuracy?: string
+}
+
+export interface FederationModelIdsOut {
+  model_ids?: string[]
+}
+
+/** The recorded two-partition demonstration; all properties after status are
+ * optional because a no-run response intentionally carries only scope/limits. */
+export interface FederationStatusOut {
+  status: string
+  run_id?: string | null
+  participant_count?: number | null
+  region_scope?: string | null
+  feature_schema_version?: string | null
+  horizons_hours?: number[] | null
+  participants?: FederationParticipantOut[] | null
+  aggregate?: FederationAggregateOut | null
+  model_versions?: FederationModelVersionOut[] | FederationModelIdsOut | null
+  evaluation?: FederationEvaluationOut | null
+  raw_rows_exchanged_to_aggregator?: number | null
+  limitations?: FederationLimitationsOut | null
+  started_at?: string | null
+  finished_at?: string | null
+}
+
 export interface CellDetailOut {
   h3_cell: string
   current: GridStateOut | null
@@ -288,15 +365,10 @@ export interface CellDetailOut {
   }
 }
 
-
 /** What a citizen reported burning. Wire values match the backend's
  *  app.domain.types.FireKind. */
 export type FireReportKind =
-  | 'building_fire'
-  | 'industrial_fire'
-  | 'forest_fire'
-  | 'crop_burning'
-  | 'other'
+  'building_fire' | 'industrial_fire' | 'forest_fire' | 'crop_burning' | 'other'
 
 /** One citizen fire/burning report, as POST/GET /api/v1/reports return it.
  *  `smoke_intensity` is the user's 1-5 smoke slider - a triage choice the
@@ -320,11 +392,7 @@ export interface FireReportOut {
  *  source of truth and `affects_air_quality_model` is the field a UI must show
  *  rather than infer. */
 export type FireReportStatus =
-  | 'submitted'
-  | 'under_review'
-  | 'corroborated'
-  | 'rejected'
-  | 'expired'
+  'submitted' | 'under_review' | 'corroborated' | 'rejected' | 'expired'
 
 /** A report with its standing: the v2 row shape and GET /api/v1/reports/{id}.
  *

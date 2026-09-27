@@ -5,6 +5,7 @@ from app.db.repositories.dataset_version import SqlDatasetVersionRepository
 from app.db.repositories.feature_snapshot import SqlFeatureSnapshotRepository
 from app.db.repositories.fire_hotspot import SqlFireHotspotRepository
 from app.db.repositories.fire_report import SqlFireReportRepository
+from app.db.repositories.federation import SqlFederationRepository
 from app.db.repositories.incident import SqlIncidentRepository
 from app.db.repositories.incident_delivery import SqlIncidentDeliveryRepository
 from app.db.repositories.source_health import (
@@ -27,6 +28,7 @@ __all__ = [
     "SqlFeatureSnapshotRepository",
     "SqlFireHotspotRepository",
     "SqlFireReportRepository",
+    "SqlFederationRepository",
     "SqlIncidentRepository",
     "SqlIncidentDeliveryRepository",
     "SqlEvidenceRepository",

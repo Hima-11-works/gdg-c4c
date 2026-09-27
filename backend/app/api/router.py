@@ -9,6 +9,7 @@ from app.api.routes.alerts import router as alerts_router
 from app.api.routes.cells import router as cells_router
 from app.api.routes.corridors import router as corridors_router
 from app.api.routes.fires import router as fires_router
+from app.api.routes.federation import router as federation_router
 from app.api.routes.incidents import router as incidents_router
 from app.api.routes.grid import router as grid_router
 from app.api.routes.reports import router as reports_router
@@ -29,3 +30,4 @@ api_v1_router.include_router(fires_router)
 api_v1_router.include_router(incidents_router)
 api_v1_router.include_router(tiles_router)
 api_v1_router.include_router(corridors_router)
+api_v1_router.include_router(federation_router)

@@ -960,6 +960,12 @@ body,
   letter-spacing: 0.02em;
   color: #9ca3af;
   white-space: nowrap;
+  cursor: pointer;
+}
+
+.federated-pill:hover {
+  border-color: #4b5563;
+  color: #e5e7eb;
 }
 
 .federated-dot {
@@ -968,6 +974,158 @@ body,
   border-radius: 50%;
   background: #22c55e;
   box-shadow: 0 0 4px rgba(34, 197, 94, 0.7);
+}
+
+.federated-dot-none {
+  background: #6b7280;
+  box-shadow: none;
+}
+
+.federated-dot-loading {
+  background: #eab308;
+  box-shadow: 0 0 4px rgba(234, 179, 8, 0.6);
+}
+
+.federated-dot-unavailable {
+  background: #f97316;
+  box-shadow: 0 0 4px rgba(249, 115, 22, 0.7);
+}
+
+.federated {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.35rem;
+}
+
+.federated-panel {
+  width: max-content;
+  max-width: min(92vw, 26rem);
+  max-height: min(70vh, 32rem);
+  overflow-y: auto;
+  text-align: left;
+}
+
+.federated-panel h3 {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 0 0.4rem;
+  font-size: 0.9rem;
+}
+
+.federated-panel h4.federated-subhead {
+  margin: 0.6rem 0 0.2rem;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6b7280;
+}
+
+.federated-badge {
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  border: 1px solid #5c4a1a;
+  background: #2d2412;
+  color: #fcd34d;
+  font-size: 0.62rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.federated-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.2rem 0.6rem;
+  margin: 0;
+  font-size: 0.78rem;
+}
+
+.federated-grid dt {
+  color: #9ca3af;
+  white-space: nowrap;
+}
+
+.federated-grid dd {
+  margin: 0;
+  color: #e5e7eb;
+  line-height: 1.35;
+}
+
+.federated-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.7rem;
+  word-break: break-all;
+}
+
+.federated-regions,
+.federated-models,
+.federated-metrics,
+.federated-limitations {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.74rem;
+}
+
+.federated-regions li {
+  padding-left: 0.5rem;
+  border-left: 2px solid #2a2e36;
+}
+
+.federated-region-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.federated-models li,
+.federated-metrics li,
+.federated-limitations li {
+  line-height: 1.35;
+}
+
+.federated-metrics li {
+  padding-left: 0.5rem;
+  border-left: 2px solid #2a2e36;
+  color: #d1d5db;
+}
+
+.federated-limitations li {
+  color: #d1d5db;
+}
+
+.federated-scope {
+  margin: 0.4rem 0 0;
+}
+
+.federated-error {
+  margin: 0.3rem 0;
+  font-size: 0.74rem;
+  color: #fca5a5;
+  line-height: 1.35;
+}
+
+.federated-refresh {
+  margin-top: 0.55rem;
+  border: 1px solid #3a3f4a;
+  border-radius: 5px;
+  background: transparent;
+  color: #d1d5db;
+  font: inherit;
+  font-size: 0.72rem;
+  padding: 0.2rem 0.5rem;
+  cursor: pointer;
+}
+
+.federated-refresh:hover {
+  border-color: #6b7280;
+  color: #e5e7eb;
 }
 
 /* --- layer toggle: signal layers group --- */

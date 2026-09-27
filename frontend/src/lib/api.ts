@@ -22,6 +22,7 @@ import type {
   FireReportSubmit,
   FireReportWithStatus,
   ForecastOut,
+  FederationStatusOut,
   ForecastV2Out,
   GridCurrentV2Out,
   GridStateOut,
@@ -290,6 +291,11 @@ export function fetchAlerts(runId?: string): Promise<Envelope<AlertOut[]>> {
   return apiGetV2<AlertOut[]>('/api/v2/alerts', runId).then((envelope) =>
     preserveV2Envelope(envelope, envelope.data),
   )
+}
+
+/** The latest recorded two-partition federation demonstration. */
+export function fetchFederationStatus(): Promise<Envelope<FederationStatusOut>> {
+  return apiGet<Envelope<FederationStatusOut>>('/api/v1/federation/status')
 }
 
 export function fetchReports(): Promise<Envelope<FireReportOut[]>> {
