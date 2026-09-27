@@ -1004,6 +1004,39 @@ body,
   min-width: 0;
 }
 
+.cell-firms-evidence {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.5rem 0;
+  padding: 0.55rem;
+  border: 1px solid #22d3ee55;
+  border-radius: 6px;
+  background: rgba(8, 36, 43, 0.45);
+}
+
+.cell-firms-evidence h3,
+.cell-firms-evidence p {
+  margin: 0;
+}
+
+.cell-firms-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.75rem;
+}
+
+.cell-firms-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  overflow-wrap: anywhere;
+}
+
 /* --- freight corridor node popup --- */
 
 .freight-node-popup .maplibregl-popup-content {

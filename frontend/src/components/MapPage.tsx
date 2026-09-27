@@ -238,7 +238,8 @@ export function MapPage() {
   // covers all of India, and the endpoint clips by H3 cell at the resolution
   // the detections were stored at, which a viewport-scoped request wouldn't
   // match (see backend/app/services/fires.py).
-  const firesNeeded = state.showActiveFires || state.showHotspotCandidates
+  const firesNeeded =
+    state.showActiveFires || state.showHotspotCandidates || state.selectedCell !== null
   const activeFires = useApiResource(() => fetchActiveFires(), [firesNeeded], {
     pollIntervalMs: FIRMS_POLL_INTERVAL_MS,
     enabled: firesNeeded,
@@ -387,7 +388,11 @@ export function MapPage() {
         <TimelineControl publishedRunId={publishedRunId} supportedHours={supportedHours} />
       </div>
 
-      <CellDetailPanel publishedRunId={publishedRunId} citizenReports={reports.resource} />
+      <CellDetailPanel
+        publishedRunId={publishedRunId}
+        citizenReports={reports.resource}
+        activeFires={activeFires.resource}
+      />
       <HotspotEvidencePanel resource={activeFires.resource} />
     </div>
   )

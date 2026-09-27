@@ -1,7 +1,8 @@
 import { useState } from 'react'
+import { latLngToCell } from 'h3-js'
 import { fetchCellDetail } from '../lib/api'
 import { PDI_LABEL, PDI_TOOLTIP, compassLabel, formatNumber, pdiFactorLabel } from '../lib/format'
-import { cellCenter } from '../lib/h3Geometry'
+import { cellCenter, resolutionOfCell } from '../lib/h3Geometry'
 import { regionTitle } from '../lib/regionName'
 import {
   FIRE_KIND_LABELS,
@@ -17,6 +18,7 @@ import type { AsyncResource } from '../hooks/useApiResource'
 import { useStateBoundaries } from '../hooks/useStateBoundaries'
 import { useMapUi } from '../state/MapUiContext'
 import type { CellDetailOut, FireReportWithStatus } from '../lib/types'
+import type { ActiveFire } from '../lib/activeFires'
 
 /** The most recent citizen report filed in this cell, from
  *  GET /api/v1/reports. Deliberately NOT framed as evidence behind any
@@ -55,6 +57,70 @@ function CitizenReportWidget({ report }: { report: FireReportWithStatus }) {
           Cell {report.h3_cell} — the model treats this as an active source.
         </span>
       </div>
+    </section>
+  )
+}
+
+function SatelliteFireEvidence({
+  h3Cell,
+  resource,
+}: {
+  h3Cell: string
+  resource: AsyncResource<ActiveFire[]>
+}) {
+  let matches: ActiveFire[] = []
+  if (resource.status === 'success') {
+    const resolution = resolutionOfCell(h3Cell)
+    if (resolution !== undefined) {
+      matches = resource.data.filter((fire) => {
+        try {
+          return latLngToCell(fire.latitude, fire.longitude, resolution) === h3Cell
+        } catch {
+          return false
+        }
+      })
+    }
+  }
+
+  return (
+    <section className="cell-firms-evidence">
+      <h3>Satellite thermal evidence</h3>
+      <p className="muted">
+        NASA FIRMS detections from the latest 24-hour feed. A thermal detection is not a confirmed
+        ground fire or a PM2.5 measurement.
+      </p>
+      {resource.status === 'idle' || resource.status === 'loading' ? (
+        <p className="muted">Loading satellite evidence…</p>
+      ) : null}
+      {resource.status === 'error' ? (
+        <p role="status" className="muted">
+          The FIRMS feed could not be read; this does not mean there were no detections.
+        </p>
+      ) : null}
+      {resource.status === 'success' && matches.length === 0 ? (
+        <p className="muted">
+          No detection in this cell was returned for the feed window. This is not proof that no
+          source is present.
+        </p>
+      ) : null}
+      {resource.status === 'success' && matches.length > 0 ? (
+        <ul className="cell-firms-list">
+          {matches.slice(0, 5).map((fire) => (
+            <li key={fire.id}>
+              <strong>{fire.confidenceClass} confidence</strong>
+              <span>
+                {fire.satellite} · {fire.acquiredAt || 'acquisition time unavailable'}
+              </span>
+              <span>
+                FRP {fire.frp === null ? 'not reported' : `${formatNumber(fire.frp)} MW`}
+                {' · '}
+                Brightness{' '}
+                {fire.brightness === null ? 'not reported' : `${formatNumber(fire.brightness)} K`}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </section>
   )
 }
@@ -443,9 +509,11 @@ function InterventionActionBar({
 export function CellDetailPanel({
   publishedRunId,
   citizenReports,
+  activeFires,
 }: {
   publishedRunId?: string
   citizenReports: AsyncResource<FireReportWithStatus[]>
+  activeFires: AsyncResource<ActiveFire[]>
 }) {
   const { state, dispatch } = useMapUi()
   const selectedCell = state.selectedCell
@@ -522,6 +590,7 @@ export function CellDetailPanel({
 
       {resource.status === 'success' && (
         <>
+          <SatelliteFireEvidence h3Cell={selectedCell} resource={activeFires} />
           <CellDetailContent
             detail={resource.data}
             isDemo={resource.isDemo}
