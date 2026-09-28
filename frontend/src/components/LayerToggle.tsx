@@ -147,14 +147,14 @@ export function LayerToggle() {
 
           <label
             className="layer-toggle-option"
-            title="Major Economic Freight Corridors — predictive interstate air-quality forecast & logistics routing"
+            title="Major Economic Freight Corridors — predictive interstate air-quality forecast & logistics routing (illustrative sample corridors)"
           >
             <input
               type="checkbox"
               checked={state.showFreightCorridors}
               onChange={() => dispatch({ type: 'TOGGLE_FREIGHT_CORRIDORS' })}
             />
-            Major Freight Corridors
+            Major Freight Corridors (illustrative)
           </label>
         </div>
       </div>

@@ -819,6 +819,7 @@ export function MapView({
       popupRef.current?.popup.remove()
       popupRef.current = null
       dispatch({ type: 'SELECT_CELL', cell: null })
+      dispatch({ type: 'SELECT_CORRIDOR', corridor: null })
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
