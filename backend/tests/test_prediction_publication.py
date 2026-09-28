@@ -27,6 +27,7 @@ class MemoryPublicationRepository:
         self.run_value = run
         self.result_values = list(results or [])
         self.published = 0
+        self.result_queries = []
 
     def publish(self, run, results):
         self.run_value = run
@@ -39,12 +40,16 @@ class MemoryPublicationRepository:
     def latest_run(self, *, region=None):
         return self.run_value if region is None or self.run_value.region == region else None
 
-    def list_results(self, run_id, *, horizons=None):
+    def list_results(self, run_id, *, horizons=None, cells=None):
+        self.result_queries.append((horizons, cells))
         rows = [item for item in self.result_values if item.run_id == run_id]
-        if horizons is None:
-            return rows
-        wanted = set(horizons)
-        return [item for item in rows if item.horizon_hours in wanted]
+        if horizons is not None:
+            wanted = set(horizons)
+            rows = [item for item in rows if item.horizon_hours in wanted]
+        if cells is not None:
+            wanted_cells = set(cells)
+            rows = [item for item in rows if item.h3_cell in wanted_cells]
+        return rows
 
     def list_horizons(self, run_id):
         return sorted(
@@ -294,6 +299,49 @@ def test_published_run_is_not_upscaled_to_finer_display_resolution():
     service = PredictionQueryService(repository, native_resolution=7, region="india")
     with pytest.raises(ValueError, match="exceeds native prediction resolution"):
         service.aggregate(run, target_cells=[coarse], resolution=8, horizon=0)
+
+
+def test_cell_detail_queries_only_descendants_of_the_selected_cell():
+    now = datetime(2026, 9, 22, tzinfo=UTC)
+    parent = h3.latlng_to_cell(28.6, 77.1, 7)
+    children = sorted(h3.cell_to_children(parent, 8))[:2]
+    outside = h3.latlng_to_cell(-33.9, 151.2, 8)
+    run = PredictionRun(
+        run_id="detail-filter-1",
+        generated_at=now,
+        published_at=now,
+        region="india",
+        mode=DataMode.LIVE,
+        feature_run_id="features-1",
+        feature_schema_version="environmental-v1",
+    )
+    repository = MemoryPublicationRepository(run, [
+        PredictionResult(
+            run_id=run.run_id,
+            h3_cell=cell,
+            horizon_hours=0,
+            valid_at=now,
+            baseline_pm25=20,
+            predicted_pm25=20,
+            prediction_method="observed-current",
+            input_kind=InputKind.OBSERVED,
+        )
+        for cell in [*children, outside]
+    ])
+    service = PredictionQueryService(repository, native_resolution=8, region="india")
+
+    source_cells = service.source_cells_for_targets(run, [parent], resolution=7)
+    view = service.detail(
+        run,
+        parent,
+        resolution=7,
+        threshold_pm25=60,
+        source_cells=source_cells,
+    )
+
+    assert view is not None
+    assert source_cells == children
+    assert repository.result_queries == [([0], children)]
 
 
 def test_quarter_hour_forecast_interpolates_anchors_without_claiming_an_interval():

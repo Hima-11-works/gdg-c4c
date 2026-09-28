@@ -299,7 +299,7 @@ def test_horizons_are_read_without_loading_result_rows() -> None:
         def list_horizons(self, run_id: str) -> list[float]:
             return [1.0, 3.0, 6.0]
 
-        def list_results(self, run_id, *, horizons=None):
+        def list_results(self, run_id, *, horizons=None, cells=None):
             self.list_results_calls += 1
             return []
 
@@ -333,7 +333,7 @@ def test_horizon_zero_is_still_a_valid_interpolation_anchor() -> None:
             # What the run actually published, current frame included.
             return [0.0, 1.0, 2.0]
 
-        def list_results(self, run_id, *, horizons=None):
+        def list_results(self, run_id, *, horizons=None, cells=None):
             requested.append(horizons)
             return []
 

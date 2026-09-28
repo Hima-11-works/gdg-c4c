@@ -315,8 +315,21 @@ def get_cell_v2(
     run = _run_or_404(service, run_id)
     if display_resolution > service.native_resolution:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="upscaling is not supported")
+    source_cells = (
+        None
+        if run.run_id.startswith("demo-fallback-")
+        else service.source_cells_for_targets(
+            run, [h3_cell], resolution=display_resolution
+        )
+    )
     try:
-        current_view = service.detail(run, h3_cell, resolution=display_resolution, threshold_pm25=threshold_pm25)
+        current_view = service.detail(
+            run,
+            h3_cell,
+            resolution=display_resolution,
+            threshold_pm25=threshold_pm25,
+            source_cells=source_cells,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     if current_view is None:
@@ -329,6 +342,7 @@ def get_cell_v2(
             resolution=display_resolution,
             horizon=horizon,
             threshold_pm25=threshold_pm25,
+            source_cells=source_cells,
         )[0]
         forecast = _forecast(run, forecast_view)
         if forecast is not None:

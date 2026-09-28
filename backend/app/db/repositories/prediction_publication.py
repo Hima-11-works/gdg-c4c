@@ -152,7 +152,11 @@ def _latest_run_stmt(region: str | None) -> Select:
     return stmt.order_by(prediction_run.c.published_at.desc(), prediction_run.c.id).limit(1)
 
 
-def _results_stmt(run_id: str, horizons: Sequence[float] | None = None) -> Select:
+def _results_stmt(
+    run_id: str,
+    horizons: Sequence[float] | None = None,
+    cells: Sequence[str] | None = None,
+) -> Select:
     stmt = select(prediction_result).where(prediction_result.c.run_id == run_id)
     if horizons is not None:
         # The read path asks for one horizon, or the two bracketing an
@@ -160,6 +164,8 @@ def _results_stmt(run_id: str, horizons: Sequence[float] | None = None) -> Selec
         # difference between ~10k rows and the run's full ~200k, each carrying
         # three JSON columns.
         stmt = stmt.where(prediction_result.c.horizon_hours.in_(list(horizons)))
+    if cells is not None:
+        stmt = stmt.where(prediction_result.c.h3_cell.in_(list(cells)))
     return stmt.order_by(prediction_result.c.h3_cell, prediction_result.c.horizon_hours)
 
 
@@ -268,9 +274,13 @@ class SqlPredictionPublicationRepository:
         return None if row is None else _row_to_run(row)
 
     def list_results(
-        self, run_id: str, *, horizons: Sequence[float] | None = None
+        self,
+        run_id: str,
+        *,
+        horizons: Sequence[float] | None = None,
+        cells: Sequence[str] | None = None,
     ) -> list[PredictionResult]:
-        rows = self._session.execute(_results_stmt(run_id, horizons)).all()
+        rows = self._session.execute(_results_stmt(run_id, horizons, cells)).all()
         return [_row_to_result(row) for row in rows]
 
     def list_alert_candidates(

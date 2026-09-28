@@ -338,14 +338,17 @@ class PredictionPublicationRepository(Protocol):
     def latest_run(self, *, region: str | None = None) -> PredictionRun | None: ...
 
     def list_results(
-        self, run_id: str, *, horizons: Sequence[float] | None = None
+        self,
+        run_id: str,
+        *,
+        horizons: Sequence[float] | None = None,
+        cells: Sequence[str] | None = None,
     ) -> list[PredictionResult]:
         """Every result in the run, or only those at `horizons`.
 
-        `horizons` exists because a run holds one row per cell per horizon and
-        a read only ever needs one (or the two bracketing an interpolation).
-        Selecting the whole run made a country read cost the same as a
-        single-cell one.
+        `horizons` and `cells` keep reads at the smallest useful slice: a run
+        holds one row per cell per horizon, while a detail read needs only one
+        cell's descendants and one (or two) horizons.
         """
         ...
 

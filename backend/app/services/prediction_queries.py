@@ -202,13 +202,13 @@ class PredictionQueryService:
     ) -> list[PredictionResult]:
         if run.run_id.startswith(DEMO_FALLBACK_PREFIX):
             return self._demo_results(run, cells or [], horizons)
-        # Pushed into SQL. A run holds one row per cell per horizon across 25
-        # horizons, and a read needs one of them; selecting the run and
-        # filtering here meant every request paid for the whole run, three JSON
-        # columns included. That is what made a country read take over a
-        # minute.
+        # Push both filters into SQL. A run holds one row per cell per horizon;
+        # materializing the whole run and filtering here made even a small
+        # detail read pay for every row and its three JSON columns.
         results = self._repository.list_results(
-            run.run_id, horizons=sorted(horizons) if horizons is not None else None
+            run.run_id,
+            horizons=sorted(horizons) if horizons is not None else None,
+            cells=cells,
         )
         cell_set = None if cells is None else set(cells)
         return [
@@ -266,6 +266,22 @@ class PredictionQueryService:
         }
         return sorted(cells)
 
+    def source_cells_for_targets(
+        self, run: PredictionRun, target_cells: list[str], *, resolution: int
+    ) -> list[str]:
+        """Return stored descendant cells covered by the requested H3 cells."""
+        target_set = set(target_cells)
+        return sorted(
+            cell
+            for cell in self._repository.list_result_cells(run.run_id)
+            if h3.get_resolution(cell) >= resolution
+            and (
+                cell in target_set
+                if h3.get_resolution(cell) == resolution
+                else h3.cell_to_parent(cell, resolution) in target_set
+            )
+        )
+
     def aggregate(
         self,
         run: PredictionRun,
@@ -274,6 +290,7 @@ class PredictionQueryService:
         resolution: int,
         horizon: float,
         threshold_pm25: float = DEFAULT_EXPOSURE_THRESHOLD_PM25,
+        source_cells: list[str] | None = None,
     ) -> list[PredictionCellView]:
         if resolution > self.native_resolution:
             raise ValueError(
@@ -282,7 +299,7 @@ class PredictionQueryService:
             )
         if not math.isfinite(threshold_pm25) or threshold_pm25 < 0:
             raise ValueError("threshold_pm25 must be a finite non-negative concentration")
-        rows = self._rows_at_horizon(run, target_cells, horizon)
+        rows = self._rows_at_horizon(run, target_cells, horizon, source_cells)
         grouped: dict[str, list[PredictionResult]] = {cell: [] for cell in target_cells}
         for row in rows:
             source_resolution = h3.get_resolution(row.h3_cell)
@@ -297,25 +314,31 @@ class PredictionQueryService:
         ]
 
     def detail(
-        self, run: PredictionRun, h3_cell: str, *, resolution: int, threshold_pm25: float
+        self,
+        run: PredictionRun,
+        h3_cell: str,
+        *,
+        resolution: int,
+        threshold_pm25: float,
+        source_cells: list[str] | None = None,
     ) -> PredictionCellView | None:
+        if source_cells is None and not run.run_id.startswith(DEMO_FALLBACK_PREFIX):
+            source_cells = self.source_cells_for_targets(
+                run, [h3_cell], resolution=resolution
+            )
         view = self.aggregate(
             run,
             target_cells=[h3_cell],
             resolution=resolution,
             horizon=0,
             threshold_pm25=threshold_pm25,
+            source_cells=source_cells,
         )[0]
-        rows = self.results(run, cells=[h3_cell] if run.run_id.startswith(DEMO_FALLBACK_PREFIX) else None)
-        available = {
-            row.horizon_hours
-            for row in rows
-            if h3.get_resolution(row.h3_cell) >= resolution
-            and (
-                row.h3_cell == h3_cell
-                or h3.cell_to_parent(row.h3_cell, resolution) == h3_cell
-            )
-        }
+        if run.run_id.startswith(DEMO_FALLBACK_PREFIX):
+            rows = self.results(run, cells=[h3_cell])
+            available = any(row.horizon_hours >= 0 for row in rows)
+        else:
+            available = bool(source_cells)
         if view.supported_native_cells == 0 and not available:
             return None
         return view
@@ -330,12 +353,19 @@ class PredictionQueryService:
         return [h for h in self._repository.list_horizons(run.run_id) if h > 0]
 
     def _rows_at_horizon(
-        self, run: PredictionRun, target_cells: list[str], horizon: float
+        self,
+        run: PredictionRun,
+        target_cells: list[str],
+        horizon: float,
+        source_cells: list[str] | None = None,
     ) -> list[PredictionResult]:
         if run.run_id.startswith(DEMO_FALLBACK_PREFIX):
             # The fallback is synthesised in memory, so there is nothing to
             # narrow and it filters as it always did.
-            stored = self.results(run, cells=target_cells)
+            stored = self.results(
+                run,
+                cells=target_cells if source_cells is None else source_cells,
+            )
         else:
             # Work out which horizons can answer this request *before*
             # materialising any rows, then load only those. A run publishes 25
@@ -356,7 +386,7 @@ class PredictionQueryService:
                 if not lower or not upper:
                     return []
                 wanted = {max(lower), min(upper)}
-            stored = self.results(run, horizons=wanted)
+            stored = self.results(run, horizons=wanted, cells=source_cells)
 
         exact = [row for row in stored if row.horizon_hours == horizon]
         if exact or horizon == 0:
