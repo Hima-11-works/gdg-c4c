@@ -65,6 +65,7 @@ function FeatureLoading({ label }: { label: string }) {
 export function MapPage() {
   const { state, dispatch } = useMapUi()
   const { lod, bbox, forecastMinutes } = state
+  const fireReportingEnabled = import.meta.env.VITE_ENABLE_FIRE_REPORTING === 'true'
   // The submit form is open/closed here so its map-centre location and the
   // reports list it refetches both come from this component's data.
   const [reportOpen, setReportOpen] = useState(false)
@@ -380,9 +381,10 @@ export function MapPage() {
             onReport={() => setReportOpen(true)}
             onReviewPhotos={() => setPhotoReviewOpen(true)}
             reportAvailable={reportCenter !== null}
+            showReport={fireReportingEnabled}
           />
         )}
-        {reportOpen && reportCenter !== null && (
+        {fireReportingEnabled && reportOpen && reportCenter !== null && (
           <Suspense fallback={<FeatureLoading label="Opening fire report form…" />}>
             <ReportFireForm
               latitude={reportCenter.latitude}
@@ -414,6 +416,7 @@ export function MapPage() {
             onReport={() => setReportOpen(true)}
             onReviewPhotos={() => setPhotoReviewOpen(true)}
             reportAvailable={reportCenter !== null}
+            showReport={fireReportingEnabled}
           />
         )}
       </div>

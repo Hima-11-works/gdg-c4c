@@ -2,6 +2,7 @@
 
 interface ImportMetaEnv {
   readonly VITE_API_BASE_URL?: string
+  readonly VITE_ENABLE_FIRE_REPORTING?: string
 }
 
 interface ImportMeta {
