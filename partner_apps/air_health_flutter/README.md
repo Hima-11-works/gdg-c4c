@@ -21,7 +21,7 @@ Flutter / Dart · **Riverpod** (state & DI) · **go_router** (navigation) ·
 `permission_handler` · `flutter_secure_storage` + `shared_preferences` ·
 `fl_chart` · `intl` · `image_picker`.
 
-## Citizen reports
+## Citizen reports and readings
 
 When connected to the backend, the fire/smoke report sheet can attach one
 camera or gallery photo to a report. The app asks for explicit consent before
@@ -29,6 +29,12 @@ uploading and resizes the selected image for mobile upload. The backend stores
 the original privately and exposes only its metadata-stripped review derivative.
 If photo upload fails after the report is saved, the sheet keeps the report id
 and lets the citizen retry the photo upload without creating a duplicate report.
+
+The home screen also accepts a manually entered PM2.5 value from an external
+consumer sensor, along with its make/model and the current location. It requires
+separate consent and sends the reading to the authority review queue. Community
+readings remain separate from provider-backed stations and do not affect the
+forecast pipeline.
 
 ## Layout
 

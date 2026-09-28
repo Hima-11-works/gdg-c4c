@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/formatters.dart';
 import '../../data/reports/fire_report_api.dart';
 import '../../domain/models/models.dart';
+import '../../features/reports/citizen_sensor_sheet.dart';
 import '../../features/reports/report_fire_sheet.dart';
 import '../../providers/data_providers.dart';
 import '../../providers/home_providers.dart';
@@ -48,10 +49,24 @@ class HomeScreen extends ConsumerWidget {
       // is nowhere to send one, so the entry point hides itself.
       floatingActionButton: ref.watch(fireReportApiClientProvider) == null
           ? null
-          : FloatingActionButton.extended(
-              onPressed: () => _openReportSheet(context),
-              icon: const Icon(Icons.local_fire_department),
-              label: const Text('Report fire'),
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                FloatingActionButton.extended(
+                  heroTag: 'report-fire',
+                  onPressed: () => _openReportSheet(context),
+                  icon: const Icon(Icons.local_fire_department),
+                  label: const Text('Report fire'),
+                ),
+                const SizedBox(height: 12),
+                FloatingActionButton.extended(
+                  heroTag: 'report-sensor-reading',
+                  onPressed: () => _openSensorSheet(context),
+                  icon: const Icon(Icons.sensors_outlined),
+                  label: const Text('Share sensor reading'),
+                ),
+              ],
             ),
       body: airQuality.when(
         loading: () => const LoadingState(message: 'Loading air quality…'),
@@ -236,6 +251,21 @@ class HomeScreen extends ConsumerWidget {
       isScrollControlled: true,
       builder: (BuildContext sheetContext) => const ReportFireSheet(),
     );
+  }
+
+  Future<void> _openSensorSheet(BuildContext context) async {
+    final submitted = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      builder: (BuildContext sheetContext) => const CitizenSensorSheet(),
+    );
+    if (submitted == true && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Reading submitted for authority review; it will not change the forecast.'),
+        ),
+      );
+    }
   }
 }
 

@@ -213,6 +213,38 @@ sensor_reading = Table(
     Index("ix_sensor_reading_geom", "geom", postgresql_using="gist"),
 )
 
+# Community-submitted measurements are deliberately isolated from provider
+# sensor_reading rows until a reviewer accepts them. The forecast pipeline only
+# reads sensor_reading, so an unverified citizen value can never become a
+# modeled concentration by accident.
+citizen_sensor_submission = Table(
+    "citizen_sensor_submission",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("client_submission_id", String(64), nullable=False, unique=True),
+    Column("source_prefix", String(80), nullable=False),
+    Column("latitude", Float, nullable=False),
+    Column("longitude", Float, nullable=False),
+    Column("pm25_ugm3", Float, nullable=False),
+    Column("device_label", String(80), nullable=False),
+    Column("measured_at", DateTime(timezone=True), nullable=False),
+    Column("submitted_at", DateTime(timezone=True), nullable=False),
+    Column("consent", Boolean, nullable=False),
+    Column("status", String(20), nullable=False, server_default="pending_review"),
+    Column("reviewed_at", DateTime(timezone=True), nullable=True),
+    CheckConstraint("latitude BETWEEN -90 AND 90", name="ck_citizen_sensor_latitude"),
+    CheckConstraint("longitude BETWEEN -180 AND 180", name="ck_citizen_sensor_longitude"),
+    CheckConstraint("pm25_ugm3 BETWEEN 0 AND 2000", name="ck_citizen_sensor_pm25"),
+    CheckConstraint("consent", name="ck_citizen_sensor_consent"),
+    CheckConstraint(
+        "status IN ('pending_review', 'verified', 'rejected')",
+        name="ck_citizen_sensor_status",
+    ),
+    Index("ix_citizen_sensor_submitted_at", "submitted_at"),
+    Index("ix_citizen_sensor_status_submitted", "status", "submitted_at"),
+    Index("ix_citizen_sensor_source_submitted", "source_prefix", "submitted_at"),
+)
+
 weather_reading = Table(
     "weather_reading",
     metadata,

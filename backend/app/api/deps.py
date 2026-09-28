@@ -36,6 +36,7 @@ from app.domain.incidents import IncidentActor
 from app.domain.types import BoundingBox
 from app.services.alerts import AlertService
 from app.services.cells import CellService
+from app.services.citizen_sensors import CitizenSensorSubmissionService
 from app.services.evidence import EvidenceService
 from app.services.federation import FederationStatusReader
 from app.services.fires import FireHotspotService
@@ -87,6 +88,12 @@ def get_bbox_query(
 
 def get_sensor_service(session: Session = Depends(get_db)) -> SensorService:
     return SensorService(SqlSensorReadingRepository(session))
+
+
+def get_citizen_sensor_submission_service(
+    session: Session = Depends(get_db),
+) -> CitizenSensorSubmissionService:
+    return CitizenSensorSubmissionService(session)
 
 
 def get_weather_service(session: Session = Depends(get_db)) -> WeatherService:

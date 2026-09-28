@@ -7,6 +7,7 @@ import '../data/pollution_data_provider.dart';
 import '../data/providers/dummy_pollution_data_provider.dart';
 import '../data/providers/grid_api_pollution_data_provider.dart';
 import '../data/providers/scenario_data.dart';
+import '../data/reports/citizen_sensor_api.dart';
 import '../data/reports/fire_report_api.dart';
 
 /// Grid API client, or null when `POLLUTION_API_BASE_URL` is not set.
@@ -30,6 +31,13 @@ final fireReportApiClientProvider = Provider<FireReportApiClient?>((ref) {
   final config = ApiConfig.tryFromEnvironment();
   if (config == null) return null;
   return DioFireReportApiClient(dio: createPollutionDio(config));
+});
+
+/// Citizen PM2.5 submission client, or null until the API is configured.
+final citizenSensorApiClientProvider = Provider<CitizenSensorApiClient?>((ref) {
+  final config = ApiConfig.tryFromEnvironment();
+  if (config == null) return null;
+  return CitizenSensorApiClient(dio: createPollutionDio(config));
 });
 
 /// The single binding point for [PollutionDataProvider].
