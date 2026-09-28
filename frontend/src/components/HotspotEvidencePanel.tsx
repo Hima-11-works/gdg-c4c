@@ -300,7 +300,8 @@ export function HotspotEvidencePanel({
 
             <p className="hotspot-caveat">
               A candidate is <b>not a confirmed fire</b>. It is one satellite thermal detection the
-              detector was reasonably sure about, waiting for a person to look.
+              detector was reasonably sure about, waiting for a person to look. The source is
+              unconfirmed; this feed cannot distinguish agricultural, industrial, or urban sources.
             </p>
 
             <h4 className="hotspot-subhead">Detections</h4>

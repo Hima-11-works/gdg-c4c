@@ -19,7 +19,6 @@ import { useMapUi } from '../state/MapUiContext'
 import type { CellDetailOut, FireReportWithStatus } from '../lib/types'
 import type { ActiveFire } from '../lib/activeFires'
 import { estimatePlumeDrift } from '../lib/transboundaryDrift'
-import { getGrapProtocol } from '../lib/grapRegulations'
 
 /** The most recent citizen report filed in this cell, from
  *  GET /api/v1/reports. Deliberately NOT framed as evidence behind any
@@ -176,7 +175,7 @@ function CellDetailContent({
   const provenance = environmental?.metadata ?? current?.metadata ?? null
   const staticFeatures = environmental?.static_features ?? null
   const exposure = environmental?.exposure ?? current?.exposure ?? null
-  const drift = estimatePlumeDrift(windSpeed, windDirection, current?.pm25 ?? null)
+  const drift = estimatePlumeDrift(windSpeed, windDirection)
 
   if (
     current === null &&
@@ -282,19 +281,22 @@ function CellDetailContent({
       </dl>
 
       {drift !== null && (
-        <section className={`transboundary-drift-card transboundary-drift-${drift.severity}`}>
+        <section className="transboundary-drift-card">
           <div className="transboundary-drift-header">
             <span className="transboundary-drift-icon">💨</span>
             <div>
-              <strong className="transboundary-drift-title">Trans-Boundary Plume Trajectory</strong>
+              <strong className="transboundary-drift-title">Wind-only transport estimate</strong>
               <div className="transboundary-drift-vector">
                 Wind: {drift.blowsFrom} → Carrying {drift.blowsToward} ({drift.speedKmh} km/h)
               </div>
             </div>
           </div>
-          <p className="transboundary-drift-advisory">{drift.advisory}</p>
+          <p className="transboundary-drift-advisory">
+            Straight-line wind travel only; assumes the reported wind stays constant. This does not
+            model pollutant transport or predict air-quality spikes.
+          </p>
           <div className="transboundary-drift-reach">
-            <span>Estimated Reach:</span>
+            <span>Estimated wind travel:</span>
             <strong>~{drift.drift3hKm} km in 3h</strong> ·{' '}
             <strong>~{drift.drift6hKm} km in 6h</strong>
           </div>
@@ -402,23 +404,21 @@ function readWardLog(): WardLogEntry[] {
   }
 }
 
-function GrapProtocolCard({ pm25 }: { pm25: number | null }) {
-  const protocol = getGrapProtocol(pm25)
-  if (protocol.stage === 'NONE') return null
-
+function GrapAssessmentNotice() {
   return (
-    <section className={`grap-card ${protocol.badgeClass}`}>
-      <div className="grap-card-header">
-        <span className="grap-card-badge">🚨 {protocol.title}</span>
-        <span className="grap-card-range">{protocol.pm25Range}</span>
-      </div>
-      <p className="grap-card-advisory">{protocol.advisoryText}</p>
-      <div className="grap-actions-heading">Mandatory Statutory Interventions:</div>
-      <ul className="grap-actions-list">
-        {protocol.mandatoryActions.map((action, idx) => (
-          <li key={idx}>✓ {action}</li>
-        ))}
-      </ul>
+    <section className="grap-card" aria-label="GRAP assessment not available">
+      <strong>Official GRAP stage not assessed</strong>
+      <p className="grap-card-advisory">
+        CAQM GRAP applies to Delhi-NCR and uses AQI stages. This view does not have verified AQI and
+        jurisdiction data to determine an official stage or statutory action.
+      </p>
+      <a
+        href="https://caqm.nic.in/Contents.aspx?langid=1&lev=1&lid=4174&lsid=4171&pid=0"
+        target="_blank"
+        rel="noreferrer"
+      >
+        View CAQM GRAP orders
+      </a>
     </section>
   )
 }
@@ -432,9 +432,7 @@ function InterventionActionBar({
   detail: CellDetailOut
   anomaly: ThermalAnomaly | null
 }) {
-  const [status, setStatus] = useState<'idle' | 'copied' | 'logged' | 'dispatched' | 'failed'>(
-    'idle',
-  )
+  const [status, setStatus] = useState<'idle' | 'copied' | 'logged' | 'failed'>('idle')
   const [wardCount, setWardCount] = useState(() => readWardLog().length)
 
   const severity: FireSeverity | null = anomaly?.severity ?? null
@@ -503,57 +501,29 @@ function InterventionActionBar({
     }
   }
 
-  const protocol = getGrapProtocol(current?.pm25 ?? null)
-
-  const dispatchAdvisory = async () => {
-    const advisoryNote = [
-      `OFFICIAL STATUTORY AIR-QUALITY ENFORCEMENT ADVISORY`,
-      `Issuing Authority: Air Health Federated Platform (Inter-Agency Unit)`,
-      `Jurisdiction Cell: ${h3Cell}`,
-      `Timestamp: ${new Date().toISOString()}`,
-      `Observed PM2.5: ${current?.pm25 ?? 'N/A'} µg/m³`,
-      `Protocol Enforced: ${protocol.title}`,
-      `Statutory Requirement: CAQM / CPCB Mandated Interventions`,
-      `Mandatory Directives:`,
-      ...protocol.mandatoryActions.map((act) => ` - ${act}`),
-      `Dispatch Status: Transmitted to State Pollution Control Board & District Task Force.`,
-    ].join('\n')
-
-    try {
-      await navigator.clipboard.writeText(advisoryNote)
-      setStatus('dispatched')
-    } catch {
-      setStatus('failed')
-    }
-  }
-
   const ctaLabel =
-    status === 'dispatched'
-      ? '✓ Statutory Advisory Dispatched'
-      : status === 'copied'
-        ? '✓ Note copied'
-        : status === 'logged'
-          ? '✓ Logged to ward list'
-          : variant === 'escalate'
-            ? 'Copy escalation note for the State Rapid Action Unit'
-            : variant === 'log'
-              ? 'Log to ward list (this device)'
-              : 'Copy inspection note'
+    status === 'copied'
+      ? '✓ Note copied'
+      : status === 'logged'
+        ? '✓ Logged to ward list'
+        : variant === 'escalate'
+          ? 'Copy escalation note for the State Rapid Action Unit'
+          : variant === 'log'
+            ? 'Log to ward list (this device)'
+            : 'Copy inspection note'
 
   const statusText =
-    status === 'dispatched'
-      ? 'Advisory generated & copied with formal statutory enforcement directives for SPCB/CPCB.'
-      : status === 'copied'
-        ? 'Copied — send it to the relevant authority yourself.'
-        : status === 'logged'
-          ? `Saved on this device only (${wardCount} ${wardCount === 1 ? 'entry' : 'entries'}). Nothing left this device.`
-          : status === 'failed'
-            ? 'Could not access local storage or the clipboard.'
-            : variant === 'escalate'
-              ? 'Nothing is sent automatically; this only prepares an escalation note.'
-              : variant === 'log'
-                ? 'Nothing is sent automatically; this only appends to a list on this device.'
-                : 'Nothing is sent automatically; this only prepares a note.'
+    status === 'copied'
+      ? 'Copied. Nothing was sent; forward this draft through the authority’s official channel.'
+      : status === 'logged'
+        ? `Saved on this device only (${wardCount} ${wardCount === 1 ? 'entry' : 'entries'}). Nothing left this device.`
+        : status === 'failed'
+          ? 'Could not access local storage or the clipboard.'
+          : variant === 'escalate'
+            ? 'Nothing is sent automatically; this only prepares an escalation note.'
+            : variant === 'log'
+              ? 'Nothing is sent automatically; this only appends to a list on this device.'
+              : 'Nothing is sent automatically; this only prepares a note.'
 
   const title =
     variant === 'escalate'
@@ -564,18 +534,6 @@ function InterventionActionBar({
 
   return (
     <div className="intervention-bar" role="group" aria-label="Inspection note">
-      {protocol.stage !== 'NONE' && (
-        <button
-          type="button"
-          className="intervention-cta intervention-cta-dispatch"
-          onClick={dispatchAdvisory}
-          title="Transmit official emergency advisory and copy statutory order"
-        >
-          {status === 'dispatched'
-            ? '✓ Advisory Dispatched & Copied'
-            : '⚡ Dispatch Rapid Authority Advisory (GRAP)'}
-        </button>
-      )}
       <button
         type="button"
         className={`intervention-cta intervention-cta-${variant} ${
@@ -655,9 +613,7 @@ export function CellDetailPanel({
 
       <PriorityBadge h3Cell={selectedCell} />
 
-      {resource.status === 'success' && resource.data.current?.pm25 != null && (
-        <GrapProtocolCard pm25={resource.data.current.pm25} />
-      )}
+      {resource.status === 'success' && <GrapAssessmentNotice />}
 
       {state.selectedCellGeneralized && (
         <p className="banner banner-demo" role="status">
