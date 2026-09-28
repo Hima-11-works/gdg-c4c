@@ -76,13 +76,13 @@ export interface FreightNode {
   corridor: string
   lat: number
   lon: number
-  /** Corridor congestion at the node, 0–100%. */
+  /** Illustrative scenario value, not measured corridor congestion. */
   congestion: number
-  /** Estimated daily emission impact from corridor freight activity. */
+  /** Illustrative sample value, not measured daily emissions. */
   dailyEmissionTonnes: number
-  /** Forecast air-quality spike risk along corridor section */
+  /** Illustrative scenario label, not a forecast. */
   spikeRisk: 'Elevated' | 'High' | 'Severe'
-  /** Statutory freight logistics advisory */
+  /** Example response text, not official or statutory guidance. */
   advisory: string
 }
 
@@ -95,7 +95,8 @@ export const FREIGHT_NODES: FreightNode[] = [
     congestion: 78,
     dailyEmissionTonnes: 890,
     spikeRisk: 'Severe',
-    advisory: 'Downwind industrial & vehicular entrapment; recommend low-emission freight scheduling.',
+    advisory:
+      'Downwind industrial & vehicular entrapment; recommend low-emission freight scheduling.',
   },
   {
     name: 'Sanand Freight Node',
@@ -130,7 +131,7 @@ export const FREIGHT_NODES: FreightNode[] = [
   {
     name: 'Ludhiana Cargo Logistics Park',
     corridor: 'Eastern DFC Northern Origin',
-    lat: 30.90,
+    lat: 30.9,
     lon: 75.85,
     congestion: 76,
     dailyEmissionTonnes: 720,
@@ -169,10 +170,7 @@ export const FREIGHT_NODES: FreightNode[] = [
   },
 ]
 
-export function freightLinesFeatureCollection(): FeatureCollection<
-  LineString,
-  { name: string }
-> {
+export function freightLinesFeatureCollection(): FeatureCollection<LineString, { name: string }> {
   return FREIGHT_ROUTES
 }
 

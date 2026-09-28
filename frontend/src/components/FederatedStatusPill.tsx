@@ -42,16 +42,27 @@ export function FederatedStatusPill() {
   const status: FederationStatusOut | null = resource.status === 'success' ? resource.data : null
   const failed = resource.status === 'error'
   const loading = resource.status === 'idle' || resource.status === 'loading'
+  const succeeded = hasRun(status) && status.status === 'succeeded'
+  const runFailed = hasRun(status) && status.status === 'failed'
 
-  const dotClass = failed
-    ? 'federated-dot federated-dot-unavailable'
-    : loading
-      ? 'federated-dot federated-dot-loading'
-      : hasRun(status)
-        ? 'federated-dot federated-dot-ok'
-        : 'federated-dot federated-dot-ok' // Active federated state mesh
+  const dotClass =
+    failed || runFailed
+      ? 'federated-dot federated-dot-unavailable'
+      : loading
+        ? 'federated-dot federated-dot-loading'
+        : succeeded
+          ? 'federated-dot federated-dot-ok'
+          : 'federated-dot federated-dot-none'
 
-  const label = loading ? 'Federation: checking…' : 'Federated Mesh · 4 State Nodes'
+  const label = loading
+    ? 'Federation: checking…'
+    : failed
+      ? 'Federation: status unavailable'
+      : runFailed
+        ? 'Federation demo: last run failed'
+        : succeeded
+          ? 'Federation demo: run succeeded'
+          : 'Federation demo: no run recorded'
 
   const checkAgain = () => {
     if (resource.status === 'error') refetch()
@@ -64,7 +75,7 @@ export function FederatedStatusPill() {
         className="federated-pill"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        title="Federated climate model mesh: State Pollution Control Boards (PPCB, HSPCB, DPCC, UPPCB) sharing private model weights without exporting raw sensor readings."
+        title="Federation demo status. The state-node cards are illustrative samples and are not connected to live state boards."
       >
         <span className={dotClass} aria-hidden="true" />
         {label}
@@ -79,7 +90,8 @@ export function FederatedStatusPill() {
                 <span className="federated-badge">India Mesh</span>
               </h3>
               <p className="muted federated-subtitle">
-                Cross-state collaborative training without centralizing private sensor telemetry
+                Demonstration of regional model collaboration; no live state-board nodes are
+                connected.
               </p>
             </div>
             <button
@@ -99,7 +111,7 @@ export function FederatedStatusPill() {
               className={`federated-tab-btn ${activeTab === 'nodes' ? 'active' : ''}`}
               onClick={() => setActiveTab('nodes')}
             >
-              State Nodes ({STATE_FEDERATED_NODES.length})
+              Sample Nodes ({STATE_FEDERATED_NODES.length})
             </button>
             <button
               type="button"
@@ -112,10 +124,15 @@ export function FederatedStatusPill() {
 
           {activeTab === 'nodes' && (
             <div className="federated-nodes-view">
+              <p className="federated-demo-notice" role="note">
+                Illustrative mock data only. Node status, station counts, sensor hours, weights,
+                privacy methods, and hashes are examples—not live measurements or verified privacy
+                controls. The aggregator tab is the only endpoint-backed status.
+              </p>
               <div className="federated-weights-card">
                 <div className="federated-weights-label">
-                  <span>Aggregation Weight Distribution (Round 4)</span>
-                  <span className="federated-mono">FedAvg v2.4</span>
+                  <span>Example aggregation weights</span>
+                  <span className="federated-mono">illustrative</span>
                 </div>
                 <div className="federated-weight-bar">
                   {STATE_FEDERATED_NODES.map((node) => (
@@ -162,8 +179,8 @@ export function FederatedStatusPill() {
                           <div className="federated-node-agency muted">{node.agency}</div>
                         </div>
                       </div>
-                      <span className="federated-status-tag synced">
-                        Round {node.currentRound}/{node.totalRounds} · Synced
+                      <span className="federated-status-tag">
+                        Example round {node.currentRound}/{node.totalRounds} · not live
                       </span>
                     </div>
 
@@ -178,27 +195,34 @@ export function FederatedStatusPill() {
                     <div className="federated-node-metrics">
                       <div className="federated-node-metric-cell">
                         <div className="federated-metric-val">{node.stationCount}</div>
-                        <div className="muted federated-metric-lbl">Stations</div>
+                        <div className="muted federated-metric-lbl">Sample stations</div>
                       </div>
                       <div className="federated-node-metric-cell">
-                        <div className="federated-metric-val">{formatCount(node.localSensorHours)}</div>
-                        <div className="muted federated-metric-lbl">Sensor Hours</div>
+                        <div className="federated-metric-val">
+                          {formatCount(node.localSensorHours)}
+                        </div>
+                        <div className="muted federated-metric-lbl">Sample sensor hours</div>
                       </div>
                       <div className="federated-node-metric-cell">
                         <div className="federated-metric-val">
                           {(node.aggregationWeight * 100).toFixed(0)}%
                         </div>
-                        <div className="muted federated-metric-lbl">Model Weight</div>
+                        <div className="muted federated-metric-lbl">Sample model weight</div>
                       </div>
                     </div>
 
                     <div className="federated-node-footer">
                       <div className="federated-privacy-note">
-                        <span className="federated-shield-icon">🔒</span>
-                        <span>{node.privacyProtocol}</span>
+                        <span className="federated-shield-icon" aria-hidden="true">
+                          ⓘ
+                        </span>
+                        <span>Example only; not verified: {node.privacyProtocol}</span>
                       </div>
-                      <div className="federated-mono federated-hash-text" title="Latest local gradient hash">
-                        {node.lastWeightHash}
+                      <div
+                        className="federated-mono federated-hash-text"
+                        title="Illustrative placeholder hash, not from a live node"
+                      >
+                        Sample hash: {node.lastWeightHash}
                       </div>
                     </div>
                   </div>
@@ -231,8 +255,8 @@ export function FederatedStatusPill() {
                 <>
                   <h3>Central CPCB Aggregator · Standby</h3>
                   <p className="muted">
-                    The central server is currently listening for regional state board gradient updates.
-                    Local nodes retain raw station telemetry on-premise.
+                    The central server is currently listening for regional state board gradient
+                    updates. Local nodes retain raw station telemetry on-premise.
                   </p>
                   <p className="muted federated-scope">
                     Default regional scope: <b>{scopeLine(status)}</b>.

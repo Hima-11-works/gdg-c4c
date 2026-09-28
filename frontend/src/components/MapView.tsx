@@ -1276,8 +1276,8 @@ export function MapView({
             popupRef.current = { key, popup }
           }
 
-          // Freight node popups: congestion + emission impact for the
-          // clicked node. Popup garbage-collects itself on close.
+          // Freight node popups contain illustrative sample values only.
+          // Popup garbage-collects itself on close.
           map!.on('click', LAYER_FREIGHT_NODES, (event) => {
             const feature = event.features?.[0]
             const props = feature?.properties
@@ -1289,14 +1289,15 @@ export function MapView({
               geometry.coordinates,
               'freight-node-popup',
               `<strong>${props.name}</strong>` +
+                `<span class="freight-popup-demo">Illustrative sample values — not live measurements or a model forecast</span>` +
                 `<span class="freight-popup-corridor">${props.corridor}</span>` +
-                `<span>Corridor congestion: <b>${props.congestion}%</b></span>` +
-                `<span>Emission impact: <b>${props.emission}</b> t CO₂e / day</span>` +
+                `<span>Example congestion: <b>${props.congestion}%</b></span>` +
+                `<span>Example emissions: <b>${props.emission}</b> t CO₂e / day</span>` +
                 (props.spikeRisk
-                  ? `<span class="freight-popup-risk">Corridor spike risk: <b class="freight-risk-badge freight-risk-${props.spikeRisk.toLowerCase()}">${props.spikeRisk}</b></span>`
+                  ? `<span class="freight-popup-risk">Illustrative scenario risk (not a forecast): <b class="freight-risk-badge freight-risk-${props.spikeRisk.toLowerCase()}">${props.spikeRisk}</b></span>`
                   : '') +
                 (props.advisory
-                  ? `<span class="freight-popup-advisory">${props.advisory}</span>`
+                  ? `<span class="freight-popup-advisory">Example response text (not official guidance): ${props.advisory}</span>`
                   : ''),
               12,
             )

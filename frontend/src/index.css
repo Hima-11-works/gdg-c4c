@@ -1029,6 +1029,17 @@ body,
   box-shadow: none;
 }
 
+.federated-demo-notice {
+  margin: 0.5rem 0;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid rgba(234, 179, 8, 0.45);
+  border-radius: 8px;
+  background: rgba(234, 179, 8, 0.1);
+  color: #fde68a;
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
 .federated-dot-loading {
   background: #eab308;
   box-shadow: 0 0 4px rgba(234, 179, 8, 0.6);
@@ -1521,6 +1532,12 @@ body,
 .freight-node-popup .freight-popup-corridor {
   color: #00f5d4;
   font-size: 0.68rem;
+}
+
+.freight-node-popup .freight-popup-demo {
+  color: #fde68a;
+  font-size: 0.68rem;
+  line-height: 1.35;
 }
 
 .freight-popup-risk {
