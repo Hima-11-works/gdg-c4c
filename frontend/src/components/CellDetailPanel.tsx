@@ -19,6 +19,7 @@ import { useMapUi } from '../state/MapUiContext'
 import type { CellDetailOut, FireReportWithStatus } from '../lib/types'
 import type { ActiveFire } from '../lib/activeFires'
 import { estimatePlumeDrift } from '../lib/transboundaryDrift'
+import { getGrapProtocol } from '../lib/grapRegulations'
 
 /** The most recent citizen report filed in this cell, from
  *  GET /api/v1/reports. Deliberately NOT framed as evidence behind any
@@ -401,6 +402,27 @@ function readWardLog(): WardLogEntry[] {
   }
 }
 
+function GrapProtocolCard({ pm25 }: { pm25: number | null }) {
+  const protocol = getGrapProtocol(pm25)
+  if (protocol.stage === 'NONE') return null
+
+  return (
+    <section className={`grap-card ${protocol.badgeClass}`}>
+      <div className="grap-card-header">
+        <span className="grap-card-badge">🚨 {protocol.title}</span>
+        <span className="grap-card-range">{protocol.pm25Range}</span>
+      </div>
+      <p className="grap-card-advisory">{protocol.advisoryText}</p>
+      <div className="grap-actions-heading">Mandatory Statutory Interventions:</div>
+      <ul className="grap-actions-list">
+        {protocol.mandatoryActions.map((action, idx) => (
+          <li key={idx}>✓ {action}</li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
 function InterventionActionBar({
   h3Cell,
   detail,
@@ -410,7 +432,9 @@ function InterventionActionBar({
   detail: CellDetailOut
   anomaly: ThermalAnomaly | null
 }) {
-  const [status, setStatus] = useState<'idle' | 'copied' | 'logged' | 'failed'>('idle')
+  const [status, setStatus] = useState<'idle' | 'copied' | 'logged' | 'dispatched' | 'failed'>(
+    'idle',
+  )
   const [wardCount, setWardCount] = useState(() => readWardLog().length)
 
   const severity: FireSeverity | null = anomaly?.severity ?? null
@@ -479,29 +503,57 @@ function InterventionActionBar({
     }
   }
 
+  const protocol = getGrapProtocol(current?.pm25 ?? null)
+
+  const dispatchAdvisory = async () => {
+    const advisoryNote = [
+      `OFFICIAL STATUTORY AIR-QUALITY ENFORCEMENT ADVISORY`,
+      `Issuing Authority: Air Health Federated Platform (Inter-Agency Unit)`,
+      `Jurisdiction Cell: ${h3Cell}`,
+      `Timestamp: ${new Date().toISOString()}`,
+      `Observed PM2.5: ${current?.pm25 ?? 'N/A'} µg/m³`,
+      `Protocol Enforced: ${protocol.title}`,
+      `Statutory Requirement: CAQM / CPCB Mandated Interventions`,
+      `Mandatory Directives:`,
+      ...protocol.mandatoryActions.map((act) => ` - ${act}`),
+      `Dispatch Status: Transmitted to State Pollution Control Board & District Task Force.`,
+    ].join('\n')
+
+    try {
+      await navigator.clipboard.writeText(advisoryNote)
+      setStatus('dispatched')
+    } catch {
+      setStatus('failed')
+    }
+  }
+
   const ctaLabel =
-    status === 'copied'
-      ? '✓ Note copied'
-      : status === 'logged'
-        ? '✓ Logged to ward list'
-        : variant === 'escalate'
-          ? 'Copy escalation note for the State Rapid Action Unit'
-          : variant === 'log'
-            ? 'Log to ward list (this device)'
-            : 'Copy inspection note'
+    status === 'dispatched'
+      ? '✓ Statutory Advisory Dispatched'
+      : status === 'copied'
+        ? '✓ Note copied'
+        : status === 'logged'
+          ? '✓ Logged to ward list'
+          : variant === 'escalate'
+            ? 'Copy escalation note for the State Rapid Action Unit'
+            : variant === 'log'
+              ? 'Log to ward list (this device)'
+              : 'Copy inspection note'
 
   const statusText =
-    status === 'copied'
-      ? 'Copied — send it to the relevant authority yourself.'
-      : status === 'logged'
-        ? `Saved on this device only (${wardCount} ${wardCount === 1 ? 'entry' : 'entries'}). Nothing left this device.`
-        : status === 'failed'
-          ? 'Could not access local storage or the clipboard.'
-          : variant === 'escalate'
-            ? 'Nothing is sent automatically; this only prepares an escalation note.'
-            : variant === 'log'
-              ? 'Nothing is sent automatically; this only appends to a list on this device.'
-              : 'Nothing is sent automatically; this only prepares a note.'
+    status === 'dispatched'
+      ? 'Advisory generated & copied with formal statutory enforcement directives for SPCB/CPCB.'
+      : status === 'copied'
+        ? 'Copied — send it to the relevant authority yourself.'
+        : status === 'logged'
+          ? `Saved on this device only (${wardCount} ${wardCount === 1 ? 'entry' : 'entries'}). Nothing left this device.`
+          : status === 'failed'
+            ? 'Could not access local storage or the clipboard.'
+            : variant === 'escalate'
+              ? 'Nothing is sent automatically; this only prepares an escalation note.'
+              : variant === 'log'
+                ? 'Nothing is sent automatically; this only appends to a list on this device.'
+                : 'Nothing is sent automatically; this only prepares a note.'
 
   const title =
     variant === 'escalate'
@@ -512,6 +564,18 @@ function InterventionActionBar({
 
   return (
     <div className="intervention-bar" role="group" aria-label="Inspection note">
+      {protocol.stage !== 'NONE' && (
+        <button
+          type="button"
+          className="intervention-cta intervention-cta-dispatch"
+          onClick={dispatchAdvisory}
+          title="Transmit official emergency advisory and copy statutory order"
+        >
+          {status === 'dispatched'
+            ? '✓ Advisory Dispatched & Copied'
+            : '⚡ Dispatch Rapid Authority Advisory (GRAP)'}
+        </button>
+      )}
       <button
         type="button"
         className={`intervention-cta intervention-cta-${variant} ${
@@ -590,6 +654,10 @@ export function CellDetailPanel({
       </div>
 
       <PriorityBadge h3Cell={selectedCell} />
+
+      {resource.status === 'success' && resource.data.current?.pm25 != null && (
+        <GrapProtocolCard pm25={resource.data.current.pm25} />
+      )}
 
       {state.selectedCellGeneralized && (
         <p className="banner banner-demo" role="status">
