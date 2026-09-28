@@ -177,7 +177,9 @@ export function PhotoReviewPanel({
         (item) => item.getClientRects().length > 0 && item.getAttribute('aria-hidden') !== 'true',
       )
 
-    focusableItems()[0]?.focus()
+    const initialFocus =
+      panel.querySelector<HTMLElement>('#photo-review-key') ?? focusableItems()[0]
+    initialFocus?.focus()
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -289,6 +291,7 @@ export function PhotoReviewPanel({
         <label className="photo-review-key">
           Reviewer key
           <input
+            id="photo-review-key"
             type="password"
             autoComplete="off"
             value={reviewerKey}
