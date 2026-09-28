@@ -30,21 +30,22 @@ from app.domain.types import _require_utc
 class IncidentSourceType(StrEnum):
     """What an incident was created from.
 
-    The pair (source_type, source_id) — or, for a published alert,
-    (source_type, source_ref) — is unique across incidents, which is what makes
-    creation idempotent.
+    The pair (source_type, source_id) — or, for a published alert or hotspot
+    event, (source_type, source_ref) — is unique across incidents.
     """
 
     ALERT = "alert"
     REPORT = "report"
     PUBLISHED_ALERT = "published_alert"
+    HOTSPOT_EVENT = "hotspot_event"
 
     @property
     def uses_ref(self) -> bool:
-        """Whether this source is named by a string reference rather than a row
-        id. A published alert has no row of its own: it is a run + cell +
-        horizon in the published prediction space."""
-        return self is IncidentSourceType.PUBLISHED_ALERT
+        """Whether this source is named by a string reference rather than a row id."""
+        return self in {
+            IncidentSourceType.PUBLISHED_ALERT,
+            IncidentSourceType.HOTSPOT_EVENT,
+        }
 
 
 class IncidentStatus(StrEnum):
@@ -262,12 +263,12 @@ class Incident:
         if not self.severity:
             raise ValueError("severity must not be empty")
         # The source must be identified exactly one way, and the way must match
-        # the source type: a published alert is a ref, everything else a row id.
+        # the source type: published alerts and hotspots are refs, others ids.
         if self.source_type.uses_ref:
             if self.source_ref is None or not self.source_ref.strip():
-                raise ValueError("a published-alert incident requires source_ref")
+                raise ValueError("this incident source requires source_ref")
             if self.source_id is not None:
-                raise ValueError("a published-alert incident must not carry source_id")
+                raise ValueError("this incident source must not carry source_id")
         else:
             if self.source_id is None or self.source_id < 1:
                 raise ValueError(f"a {self.source_type.value} incident requires source_id")

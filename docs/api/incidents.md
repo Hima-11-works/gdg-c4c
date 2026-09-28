@@ -28,8 +28,8 @@ Three rules shape everything below:
 
 | Term | Meaning |
 | --- | --- |
-| **Source** | What the incident was created from: a `published_alert`, a persisted fire `alert`, or a citizen `fire_report`. |
-| **Source key** | `(source_type, source_id)` for an alert/report, `(source_type, source_ref)` for a published alert. Unique across incidents, so one source can never create two incidents. |
+| **Source** | What the incident was created from: a `published_alert`, a persisted fire `alert`, a citizen `fire_report`, or a live `hotspot_event`. |
+| **Source key** | `(source_type, source_id)` for an alert/report, `(source_type, source_ref)` for a published alert or hotspot event. Unique across incidents, so one source can never create two incidents. |
 | **Status** | The incident's current response state. |
 | **Responder role** | Who may act: `fire_department` or `pollution_control`. |
 | **Actor** | An authenticated responder identity (`actor_id` + role + jurisdiction) resolved server-side. |
@@ -42,6 +42,7 @@ Three rules shape everything below:
 | Source | Eligible when | Role |
 | --- | --- | --- |
 | `published_alert` | the named run/cell/horizon exists in a published v2 run **and** its forecast PM2.5 is ≥ `ALERT_WARNING_PM25` (91 µg/m³) | `pollution_control` |
+| `hotspot_event` | the named persisted event exists, is non-synthetic, and has been confirmed by a pollution-control responder | `pollution_control` |
 | `alert` (persisted v1) | severity is `warning` or `critical` (`watch` is informational) | `pollution_control` |
 | `report` with a fire `kind` (`building_fire`, `industrial_fire`, `forest_fire`, `crop_burning`) | — | `fire_department` |
 | `report` with `kind = other` | — | `pollution_control` |
@@ -163,9 +164,9 @@ curl -X POST localhost:8000/api/v1/incidents \
 
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `source_type` | `published_alert` \| `alert` \| `report` | yes | |
-| `source_ref` | string (≤200) | for `published_alert` | The `v2:…` identity (§2). Must **not** be sent for `alert`/`report`. |
-| `source_id` | integer | for `alert`/`report` | Must exist and be eligible. Must **not** be sent for `published_alert`. |
+| `source_type` | `published_alert` \| `hotspot_event` \| `alert` \| `report` | yes | |
+| `source_ref` | string (≤200) | for `published_alert`/`hotspot_event` | The published alert identity or `hotspot-…` event id. Must **not** be sent for `alert`/`report`. |
+| `source_id` | integer | for `alert`/`report` | Must exist and be eligible. Must **not** be sent for reference sources. |
 | `severity` | `watch` \| `warning` \| `critical` | no | Defaults to the source's own severity. |
 | `jurisdiction` | string (≤120) | no | Defaults to the creating actor's jurisdiction. |
 | `latitude` / `longitude` | float | no | Defaults to the source's location (the cell centre for a cell-level source). |

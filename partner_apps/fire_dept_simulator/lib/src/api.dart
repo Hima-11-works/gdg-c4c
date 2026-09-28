@@ -247,6 +247,23 @@ class IncidentApi {
     return alerts.take(50).toList();
   }
 
+  /// Live candidate events that a pollution-control responder can open for review.
+  Future<List<Map<String, dynamic>>> listHotspotEvents() async {
+    final response = await _send('GET', '/api/v1/hotspots/events');
+    return (response.data as List)
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .toList();
+  }
+
+  Future<void> reviewHotspotEvent({required String eventId, required String reviewState}) async {
+    await _send(
+      'POST',
+      '/api/v1/hotspots/events/${Uri.encodeComponent(eventId)}/review',
+      needsKey: true,
+      body: {'review_state': reviewState},
+    );
+  }
+
   int _severityRank(String value) => switch (value) {
         'critical' => 3,
         'warning' => 2,

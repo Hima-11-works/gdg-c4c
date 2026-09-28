@@ -13,7 +13,7 @@ library;
 
 // --- enums, with their wire spellings kept explicit ---
 
-enum IncidentSourceType { alert, report, publishedAlert }
+enum IncidentSourceType { alert, report, publishedAlert, hotspotEvent }
 
 enum IncidentStatus {
   reported,
@@ -52,6 +52,7 @@ const Map<IncidentSourceType, String> _sourceToWire = {
   IncidentSourceType.alert: 'alert',
   IncidentSourceType.report: 'report',
   IncidentSourceType.publishedAlert: 'published_alert',
+  IncidentSourceType.hotspotEvent: 'hotspot_event',
 };
 
 String wireOfStatus(IncidentStatus value) => _statusToWire[value]!;

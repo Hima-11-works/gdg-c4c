@@ -31,6 +31,8 @@ class IncidentsScreen extends StatefulWidget {
 class _IncidentsScreenState extends State<IncidentsScreen>
     with WidgetsBindingObserver {
   List<Incident> _incidents = const [];
+  List<Map<String, dynamic>> _hotspotEvents = const [];
+  String? _openingHotspotId;
   int _pendingAssignments = 0;
   bool _loading = true;
   ApiException? _error;
@@ -91,6 +93,14 @@ class _IncidentsScreenState extends State<IncidentsScreen>
       ]);
       final incidents = results[0] as List<Incident>;
       final inbox = results[1] as List<IncidentInboxItem>;
+      List<Map<String, dynamic>> hotspotEvents;
+      try {
+        hotspotEvents = await widget.api.listHotspotEvents();
+      } on ApiException {
+        // The incident queue remains available while the hotspot scanner is
+        // disabled or its optional shared store is not configured.
+        hotspotEvents = const [];
+      }
       if (!mounted) return;
 
       final newlyAssigned = _hasInboxSnapshot
@@ -104,6 +114,7 @@ class _IncidentsScreenState extends State<IncidentsScreen>
 
       setState(() {
         _incidents = incidents;
+        _hotspotEvents = hotspotEvents;
         _pendingAssignments = inbox.length;
         _loading = false;
       });
@@ -204,6 +215,65 @@ class _IncidentsScreenState extends State<IncidentsScreen>
       }
     } finally {
       if (mounted) setState(() => _dispatching = false);
+    }
+  }
+
+  Future<void> _openHotspot(Map<String, dynamic> event) async {
+    final eventId = event['event_id'] as String?;
+    if (eventId == null || eventId.isEmpty) return;
+    if (widget.config.role != ResponderRole.pollutionControl) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Set the simulator role to pollution control to review hotspots.')),
+      );
+      return;
+    }
+    setState(() => _openingHotspotId = eventId);
+    try {
+      final outcome = await widget.api.createIncident(
+        sourceType: IncidentSourceType.hotspotEvent,
+        sourceRef: eventId,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(outcome.created
+              ? 'Hotspot opened as pollution-control incident #${outcome.value.id}.'
+              : 'Hotspot is already in incident #${outcome.value.id}.'),
+        ),
+      );
+      await _load();
+    } on ApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    } finally {
+      if (mounted) setState(() => _openingHotspotId = null);
+    }
+  }
+
+  Future<void> _reviewHotspot(Map<String, dynamic> event, String state) async {
+    final eventId = event['event_id'] as String?;
+    if (eventId == null || eventId.isEmpty) return;
+    if (widget.config.role != ResponderRole.pollutionControl) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Set the simulator role to pollution control to review hotspots.')),
+      );
+      return;
+    }
+    setState(() => _openingHotspotId = eventId);
+    try {
+      await widget.api.reviewHotspotEvent(eventId: eventId, reviewState: state);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(state == 'confirmed' ? 'Hotspot confirmed.' : 'Hotspot dismissed.')),
+      );
+      await _load();
+    } on ApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    } finally {
+      if (mounted) setState(() => _openingHotspotId = null);
     }
   }
 
@@ -318,7 +388,14 @@ class _IncidentsScreenState extends State<IncidentsScreen>
       );
     }
 
-    if (_incidents.isEmpty) {
+    final openHotspots = _hotspotEvents.where((event) {
+      final eventId = event['event_id'];
+      return event['synthetic'] != true &&
+          (event['status'] == 'potential' || event['status'] == 'confirmed') &&
+          !_incidents.any((incident) => incident.sourceRef == eventId);
+    }).toList(growable: false);
+
+    if (_incidents.isEmpty && openHotspots.isEmpty) {
       return RefreshIndicator(
         onRefresh: _load,
         child: ListView(
@@ -348,12 +425,57 @@ class _IncidentsScreenState extends State<IncidentsScreen>
 
     return RefreshIndicator(
       onRefresh: _load,
-      child: ListView.builder(
+      child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
-        itemCount: _incidents.length,
-        itemBuilder: (context, index) {
-          final incident = _incidents[index];
-          return Card(
+        children: [
+          if (openHotspots.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 8, 4, 4),
+              child: Text('Satellite hotspots awaiting authority review',
+                  style: Theme.of(context).textTheme.titleMedium),
+            ),
+            for (final hotspot in openHotspots)
+              Card(
+                child: ListTile(
+                  leading: const Icon(Icons.satellite_alt_outlined),
+                  title: Text('Potential hotspot · ${hotspot['confidence_band'] ?? 'unrated'} triage'),
+                  subtitle: Text(
+                    '${(hotspot['region'] as String?) ?? 'India'} · '
+                    '${((hotspot['footprint_cells'] as List?) ?? const []).length} cell(s) · '
+                    '${hotspot['event_id']}',
+                  ),
+                  trailing: widget.config.role == ResponderRole.pollutionControl
+                      ? Wrap(
+                          spacing: 4,
+                          children: [
+                            if (hotspot['status'] == 'potential') ...[
+                              TextButton(
+                                onPressed: _openingHotspotId == hotspot['event_id']
+                                    ? null
+                                    : () => _reviewHotspot(hotspot, 'dismissed'),
+                                child: const Text('Dismiss'),
+                              ),
+                              FilledButton(
+                                onPressed: _openingHotspotId == hotspot['event_id']
+                                    ? null
+                                    : () => _reviewHotspot(hotspot, 'confirmed'),
+                                child: Text(_openingHotspotId == hotspot['event_id'] ? 'Saving…' : 'Confirm'),
+                              ),
+                            ] else
+                              FilledButton(
+                                onPressed: _openingHotspotId == hotspot['event_id']
+                                    ? null
+                                    : () => _openHotspot(hotspot),
+                                child: Text(_openingHotspotId == hotspot['event_id'] ? 'Opening…' : 'Open incident'),
+                              ),
+                          ],
+                        )
+                      : const Icon(Icons.lock_outline),
+                ),
+              ),
+          ],
+          for (final incident in _incidents)
+            Card(
             child: ListTile(
               onTap: () => _open(incident),
               title: Row(
@@ -396,8 +518,9 @@ class _IncidentsScreenState extends State<IncidentsScreen>
               trailing: const Icon(Icons.chevron_right),
               isThreeLine: true,
             ),
-          );
-        },
+            ),
+          ),
+        ],
       ),
     );
   }

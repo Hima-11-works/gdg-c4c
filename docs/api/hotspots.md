@@ -135,6 +135,13 @@ setting on the deployed API so it can serve those records, and set
 `0022_persistent_hotspot_scans` creates the shared scan and event tables. Local
 development keeps the filesystem store by default.
 
+Pollution-control responders can review recorded events with
+`POST /api/v1/hotspots/events/{event_id}/review`, sending
+`{"review_state":"confirmed"}` or `{"review_state":"dismissed"}`. Synthetic
+events cannot be reviewed for operational response. Confirmed live events can
+then be opened as `hotspot_event` incidents from the fire-department simulator;
+the API derives the incident location from the event's H3 cell.
+
 **FIRMS signals (optional).** `detection_id`, `h3_cell`, `latitude`, `longitude`,
 `acquired_at`, `available_at`, `frp_mw`, `confidence_class`, `satellite`, `source`,
 `product_version`. The platform's stored FIRMS detections

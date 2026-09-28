@@ -29,9 +29,8 @@ __all__ = [
 
 class IncidentCreateIn(BaseModel):
     source_type: IncidentSourceType
-    # Exactly one of source_id / source_ref, decided by source_type: a
-    # published alert is named by its stable identity, a persisted alert or
-    # report by its row id.
+    # Exactly one of source_id / source_ref, decided by source_type: published
+    # alerts and hotspot events use stable references; stored rows use ids.
     source_id: int | None = Field(default=None, ge=1)
     source_ref: str | None = Field(default=None, min_length=1, max_length=200)
     severity: str | None = Field(default=None, max_length=20)
@@ -46,12 +45,10 @@ class IncidentCreateIn(BaseModel):
         if self.source_type.uses_ref:
             if self.source_ref is None:
                 raise ValueError(
-                    "a published_alert incident requires source_ref "
-                    "('v2:<run_id>:<h3_cell>:<forecast_minutes>', as returned by "
-                    "GET /api/v2/alerts)"
+                    "this incident source requires source_ref"
                 )
             if self.source_id is not None:
-                raise ValueError("source_id must not be given for a published_alert source")
+                raise ValueError("source_id must not be given for this source")
         else:
             if self.source_id is None:
                 raise ValueError(f"a {self.source_type.value} incident requires source_id")

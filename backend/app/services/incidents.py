@@ -50,6 +50,7 @@ from app.domain.repositories import (
     IncidentRepository,
 )
 from app.domain.types import Alert, AlertSeverity, FireKind, FireReport
+from app.services.hotspot_detection import HotspotScanStore
 from app.services.published_alerts import (
     PublishedAlert,
     PublishedAlertNotEligibleError,
@@ -181,12 +182,14 @@ class IncidentService:
         report_repository: FireReportRepository,
         delivery_repository: IncidentDeliveryRepository,
         published_alerts: PublishedAlertService,
+        hotspot_store: HotspotScanStore | None = None,
     ) -> None:
         self._incidents = incident_repository
         self._alerts = alert_repository
         self._reports = report_repository
         self._deliveries = delivery_repository
         self._published_alerts = published_alerts
+        self._hotspot_store = hotspot_store
 
     # -- permissions --------------------------------------------------------
 
@@ -301,6 +304,16 @@ class IncidentService:
             # optional: two different runs are two different incidents.
             effective_run_id = published.run_id
             source_synthetic = published.synthetic
+        elif source_type is IncidentSourceType.HOTSPOT_EVENT:
+            if actor.role is not ResponderRole.POLLUTION_CONTROL:
+                raise RoleMismatchError(
+                    "only a pollution-control responder may open a hotspot event"
+                )
+            role, default_severity, source_lat, source_lon, cell_id = (
+                self._resolve_hotspot_event(key_ref or "")
+            )
+            effective_run_id = linked_prediction_run_id
+            source_synthetic = False
         else:
             role, default_severity, source_lat, source_lon, cell_id = self._resolve_source(
                 source_type, source_id
@@ -392,6 +405,28 @@ class IncidentService:
                 synthetic=alert.synthetic,
             ),
         )
+
+    def _resolve_hotspot_event(
+        self, event_id: str
+    ) -> tuple[ResponderRole, str, float, float, str]:
+        """Resolve a live persisted hotspot event into a reviewable incident."""
+        if self._hotspot_store is None:
+            raise SourceNotEligibleError("hotspot event storage is not configured")
+        try:
+            event = self._hotspot_store.event(event_id)
+        except FileNotFoundError as exc:
+            raise IncidentNotFoundError(str(exc)) from exc
+        if event.get("synthetic") is True:
+            raise SourceNotEligibleError("synthetic hotspot events cannot enter the response queue")
+        if event.get("status") != "confirmed":
+            raise SourceNotEligibleError(
+                "a hotspot must be confirmed before it enters the response queue"
+            )
+        cell_id = event.get("dedup_cell")
+        if not isinstance(cell_id, str):
+            raise SourceNotEligibleError("hotspot event has no mappable H3 footprint")
+        latitude, longitude = cell_center(cell_id)
+        return ResponderRole.POLLUTION_CONTROL, "warning", latitude, longitude, cell_id
 
     def _resolve_source(
         self, source_type: IncidentSourceType, source_id: int

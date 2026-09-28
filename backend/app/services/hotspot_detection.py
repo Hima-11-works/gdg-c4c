@@ -49,7 +49,7 @@ from pathlib import Path
 from typing import Any
 
 import h3
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -1479,6 +1479,41 @@ class HotspotScanStore:
             return payload
         return HotspotEventStore(self.directory).get_event(event_id)
 
+    def review_event(
+        self, event_id: str, *, review_state: str, reviewed_by: str
+    ) -> dict[str, Any]:
+        if not re.fullmatch(r"hotspot-[0-9a-f]{20}", event_id or ""):
+            raise FileNotFoundError(f"no recorded hotspot event {event_id!r}")
+        if self._session is None:
+            return HotspotEventStore(self.directory).review_event(
+                event_id, review_state=review_state, reviewed_by=reviewed_by
+            )
+        try:
+            with self._session.begin_nested():
+                row = self._session.execute(
+                    select(hotspot_event_projection.c.payload).where(
+                        hotspot_event_projection.c.event_id == event_id
+                    )
+                ).scalar_one_or_none()
+                if row is None:
+                    raise FileNotFoundError(f"no recorded hotspot event {event_id!r}")
+                payload = _review_event_payload(
+                    row, review_state=review_state, reviewed_by=reviewed_by
+                )
+                self._session.execute(
+                    update(hotspot_event_projection)
+                    .where(hotspot_event_projection.c.event_id == event_id)
+                    .values(
+                        updated_at=datetime.fromisoformat(payload["updated_at"]),
+                        payload=payload,
+                    )
+                )
+            self._session.commit()
+            return payload
+        except Exception:
+            self._session.rollback()
+            raise
+
 
 class HotspotEventStore:
     """Durable, idempotent event projection over recorded detector scans.
@@ -1679,6 +1714,52 @@ class HotspotEventStore:
         if row is None:
             raise FileNotFoundError(f"no recorded hotspot event {event_id!r}")
         return json.loads(row["payload"])
+
+    def review_event(
+        self, event_id: str, *, review_state: str, reviewed_by: str
+    ) -> dict[str, Any]:
+        if not re.fullmatch(r"hotspot-[0-9a-f]{20}", event_id or ""):
+            raise FileNotFoundError(f"no recorded hotspot event {event_id!r}")
+        with closing(self._connect()) as connection:
+            with connection:
+                connection.execute("BEGIN IMMEDIATE")
+                row = connection.execute(
+                    "SELECT payload FROM hotspot_event WHERE event_id = ?", (event_id,)
+                ).fetchone()
+                if row is None:
+                    raise FileNotFoundError(f"no recorded hotspot event {event_id!r}")
+                payload = _review_event_payload(
+                    json.loads(row["payload"]),
+                    review_state=review_state,
+                    reviewed_by=reviewed_by,
+                )
+                connection.execute(
+                    "UPDATE hotspot_event SET payload = ? WHERE event_id = ?",
+                    (json.dumps(payload, sort_keys=True, allow_nan=False), event_id),
+                )
+        return payload
+
+
+def _review_event_payload(
+    payload: dict[str, Any], *, review_state: str, reviewed_by: str
+) -> dict[str, Any]:
+    if review_state not in {"confirmed", "dismissed"}:
+        raise ValueError("review_state must be confirmed or dismissed")
+    if payload.get("synthetic") is True:
+        raise ValueError("synthetic hotspot events cannot be reviewed for real response")
+    current = payload.get("status")
+    if current == review_state:
+        return payload
+    if current != "potential":
+        raise ValueError(f"hotspot event is already reviewed as {current!r}")
+    reviewed_at = datetime.now(UTC).isoformat()
+    return {
+        **payload,
+        "status": review_state,
+        "reviewed_by": reviewed_by,
+        "reviewed_at": reviewed_at,
+        "updated_at": reviewed_at,
+    }
 
 
 #: Fields a recorded scan must carry for a catalog row to be projectable. A

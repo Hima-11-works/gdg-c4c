@@ -22,10 +22,12 @@ See docs/api/hotspots.md.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 
-from app.api.deps import get_hotspot_scan_store
+from app.api.deps import get_hotspot_scan_store, require_incident_actor
 from app.api.schemas import Envelope
 from app.api.schemas_hotspots import (
     HotspotCatalogOut,
@@ -35,6 +37,7 @@ from app.api.schemas_hotspots import (
     HotspotScanSummaryOut,
 )
 from app.domain.hotspots import DETECTOR_VERSION
+from app.domain.incidents import IncidentActor, ResponderRole
 from app.services.hotspot_detection import (
     HOTSPOT_LIMITATIONS,
     DetectorConfig,
@@ -43,6 +46,10 @@ from app.services.hotspot_detection import (
 )
 
 router = APIRouter(prefix="/hotspots", tags=["hotspots"])
+
+
+class HotspotEventReviewIn(BaseModel):
+    review_state: Literal["confirmed", "dismissed"]
 
 #: Stated in the response so a client never has to infer the detector's role
 #: from its output shape.
@@ -110,6 +117,35 @@ def get_hotspot_event(
         is_demo=event.synthetic,
         data=event,
     )
+
+
+@router.post(
+    "/events/{event_id}/review",
+    response_model=Envelope[dict],
+    summary="Confirm or dismiss a hotspot event as a pollution-control responder",
+)
+def review_hotspot_event(
+    event_id: str,
+    payload: HotspotEventReviewIn,
+    actor: IncidentActor = Depends(require_incident_actor),
+    store: HotspotScanStore = Depends(get_hotspot_scan_store),
+) -> Envelope[dict]:
+    if actor.role is not ResponderRole.POLLUTION_CONTROL:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="only pollution-control responders may review hotspot events",
+        )
+    try:
+        event = store.review_event(
+            event_id,
+            review_state=payload.review_state,
+            reviewed_by=actor.actor_id,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return Envelope(generated_at=datetime.now(UTC), is_demo=False, data=event)
 
 
 @router.get(

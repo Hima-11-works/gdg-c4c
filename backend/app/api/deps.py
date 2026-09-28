@@ -129,6 +129,7 @@ def get_incident_service(session: Session = Depends(get_db)) -> IncidentService:
         published_alerts=PublishedAlertService(
             PredictionQueryService(SqlPredictionPublicationRepository(session))
         ),
+        hotspot_store=build_store(get_settings(), session=session),
     )
 
 

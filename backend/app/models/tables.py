@@ -653,8 +653,8 @@ traffic_observation = Table(
     Index("ix_traffic_run", "ingestion_run_id"),
 )
 
-# Incident response workflow. Published prediction alerts use source_ref because
-# they have no database row id; persisted v1 alerts and citizen reports use ids.
+# Incident response workflow. Published prediction alerts and hotspot events
+# use source_ref because they have no database row id.
 incident = Table(
     "incident",
     metadata,
@@ -677,9 +677,9 @@ incident = Table(
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
     Column("resolved_at", DateTime(timezone=True), nullable=True),
-    CheckConstraint("source_type IN ('alert', 'report', 'published_alert')", name="ck_incident_source_type"),
-    CheckConstraint("(source_type = 'published_alert') = (source_ref IS NOT NULL)", name="ck_incident_source_ref_only_for_published_alert"),
-    CheckConstraint("(source_type = 'published_alert') = (source_id IS NULL)", name="ck_incident_source_id_absent_for_published_alert"),
+    CheckConstraint("source_type IN ('alert', 'report', 'published_alert', 'hotspot_event')", name="ck_incident_source_type"),
+    CheckConstraint("(source_type IN ('published_alert', 'hotspot_event')) = (source_ref IS NOT NULL)", name="ck_incident_source_ref_required"),
+    CheckConstraint("(source_type IN ('published_alert', 'hotspot_event')) = (source_id IS NULL)", name="ck_incident_source_id_absent"),
     CheckConstraint("source_ref IS NULL OR length(source_ref) > 0", name="ck_incident_source_ref_nonempty"),
     CheckConstraint("status IN ('reported', 'assigned', 'acknowledged', 'en_route', 'on_scene', 'resolved', 'cancelled')", name="ck_incident_status"),
     CheckConstraint("responder_role IN ('fire_department', 'pollution_control')", name="ck_incident_responder_role"),
