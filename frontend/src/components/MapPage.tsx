@@ -18,6 +18,7 @@ import { lodForZoom, lodKey, lodQueryFor, weatherResolutionForLod } from '../lib
 import { useMapUi } from '../state/MapUiContext'
 import { AlertsPanel } from './AlertsPanel'
 import { CellDetailPanel } from './CellDetailPanel'
+import { CorridorDetailPanel } from './CorridorDetailPanel'
 import { FederatedStatusPill } from './FederatedStatusPill'
 import { Legend } from './Legend'
 import { LayerToggle } from './LayerToggle'
@@ -398,11 +399,15 @@ export function MapPage() {
         <TimelineControl publishedRunId={publishedRunId} supportedHours={supportedHours} />
       </div>
 
-      <CellDetailPanel
-        publishedRunId={publishedRunId}
-        citizenReports={reports.resource}
-        activeFires={activeFires.resource}
-      />
+      {state.selectedCorridor !== null ? (
+        <CorridorDetailPanel corridor={state.selectedCorridor} />
+      ) : (
+        <CellDetailPanel
+          publishedRunId={publishedRunId}
+          citizenReports={reports.resource}
+          activeFires={activeFires.resource}
+        />
+      )}
       <HotspotEvidencePanel
         resource={activeFires.resource}
         localHotspots={localHotspots}

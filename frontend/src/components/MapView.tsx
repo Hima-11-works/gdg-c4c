@@ -19,9 +19,9 @@ import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&ur
 setWorkerUrl(maplibreWorkerUrl)
 import { colorScaleExpression, PDI_COLOR_SCALE, PM25_COLOR_SCALE } from '../lib/colorScales'
 import {
-  FREIGHT_LINE_COLOR,
   freightLinesFeatureCollection,
   freightNodesFeatureCollection,
+  normalizeCorridorProperties,
 } from '../lib/freightCorridors'
 import { EMPTY_REPORTS, cameraPinImage, reportsFeatureCollection } from '../lib/citizenReports'
 import { anomalyById, anomalyPopupHtml, fireAnomalyFeatureCollection } from '../lib/fireAnomalies'
@@ -264,13 +264,26 @@ const LAYER_SELECTED_OUTLINE = 'selected-cell-outline'
 // Economic freight corridors — a glowing polyline overlay plus clickable
 // congestion node markers. Pure context for the intervention picture.
 const SOURCE_FREIGHT_LINES = 'freight-lines'
-const LAYER_FREIGHT_GLOW = 'freight-lines-glow'
-const LAYER_FREIGHT_LINE = 'freight-lines-core'
+const LAYER_FREIGHT_GLOW = 'corridor-layer-glow'
+const LAYER_FREIGHT_LINE = 'corridor-layer'
 const SOURCE_FREIGHT_NODES = 'freight-nodes'
 const LAYER_FREIGHT_NODES = 'freight-nodes-markers'
 const FREIGHT_NODE_COLOR = '#00F5D4'
-const FREIGHT_GLOW_OPACITY = 0.25
+const FREIGHT_GLOW_OPACITY = 0.38
 const FREIGHT_LINE_OPACITY = 0.95
+
+/** Color coding for major economic freight corridors based on predictive risk status */
+const CORRIDOR_COLOR_EXPRESSION = [
+  'match',
+  ['get', 'status'],
+  'Critical',
+  '#EF4444', // Red for Critical / AKIC
+  'Warning',
+  '#F59E0B', // Amber for Warning
+  'Normal',
+  '#00F5D4', // Cyan for Normal
+  '#00F5D4',
+]
 
 // Citizen report camera pins — amber, wrapped in white pill badges, above
 // corridors but below the selection outline, hidden until toggled on.
@@ -1188,9 +1201,10 @@ export function MapView({
             source: SOURCE_FREIGHT_LINES,
             layout: { 'line-cap': 'round', 'line-join': 'round', visibility: 'none' },
             paint: {
-              'line-color': FREIGHT_LINE_COLOR,
-              'line-width': 10,
+              'line-color': CORRIDOR_COLOR_EXPRESSION as never,
+              'line-width': ['interpolate', ['linear'], ['zoom'], 3, 8, 8, 14, 12, 18],
               'line-opacity': FREIGHT_GLOW_OPACITY,
+              'line-blur': 3,
             },
           })
           map!.addLayer({
@@ -1199,8 +1213,8 @@ export function MapView({
             source: SOURCE_FREIGHT_LINES,
             layout: { 'line-cap': 'round', 'line-join': 'round', visibility: 'none' },
             paint: {
-              'line-color': FREIGHT_LINE_COLOR,
-              'line-width': 4,
+              'line-color': CORRIDOR_COLOR_EXPRESSION as never,
+              'line-width': ['interpolate', ['linear'], ['zoom'], 3, 3.5, 8, 5.5, 12, 7.5],
               'line-opacity': FREIGHT_LINE_OPACITY,
             },
           })
@@ -1305,6 +1319,32 @@ export function MapView({
             map!.getCanvas().style.cursor = 'pointer'
           })
           map!.on('mouseleave', LAYER_FREIGHT_NODES, () => {
+            map!.getCanvas().style.cursor = ''
+          })
+
+          // Major economic freight corridors: click event extracts predictive
+          // metadata and sets it into the app's selected corridor state.
+          const handleCorridorClick = (event: { features?: unknown[] }) => {
+            const feature = event.features?.[0] as { properties?: Record<string, unknown> } | undefined
+            const props = feature?.properties
+            if (!feature || !props) return
+            const corridor = normalizeCorridorProperties(props)
+            dispatch({ type: 'SELECT_CORRIDOR', corridor })
+          }
+
+          map!.on('click', 'corridor-layer', handleCorridorClick)
+          map!.on('click', LAYER_FREIGHT_GLOW, handleCorridorClick)
+
+          map!.on('mouseenter', 'corridor-layer', () => {
+            map!.getCanvas().style.cursor = 'pointer'
+          })
+          map!.on('mouseleave', 'corridor-layer', () => {
+            map!.getCanvas().style.cursor = ''
+          })
+          map!.on('mouseenter', LAYER_FREIGHT_GLOW, () => {
+            map!.getCanvas().style.cursor = 'pointer'
+          })
+          map!.on('mouseleave', LAYER_FREIGHT_GLOW, () => {
             map!.getCanvas().style.cursor = ''
           })
 
