@@ -40,7 +40,15 @@ export function PhotoReviewPanel({
   const [notice, setNotice] = useState<string | null>(null)
   const [decisionInFlight, setDecisionInFlight] = useState(false)
   const loadGeneration = useRef(0)
+  const panelRef = useRef<HTMLElement>(null)
+  const onCloseRef = useRef(onClose)
+  const decisionInFlightRef = useRef(decisionInFlight)
   const selected = queue.find((item) => item.evidence.id === selectedId) ?? queue[0] ?? null
+
+  useEffect(() => {
+    onCloseRef.current = onClose
+    decisionInFlightRef.current = decisionInFlight
+  }, [decisionInFlight, onClose])
 
   const loadQueue = useCallback(async () => {
     const generation = ++loadGeneration.current
@@ -158,12 +166,54 @@ export function PhotoReviewPanel({
   }, [selectedReportId, selectedEvidenceId, selectedScanState, previewKey])
 
   useEffect(() => {
+    const panel = panelRef.current
+    if (panel === null) return
+    const previousFocus =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const focusableSelector =
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    const focusableItems = () =>
+      Array.from(panel.querySelectorAll<HTMLElement>(focusableSelector)).filter(
+        (item) => item.getClientRects().length > 0 && item.getAttribute('aria-hidden') !== 'true',
+      )
+
+    focusableItems()[0]?.focus()
+
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !decisionInFlight) onClose()
+      if (event.key === 'Escape') {
+        if (!decisionInFlightRef.current) onCloseRef.current()
+        return
+      }
+      if (event.key !== 'Tab') return
+
+      const items = focusableItems()
+      const first = items[0]
+      const last = items.at(-1)
+      if (first === undefined || last === undefined) {
+        event.preventDefault()
+        panel.focus()
+        return
+      }
+      if (
+        event.shiftKey &&
+        (document.activeElement === first || !panel.contains(document.activeElement))
+      ) {
+        event.preventDefault()
+        last.focus()
+      } else if (
+        !event.shiftKey &&
+        (document.activeElement === last || !panel.contains(document.activeElement))
+      ) {
+        event.preventDefault()
+        first.focus()
+      }
     }
     window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [decisionInFlight, onClose])
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      if (previousFocus?.isConnected) previousFocus.focus()
+    }
+  }, [])
 
   const decide = async (reviewState: 'approved' | 'rejected') => {
     if (
@@ -216,6 +266,9 @@ export function PhotoReviewPanel({
         role="dialog"
         aria-modal="true"
         aria-labelledby="photo-review-title"
+        aria-describedby="photo-review-description"
+        tabIndex={-1}
+        ref={panelRef}
       >
         <header className="photo-review-header">
           <div>
@@ -226,6 +279,7 @@ export function PhotoReviewPanel({
             type="button"
             className="report-form-close"
             onClick={onClose}
+            disabled={decisionInFlight}
             aria-label="Close photo review"
           >
             ×
@@ -245,7 +299,7 @@ export function PhotoReviewPanel({
             placeholder="Enter the configured reviewer key"
           />
         </label>
-        <p className="muted photo-review-note">
+        <p className="muted photo-review-note" id="photo-review-description">
           The key stays in this page's memory. Approving or rejecting a photo records a photo
           decision only; the report must be reviewed separately before it can affect the model.
         </p>
