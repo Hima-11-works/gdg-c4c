@@ -170,6 +170,94 @@ body,
   pointer-events: auto;
 }
 
+.map-action-toolbar {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.45rem;
+  width: max-content;
+  pointer-events: none;
+}
+
+.map-action-button {
+  position: relative;
+  display: grid;
+  width: 2.7rem;
+  height: 2.7rem;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 0.8rem;
+  background: rgba(20, 26, 32, 0.94);
+  color: #e5e7eb;
+  cursor: pointer;
+  pointer-events: auto;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
+}
+
+.map-action-button:hover,
+.map-action-button:focus-visible {
+  border-color: #67e8f9;
+  background: #202b32;
+  color: #a5f3fc;
+}
+
+.map-action-button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.map-action-button:focus-visible {
+  outline: 2px solid #67e8f9;
+  outline-offset: 2px;
+}
+
+.map-action-button svg {
+  width: 1.25rem;
+  height: 1.25rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.map-action-button .map-action-fire-icon path:first-child {
+  fill: currentColor;
+  stroke-width: 0.8;
+}
+
+.map-action-button::after {
+  position: absolute;
+  z-index: 20;
+  top: 50%;
+  right: calc(100% + 0.55rem);
+  width: max-content;
+  max-width: min(15rem, calc(100vw - 5rem));
+  transform: translateY(-50%);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 0.45rem;
+  background: #111820;
+  color: #f3f4f6;
+  content: attr(data-tooltip);
+  padding: 0.4rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 550;
+  line-height: 1.3;
+  white-space: nowrap;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.36);
+  transition: opacity 0.12s ease;
+}
+
+.map-action-button:hover::after,
+.map-action-button:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+}
+
 /* Search box with the alerts bell beside it, rather than the bell in its own
    row below. The row sizes to its content so .overlay's 20rem cap can't
    squeeze the search bar — it overflows that cap to the left, the same way
