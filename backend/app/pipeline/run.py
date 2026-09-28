@@ -81,7 +81,7 @@ from app.services.fire_gradient import PlumeFireGradientModel
 from app.services.forecasting import ForecastingService
 from app.services.geospatial import GeospatialService
 from app.services.grid_computation import GridComputationService
-from app.services.hotspot_detection import DetectorConfig, HotspotDetector, HotspotScanStore
+from app.services.hotspot_detection import DetectorConfig, HotspotDetector, build_store
 from app.services.ingestion import SensorIngestionService, WeatherIngestionService
 from app.services.national_overview import build_national_overview
 from app.services.pdi import HeuristicPDIModel
@@ -607,7 +607,7 @@ async def _scan_live_satellite_hotspots(
             "satellite_hotspot_scanning", True, "skipped: CDSE_REFRESH_TOKEN is not configured"
         )
 
-    store = HotspotScanStore(settings.hotspot_scan_dir)
+    store = build_store(settings, session=session)
     summaries = store.summaries()
     product_ids = {
         case_id.removeprefix("live-s5p-")

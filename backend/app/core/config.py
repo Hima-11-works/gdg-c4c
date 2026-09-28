@@ -412,6 +412,7 @@ class Settings(BaseSettings):
     # them from. Unset means the API reports an empty catalog rather than
     # inventing runs.
     hotspot_scan_dir: str = "var/hotspots"
+    hotspot_scan_backend: Literal["filesystem", "database"] = "filesystem"
     # Imagery index value at which a cell becomes a candidate at all.
     hotspot_smoke_index_threshold: float = Field(default=0.55, gt=0, lt=1)
     # A stronger index, recorded as a confidence contribution. Must exceed the

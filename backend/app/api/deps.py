@@ -22,38 +22,38 @@ from app.db.repositories import (
     SqlFederationRepository,
     SqlFireHotspotRepository,
     SqlFireReportRepository,
-    SqlIncidentDeliveryRepository,
-    SqlIncidentRepository,
     SqlForecastRepository,
     SqlGridStateRepository,
+    SqlIncidentDeliveryRepository,
+    SqlIncidentRepository,
     SqlPredictionPublicationRepository,
     SqlSensorReadingRepository,
     SqlSourceHealthRepository,
     SqlWeatherReadingRepository,
 )
 from app.db.session import get_db
-from app.domain.types import BoundingBox
 from app.domain.incidents import IncidentActor
+from app.domain.types import BoundingBox
 from app.services.alerts import AlertService
 from app.services.cells import CellService
 from app.services.evidence import EvidenceService
-from app.services.fires import FireHotspotService
 from app.services.federation import FederationStatusReader
+from app.services.fires import FireHotspotService
 from app.services.grid import GridService
-from app.services.media_storage import (
-    FilesystemMediaStore,
-    MediaStore,
-    MediaStoreUnavailable,
-)
 from app.services.hotspot_detection import HotspotScanStore, build_store
-from app.services.prediction_queries import PredictionQueryService
-from app.services.reports import FireReportService
 from app.services.incidents import (
     ActorNotPermittedError,
     IncidentService,
     SimulatorDisabledError,
 )
+from app.services.media_storage import (
+    FilesystemMediaStore,
+    MediaStore,
+    MediaStoreUnavailable,
+)
+from app.services.prediction_queries import PredictionQueryService
 from app.services.published_alerts import PublishedAlertService
+from app.services.reports import FireReportService
 from app.services.sensors import SensorService
 from app.services.tiles import TileService
 from app.services.weather import WeatherService
@@ -202,7 +202,7 @@ def get_federation_status_service(
     return FederationStatusReader(SqlFederationRepository(session))
 
 
-def get_hotspot_scan_store() -> HotspotScanStore:
+def get_hotspot_scan_store(session: Session = Depends(get_db)) -> HotspotScanStore:
     """Where recorded candidate-hotspot scans are read from.
 
     No session: the route serves scans written by `python -m app.cli
@@ -210,7 +210,7 @@ def get_hotspot_scan_store() -> HotspotScanStore:
     request, and an unconfigured directory yields an empty catalog rather than
     an invented scan.
     """
-    return build_store(get_settings())
+    return build_store(get_settings(), session=session)
 
 
 def get_tile_service() -> TileService:

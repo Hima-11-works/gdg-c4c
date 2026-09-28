@@ -1,10 +1,8 @@
 """Routes for candidate hotspots and the provenance behind them.
 
-Read-only. A scan is produced by the command
-(``python -m app.cli hotspot-scan --fixture <path>``), recorded under
-``HOTSPOT_SCAN_DIR``, and served from there — the same separation as the
-federation workflow, so the API never re-runs a detector on request and never
-invents a scan.
+Read-only. A scan is produced by the pipeline or the fixture command and read
+from the configured filesystem or shared Postgres store. The API never re-runs
+a detector on request and never invents a scan.
 
 Three things this route is careful about:
 

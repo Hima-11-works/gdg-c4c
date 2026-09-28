@@ -49,6 +49,9 @@ from pathlib import Path
 from typing import Any
 
 import h3
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.domain.environmental_observations import FireHotspot
@@ -80,6 +83,7 @@ from app.domain.hotspots import (
 )
 from app.domain.india import is_inside_india
 from app.domain.types import _require_utc
+from app.models.tables import hotspot_event_projection, hotspot_scan_record
 
 #: The standing limits, repeated on every scan and every API response. These
 #: are the sentences that must not get lost between the detector and a reader.
@@ -1300,15 +1304,19 @@ class HotspotScanStore:
     durable-or-fail rule the citizen media store follows.
     """
 
-    def __init__(self, directory: Path | str) -> None:
+    def __init__(self, directory: Path | str, *, session: Session | None = None) -> None:
         self.directory = Path(directory)
+        self._session = session
 
     def path_for(self, scan_id: str) -> Path:
         if not _SCAN_ID_PATTERN.match(scan_id or ""):
             raise HotspotInputError(f"{scan_id!r} is not a valid scan id")
         return self.directory / f"{scan_id}.json"
 
-    def write(self, scan: HotspotScan) -> Path:
+    def write(self, scan: HotspotScan) -> Path | None:
+        if self._session is not None:
+            self._write_database(scan)
+            return None
         path = self.path_for(scan.scan_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         body = json.dumps(scan.to_dict(), indent=2, sort_keys=True, allow_nan=False) + "\n"
@@ -1328,7 +1336,85 @@ class HotspotScanStore:
             ) from exc
         return path
 
+    def _write_database(self, scan: HotspotScan) -> None:
+        """Atomically persist a scan and its event projection in shared Postgres."""
+        session = self._session
+        if session is None:
+            raise RuntimeError("database scan store has no session")
+        payload = scan.to_dict()
+        try:
+            with session.begin_nested():
+                scan_insert = pg_insert(hotspot_scan_record).values(
+                    scan_id=scan.scan_id,
+                    case_id=scan.case_id,
+                    evaluated_at=scan.evaluated_at,
+                    payload=payload,
+                )
+                session.execute(
+                    scan_insert.on_conflict_do_update(
+                        index_elements=[hotspot_scan_record.c.scan_id],
+                        set_={
+                            "case_id": scan_insert.excluded.case_id,
+                            "evaluated_at": scan_insert.excluded.evaluated_at,
+                            "payload": scan_insert.excluded.payload,
+                        },
+                    )
+                )
+                grouped: dict[tuple[str, datetime], list[HotspotCandidate]] = {}
+                for candidate in scan.candidates:
+                    parent_resolution = max(0, scan.h3_resolution - 1)
+                    footprint = h3.cell_to_parent(candidate.h3_cell, parent_resolution)
+                    observed = candidate.acquired_at.astimezone(UTC)
+                    window_start = observed.replace(
+                        hour=(observed.hour // 6) * 6,
+                        minute=0,
+                        second=0,
+                        microsecond=0,
+                    )
+                    grouped.setdefault((footprint, window_start), []).append(candidate)
+
+                for (footprint, window_start), candidates in grouped.items():
+                    key = f"{footprint}:{window_start.isoformat()}"
+                    event_id = "hotspot-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:20]
+                    incoming = HotspotEventStore._event_record(
+                        event_id, footprint, window_start, scan, candidates
+                    )
+                    previous = session.execute(
+                        select(hotspot_event_projection.c.payload).where(
+                            hotspot_event_projection.c.event_id == event_id
+                        )
+                    ).scalar_one_or_none()
+                    if previous is not None:
+                        incoming = HotspotEventStore._merge(previous, incoming)
+                    event_insert = pg_insert(hotspot_event_projection).values(
+                        event_id=event_id,
+                        updated_at=datetime.fromisoformat(incoming["updated_at"]),
+                        payload=incoming,
+                    )
+                    session.execute(
+                        event_insert.on_conflict_do_update(
+                            index_elements=[hotspot_event_projection.c.event_id],
+                            set_={
+                                "updated_at": event_insert.excluded.updated_at,
+                                "payload": event_insert.excluded.payload,
+                            },
+                        )
+                    )
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+
     def read(self, scan_id: str) -> dict[str, Any]:
+        if self._session is not None:
+            row = self._session.execute(
+                select(hotspot_scan_record.c.payload).where(
+                    hotspot_scan_record.c.scan_id == scan_id
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                raise FileNotFoundError(f"no recorded hotspot scan {scan_id!r}")
+            return row
         path = self.path_for(scan_id)
         if not path.exists():
             raise FileNotFoundError(f"no recorded hotspot scan {scan_id!r} in {self.directory}")
@@ -1344,6 +1430,13 @@ class HotspotScanStore:
         reports the scans it can actually read, and the unreadable one is
         reported when it is requested by id.
         """
+        if self._session is not None:
+            payloads = self._session.execute(
+                select(hotspot_scan_record.c.payload).order_by(
+                    hotspot_scan_record.c.scan_id
+                )
+            ).scalars()
+            return [summary_from_record(payload) for payload in payloads]
         if not self.directory.exists():
             return []
         rows = []
@@ -1357,9 +1450,33 @@ class HotspotScanStore:
         return rows
 
     def events(self) -> list[dict[str, Any]]:
+        if self._session is not None:
+            events = list(
+                self._session.execute(
+                    select(hotspot_event_projection.c.payload).order_by(
+                        hotspot_event_projection.c.updated_at.desc()
+                    )
+                ).scalars()
+            )
+            return sorted(
+                events,
+                key=lambda event: (event["time_window"]["from"], event["event_id"]),
+                reverse=True,
+            )
         return HotspotEventStore(self.directory).list_events()
 
     def event(self, event_id: str) -> dict[str, Any]:
+        if self._session is not None:
+            if not re.fullmatch(r"hotspot-[0-9a-f]{20}", event_id or ""):
+                raise FileNotFoundError(f"no recorded hotspot event {event_id!r}")
+            payload = self._session.execute(
+                select(hotspot_event_projection.c.payload).where(
+                    hotspot_event_projection.c.event_id == event_id
+                )
+            ).scalar_one_or_none()
+            if payload is None:
+                raise FileNotFoundError(f"no recorded hotspot event {event_id!r}")
+            return payload
         return HotspotEventStore(self.directory).get_event(event_id)
 
 
@@ -1611,5 +1728,12 @@ def summary_from_record(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_store(settings: Settings | None = None) -> HotspotScanStore:
-    return HotspotScanStore((settings or get_settings()).hotspot_scan_dir)
+def build_store(
+    settings: Settings | None = None, *, session: Session | None = None
+) -> HotspotScanStore:
+    resolved = settings or get_settings()
+    if resolved.hotspot_scan_backend == "database":
+        if session is None:
+            raise ValueError("HOTSPOT_SCAN_BACKEND=database requires a database session")
+        return HotspotScanStore(resolved.hotspot_scan_dir, session=session)
+    return HotspotScanStore(resolved.hotspot_scan_dir)

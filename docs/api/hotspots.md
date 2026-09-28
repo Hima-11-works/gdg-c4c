@@ -128,6 +128,12 @@ it is not PM2.5, does not cover every pollutant, and cannot identify the source.
 The default UVAI thresholds are initial triage settings that still need local
 validation against reviewed events. A CDSE account and refresh token are needed
 to download products; without one the pipeline reports the scan stage as skipped.
+The scheduled GitHub Actions worker reads `CDSE_REFRESH_TOKEN` and stores scan
+records in Postgres by default. Configure the same `HOTSPOT_SCAN_BACKEND=database`
+setting on the deployed API so it can serve those records, and set
+`PIPELINE_DEMO_MODE=false` to enable live sources. Migration
+`0022_persistent_hotspot_scans` creates the shared scan and event tables. Local
+development keeps the filesystem store by default.
 
 **FIRMS signals (optional).** `detection_id`, `h3_cell`, `latitude`, `longitude`,
 `acquired_at`, `available_at`, `frp_mw`, `confidence_class`, `satellite`, `source`,

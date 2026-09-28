@@ -791,3 +791,25 @@ federation_participant = Table(
     UniqueConstraint("federation_run_id", "participant_id", name="uq_federation_participant"),
     Index("ix_federation_participant_run", "federation_run_id"),
 )
+
+# Live satellite scan records and their candidate-event projection are shared
+# by the scheduled pipeline worker and the API process. JSONB keeps the full
+# versioned detector contract without dropping provenance fields.
+hotspot_scan_record = Table(
+    "hotspot_scan_record",
+    metadata,
+    Column("scan_id", String(220), primary_key=True),
+    Column("case_id", String(220), nullable=False),
+    Column("evaluated_at", DateTime(timezone=True), nullable=False),
+    Column("payload", JSONB, nullable=False),
+    Index("ix_hotspot_scan_evaluated_at", "evaluated_at"),
+)
+
+hotspot_event_projection = Table(
+    "hotspot_event_projection",
+    metadata,
+    Column("event_id", String(80), primary_key=True),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Column("payload", JSONB, nullable=False),
+    Index("ix_hotspot_event_updated_at", "updated_at"),
+)

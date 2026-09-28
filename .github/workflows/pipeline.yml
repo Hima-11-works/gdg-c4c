@@ -9,6 +9,8 @@ name: Pollution pipeline
 #   variable PIPELINE_DEMO_MODE   optional; "true" (default) or "false"
 #   secret   OPENAQ_API_KEY       only needed when PIPELINE_DEMO_MODE=false
 #   secret   FIRMS_MAP_KEY        optional NASA FIRMS features in live mode
+#   secret   CDSE_REFRESH_TOKEN   optional live Sentinel-5P aerosol-index scans
+#   variable HOTSPOT_SCAN_BACKEND database to share scans with the API
 #
 # GitHub only runs scheduled workflows on the default branch, and pauses a
 # schedule after ~60 days without repository activity.
@@ -41,6 +43,8 @@ jobs:
       DEMO_MODE: ${{ vars.PIPELINE_DEMO_MODE || 'true' }}
       OPENAQ_API_KEY: ${{ secrets.OPENAQ_API_KEY }}
       FIRMS_MAP_KEY: ${{ secrets.FIRMS_MAP_KEY }}
+      CDSE_REFRESH_TOKEN: ${{ secrets.CDSE_REFRESH_TOKEN }}
+      HOTSPOT_SCAN_BACKEND: ${{ vars.HOTSPOT_SCAN_BACKEND || 'database' }}
     steps:
       - uses: actions/checkout@v4
 
