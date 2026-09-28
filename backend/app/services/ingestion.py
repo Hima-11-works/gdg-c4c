@@ -59,6 +59,14 @@ def _persist_all(
     become a reported IngestionResult, not an uncaught traceback out of a
     CLI command or a future scheduled job.
     """
+    add_many = getattr(repository, "add_many", None)
+    if callable(add_many):
+        try:
+            return (*add_many(items), None)
+        except Exception as exc:  # deliberately broad — see docstring
+            logger.error("Batch persistence failed, stopping this run: %s", exc)
+            return 0, 0, str(exc)
+
     saved = skipped = 0
     for item in items:
         try:

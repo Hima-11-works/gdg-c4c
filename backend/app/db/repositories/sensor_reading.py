@@ -12,6 +12,7 @@ from datetime import datetime
 from geoalchemy2.elements import WKTElement
 from psycopg.errors import UniqueViolation
 from sqlalchemy import Insert, Select, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Row
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -113,6 +114,38 @@ class SqlSensorReadingRepository:
                 ) from exc
             raise
         return _row_to_domain(row)
+
+    def add_many(self, readings: list[SensorReading]) -> tuple[int, int]:
+        """Persist a provider batch in one transaction; return saved/duplicate counts."""
+        if not readings:
+            return 0, 0
+        values = [
+            {
+                "source": reading.source,
+                "external_sensor_id": reading.external_sensor_id,
+                "latitude": reading.latitude,
+                "longitude": reading.longitude,
+                "geom": _to_point(reading.latitude, reading.longitude),
+                "pollutant": reading.pollutant,
+                "value": reading.value,
+                "unit": reading.unit,
+                "measured_at": reading.measured_at,
+            }
+            for reading in readings
+        ]
+        stmt = (
+            pg_insert(sensor_reading_table)
+            .values(values)
+            .on_conflict_do_nothing(constraint="uq_sensor_reading_identity")
+            .returning(sensor_reading_table.c.id)
+        )
+        try:
+            saved = len(self._session.execute(stmt).all())
+            self._session.commit()
+        except Exception:
+            self._session.rollback()
+            raise
+        return saved, len(readings) - saved
 
     def list_since(self, since: datetime, *, pollutant: str | None = None) -> list[SensorReading]:
         rows = self._session.execute(_list_since_stmt(since, pollutant)).all()

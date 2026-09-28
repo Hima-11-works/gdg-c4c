@@ -23,12 +23,10 @@ and that rule is the right one for an air-quality map. Relaxing the search
 radius would paint Delhi's reading over Kerala and make an unmeasured region
 look clean, which is the most dangerous thing this product could do.
 
-So the coarse tier is populated only where there is a genuine nationwide
-source. Today that is Demo Mode, whose scenario is a continuous synthetic
-field over all of India (``app.services.demo_data``) - the same field the
-pre-publication fallback used, and explicitly labelled as illustrative. In
-live mode the tier is empty and the map correctly shows no data outside the
-ingested box, until a coarse national feed is configured.
+Demo Mode uses a continuous synthetic field, explicitly labelled as
+illustrative. Live mode coarsens a bounded sample of fresh OpenAQ PM2.5 station
+readings into observed cells. It does not paint values into unmonitored areas,
+and it does not publish national forecast rows.
 """
 
 from __future__ import annotations
@@ -36,9 +34,10 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.core.config import Settings
+from app.domain import india
 from app.domain.features import (
     FEATURE_SCHEMA_VERSION,
     CellFeatureVector,
@@ -47,8 +46,9 @@ from app.domain.features import (
     FeatureSnapshot,
     InputKind,
 )
+from app.domain.h3_grid import cell_for
 from app.domain.prediction import DEFAULT_REGION
-from app.domain.types import BoundingBox
+from app.domain.types import BoundingBox, SensorReading
 from app.services.grid_query import resolve_cells
 
 logger = logging.getLogger(__name__)
@@ -62,6 +62,7 @@ NATIONAL_OVERVIEW_DATASET = "demo_national_synthetic_field"
 #: to cite. Stated rather than invented, because a dataset_ref is provenance
 #: and a made-up version string is a lie a reviewer cannot detect.
 DEMO_SCENARIO_VERSION = "demo-fixture-v1"
+NATIONAL_LIVE_DATASET = "openaq-national-pm25"
 
 #: India's extent, for enumerating the coarse tier. Matches the frontend's
 #: INDIA_BBOX in lib/lod.ts; the coarse tier is a country product, so it is
@@ -110,6 +111,19 @@ def _dataset_ref() -> DatasetRef:
     )
 
 
+def _live_dataset_ref() -> DatasetRef:
+    return DatasetRef(
+        dataset_id=NATIONAL_LIVE_DATASET,
+        source="OpenAQ API v3",
+        product="latest PM2.5 sensor readings",
+        version="v3",
+        kind=InputKind.OBSERVED,
+        region=DEFAULT_REGION,
+        attribution="OpenAQ and upstream measurement providers",
+        license="upstream provider terms; OpenAQ terms apply",
+    )
+
+
 def _quality() -> FeatureQuality:
     return FeatureQuality(
         coverage_fraction=1.0,
@@ -127,6 +141,7 @@ def build_national_overview(
     *,
     issued_at: datetime,
     forecast_horizons: Sequence[float],
+    sensor_readings: Sequence[SensorReading] = (),
 ) -> NationalOverview:
     """Coarse country-wide snapshots for this run, or a stated reason why not.
 
@@ -149,13 +164,11 @@ def build_national_overview(
         )
 
     if not settings.demo_mode:
-        # The honest answer. There is no nationwide live feed configured, and
-        # inventing one from the city's stations is the thing this module
-        # exists to prevent.
-        return _empty(
-            resolution,
-            "no nationwide coarse source is configured in live mode; the coarse "
-            "tier is only populated from the demo synthetic field",
+        return _build_live_overview(
+            settings,
+            resolution=resolution,
+            issued_at=issued_at,
+            sensor_readings=sensor_readings,
         )
 
     from app.services import demo_data
@@ -248,3 +261,81 @@ def build_national_overview(
         len(forecast_horizons),
     )
     return NationalOverview(snapshots, resolution, forecasts, None)
+
+
+def _build_live_overview(
+    settings: Settings,
+    *,
+    resolution: int,
+    issued_at: datetime,
+    sensor_readings: Sequence[SensorReading],
+) -> NationalOverview:
+    """Coarsen fresh, observed Indian station values; never synthesize gaps."""
+    cutoff = issued_at - timedelta(hours=settings.ingest_max_reading_age_hours)
+    grouped: dict[str, list[SensorReading]] = {}
+    for reading in sensor_readings:
+        if (
+            reading.pollutant.lower() not in {"pm25", "pm2.5"}
+            or reading.measured_at > issued_at
+            or reading.measured_at < cutoff
+            or not india.is_inside_india(reading.latitude, reading.longitude)
+        ):
+            continue
+        cell = cell_for(reading.latitude, reading.longitude, resolution=resolution)
+        grouped.setdefault(cell, []).append(reading)
+
+    if not grouped:
+        return _empty(
+            resolution,
+            "no fresh OpenAQ PM2.5 observations inside India were available for the national overview",
+        )
+
+    ref = _live_dataset_ref()
+    snapshots: list[FeatureSnapshot] = []
+    for cell, readings in sorted(grouped.items()):
+        latest_values = [reading.value for reading in readings]
+        observed_mean = sum(latest_values) / len(latest_values)
+        max_age = max(
+            (issued_at - reading.measured_at).total_seconds() / 3600
+            for reading in readings
+        )
+        snapshots.append(
+            FeatureSnapshot(
+                h3_cell=cell,
+                issued_at=issued_at,
+                valid_at=issued_at,
+                horizon_hours=0.0,
+                feature_schema_version=FEATURE_SCHEMA_VERSION,
+                vector=CellFeatureVector(current_pm25=round(observed_mean, 2)),
+                quality=FeatureQuality(
+                    coverage_fraction=0.2,
+                    observed_station_count=len(
+                        {reading.external_sensor_id for reading in readings}
+                    ),
+                    max_observation_age_hours=max_age,
+                    missing_fields=(
+                        "forecast",
+                        "weather",
+                        "population",
+                        "roads",
+                        "land_cover",
+                    ),
+                    warnings=(
+                        "Coarse national cell from observed stations; unmonitored areas remain unknown.",
+                    ),
+                ),
+                dataset_refs=(ref,),
+            )
+        )
+
+    logger.info(
+        "national overview: %d observed coarse cells at resolution %d; forecast is unavailable",
+        len(snapshots),
+        resolution,
+    )
+    return NationalOverview(
+        snapshots,
+        resolution,
+        {},
+        None,
+    )

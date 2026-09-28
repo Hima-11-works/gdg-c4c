@@ -30,6 +30,7 @@ from datetime import UTC, datetime
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from app.domain import india
 from app.domain.providers import ProviderError
 from app.domain.types import PM25, BoundingBox, SensorReading
 from app.ingestion import http
@@ -332,3 +333,97 @@ class OpenAQProvider:
             max_retries=self._max_retries,
             log_prefix="OpenAQ",
         )
+
+
+class OpenAQNationalOverviewProvider:
+    """Fetch a bounded sample of current PM2.5 sensors across India.
+
+    OpenAQ's parameter-latest endpoint is global, so this provider reads a
+    small, configured number of pages and retains only recent values inside
+    India's state/UT geofence. It is intentionally a coarse overview input;
+    the city-bounded provider above remains the source for detailed grids.
+    """
+
+    PARAMETER_PM25 = 2
+    PAGE_SIZE = 1000
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        client: httpx.AsyncClient,
+        base_url: str = "https://api.openaq.org/v3",
+        timeout_seconds: float = 10.0,
+        max_retries: int = 3,
+        max_pages: int = 5,
+    ) -> None:
+        if not api_key:
+            raise ValueError("api_key must not be empty")
+        self._api_key = api_key
+        self._client = client
+        self._base_url = base_url.rstrip("/")
+        self._timeout_seconds = timeout_seconds
+        self._max_retries = max_retries
+        self._max_pages = max_pages
+
+    async def fetch_readings(
+        self, _bbox: BoundingBox, *, since: datetime
+    ) -> list[SensorReading]:
+        readings_by_sensor: dict[int, SensorReading] = {}
+        for page in range(1, self._max_pages + 1):
+            try:
+                payload = await http.get_json(
+                    self._client,
+                    f"{self._base_url}/parameters/{self.PARAMETER_PM25}/latest",
+                    params={
+                        "limit": self.PAGE_SIZE,
+                        "page": page,
+                        "datetime_min": since.isoformat(),
+                    },
+                    headers={"X-API-Key": self._api_key},
+                    timeout_seconds=self._timeout_seconds,
+                    max_retries=self._max_retries,
+                    log_prefix="OpenAQ national overview",
+                )
+            except http.RequestFailedError as exc:
+                raise ProviderError(f"OpenAQ national overview: {exc}") from exc
+            try:
+                parsed = _LatestResponse.model_validate(payload)
+            except ValidationError as exc:
+                raise ProviderError(
+                    f"OpenAQ national overview: malformed PM2.5 latest response: {exc}"
+                ) from exc
+
+            for item in parsed.results:
+                coordinates = item.coordinates
+                latitude = coordinates.latitude if coordinates else None
+                longitude = coordinates.longitude if coordinates else None
+                measured_at = item.measured_at.utc
+                if (
+                    latitude is None
+                    or longitude is None
+                    or measured_at < since
+                    or not _is_usable_value(item.value)
+                    or not india.is_inside_india(latitude, longitude)
+                ):
+                    continue
+                previous = readings_by_sensor.get(item.sensor_id)
+                if previous is None or measured_at > previous.measured_at:
+                    readings_by_sensor[item.sensor_id] = SensorReading(
+                        source=SOURCE,
+                        external_sensor_id=str(item.sensor_id),
+                        latitude=latitude,
+                        longitude=longitude,
+                        pollutant=PM25,
+                        value=item.value,
+                        unit="µg/m³",
+                        measured_at=measured_at,
+                    )
+            if len(parsed.results) < self.PAGE_SIZE:
+                break
+            if page == self._max_pages:
+                logger.warning(
+                    "OpenAQ national overview reached its %d-page cap; the country sample may be partial",
+                    self._max_pages,
+                )
+        return list(readings_by_sensor.values())

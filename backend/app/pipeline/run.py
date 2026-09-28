@@ -1,6 +1,6 @@
 """The complete processing pipeline for the configured region:
 
-    OpenAQ -> sensor ingestion -> H3 grid + PM2.5 interpolation -> PDI
+    OpenAQ city + national overview -> sensor ingestion -> H3 grid + PM2.5 interpolation -> PDI
     -> Open-Meteo -> weather ingestion -> dispersion model -> 1h/3h/6h
     forecasts -> alerts
 
@@ -72,6 +72,7 @@ from app.domain.types import BoundingBox, Forecast, WeatherReading
 from app.ingestion.demo_reports import demo_fire_reports
 from app.ingestion.factory import build_pollution_provider, build_weather_provider
 from app.ingestion.firms import FirmsProvider
+from app.ingestion.openaq import OpenAQNationalOverviewProvider
 from app.ingestion.sentinel5p import CopernicusSentinel5PProvider, normalized_threshold
 from app.services.alert_generation import AlertGenerationService
 from app.services.dispersion import DeterministicH3DispersionModel
@@ -84,7 +85,7 @@ from app.services.geospatial import GeospatialService
 from app.services.grid_computation import GridComputationService
 from app.services.hotspot_detection import DetectorConfig, HotspotDetector, build_store
 from app.services.ingestion import SensorIngestionService, WeatherIngestionService
-from app.services.national_overview import build_national_overview
+from app.services.national_overview import INDIA_OVERVIEW_BBOX, build_national_overview
 from app.services.pdi import HeuristicPDIModel
 from app.services.prediction_publication import PredictionPublicationService
 from app.services.reports import FireReportService, ReportRateLimitedError
@@ -280,7 +281,10 @@ def _publish_inner(
     # sees only the fine grid. That is what makes "coarse everywhere, detailed
     # where measured" one product rather than two competing ones.
     overview = build_national_overview(
-        settings, issued_at=timestamp, forecast_horizons=FORECAST_HORIZONS_HOURS
+        settings,
+        issued_at=timestamp,
+        forecast_horizons=FORECAST_HORIZONS_HOURS,
+        sensor_readings=sensors,
     )
     if overview.unavailable_reason is not None:
         # Reported, not swallowed: an operator seeing a blank country needs to
@@ -458,6 +462,78 @@ async def _ingest_sensors(
         True,
         f"fetched={result.fetched} saved={result.saved} "
         f"skipped_duplicates={result.skipped_duplicates}",
+    )
+
+
+async def _ingest_national_overview_sensors(
+    session: Session,
+    settings: Settings,
+    since: datetime,
+    pipeline_run_id: str,
+) -> StageOutcome:
+    dataset_id = "openaq-national-overview"
+    if settings.demo_mode or settings.national_overview_resolution == 0:
+        reason = "demo mode" if settings.demo_mode else "national overview disabled"
+        _record_source_health(
+            session,
+            pipeline_run_id=pipeline_run_id,
+            dataset_id=dataset_id,
+            called=False,
+            failed=False,
+            item_count=0,
+            error_summary=reason,
+        )
+        return StageOutcome(dataset_id, True, f"skipped ({reason})")
+    if settings.openaq_api_key is None:
+        _record_source_health(
+            session,
+            pipeline_run_id=pipeline_run_id,
+            dataset_id=dataset_id,
+            called=False,
+            failed=False,
+            item_count=0,
+            error_summary="OPENAQ_API_KEY not configured",
+        )
+        return StageOutcome(dataset_id, False, "skipped (OPENAQ_API_KEY not configured)")
+
+    async with httpx.AsyncClient(timeout=settings.openaq_timeout_seconds) as client:
+        provider = OpenAQNationalOverviewProvider(
+            api_key=settings.openaq_api_key.get_secret_value(),
+            client=client,
+            base_url=settings.openaq_base_url,
+            timeout_seconds=settings.openaq_timeout_seconds,
+            max_retries=settings.openaq_max_retries,
+            max_pages=settings.openaq_national_overview_pages,
+        )
+        result = await SensorIngestionService(
+            provider, SqlSensorReadingRepository(session)
+        ).run(INDIA_OVERVIEW_BBOX, since=since)
+
+    if not result.succeeded:
+        message = "; ".join(result.errors)
+        _record_source_health(
+            session,
+            pipeline_run_id=pipeline_run_id,
+            dataset_id=dataset_id,
+            called=True,
+            failed=True,
+            item_count=0,
+            error_summary=message[:500],
+        )
+        return StageOutcome(dataset_id, False, f"failed: {message}")
+    _record_source_health(
+        session,
+        pipeline_run_id=pipeline_run_id,
+        dataset_id=dataset_id,
+        called=True,
+        failed=False,
+        item_count=result.saved,
+    )
+    return StageOutcome(
+        dataset_id,
+        True,
+        f"India readings fetched={result.fetched} saved={result.saved} "
+        f"duplicates={result.skipped_duplicates}",
     )
 
 
@@ -1058,6 +1134,9 @@ async def run_pipeline(bbox: BoundingBox, *, timestamp: datetime) -> PipelineRep
         sensor_outcome = await _ingest_sensors(
             session, settings, bbox, since, pipeline_run_id
         )
+        national_sensor_outcome = await _ingest_national_overview_sensors(
+            session, settings, since, pipeline_run_id
+        )
         weather_outcome = await _ingest_weather(session, settings, bbox, pipeline_run_id)
         fire_outcome, fire_feed_available, fire_dataset_id = await _ingest_fires(
             session, settings, bbox, pipeline_run_id
@@ -1072,6 +1151,7 @@ async def run_pipeline(bbox: BoundingBox, *, timestamp: datetime) -> PipelineRep
         )
         stages = [
             sensor_outcome,
+            national_sensor_outcome,
             weather_outcome,
             fire_outcome,
             satellite_hotspot_outcome,

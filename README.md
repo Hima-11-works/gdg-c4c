@@ -533,12 +533,13 @@ separate and only holds `VITE_API_BASE_URL`.
 | `H3_RESOLUTION` | backend | 0-15, default `8`. Changing it on an existing database does **not** rewrite stored `h3_cell` values — treat a change as a breaking change to stored data |
 | `GRID_QUERY_MAX_CELLS` | backend | Safety ceiling (default 50000) on one level-of-detail read (`/grid/current`, `/grid/forecast`, `/weather` with a bbox) — see [Level of detail](#level-of-detail) |
 | `OPENAQ_API_KEY` | ingestion | Required for real PM2.5 ingestion. Leave blank to run everything else (API, frontend, demo fallback, Demo Mode) without it |
-| `OPENAQ_BASE_URL`, `OPENAQ_TIMEOUT_SECONDS`, `OPENAQ_MAX_RETRIES`, `OPENAQ_LOCATIONS_LIMIT` | ingestion | OpenAQ adapter tuning |
+| `OPENAQ_BASE_URL`, `OPENAQ_TIMEOUT_SECONDS`, `OPENAQ_MAX_RETRIES`, `OPENAQ_LOCATIONS_LIMIT` | ingestion | OpenAQ city adapter tuning |
+| `OPENAQ_NATIONAL_OVERVIEW_PAGES` | ingestion | Global OpenAQ PM2.5 latest pages sampled for India's coarse overview (default 5; partial coverage) |
 | `OPEN_METEO_BASE_URL`, `OPEN_METEO_TIMEOUT_SECONDS`, `OPEN_METEO_MAX_RETRIES`, `OPEN_METEO_MAX_LOCATIONS_PER_REQUEST` | ingestion | Open-Meteo adapter tuning; no key needed |
 | `WEATHER_MAX_CELLS` | ingestion | Safety ceiling (default 50000) on one weather run's fan-out; an oversized bbox is refused rather than building millions of rows |
 | `WEATHER_H3_RESOLUTION` | ingestion | Coarser resolution (default 5) weather is sampled at, fanned out to every `H3_RESOLUTION` cell inside. Must be ≤ `H3_RESOLUTION` (enforced by a `Settings` validator) |
 | `INGEST_BBOX_MIN_LAT`/`MIN_LON`/`MAX_LAT`/`MAX_LON` | ingestion | Bounding box, shared by `ingest` and `ingest-weather` (default: Delhi NCR — a single city/region, not all of India; see [Level of detail](#level-of-detail)) |
-| `NATIONAL_OVERVIEW_RESOLUTION` | publication | H3 resolution of the coarse country-wide tier published alongside the fine grid (default 4; `0` disables it). Demo Mode only — see [Two-tier grid](#two-tier-grid) |
+| `NATIONAL_OVERVIEW_RESOLUTION` | publication | H3 resolution of the coarse national tier published alongside the fine grid (default 4; `0` disables it). Live mode contains observed stations only; demo mode is synthetic — see [Two-tier grid](#two-tier-grid) |
 | `INGEST_MAX_READING_AGE_HOURS` | ingestion | A fetched PM2.5 reading older than this is dropped as stale (default 3h) |
 | `IDW_MAX_DISTANCE_KM` | estimation | Max distance (default 15km) a sensor may be from a cell center to count as evidence |
 | `IDW_MIN_SENSORS` | estimation | Min sensors (default 2) required in range before a cell gets an estimate at all |
@@ -913,18 +914,17 @@ and that is deliberate: "no evidence" must not render as "clean air".
 Relaxing the search radius would paint Delhi's reading over Kerala and
 make an unmeasured region look safe.
 
-**Where its data comes from today.** Only Demo Mode has a nationwide
-source, so the coarse tier is only populated there — from
-`app/services/demo_data.py`'s continuous synthetic field, the same one
-the pre-publication fallback used. Every coarse cell carries
-`InputKind.SYNTHETIC` and a quality warning saying so. In live mode the
-tier is **empty** and the map correctly shows no data outside
-`INGEST_BBOX_*`; `app/services/national_overview.py` returns the reason
-rather than an empty list, and the publication stage prints it, because
-"no data" and "not configured" need different fixes and look identical
-on a blank map. Wiring a real national coarse feed (a government
-monitoring network, a satellite AOD product) is the thing that would
-make this tier meaningful outside the demo.
+**Where its data comes from.** Demo Mode uses
+`app/services/demo_data.py`'s continuous synthetic field, clearly marked
+synthetic. Live mode samples a bounded number of pages from OpenAQ's
+[latest PM2.5 endpoint](https://docs.openaq.org/api/operations/parameters_latest_get_v3_parameters__parameters_id__latest_get)
+and publishes only fresh observations whose
+coordinates fall inside India. These are coarse observed station cells,
+not a continuous surface: unmonitored areas stay blank, and the live
+national tier has no forecast rows. The API key must be configured and
+`OPENAQ_NATIONAL_OVERVIEW_PAGES` controls the request cap. OpenAQ does not
+represent every Indian monitor, so this gives broad partial coverage, not
+complete country coverage.
 
 Weather (wind
 arrows) uses this same resolution at every tier *except* country, where

@@ -95,6 +95,9 @@ class Settings(BaseSettings):
     openaq_timeout_seconds: float = Field(default=10.0, gt=0)
     openaq_max_retries: int = Field(default=3, ge=1, le=10)
     openaq_locations_limit: int = Field(default=100, ge=1, le=1000)
+    # Number of pages from OpenAQ's global latest-PM2.5 endpoint inspected for
+    # fresh readings inside India. This bounds the nationwide overview work.
+    openaq_national_overview_pages: int = Field(default=5, ge=1, le=100)
 
     # Bounding box ingestion is scoped to (a city/region, not "the world").
     # Defaults to the Delhi NCR area, matching app.ingestion.demo's Demo
@@ -127,10 +130,8 @@ class Settings(BaseSettings):
     # `national_overview_resolution` reads the fine grid, so zooming into the
     # city still shows the real per-cell detail.
     #
-    # Only Demo Mode has a nationwide source (app.services.demo_data's city
-    # scenario). In live mode this stays empty unless a coarse national feed is
-    # added - see app.services.national_overview, which reports the reason
-    # rather than inventing values.
+    # Demo Mode is synthetic. Live mode fills only coarse cells with fresh
+    # OpenAQ PM2.5 observations; unmonitored areas remain unknown.
     #
     # There is deliberately no "crossover resolution" setting. The read path
     # already does the right thing without one: it aggregates a run's own cells
