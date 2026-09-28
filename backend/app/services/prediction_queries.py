@@ -219,9 +219,14 @@ class PredictionQueryService:
         ]
 
     def alert_candidates(
-        self, run: PredictionRun, *, threshold_pm25: float
+        self,
+        run: PredictionRun,
+        *,
+        threshold_pm25: float,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[AlertCandidate]:
-        """Fetch just qualifying alert rows instead of every row in a run."""
+        """Fetch qualifying alerts, optionally as a page, without loading a run."""
         if run.run_id.startswith(DEMO_FALLBACK_PREFIX):
             rows = self.results(
                 run, cells=self.target_cells(run, self.native_resolution)
@@ -247,9 +252,15 @@ class PredictionQueryService:
                     confidence=row.quality.coverage_fraction,
                     synthetic=row.synthetic,
                 ))
-            return candidates
+            candidates.sort(
+                key=lambda item: (-item.predicted_pm25, item.horizon_hours, item.h3_cell)
+            )
+            return candidates[offset:] if limit is None else candidates[offset : offset + limit]
         return self._repository.list_alert_candidates(
-            run.run_id, threshold_pm25=threshold_pm25
+            run.run_id,
+            threshold_pm25=threshold_pm25,
+            limit=limit,
+            offset=offset,
         )
 
     def target_cells(self, run: PredictionRun, resolution: int) -> list[str]:

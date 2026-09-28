@@ -19,6 +19,7 @@ from app.db.repositories import forecast as forecast_repo
 from app.db.repositories import grid_state as grid_state_repo
 from app.db.repositories import ingestion_run as run_repo
 from app.db.repositories import model_version as model_version_repo
+from app.db.repositories import prediction_publication as prediction_publication_repo
 from app.db.repositories import sensor_reading as sensor_reading_repo
 from app.db.repositories import weather_reading as weather_reading_repo
 from app.domain.features import CellFeatureVector, FeatureSnapshot, InputKind
@@ -210,6 +211,14 @@ def test_alert_statements() -> None:
     assert "'warning'" in insert_sql  # the enum's .value, not .name
 
     assert "FROM alert" in _sql(alert_repo._list_active_stmt(NOW))
+
+    alert_page_sql = _sql(
+        prediction_publication_repo._alert_candidates_stmt(
+            "published-run", 91.0, limit=100, offset=200
+        )
+    )
+    assert "ORDER BY forecast_prediction.predicted_pm25 DESC" in alert_page_sql
+    assert "LIMIT 100 OFFSET 200" in alert_page_sql
 
 
 def test_fire_report_statements() -> None:

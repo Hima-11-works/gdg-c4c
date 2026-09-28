@@ -61,10 +61,10 @@ class MemoryPublicationRepository:
             {item.h3_cell for item in self.result_values if item.run_id == run_id}
         )
 
-    def list_alert_candidates(self, run_id, *, threshold_pm25):
+    def list_alert_candidates(self, run_id, *, threshold_pm25, limit=None, offset=0):
         rows = [item for item in self.result_values if item.run_id == run_id]
         current = {item.h3_cell: item for item in rows if item.horizon_hours == 0}
-        return [
+        candidates = [
             AlertCandidate(
                 h3_cell=item.h3_cell,
                 horizon_hours=item.horizon_hours,
@@ -80,6 +80,10 @@ class MemoryPublicationRepository:
             and item.predicted_pm25 is not None
             and item.predicted_pm25 >= threshold_pm25
         ]
+        candidates.sort(
+            key=lambda item: (-item.predicted_pm25, item.horizon_hours, item.h3_cell)
+        )
+        return candidates[offset:] if limit is None else candidates[offset : offset + limit]
 
 
 def _snapshot(cell, horizon, issued_at, *, pm25=20.0, refs=()):
@@ -443,10 +447,28 @@ def test_alert_candidates_are_thresholded_and_include_current_context():
             prediction_method="residual-ridge",
             input_kind=InputKind.MODELED,
         ),
+        PredictionResult(
+            run_id=run.run_id,
+            h3_cell=h3.latlng_to_cell(28.7, 77.2, 8),
+            horizon_hours=1,
+            valid_at=now + timedelta(hours=1),
+            baseline_pm25=18,
+            predicted_pm25=110,
+            prediction_method="residual-ridge",
+            input_kind=InputKind.MODELED,
+        ),
     ])
 
-    [candidate] = repository.list_alert_candidates(run.run_id, threshold_pm25=60)
+    queries = PredictionQueryService(repository, native_resolution=8)
+    [highest] = queries.alert_candidates(
+        run, threshold_pm25=60, limit=1, offset=0
+    )
+    [candidate] = queries.alert_candidates(
+        run, threshold_pm25=60, limit=1, offset=1
+    )
+    assert queries.alert_candidates(run, threshold_pm25=60, limit=1, offset=2) == []
 
+    assert highest.predicted_pm25 == 110
     assert candidate.h3_cell == cell
     assert candidate.horizon_hours == 1
     assert candidate.predicted_pm25 == 75

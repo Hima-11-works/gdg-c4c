@@ -353,9 +353,17 @@ class PredictionPublicationRepository(Protocol):
         ...
 
     def list_alert_candidates(
-        self, run_id: str, *, threshold_pm25: float
+        self,
+        run_id: str,
+        *,
+        threshold_pm25: float,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[AlertCandidate]:
-        """Only forecast rows over threshold, joined to their current value."""
+        """Only forecast rows over threshold, joined to their current value.
+
+        Optional limit and offset keep large alert sets pageable at the query.
+        """
         ...
 
     def list_horizons(self, run_id: str) -> list[float]:

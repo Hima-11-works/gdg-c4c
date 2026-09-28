@@ -188,10 +188,16 @@ def _cells_stmt(run_id: str) -> Select:
     )
 
 
-def _alert_candidates_stmt(run_id: str, threshold_pm25: float) -> Select:
+def _alert_candidates_stmt(
+    run_id: str,
+    threshold_pm25: float,
+    *,
+    limit: int | None = None,
+    offset: int = 0,
+) -> Select:
     current = prediction_result.alias("current_prediction")
     forecast = prediction_result.alias("forecast_prediction")
-    return (
+    stmt = (
         select(
             forecast.c.h3_cell,
             forecast.c.horizon_hours,
@@ -214,8 +220,17 @@ def _alert_candidates_stmt(run_id: str, threshold_pm25: float) -> Select:
             forecast.c.horizon_hours > 0,
             forecast.c.predicted_pm25 >= threshold_pm25,
         )
-        .order_by(forecast.c.predicted_pm25.desc(), forecast.c.horizon_hours)
+        .order_by(
+            forecast.c.predicted_pm25.desc(),
+            forecast.c.horizon_hours,
+            forecast.c.h3_cell,
+        )
     )
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    if offset:
+        stmt = stmt.offset(offset)
+    return stmt
 
 
 class SqlPredictionPublicationRepository:
@@ -284,10 +299,15 @@ class SqlPredictionPublicationRepository:
         return [_row_to_result(row) for row in rows]
 
     def list_alert_candidates(
-        self, run_id: str, *, threshold_pm25: float
+        self,
+        run_id: str,
+        *,
+        threshold_pm25: float,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[AlertCandidate]:
         rows = self._session.execute(
-            _alert_candidates_stmt(run_id, threshold_pm25)
+            _alert_candidates_stmt(run_id, threshold_pm25, limit=limit, offset=offset)
         ).all()
         return [
             AlertCandidate(

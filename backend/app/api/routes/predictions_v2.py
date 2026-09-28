@@ -401,10 +401,17 @@ def get_weather_v2(
 @router.get("/alerts", response_model=V2Envelope[list[AlertV2Out]])
 def get_alerts_v2(
     run_id: str | None = Query(None),
+    limit: int | None = Query(None, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     service: PredictionQueryService = Depends(get_prediction_query_service),
 ) -> V2Envelope[list[AlertV2Out]]:
     run = _run_or_404(service, run_id)
-    candidates = service.alert_candidates(run, threshold_pm25=ALERT_WARNING_PM25)
+    candidates = service.alert_candidates(
+        run,
+        threshold_pm25=ALERT_WARNING_PM25,
+        limit=limit,
+        offset=offset,
+    )
     alerts = []
     for row in candidates:
         identity = PublishedAlertIdentity(

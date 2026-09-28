@@ -5,7 +5,6 @@ import { useApiResource } from '../hooks/useApiResource'
 import { useMapUi } from '../state/MapUiContext'
 import type { AlertOut, AlertSeverity } from '../lib/types'
 
-const POLL_INTERVAL_MS = 60_000
 const ALERT_PAGE_SIZE = 100
 
 const SEVERITY_LABEL: Record<AlertSeverity, string> = {
@@ -100,25 +99,51 @@ function AlertItem({
 
 export function AlertsPanel({ publishedRunId }: { publishedRunId?: string }) {
   const [open, setOpen] = useState(false)
-  // The checklist is per-alert and lives here (not inside AlertItem) so a
-  // 60s poll re-rendering the list cannot wipe what an operator ticked.
+  // The checklist is per-alert and lives here (not inside AlertItem) so
+  // loading later pages cannot wipe what an operator ticked.
   const [checked, setChecked] = useState<Set<string>>(new Set())
-  const [page, setPage] = useState({ runId: publishedRunId, count: ALERT_PAGE_SIZE })
+  const [pageState, setPageState] = useState<{ runId: string | undefined; pages: AlertOut[][] }>({
+    runId: publishedRunId,
+    pages: [],
+  })
+  const [loadingMoreFor, setLoadingMoreFor] = useState<string | undefined>()
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null)
   const { dispatch } = useMapUi()
   const { resource, refetch } = useApiResource(
-    () => fetchAlerts(publishedRunId),
+    () => fetchAlerts(publishedRunId, ALERT_PAGE_SIZE, 0),
     [publishedRunId],
     {
-      pollIntervalMs: POLL_INTERVAL_MS,
       enabled: publishedRunId !== undefined,
     },
   )
 
-  const count = resource.status === 'success' ? resource.data.length : 0
-  const visibleCount = page.runId === publishedRunId ? page.count : ALERT_PAGE_SIZE
+  const extraPages = pageState.runId === publishedRunId ? pageState.pages : []
   const visibleAlerts = resource.status === 'success'
-    ? resource.data.slice(0, visibleCount)
+    ? [...resource.data, ...extraPages.flat()]
     : []
+  const count = visibleAlerts.length
+  const lastPage = extraPages.at(-1) ?? (resource.status === 'success' ? resource.data : [])
+  const hasMore = resource.status === 'success' && lastPage.length === ALERT_PAGE_SIZE
+  const loadingMore = publishedRunId !== undefined && loadingMoreFor === publishedRunId
+
+  const loadMore = async () => {
+    if (publishedRunId === undefined || loadingMoreFor !== undefined || !hasMore) return
+    const requestRunId = publishedRunId
+    const offset = visibleAlerts.length
+    setLoadingMoreFor(requestRunId)
+    setLoadMoreError(null)
+    try {
+      const nextPage = await fetchAlerts(requestRunId, ALERT_PAGE_SIZE, offset)
+      setPageState((current) => ({
+        runId: requestRunId,
+        pages: [...(current.runId === requestRunId ? current.pages : []), nextPage.data],
+      }))
+    } catch (error) {
+      setLoadMoreError(error instanceof Error ? error.message : 'Could not load more alerts.')
+    } finally {
+      setLoadingMoreFor((current) => current === requestRunId ? undefined : current)
+    }
+  }
 
   const keyFor = (alert: AlertOut, action: string) =>
     `${alert.h3_cell}-${alert.created_at}-${alert.forecast_hours}-${action}`
@@ -137,7 +162,15 @@ export function AlertsPanel({ publishedRunId }: { publishedRunId?: string }) {
         type="button"
         className="alerts-toggle"
         onClick={() => setOpen((value) => !value)}
-        aria-label={count > 0 ? `Alerts, ${count} active` : 'Alerts, none active'}
+        aria-label={
+          resource.status !== 'success'
+            ? 'Alerts'
+            : count >= ALERT_PAGE_SIZE
+              ? 'Alerts, 100 or more active'
+              : count > 0
+                ? `Alerts, ${count} active`
+                : 'Alerts, none active'
+        }
         aria-expanded={open}
       >
         <svg className="bell-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -156,7 +189,9 @@ export function AlertsPanel({ publishedRunId }: { publishedRunId?: string }) {
             strokeLinecap="round"
           />
         </svg>
-        {count > 0 && <span className="alert-badge">{count > 99 ? '99+' : count}</span>}
+        {resource.status === 'success' && count > 0 && (
+          <span className="alert-badge">{count >= ALERT_PAGE_SIZE ? '99+' : count}</span>
+        )}
       </button>
 
       {open && (
@@ -187,9 +222,10 @@ export function AlertsPanel({ publishedRunId }: { publishedRunId?: string }) {
             </p>
           )}
 
-          {resource.status === 'success' && resource.data.length > visibleAlerts.length && (
-            <p className="muted alerts-checklist-note">
-              Showing {visibleAlerts.length.toLocaleString()} of {resource.data.length.toLocaleString()} alerts.
+          {resource.status === 'success' && (
+            <p className="muted alerts-checklist-note" role="status">
+              Showing {count.toLocaleString()} alert{count === 1 ? '' : 's'}
+              {hasMore ? ' · 100 or more in this run' : ' · all in this run'}.
             </p>
           )}
 
@@ -212,16 +248,23 @@ export function AlertsPanel({ publishedRunId }: { publishedRunId?: string }) {
               />
             ))}
 
-          {resource.status === 'success' && resource.data.length > visibleAlerts.length && (
+          {loadMoreError !== null && (
+            <p role="alert" className="alerts-load-error">
+              Couldn't load more alerts: {loadMoreError}{' '}
+              <button type="button" onClick={() => void loadMore()}>
+                Retry
+              </button>
+            </p>
+          )}
+
+          {hasMore && (
             <button
               type="button"
               className="alert-cta"
-              onClick={() => setPage((current) => ({
-                runId: publishedRunId,
-                count: (current.runId === publishedRunId ? current.count : ALERT_PAGE_SIZE) + ALERT_PAGE_SIZE,
-              }))}
+              onClick={() => void loadMore()}
+              disabled={loadingMore}
             >
-              Show next {Math.min(ALERT_PAGE_SIZE, resource.data.length - visibleAlerts.length)} alerts
+              {loadingMore ? 'Loading alerts…' : `Load next ${ALERT_PAGE_SIZE} alerts`}
             </button>
           )}
         </div>

@@ -290,9 +290,13 @@ export function fetchWeather(
   ).then((envelope) => preserveV2Envelope(envelope, envelope.data.map(fromWeatherV2)))
 }
 
-export function fetchAlerts(runId?: string): Promise<Envelope<AlertOut[]>> {
-  return apiGetV2<AlertOut[]>('/api/v2/alerts', runId).then((envelope) =>
-    preserveV2Envelope(envelope, envelope.data),
+export function fetchAlerts(
+  runId?: string,
+  limit?: number,
+  offset?: number,
+): Promise<Envelope<AlertOut[]>> {
+  return apiGetV2<AlertOut[]>(`/api/v2/alerts${buildQuery({ limit, offset })}`, runId).then(
+    (envelope) => preserveV2Envelope(envelope, envelope.data),
   )
 }
 
