@@ -820,6 +820,14 @@ export function MapView({
     let cancelled = false
     let map: MapLibreMap | null = null
     let debounceHandle: ReturnType<typeof setTimeout> | undefined
+    let resizeObserver: ResizeObserver | null = null
+    let initialRenderFrame = 0
+
+    const refreshMapLayout = () => {
+      if (cancelled || !map) return
+      map.resize()
+      map.triggerRepaint()
+    }
 
     fetch(BASE_STYLE_URL)
       .then((r) => r.json())
@@ -837,6 +845,10 @@ export function MapView({
           renderWorldCopies: false,
         })
         mapRef.current = map
+        if (typeof ResizeObserver !== 'undefined') {
+          resizeObserver = new ResizeObserver(refreshMapLayout)
+          resizeObserver.observe(container)
+        }
         map.addControl(new NavigationControl({ showCompass: false }), 'bottom-right')
 
         // Reports the current viewport (zoom + bounds) to MapUiContext,
@@ -862,7 +874,11 @@ export function MapView({
         map.on('movestart', onMoveStart)
         map.on('moveend', reportViewport)
 
-        map.on('load', () => {
+        // Install product layers as soon as the style is ready. Waiting for
+        // MapLibre's full `load` event also waits for remote basemap tiles;
+        // if those tiles stall, the pollution grid stays empty until the user
+        // moves the map and prompts another tile pass.
+        map.once('style.load', () => {
           // India country base fill — dissolved from geoBoundaries ADM1. Added
           // first of all, *under* the satellite rasters: it is an opaque fill,
           // so anywhere above them it would hide the imagery over India (which
@@ -1652,6 +1668,13 @@ export function MapView({
             map!.getCanvas().style.cursor = ''
           })
 
+          // The map's style is fetched asynchronously, and this view can be
+          // mounted from a lazy-loaded chunk. Re-measure after the style and
+          // overlays are attached so the first frame uses the final layout;
+          // otherwise some browsers leave the canvas blank until user input.
+          refreshMapLayout()
+          reportViewport()
+          initialRenderFrame = requestAnimationFrame(refreshMapLayout)
           setMapReady(true)
         })
       })
@@ -1659,6 +1682,8 @@ export function MapView({
     return () => {
       cancelled = true
       clearTimeout(debounceHandle)
+      resizeObserver?.disconnect()
+      cancelAnimationFrame(initialRenderFrame)
       if (map) {
         map.remove()
         mapRef.current = null
