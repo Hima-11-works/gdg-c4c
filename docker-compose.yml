@@ -33,6 +33,10 @@ services:
         condition: service_healthy
     volumes:
       - ./backend/app:/app/app
+      # Keep migration revisions in sync with the working tree. The startup
+      # command runs Alembic before serving; without this mount an older image
+      # can run new route code against a schema that is missing new tables.
+      - ./backend/alembic:/app/alembic:ro
       # F2: the citizen-photo evidence store. A named volume, not a path inside
       # the container, because these are the only bytes the platform holds that
       # nobody can re-derive: a `docker compose up --force-recreate` against an

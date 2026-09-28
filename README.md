@@ -120,7 +120,9 @@ Requirements: Docker Desktop with Compose, Git, and Node.js `^20.19.0 || >=22.12
    ```powershell
    docker compose up --build
    ```
-   The API applies database migrations at startup.
+   The API applies database migrations at startup. After pulling schema or
+   migration changes, restart it with `docker compose restart api` so the
+   startup migration step runs against the current migration files.
 4. In a second terminal, create demo data and start the web map:
    ```powershell
    docker compose exec api python -m app.pipeline.run
