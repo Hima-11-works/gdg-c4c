@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   fetchActiveFires,
   fetchGridCurrent,
@@ -17,18 +17,13 @@ import {
 import { lodForZoom, lodKey, lodQueryFor, weatherResolutionForLod } from '../lib/lod'
 import { useMapUi } from '../state/MapUiContext'
 import { AlertsPanel } from './AlertsPanel'
-import { CellDetailPanel } from './CellDetailPanel'
 import { FederatedStatusPill } from './FederatedStatusPill'
 import { Legend } from './Legend'
 import { LayerToggle } from './LayerToggle'
-import { MapView } from './MapView'
-import { ReportFireForm } from './ReportFireForm'
 import { ScopeChip } from './ScopeChip'
 import { SearchBar } from './SearchBar'
 import { StatusBanner } from './StatusBanner'
 import { ProvenanceBanner } from './ProvenanceBanner'
-import { PhotoReviewPanel } from './PhotoReviewPanel'
-import { HotspotEvidencePanel } from './HotspotEvidencePanel'
 import { TimelineControl } from './TimelineControl'
 import type { AsyncResource } from '../hooks/useApiResource'
 import type { LodQuery } from '../lib/api'
@@ -42,6 +37,28 @@ const FALLBACK_SUPPORTED_HOURS = [1, 3, 6]
 // only re-read unchanged rows. This refreshes far more slowly.
 const FIRMS_POLL_INTERVAL_MS = 10 * 60 * 1000
 
+const MapView = lazy(() => import('./MapView').then((module) => ({ default: module.MapView })))
+const CellDetailPanel = lazy(() =>
+  import('./CellDetailPanel').then((module) => ({ default: module.CellDetailPanel })),
+)
+const ReportFireForm = lazy(() =>
+  import('./ReportFireForm').then((module) => ({ default: module.ReportFireForm })),
+)
+const PhotoReviewPanel = lazy(() =>
+  import('./PhotoReviewPanel').then((module) => ({ default: module.PhotoReviewPanel })),
+)
+const HotspotEvidencePanel = lazy(() =>
+  import('./HotspotEvidencePanel').then((module) => ({ default: module.HotspotEvidencePanel })),
+)
+
+function FeatureLoading({ label }: { label: string }) {
+  return (
+    <div className="panel feature-loading" role="status" aria-live="polite">
+      {label}
+    </div>
+  )
+}
+
 export function MapPage() {
   const { state, dispatch } = useMapUi()
   const { lod, bbox, forecastMinutes } = state
@@ -49,7 +66,21 @@ export function MapPage() {
   // reports list it refetches both come from this component's data.
   const [reportOpen, setReportOpen] = useState(false)
   const [photoReviewOpen, setPhotoReviewOpen] = useState(false)
+  const [selectedHotspotId, setSelectedHotspotId] = useState<string | null>(null)
   const [viewportMoving, setViewportMoving] = useState(false)
+
+  useEffect(() => {
+    const onHotspotSelected = (event: Event) => {
+      const detail = (event as CustomEvent<Record<string, unknown>>).detail
+      const detectionId = detail?.detection_id
+      if (typeof detectionId !== 'string') return
+      setSelectedHotspotId(detectionId)
+      if (!state.hotspotPanelOpen) dispatch({ type: 'TOGGLE_HOTSPOT_PANEL' })
+    }
+    window.addEventListener('air-health:hotspot-candidate-selected', onHotspotSelected)
+    return () =>
+      window.removeEventListener('air-health:hotspot-candidate-selected', onHotspotSelected)
+  }, [dispatch, state.hotspotPanelOpen])
 
   // A report is filed where the user is looking: the viewport centre. The
   // backend snaps it to an H3 cell and returns that in the response.
@@ -316,20 +347,22 @@ export function MapPage() {
         <ProvenanceBanner meta={publishedMeta.resource} />
       </div>
 
-      <MapView
-        currentGrid={currentGrid.resource}
-        forecastGrid={forecastGrid.resource}
-        overviewGrid={overviewGrid.resource}
-        parentGrid={parentGrid.resource}
-        overviewForecastGrid={overviewForecastGrid}
-        parentForecastGrid={parentForecastGrid}
-        weather={weather.resource}
-        citizenReports={reports.resource}
-        activeFires={activeFires.resource}
-        localHotspots={localHotspots}
-        onViewportMoveStart={handleViewportMoveStart}
-        onViewportSettled={handleViewportSettled}
-      />
+      <Suspense fallback={<FeatureLoading label="Loading India air-quality map…" />}>
+        <MapView
+          currentGrid={currentGrid.resource}
+          forecastGrid={forecastGrid.resource}
+          overviewGrid={overviewGrid.resource}
+          parentGrid={parentGrid.resource}
+          overviewForecastGrid={overviewForecastGrid}
+          parentForecastGrid={parentForecastGrid}
+          weather={weather.resource}
+          citizenReports={reports.resource}
+          activeFires={activeFires.resource}
+          localHotspots={localHotspots}
+          onViewportMoveStart={handleViewportMoveStart}
+          onViewportSettled={handleViewportSettled}
+        />
+      </Suspense>
 
       <div className="overlay overlay-top-left">
         <header className="panel dashboard-heading">
@@ -372,17 +405,24 @@ export function MapPage() {
           {state.hotspotPanelOpen ? 'Hide fire candidate evidence' : 'Show fire candidate evidence'}
         </button>
         {reportOpen && reportCenter !== null && (
-          <ReportFireForm
-            latitude={reportCenter.latitude}
-            longitude={reportCenter.longitude}
-            onClose={() => setReportOpen(false)}
-            onSubmitted={reports.refetch}
-          />
+          <Suspense fallback={<FeatureLoading label="Opening fire report form…" />}>
+            <ReportFireForm
+              latitude={reportCenter.latitude}
+              longitude={reportCenter.longitude}
+              onClose={() => setReportOpen(false)}
+              onSubmitted={reports.refetch}
+            />
+          </Suspense>
         )}
       </div>
 
       {photoReviewOpen && (
-        <PhotoReviewPanel onClose={() => setPhotoReviewOpen(false)} onReviewed={reports.refetch} />
+        <Suspense fallback={<FeatureLoading label="Opening photo review…" />}>
+          <PhotoReviewPanel
+            onClose={() => setPhotoReviewOpen(false)}
+            onReviewed={reports.refetch}
+          />
+        </Suspense>
       )}
 
       <div className="overlay overlay-top-right">
@@ -402,18 +442,28 @@ export function MapPage() {
         <TimelineControl publishedRunId={publishedRunId} supportedHours={supportedHours} />
       </div>
 
-      <CellDetailPanel
-        publishedRunId={publishedRunId}
-        citizenReports={reports.resource}
-        activeFires={activeFires.resource}
-      />
-      <HotspotEvidencePanel
-        resource={activeFires.resource}
-        localHotspots={localHotspots}
-        gridResource={currentGrid.resource}
-        resolutionLevel={lod.level}
-        forecastMinutes={forecastMinutes}
-      />
+      {state.selectedCell !== null && (
+        <Suspense fallback={<FeatureLoading label="Loading cell details…" />}>
+          <CellDetailPanel
+            publishedRunId={publishedRunId}
+            citizenReports={reports.resource}
+            activeFires={activeFires.resource}
+          />
+        </Suspense>
+      )}
+      {state.hotspotPanelOpen && (
+        <Suspense fallback={<FeatureLoading label="Loading fire evidence…" />}>
+          <HotspotEvidencePanel
+            resource={activeFires.resource}
+            localHotspots={localHotspots}
+            gridResource={currentGrid.resource}
+            resolutionLevel={lod.level}
+            forecastMinutes={forecastMinutes}
+            selectedDetectionId={selectedHotspotId}
+            onSelectDetection={setSelectedHotspotId}
+          />
+        </Suspense>
+      )}
     </main>
   )
 }

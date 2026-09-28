@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useApiResource } from '../hooks/useApiResource'
 import { fetchHotspotCatalog, fetchHotspotEvents, fetchHotspotScan } from '../lib/api'
 import { useMapUi } from '../state/MapUiContext'
@@ -47,14 +47,17 @@ export function HotspotEvidencePanel({
   gridResource,
   resolutionLevel,
   forecastMinutes,
+  selectedDetectionId,
+  onSelectDetection,
 }: {
   resource: AsyncResource<ActiveFire[]>
   localHotspots: LocalPollutionHotspot[]
   gridResource: AsyncResource<GridStateOut[]>
   resolutionLevel: number
   forecastMinutes: number
+  selectedDetectionId: string | null
+  onSelectDetection: (detectionId: string) => void
 }) {
-  const [selectedId, setSelectedId] = useState<string | null>(null)
   const [selectedScanId, setSelectedScanId] = useState<string | null>(null)
   const { state, dispatch } = useMapUi()
   const scanCatalog = useApiResource(fetchHotspotCatalog, [], { pollIntervalMs: 5 * 60 * 1000 })
@@ -66,25 +69,8 @@ export function HotspotEvidencePanel({
   )
   const totals = useMemo(() => candidateTotals(candidates), [candidates])
 
-  // A selection from the map is keyed by detection_id, so a popup and this
-  // panel always describe the same record.
-  useEffect(() => {
-    const onSelected = (event: Event) => {
-      const detail = (event as CustomEvent<Record<string, unknown>>).detail
-      const id = detail?.detection_id
-      if (typeof id === 'string') {
-        setSelectedId(id)
-        if (!state.hotspotPanelOpen) {
-          dispatch({ type: 'TOGGLE_HOTSPOT_PANEL' })
-        }
-      }
-    }
-    window.addEventListener('air-health:hotspot-candidate-selected', onSelected)
-    return () => window.removeEventListener('air-health:hotspot-candidate-selected', onSelected)
-  }, [state.hotspotPanelOpen, dispatch])
-
   const selected: HotspotCandidate | null =
-    candidates.find((candidate) => candidate.detectionId === selectedId) ?? null
+    candidates.find((candidate) => candidate.detectionId === selectedDetectionId) ?? null
 
   const scans = scanCatalog.resource.status === 'success' ? scanCatalog.resource.data.scans : []
   const events = eventCatalog.resource.status === 'success' ? eventCatalog.resource.data.events : []
@@ -313,7 +299,7 @@ export function HotspotEvidencePanel({
                     className={`hotspot-row ${STATUS_CLASS[candidate.status]} ${
                       selected?.detectionId === candidate.detectionId ? 'hotspot-row-selected' : ''
                     }`}
-                    onClick={() => setSelectedId(candidate.detectionId)}
+                    onClick={() => onSelectDetection(candidate.detectionId)}
                   >
                     <div className="hotspot-row-header">
                       <span className="hotspot-row-status">
