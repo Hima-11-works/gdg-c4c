@@ -179,6 +179,11 @@ body,
   pointer-events: none;
 }
 
+.map-action-toolbar-inline {
+  flex-direction: row;
+  align-items: flex-start;
+}
+
 .map-action-button {
   position: relative;
   display: grid;

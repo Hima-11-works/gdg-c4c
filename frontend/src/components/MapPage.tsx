@@ -20,6 +20,7 @@ import { AlertsPanel } from './AlertsPanel'
 import { FederatedStatusPill } from './FederatedStatusPill'
 import { Legend } from './Legend'
 import { LayerToggle } from './LayerToggle'
+import { MapActionToolbar } from './MapActionToolbar'
 import { ScopeChip } from './ScopeChip'
 import { SearchBar } from './SearchBar'
 import { DataModeBanner } from './DataModeBanner'
@@ -369,9 +370,14 @@ export function MapPage() {
           <p>Explore forecasts, pollution hotspots, and citizen reports.</p>
         </header>
         <Legend />
-        <div className="panel resolution-indicator" role="status" aria-live="polite">
-          Resolution {lod.level}
-        </div>
+        {state.selectedCell !== null && (
+          <MapActionToolbar
+            inline
+            onReport={() => setReportOpen(true)}
+            onReviewPhotos={() => setPhotoReviewOpen(true)}
+            reportAvailable={reportCenter !== null}
+          />
+        )}
         {reportOpen && reportCenter !== null && (
           <Suspense fallback={<FeatureLoading label="Opening fire report form…" />}>
             <ReportFireForm
@@ -399,74 +405,13 @@ export function MapPage() {
           <AlertsPanel publishedRunId={publishedRunId} />
         </div>
         <FederatedStatusPill />
-        <div className="map-action-toolbar" role="toolbar" aria-label="Map actions">
-          <button
-            type="button"
-            className="panel map-action-button"
-            onClick={() => setReportOpen(true)}
-            aria-label="Report fire"
-            aria-haspopup="dialog"
-            disabled={reportCenter === null}
-            title={reportCenter === null ? 'Waiting for map location' : 'Report fire'}
-            data-tooltip={reportCenter === null ? 'Waiting for map location' : 'Report fire'}
-          >
-            <svg
-              className="map-action-fire-icon"
-              viewBox="0 0 24 24"
-              aria-hidden="true"
-              focusable="false"
-            >
-              <path d="M12.1 22c4.2 0 7.4-3.1 7.4-7.2 0-2.6-1.3-4.5-3.5-6.7-.2 2-1.1 3-2.2 3.5.1-3.5-1.7-6.3-5.2-9.6.1 4.1-1.1 6.4-3 8.8-1.2 1.5-1.9 3-1.9 4.8 0 3.8 3.1 6.4 8.4 6.4Z" />
-              <path d="M12 19.2c1.8 0 3-1.2 3-2.8 0-1.1-.6-2-1.8-3.2-.2 1.1-.6 1.6-1.3 1.9-.2-1.2-.8-2-1.8-2.9 0 1.4-.4 2.3-1 3.1-.4.5-.6 1-.6 1.5 0 1.4 1.3 2.4 3.5 2.4Z" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            className="panel map-action-button"
-            onClick={() => setPhotoReviewOpen(true)}
-            aria-label="Review citizen photos"
-            aria-haspopup="dialog"
-            title="Review citizen photos"
-            data-tooltip="Review citizen photos"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-              <path d="M4 7.5h3l1.4-2h7.2l1.4 2h3A1.5 1.5 0 0 1 21.5 9v9.2a1.5 1.5 0 0 1-1.5 1.5H4a1.5 1.5 0 0 1-1.5-1.5V9A1.5 1.5 0 0 1 4 7.5Z" />
-              <circle cx="12" cy="13" r="3.5" />
-              <path d="M17.5 10h.01" />
-            </svg>
-          </button>
-          <button
-            type="button"
-            className={`panel map-action-button hotspot-toggle-btn ${state.hotspotPanelOpen ? 'active' : ''}`}
-            onClick={() => {
-              if (!state.showHotspotCandidates) dispatch({ type: 'TOGGLE_HOTSPOT_CANDIDATES' })
-              dispatch({ type: 'TOGGLE_HOTSPOT_PANEL' })
-            }}
-            aria-expanded={state.hotspotPanelOpen}
-            aria-controls="hotspot-evidence-panel"
-            aria-label={
-              state.hotspotPanelOpen
-                ? 'Hide fire candidate evidence'
-                : 'Show fire candidate evidence'
-            }
-            title={
-              state.hotspotPanelOpen
-                ? 'Hide fire candidate evidence'
-                : 'Show fire candidate evidence'
-            }
-            data-tooltip={
-              state.hotspotPanelOpen
-                ? 'Hide fire candidate evidence'
-                : 'Show fire candidate evidence'
-            }
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-              <circle cx="12" cy="12" r="8.5" />
-              <circle cx="12" cy="12" r="3" />
-              <path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3" />
-            </svg>
-          </button>
-        </div>
+        {state.selectedCell === null && (
+          <MapActionToolbar
+            onReport={() => setReportOpen(true)}
+            onReviewPhotos={() => setPhotoReviewOpen(true)}
+            reportAvailable={reportCenter !== null}
+          />
+        )}
       </div>
 
       <div className="overlay overlay-bottom-left">
@@ -475,6 +420,9 @@ export function MapPage() {
 
       <div className="overlay overlay-bottom-center">
         <ScopeChip />
+        <div className="panel resolution-indicator" role="status" aria-live="polite">
+          Resolution {lod.level}
+        </div>
         <TimelineControl publishedRunId={publishedRunId} supportedHours={supportedHours} />
       </div>
 
