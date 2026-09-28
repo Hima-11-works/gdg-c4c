@@ -266,20 +266,14 @@ export function MapPage() {
   }, [cancelDetailedGrid, cancelParentGrid, cancelWeather, queryKey, parentForecastKey])
   const handleViewportSettled = useCallback(() => setViewportMoving(false), [])
 
-  // A view change (new queryKey) invalidates the forecast cache for this
-  // view: warm the current position plus the next WARM_WINDOW keyframes so
-  // playback is smooth from the moment it starts. The warm-up is an explicit
+  // A view change warms the selected forecast frame so it is ready before
+  // playback starts. The warm-up is an explicit
   // operation (see lib/forecastFrames.ts) — it reports `warming` to the
-  // banner and the timeline's play/restart buttons, and clears once every
-  // frame in the window is cached.
+  // banner and the timeline's play/restart buttons, and clears as soon as
+  // that selected frame is cached.
   //
-  // It runs only once the user has actually asked for a forecast, i.e.
-  // forecastMinutes > 0, which is exactly when they have scrubbed or pressed
-  // play. On first load this fetched WARM_WINDOW + 1 frames the user never
-  // looked at, alongside the one country-tier current frame that is actually
-  // displayed — so opening the map cost ten requests to draw one. Deferring it
-  // to engagement makes the first paint a single request, and the detail
-  // arrives when it is asked for.
+  // It runs only after the user asks for a forecast. Deferring it to
+  // engagement keeps first paint focused on the currently displayed data.
   const queryRef = useRef(query)
   const minutesRef = useRef(forecastMinutes)
   useEffect(() => {

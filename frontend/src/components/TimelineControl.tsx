@@ -4,7 +4,12 @@
 // store (lib/forecastFrames.ts) so playback never stalls on the network.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { prefetchUpcoming, useForecastWarming, warmForecastWindow } from '../lib/forecastFrames'
+import {
+  PREFETCH_DEPTH,
+  prefetchUpcoming,
+  useForecastWarming,
+  warmForecastWindow,
+} from '../lib/forecastFrames'
 import { lodKey, lodQueryFor } from '../lib/lod'
 import { useMapUi } from '../state/MapUiContext'
 import type { LodQuery } from '../lib/api'
@@ -112,7 +117,14 @@ export function TimelineControl({
   // Prefetch upcoming frames whenever position changes.
   useEffect(() => {
     if (forecastMinutes > 0 && publishedRunId !== undefined) {
-      prefetchUpcoming(forecastMinutes, queryKey, query, 5, supportedHours, publishedRunId)
+      prefetchUpcoming(
+        forecastMinutes,
+        queryKey,
+        query,
+        PREFETCH_DEPTH,
+        supportedHours,
+        publishedRunId,
+      )
     }
   }, [forecastMinutes, queryKey, query, supportedHours, publishedRunId])
 

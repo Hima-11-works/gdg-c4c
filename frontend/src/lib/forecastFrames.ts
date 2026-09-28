@@ -39,10 +39,11 @@ function keyframesFor(horizonsHours: number[] = DEFAULT_HORIZONS_HOURS): number[
   return Array.from({ length: maxMinutes / 15 + 1 }, (_, index) => index * 15)
 }
 
-/** How many keyframes ahead of the current position a view warm-up caches.
- * At the 750ms playback cadence this is ~6s of buffered frames — enough
- * that playback never advances onto an uncached frame after a warm-up. */
-export const WARM_WINDOW = 8
+/** Warm only the selected frame. Each frame can be a nationwide query, so
+ * waiting for a large batch made one timeline selection feel unresponsive. */
+export const WARM_WINDOW = 0
+/** Keep just the next playback frame loading in the background. */
+export const PREFETCH_DEPTH = 1
 
 const cache = new Map<string, Envelope<ForecastOut[]>>()
 interface InFlightForecast {
@@ -55,10 +56,10 @@ const failed = new Set<string>()
 const listeners = new Set<() => void>()
 
 // Explicit warm-up operations, keyed by view (queryKey). Present only while
-// a batch of frames is being fetched to make a fresh view playable — the
+// the selected frame is being fetched to make a fresh view playable — the
 // loading banner and the disabled Play/Restart buttons key off this, NOT off
 // any in-flight fetch, so ordinary playback prefetch never disables play.
-const warmups = new Map<string, { pending: number }>()
+const warmups = new Map<string, { pending: number; frames: number[] }>()
 
 function notify(): void {
   for (const listener of listeners) listener()
@@ -120,13 +121,12 @@ export function cancelForecastRequests(queryKey: string): void {
 }
 
 /**
- * Warm the frames a fresh view needs for smooth playback: the current
- * position plus the next WARM_WINDOW keyframes. Records an explicit warm-up
- * so `useForecastWarming` reports true and the UI can show a loading state
- * and disable playback until every frame is cached.
+ * Warm the selected frame (or the first frame when starting from Now).
+ * Records an explicit warm-up so `useForecastWarming` reports true and the UI
+ * can show a loading state and disable playback until that frame is cached.
  *
- * A no-op if the view is already warming (the queryKey changes on a view
- * change, so a new view starts its own warm-up) or the window is all cached.
+ * Repeated calls for the same selected frame are a no-op; changing the
+ * selected frame replaces the current warm-up.
  */
 export function warmForecastWindow(
   queryKey: string,
@@ -135,8 +135,6 @@ export function warmForecastWindow(
   supportedHorizonsHours: number[] = DEFAULT_HORIZONS_HOURS,
   runId?: string,
 ): void {
-  if (warmups.has(queryKey)) return
-
   const keyframes = keyframesFor(supportedHorizonsHours)
   const idx = keyframes.indexOf(fromMinutes)
   if (idx < 0) return
@@ -146,16 +144,35 @@ export function warmForecastWindow(
   const startIdx = idx === 0 ? 1 : idx
 
   const targets: number[] = []
-  for (let i = startIdx; i <= idx + WARM_WINDOW; i++) {
+  const endIdx = idx + Math.max(WARM_WINDOW, idx === 0 ? 1 : 0)
+  for (let i = startIdx; i <= endIdx; i++) {
     const minutes = keyframes[i]
     if (minutes === undefined) break
     targets.push(minutes)
   }
 
-  const missing = targets.filter((minutes) => !cache.has(cacheKey(minutes, queryKey)))
-  if (missing.length === 0) return
+  const previousWarmup = warmups.get(queryKey)
+  const previousFrame = previousWarmup?.frames[0]
+  const selectedFrame = targets[0]
+  if (previousWarmup && previousFrame === selectedFrame) return
+  let replacedWarmup = false
+  if (previousWarmup && previousFrame !== undefined && previousFrame !== selectedFrame) {
+    const staleKey = cacheKey(previousFrame, queryKey)
+    const staleRequest = inFlight.get(staleKey)
+    staleRequest?.controller.abort()
+    inFlight.delete(staleKey)
+    failed.delete(staleKey)
+    warmups.delete(queryKey)
+    replacedWarmup = true
+  }
 
-  const warmup = { pending: missing.length }
+  const missing = targets.filter((minutes) => !cache.has(cacheKey(minutes, queryKey)))
+  if (missing.length === 0) {
+    if (replacedWarmup) notify()
+    return
+  }
+
+  const warmup = { pending: missing.length, frames: missing }
   warmups.set(queryKey, warmup)
   notify()
 
@@ -200,7 +217,7 @@ export function prefetchUpcoming(
   currentMinutes: number,
   queryKey: string,
   query: LodQuery,
-  depth = 5,
+  depth = PREFETCH_DEPTH,
   supportedHorizonsHours: number[] = DEFAULT_HORIZONS_HOURS,
   runId?: string,
 ): void {
