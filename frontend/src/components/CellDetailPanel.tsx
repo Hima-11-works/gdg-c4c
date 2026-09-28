@@ -624,7 +624,7 @@ export function CellDetailPanel({
   const { resource, refetch } = useApiResource(
     () => fetchCellDetail(selectedCell ?? '', resolution, publishedRunId),
     [selectedCell, resolution, publishedRunId],
-    { enabled: selectedCell !== null && publishedRunId !== undefined },
+    { enabled: selectedCell !== null },
   )
 
   if (selectedCell === null) return null
