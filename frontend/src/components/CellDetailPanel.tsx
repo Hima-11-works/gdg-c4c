@@ -13,12 +13,12 @@ import {
 } from '../lib/citizenReports'
 import { anomaliesInCell, priorityForSeverity, worstAnomalyInCell } from '../lib/fireAnomalies'
 import type { FireSeverity, ThermalAnomaly } from '../lib/fireAnomalies'
-import { useApiResource } from '../hooks/useApiResource'
-import type { AsyncResource } from '../hooks/useApiResource'
+import { useApiResource, type AsyncResource } from '../hooks/useApiResource'
 import { useStateBoundaries } from '../hooks/useStateBoundaries'
 import { useMapUi } from '../state/MapUiContext'
 import type { CellDetailOut, FireReportWithStatus } from '../lib/types'
 import type { ActiveFire } from '../lib/activeFires'
+import { estimatePlumeDrift } from '../lib/transboundaryDrift'
 
 /** The most recent citizen report filed in this cell, from
  *  GET /api/v1/reports. Deliberately NOT framed as evidence behind any
@@ -175,6 +175,7 @@ function CellDetailContent({
   const provenance = environmental?.metadata ?? current?.metadata ?? null
   const staticFeatures = environmental?.static_features ?? null
   const exposure = environmental?.exposure ?? current?.exposure ?? null
+  const drift = estimatePlumeDrift(windSpeed, windDirection, current?.pm25 ?? null)
 
   if (
     current === null &&
@@ -278,6 +279,26 @@ function CellDetailContent({
             : `${formatNumber(exposure.covered_population, 0)} residents`}
         </dd>
       </dl>
+
+      {drift !== null && (
+        <section className={`transboundary-drift-card transboundary-drift-${drift.severity}`}>
+          <div className="transboundary-drift-header">
+            <span className="transboundary-drift-icon">💨</span>
+            <div>
+              <strong className="transboundary-drift-title">Trans-Boundary Plume Trajectory</strong>
+              <div className="transboundary-drift-vector">
+                Wind: {drift.blowsFrom} → Carrying {drift.blowsToward} ({drift.speedKmh} km/h)
+              </div>
+            </div>
+          </div>
+          <p className="transboundary-drift-advisory">{drift.advisory}</p>
+          <div className="transboundary-drift-reach">
+            <span>Estimated Reach:</span>
+            <strong>~{drift.drift3hKm} km in 3h</strong> ·{' '}
+            <strong>~{drift.drift6hKm} km in 6h</strong>
+          </div>
+        </section>
+      )}
 
       {provenance !== null && (
         <p className="muted cell-provenance">
