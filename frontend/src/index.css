@@ -16,17 +16,74 @@ body,
   margin: 0;
 }
 
-/* Scrollbars are hidden everywhere: the dashboard is a full-viewport map
-   with panels floating over it, and a scrollbar gutter is chrome none of
-   them want. Only the bar is hidden — the panels keep their max-heights and
-   still scroll by wheel, trackpad, touch and keyboard. Firefox needs
-   scrollbar-width, WebKit/Blink need the pseudo-element. */
+/* The map fills the viewport, so keep document scrollbars out of the way. */
 * {
   scrollbar-width: none;
 }
 
 *::-webkit-scrollbar {
   display: none;
+}
+
+/* Keep scroll affordances visible inside the panels that can hold long lists. */
+.search-results,
+.alerts-list,
+.cell-detail,
+.federated-panel,
+.photo-review-panel,
+.photo-review-queue,
+.hotspot-panel,
+.maplibregl-popup-content {
+  scrollbar-width: thin;
+  scrollbar-color: #4b5563 rgba(18, 20, 26, 0.7);
+}
+
+.search-results::-webkit-scrollbar,
+.alerts-list::-webkit-scrollbar,
+.cell-detail::-webkit-scrollbar,
+.federated-panel::-webkit-scrollbar,
+.photo-review-panel::-webkit-scrollbar,
+.photo-review-queue::-webkit-scrollbar,
+.hotspot-panel::-webkit-scrollbar,
+.maplibregl-popup-content::-webkit-scrollbar {
+  display: block;
+  width: 8px;
+  height: 8px;
+}
+
+.search-results::-webkit-scrollbar-track,
+.alerts-list::-webkit-scrollbar-track,
+.cell-detail::-webkit-scrollbar-track,
+.federated-panel::-webkit-scrollbar-track,
+.photo-review-panel::-webkit-scrollbar-track,
+.photo-review-queue::-webkit-scrollbar-track,
+.hotspot-panel::-webkit-scrollbar-track,
+.maplibregl-popup-content::-webkit-scrollbar-track {
+  background: rgba(18, 20, 26, 0.7);
+}
+
+.search-results::-webkit-scrollbar-thumb,
+.alerts-list::-webkit-scrollbar-thumb,
+.cell-detail::-webkit-scrollbar-thumb,
+.federated-panel::-webkit-scrollbar-thumb,
+.photo-review-panel::-webkit-scrollbar-thumb,
+.photo-review-queue::-webkit-scrollbar-thumb,
+.hotspot-panel::-webkit-scrollbar-thumb,
+.maplibregl-popup-content::-webkit-scrollbar-thumb {
+  border: 2px solid rgba(18, 20, 26, 0.7);
+  border-radius: 999px;
+  background: #4b5563;
+}
+
+.search-results::-webkit-scrollbar-thumb:hover,
+.alerts-list::-webkit-scrollbar-thumb:hover,
+.cell-detail::-webkit-scrollbar-thumb:hover,
+.federated-panel::-webkit-scrollbar-thumb:hover,
+.photo-review-panel::-webkit-scrollbar-thumb:hover,
+.photo-review-queue::-webkit-scrollbar-thumb:hover,
+.hotspot-panel::-webkit-scrollbar-thumb:hover,
+.maplibregl-popup-content::-webkit-scrollbar-thumb:hover {
+  background: #6b7280;
 }
 
 .map-page {
@@ -216,6 +273,37 @@ body,
   transition:
     color 0.15s,
     border-color 0.15s;
+}
+
+@media (pointer: coarse), (max-width: 48rem) {
+  .side-panel-toggle,
+  .top-right-row .alerts-toggle {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+
+  .search-clear,
+  .report-open,
+  .alert-cta,
+  .photo-review-refresh,
+  .photo-review-actions button,
+  .report-form-close,
+  .search-result {
+    min-height: 2.75rem;
+  }
+
+  .search-clear,
+  .report-form-close {
+    min-width: 2.75rem;
+  }
+
+  .search-result {
+    padding-block: 0.5rem;
+  }
+
+  .alert-cta {
+    padding-inline: 0.65rem;
+  }
 }
 
 .side-panel-toggle:hover {
@@ -1897,6 +1985,23 @@ body,
     left: 0.5rem;
     right: 0.5rem;
     width: auto;
+  }
+
+  .dashboard-heading {
+    max-width: min(23vw, 5rem);
+    padding: 0.35rem 0.45rem;
+  }
+
+  .dashboard-heading h1 {
+    font-size: 0.76rem;
+  }
+
+  .dashboard-heading p {
+    display: none;
+  }
+
+  .overlay-top-right {
+    max-width: min(62vw, 16rem);
   }
 
   .overlay {
