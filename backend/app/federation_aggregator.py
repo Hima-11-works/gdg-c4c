@@ -254,7 +254,7 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"federation aggregator for run {args.run_id} listening on "
         f"http://{args.listen}:{args.port} (participants={', '.join(participants)}; "
-        "independent_agencies=false, synthetic_only=true)"
+        "data_mode=declared-by-clients, independent_agencies=false)"
     )
     print("  POST /updates  GET /aggregates/<run>  POST /evaluations  GET /status")
     try:

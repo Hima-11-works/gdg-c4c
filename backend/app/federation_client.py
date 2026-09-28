@@ -8,18 +8,18 @@ Run it as its own process, once per client, against a running aggregator:
 
 What it does, in order:
 
-1. Builds **its own data store** — a synthetic scope generated independently of
-   any other client, with its own station ids, cells, and region label. The
-   generation is deterministic, so re-running this client produces the identical
-   update and a retry is idempotent rather than a conflicting second update.
+1. Builds **its own data store** from either a synthetic demo scope or a local,
+   validated `training-dataset-v1` manifest with observed labels. The local
+   dataset remains with the participant.
 2. Trains locally on its own train/validation split. Its held-out rows stay in
    its store and never leave the process.
 3. Submits a signed, versioned **parameter update** to the aggregator.
 4. Waits for the aggregate, then scores it on its own held-out rows and submits
    an **evaluation report** — counts and metrics only.
 
-It is a simulation process, not an agency: every artifact it writes says
-`synthetic_only: true` and `independent_agency: false`.
+This CLI can train on participant-provided observed data, but participant and
+geographic claims are not independently verified. `independent_agency` remains
+false and metrics remain ineligible as real-world validation evidence.
 """
 
 from __future__ import annotations
@@ -41,6 +41,7 @@ from app.services.federation_workflow import (
     dumps,
     parse_client_keys,
     prepare_client_update,
+    valid_participant_id,
 )
 from app.services.training_data import example_from_dict
 
@@ -88,8 +89,14 @@ def _get(url: str) -> dict[str, Any]:
 
 def run_client(args: argparse.Namespace) -> int:
     catalog = CLIENT_SCOPES
-    if args.participant not in catalog:
-        print(f"Unknown client {args.participant!r}. Known: {', '.join(sorted(catalog))}", file=sys.stderr)
+    if not valid_participant_id(args.participant):
+        print("Participant ID must be a safe 1-63 character slug.", file=sys.stderr)
+        return 1
+    if not args.dataset and args.participant not in catalog:
+        print(
+            f"Unknown client {args.participant!r}. Known: {', '.join(sorted(catalog))}",
+            file=sys.stderr,
+        )
         return 1
     secret = _resolve_secret(args)
     if secret is None:
@@ -107,10 +114,12 @@ def run_client(args: argparse.Namespace) -> int:
         hours=args.hours,
         ridge_alpha=args.ridge_alpha,
         store=store,
+        dataset_path=Path(args.dataset) if args.dataset else None,
     )
     scope = prepared.scope
     print(f"client={prepared.participant_id} scope={scope['scope_id']} "
-          f"(synthetic_only={scope['synthetic_only']}, independent_agency={scope['independent_agency']})")
+          f"(data_mode={scope['data_mode']}, synthetic_only={scope['synthetic_only']}, "
+          f"independent_agency={scope['independent_agency']})")
     print(f"  own data store: {prepared.store_path}")
     print(f"  local rows={prepared.example_count} held_out={prepared.heldout_count}")
     print(f"  update_sha256={prepared.update_sha256} signature={prepared.signature[:16]}...")
@@ -132,7 +141,10 @@ def run_client(args: argparse.Namespace) -> int:
 
     aggregate = _wait_for_aggregate(base, args.run_id, args.wait_seconds)
     if aggregate is None:
-        print("  aggregate not available yet; re-run this client to evaluate later", file=sys.stderr)
+        print(
+            "  aggregate not available yet; re-run this client to evaluate later",
+            file=sys.stderr,
+        )
         return 3
     print(f"  aggregate artifact_sha256={aggregate['artifact_sha256']}")
 
@@ -149,7 +161,8 @@ def run_client(args: argparse.Namespace) -> int:
             f"  held-out +{entry['horizon_hours']:g}h mae={entry['mae_ugm3']:.2f} "
             f"baseline_mae={entry['baseline_mae_ugm3']:.2f} n={entry['heldout_count']}"
         )
-    print("  synthetic-only labels: not evidence of real-world accuracy")
+    print(f"  evaluation provenance={report['label_provenance']}; "
+          "not independently verified or eligible for live model promotion")
 
     reported = _post(
         f"{base}/evaluations",
@@ -187,13 +200,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m app.federation_client",
         description=(
-            "One federated client: train on its own synthetic data store, submit a "
+            "One federated client: train on its own synthetic or observed local data, submit a "
             "signed model update, then evaluate the received aggregate on its own "
             "held-out rows."
         ),
     )
     parser.add_argument(
-        "--participant", required=True, choices=sorted(CLIENT_SCOPES), help="Client identity."
+        "--participant",
+        required=True,
+        help="Registered client identity (demo uses region-a or region-b).",
     )
     parser.add_argument(
         "--key",
@@ -209,7 +224,9 @@ def main(argv: list[str] | None = None) -> int:
         help="Registry string '<participant_id>:<secret>[,...]' (or FEDERATION_CLIENT_KEYS).",
     )
     parser.add_argument("--run-id", required=True, help="The federation run to join.")
-    parser.add_argument("--aggregator", default="http://127.0.0.1:8099", help="Aggregator base URL.")
+    parser.add_argument(
+        "--aggregator", default="http://127.0.0.1:8099", help="Aggregator base URL."
+    )
     parser.add_argument(
         "--data-store",
         default=None,
@@ -219,7 +236,18 @@ def main(argv: list[str] | None = None) -> int:
             "never share one directory)."
         ),
     )
-    parser.add_argument("--hours", type=int, default=48, help="Hours of local synthetic rows.")
+    parser.add_argument(
+        "--dataset",
+        default=None,
+        help=(
+            "Path to this participant's local training-dataset-v1 JSON manifest "
+            "with observed labels. Rows remain local; without this option the "
+            "synthetic demo dataset is used."
+        ),
+    )
+    parser.add_argument(
+        "--hours", type=int, default=48, help="Hours of local synthetic rows (demo mode)."
+    )
     parser.add_argument(
         "--ridge-alpha", type=float, default=1.0, help="Local ridge alpha (must match the run)."
     )

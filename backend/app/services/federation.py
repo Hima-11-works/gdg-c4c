@@ -28,12 +28,11 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from app.domain.features import DataMode
-from app.domain.repositories import FederationRepository
 from app.domain.federation import (
     PARTICIPANT_IDS,
     REGION_SCOPE,
@@ -41,6 +40,7 @@ from app.domain.federation import (
     FederationRun,
     FederationRunStatus,
 )
+from app.domain.repositories import FederationRepository
 from app.domain.training import ModelStatus, ModelVersion
 from app.services.model_training import (
     _calibration_offsets,
@@ -51,8 +51,6 @@ from app.services.model_training import (
 )
 from app.services.training_data import (
     example_from_dict,
-    example_to_dict,
-    export_training_dataset,
     generate_synthetic_training_dataset,
 )
 
@@ -73,6 +71,7 @@ _UPDATE_TOP_KEYS = frozenset(
         "region_label",
         "feature_schema_version",
         "data_mode",
+        "synthetic_only",
         "algorithm",
         "ridge_alpha",
         "horizons",
@@ -122,11 +121,13 @@ def payload_sha256(payload: dict[str, Any]) -> str:
 
 
 def region_label_for(participant_id: str) -> str:
-    """`region-a` -> `federation-partition-a`."""
+    """Give a stable non-geographic label to a registered client identity."""
 
-    if not participant_id.startswith("region-"):
-        raise ValueError(f"participant id must look like 'region-x': {participant_id!r}")
-    return f"federation-partition-{participant_id.removeprefix('region-')}"
+    if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,62}", participant_id, re.IGNORECASE):
+        raise ValueError(f"participant id must be a safe 1-63 character slug: {participant_id!r}")
+    if participant_id.startswith("region-"):
+        return f"federation-partition-{participant_id.removeprefix('region-')}"
+    return f"federation-participant-{participant_id}"
 
 
 def reject_raw_rows(payload: dict[str, Any]) -> None:
@@ -284,6 +285,19 @@ def aggregate_updates(
         raise ValueError(f"exchange payloads from unknown participants: {', '.join(unknown)}")
     ordered = [anchored[participant] for participant in participant_ids]
 
+    data_modes = {payload["data_mode"] for payload in ordered}
+    if not data_modes <= {"demo", "live"}:
+        raise ValueError("participant updates must declare data_mode demo or live")
+    synthetic_flags = {
+        bool(payload.get("synthetic_only", payload["data_mode"] == "demo"))
+        for payload in ordered
+    }
+    if len(data_modes) != 1 or len(synthetic_flags) != 1:
+        raise ValueError("participant updates must use the same data mode and label provenance")
+    expected_synthetic = next(iter(data_modes)) == "demo"
+    if next(iter(synthetic_flags)) is not expected_synthetic:
+        raise ValueError("participant update data mode conflicts with label provenance")
+
     weights = [float(payload["train_count"]) for payload in ordered]
     total_weight = sum(weights)
     if total_weight <= 0:
@@ -372,7 +386,7 @@ def aggregate_updates(
         "feature_schema_version": ordered[0]["feature_schema_version"],
         "region": AGGREGATE_REGION,
         "data_mode": ordered[0]["data_mode"],
-        "synthetic_only": True,
+        "synthetic_only": next(iter(synthetic_flags)),
         "horizons_hours": horizons_hours,
         "participants": participants_block,
         "models": horizons,
@@ -443,11 +457,18 @@ def evaluate_aggregate(
             "usable_as_real_world_evidence": False,
         }
     return {
-        "status": "synthetic_evaluation_only",
+        "status": (
+            "synthetic_evaluation_only"
+            if aggregate.get("synthetic_only", True)
+            else "observed_evaluation_unverified"
+        ),
         "usable_as_real_world_evidence": False,
         "reason": (
-            "synthetic-only demonstration labels; these metrics are not "
-            "evidence of real-world accuracy"
+            "synthetic-only demonstration labels; these metrics are not evidence "
+            "of real-world accuracy"
+            if aggregate.get("synthetic_only", True)
+            else "participant-reported observed labels; provenance and accuracy "
+            "have not been independently verified"
         ),
         "heldout_examples": heldout_total,
         "horizons": horizons_report,
@@ -607,8 +628,8 @@ def _persist_run(
 ) -> dict[str, Any]:
     """Record the run, its participants and one model_version per horizon."""
 
-    from app.db.session import get_session_factory
     from app.db.repositories import SqlFederationRepository, SqlModelVersionRepository
+    from app.db.session import get_session_factory
 
     session = get_session_factory()()
     try:

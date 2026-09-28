@@ -6,7 +6,7 @@ repository. They are independent features; neither is a rewrite of the other.
 | Part | What it is | Entry points | Status API |
 | --- | --- | --- | --- |
 | **A — two-partition demo** (§1–§8) | one process splits one synthetic dataset into two regions, trains locally, aggregates, evaluates, and can persist to the database | `python -m app.cli federation-demo` | `GET /api/v1/federation/status` (public, database-backed) |
-| **B — client/aggregator workflow** (§9–§20) | **two client processes with distinct data stores** and **one aggregator process**, exchanging authenticated, versioned model updates over HTTP and evaluating the aggregate on held-out data | `python -m app.federation_client`, `python -m app.federation_aggregator` | the aggregator process's own `GET /status` |
+| **B — client/aggregator workflow** (§9–§20) | **two client processes with distinct data stores** and **one aggregator process**, exchanging authenticated, versioned model updates over HTTP and evaluating the aggregate on held-out data; clients can use synthetic demo rows or a validated, locally held observed-label export | `python -m app.federation_client`, `python -m app.federation_aggregator` | the aggregator process's own `GET /status` |
 
 Part A is unchanged by Part B. Read §1 first: the same honesty rules govern both,
 and in particular neither workflow claims independent agencies, real-world
@@ -17,8 +17,8 @@ accuracy, or a privacy guarantee.
 | This is | This is not |
 | --- | --- |
 | A labeled **federation demonstration**: two deterministic regional partitions of one synthetic demo dataset, each trained locally, exchanging **model updates only**. | **Not** evidence of privacy: participants exchange fitted parameters and counts, but this establishes **no differential-privacy or other privacy guarantee**. |
-| A workflow that records participants, model version, run status and provenance, and evaluates the aggregate on **held-out rows**. | **Not** nationwide (or even two-real-region) deployment: the "regions" are disjoint partitions of one synthetic Delhi-NCR-labelled dataset. |
-| A pipeline where synthetic-only results are structurally ineligible for promotion (the registered model version is `synthetic_only: true` and `status: candidate`). | **Not** evidence of real-world accuracy: no observed labels participate, so the evaluation block is marked as such. |
+| A workflow that records participants, model version, run status and declared provenance, and evaluates the aggregate on **held-out rows**. | **Not** nationwide deployment or verified inter-agency operation: participant identities and declared data regions are not independently verified. |
+| Synthetic demo clients, plus observed-label clients that keep their rows local and share only signed fitted parameters and aggregate metrics. | **Not** evidence of real-world accuracy: observed labels are participant-provided and metrics remain ineligible for promotion until provenance and accuracy are independently validated. |
 
 `region_scope` is always pinned to
 `two-partition-synthetic-demonstration`. Nothing in this feature asserts
@@ -272,17 +272,19 @@ and source scope, and records the aggregate's held-out evaluation.
 
 | This is | This is not |
 | --- | --- |
-| Two independently executed client processes, each with its **own data store** (`var/federation/clients/<participant>/dataset.json`, `heldout.json`), training on data that never crosses the process boundary. | **Not** two partitions of one dataset presented as two authorities. The clients are simulation processes; every update, aggregate, and status response carries `independent_agencies: false`. |
+| Two independently executed client processes, each with its **own data store** (`var/federation/clients/<participant>/dataset.json`, `heldout.json`), training on synthetic demo data or a locally supplied observed-label export. Training rows never cross the process boundary. | **Not** two partitions of one dataset presented as two authorities. The clients are not verified agencies; every update, aggregate, and status response carries `independent_agencies: false`. |
 | An **authenticated, versioned** update protocol: per-participant HMAC-SHA256 signatures, `update_sha256` digests, and a source-scope record. | **Not** a real multi-party deployment. The two clients are **not** independent Indian agencies, states, ministries, or data-sharing authorities, and no real agency participated. |
 | An **update-only exchange** plus a client-side evaluation round trip: the aggregator sends the aggregate back, each client scores it on its own held-out rows, and reports metrics and counts. | **Not** a privacy guarantee. Exchanging fitted parameters is **not differential privacy**; no noise, clipping, secure aggregation, or membership-inference analysis exists here (§20). |
-| A recorded run on disk (`status.json`, `aggregate.json`) readable from the aggregator's HTTP status API. | **Not** evidence of real-world accuracy. Every metric is computed on **synthetic** labels and is marked `usable_as_real_world_evidence: false`. |
+| A recorded run on disk (`status.json`, `aggregate.json`) readable from the aggregator's HTTP status API. | **Not** independently verified accuracy evidence. Synthetic metrics are labeled synthetic; observed-label metrics are labeled participant-reported and both carry `usable_as_real_world_evidence: false`. |
 
-Both scopes are synthetic areas with no real-world boundaries and no real
-stations. The coordinates used to generate them (`CLIENT_SCOPES` in
-`app/services/federation_workflow.py`) place two disjoint station grids far
-enough apart that the clients share **no station ids and no H3 cells** — this
-is what makes "distinct data stores" literally true, not two views of one store.
-No real regional dataset participates in this workflow.
+With no `--dataset`, the CLI uses the two deterministic synthetic scopes below.
+With `--dataset`, the client instead validates a participant-local
+`training-dataset-v1` JSON manifest with `data_mode: "live"`,
+`target_kind: "observed"`, and `synthetic_only: false`. The participant must
+keep its dataset file and generated `dataset.json`/`heldout.json` private. The
+aggregator still receives parameters, counts, participant-reported scope, and
+metrics only. HMAC authentication proves possession of a configured shared
+secret; it does not prove agency identity or the truth of a source declaration.
 
 ## 10. The three processes
 
@@ -524,13 +526,18 @@ The evaluation report is
 `federation-workflow-evaluation-v1`: the participant id, the exact
 `aggregate_sha256` scored, per-horizon `mae_ugm3`, `baseline_mae_ugm3`,
 `rmse_ugm3`, `bias_ugm3`, and `heldout_count`, plus
-`usable_as_real_world_evidence: false`, `synthetic_only: true`,
-`label_provenance: "synthetic"`, and `raw_rows_sent: 0`.
+`usable_as_real_world_evidence: false`, a label-provenance declaration, and
+`raw_rows_sent: 0`. In the default demo mode this says
+`synthetic_only: true`, `label_provenance: "synthetic"`; with `--dataset`, it
+says `synthetic_only: false`, `label_provenance:
+"participant-reported-observed"`.
 
 The aggregator verifies the report is about **this** run's aggregate and
 **this** participant, and structurally refuses any report that claims real-world
 usability from synthetic labels (`synthetic_evidence_rejected`, §19). The
-recorded evaluation is therefore always explicitly synthetic:
+following is the default synthetic demo response. Observed-data runs use
+`observed_evaluation_unverified` and retain the same real-world-evidence
+ineligibility:
 
 ```json
 "evaluation": {
@@ -667,17 +674,42 @@ If `--data-store` is omitted, each client defaults to
 `var/federation/clients/<participant>`, so two clients started with the same
 command still never share a store.
 
+#### Use observed data kept by the client
+
+Prepare one `training-dataset-v1` JSON export per participant on that
+participant's own machine. Each manifest must declare live/observed PM2.5
+labels in `ug/m3`; the client validates its manifest and time splits before
+training. Start both clients with `--dataset`:
+
+```powershell
+python -m app.federation_client --participant region-a --client-keys $KEYS `
+  --run-id $RUN_ID --aggregator "http://127.0.0.1:$PORT" `
+  --data-store "$OUT\clients\region-a" --dataset "D:\agency-private\region-a-training.json"
+
+python -m app.federation_client --participant region-b --client-keys $KEYS `
+  --run-id $RUN_ID --aggregator "http://127.0.0.1:$PORT" `
+  --data-store "$OUT\clients\region-b" --dataset "D:\agency-private\region-b-training.json"
+```
+
+The client sends no training or held-out rows. The aggregator rejects a run if
+participants mix synthetic and observed data or use incompatible feature
+schemas. The status marks observed evaluation as
+`observed_evaluation_unverified`; scores are not independently verified and
+cannot be used for live model promotion. Each H3 cell center is checked against
+the platform's coarse India state/UT geofence; participant IDs and region labels
+still require a trusted agency enrollment process.
+
 ### Client output (real run, region-a)
 
 ```
-client=region-a scope=synthetic-basin-a (synthetic_only=True, independent_agency=False)
+client=region-a scope=synthetic-basin-a (data_mode=demo, synthetic_only=True, independent_agency=False)
   own data store: C:\...\fedrun3\clients\region-a
   local rows=144 held_out=32
   update_sha256=9f59c04a019ed330ee2b710ae08154e2661e541275cd17e5f2ae46e2a0c3c5c1 signature=ff4fffe8d45aad26...
   update accepted: {'accepted': True, 'aggregate_ready': False, 'duplicate': False, 'update_sha256': '9f59c04a…', 'updates_expected': 2, 'updates_received': 1}
   aggregate artifact_sha256=537f17e0217836c807c64dd530b2f04764de398e954c353e6435c8fc1749871b
   held-out +1h mae=0.03 baseline_mae=9.34 n=32
-  synthetic-only labels: not evidence of real-world accuracy
+  evaluation provenance=synthetic; not independently verified or eligible for live model promotion
   evaluation accepted: {'accepted': True, 'evaluations_received': 1}
 ```
 
@@ -779,4 +811,3 @@ python -m app.federation_aggregator --run-id smoke-check \
   still refuses them.
 - **Real geography.** The scopes are synthetic areas with no real boundaries,
   no real stations, and no real data sources.
-

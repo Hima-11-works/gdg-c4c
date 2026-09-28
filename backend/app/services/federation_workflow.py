@@ -10,14 +10,13 @@ the aggregate from metrics the clients compute on rows that never leave them.
 
 What this is, stated plainly:
 
-* **The clients are simulation processes, not agencies.** Two partitions of one
-  dataset would not be two independent authorities, and neither are these: each
-  client holds its own *synthetic* scope generated independently, and every
-  payload, record, and status response says `independent_agencies: false` and
-  `synthetic_only: true`. Nothing here should be read as two Indian states
-  federating.
-* **The labels are synthetic.** Held-out metrics are computed on generated rows
-  and are explicitly marked unusable as real-world evidence.
+* **The clients are not verified agencies.** Each may use a local synthetic
+  dataset or a validated observed-label training export. Participant identity,
+  agency status, and reported geography are not independently verified; every
+  run says `independent_agencies: false`.
+* **Observed labels are participant-reported.** Their metrics remain unusable as
+  real-world evidence until source provenance and accuracy are independently
+  validated. Synthetic-mode metrics are labeled synthetic.
 * **There is no privacy guarantee.** Exchanging fitted parameters is not
   differential privacy, and no such claim is made anywhere in the payload.
 
@@ -31,9 +30,9 @@ parameters and counts only — plus three additions this workflow needs:
    digest matches. Possession of a generic API key is not enough: only a
    registered participant's secret signs for that participant.
 2. **Participant identity and source scope.** Every update names the
-   participant, its synthetic scope (label, region, station count, dataset
-   digest, row counts, generation time), and states that the scope is synthetic
-   and not an independent agency. The aggregator records all of it per run.
+   participant, its source scope (label, region, station count, dataset digest,
+   row counts, generation time), and whether labels are synthetic or
+   participant-reported observed data. The aggregator records all of it per run.
 3. **Incompatible updates are refused.** A participant whose update disagrees
    with the run's reference — feature schema version, ridge alpha, algorithm, or
    feature names per horizon — is rejected with a specific reason instead of
@@ -45,17 +44,26 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import h3
+
+from app.domain.features import DataMode
+from app.domain.india import is_inside_india
+from app.services.federation import (
+    _HORIZON_KEYS as FEDERATION_HORIZON_KEYS,
+)
+from app.services.federation import (
+    _UPDATE_TOP_KEYS as FEDERATION_UPDATE_TOP_KEYS,
+)
 from app.services.federation import (
     AGGREGATE_REGION,
     ARTIFACT_SCHEMA_VERSION,
     CODE_VERSION,
-    _HORIZON_KEYS as FEDERATION_HORIZON_KEYS,
-    _UPDATE_TOP_KEYS as FEDERATION_UPDATE_TOP_KEYS,
     aggregate_updates,
     canonical_bytes,
     evaluate_aggregate,
@@ -64,6 +72,7 @@ from app.services.federation import (
 from app.services.training_data import (
     example_from_dict,
     example_to_dict,
+    export_training_dataset,
     generate_synthetic_training_dataset,
 )
 
@@ -72,6 +81,12 @@ from app.services.training_data import (
 WORKFLOW_UPDATE_SCHEMA = "federation-workflow-update-v1"
 WORKFLOW_EVALUATION_SCHEMA = "federation-workflow-evaluation-v1"
 WORKFLOW_STATUS_SCHEMA = "federation-workflow-status-v1"
+_PARTICIPANT_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$", re.IGNORECASE)
+
+
+def valid_participant_id(value: str) -> bool:
+    """Participant IDs also become local store names, so restrict their form."""
+    return bool(_PARTICIPANT_ID.fullmatch(value))
 
 # The synthetic scopes the demo clients use. Two *independent synthetic areas*,
 # not two partitions of one area, and not two agencies.
@@ -189,6 +204,10 @@ def parse_client_keys(spec: str) -> dict[str, str]:
         participant_id, secret = participant_id.strip(), secret.strip()
         if not participant_id or not secret:
             raise ValueError(f"client key entry {entry!r} has an empty participant or secret")
+        if not valid_participant_id(participant_id):
+            raise ValueError(
+                f"participant id {participant_id!r} must be a safe 1-63 character slug"
+            )
         if participant_id in keys:
             raise ValueError(f"client key registry lists {participant_id!r} twice")
         keys[participant_id] = secret
@@ -222,6 +241,7 @@ _UPDATE_TOP_KEYS = frozenset(
         "scope",
         "client_identity",
         "limitations",
+        "synthetic_only",
     }
 )
 _HORIZON_KEYS = FEDERATION_HORIZON_KEYS
@@ -243,7 +263,14 @@ def assert_no_raw_rows(payload: dict[str, Any]) -> None:
        scope keys may appear;
     3. the per-horizon allow-list, so a row cannot hide inside a model block.
     """
-    offenders = sorted(_ROW_SHAPED_KEYS & set(payload))
+    def nested_keys(value: Any) -> set[str]:
+        if isinstance(value, dict):
+            return set(value) | set().union(*(nested_keys(item) for item in value.values()))
+        if isinstance(value, list):
+            return set().union(*(nested_keys(item) for item in value))
+        return set()
+
+    offenders = sorted(_ROW_SHAPED_KEYS & nested_keys(payload))
     if offenders:
         raise RawRowsRejected(
             f"update carries raw observation-row keys: {offenders}; only fitted "
@@ -272,7 +299,14 @@ def assert_compatible(
     """Refuse an update that cannot be averaged with the run's reference."""
     if reference is None:
         return
-    for field in ("update_schema_version", "feature_schema_version", "algorithm", "ridge_alpha"):
+    for field in (
+        "update_schema_version",
+        "feature_schema_version",
+        "data_mode",
+        "synthetic_only",
+        "algorithm",
+        "ridge_alpha",
+    ):
         if payload.get(field) != reference.get(field):
             raise IncompatibleUpdateError(
                 f"update {field}={payload.get(field)!r} does not match the run's "
@@ -305,6 +339,71 @@ class ClientResult:
     example_count: int
 
 
+def _limitations_for(synthetic_only: bool) -> dict[str, str]:
+    limitations = dict(WORKFLOW_LIMITATIONS)
+    if not synthetic_only:
+        limitations["participants"] = (
+            "locally executed client processes supplied participant-provided observed "
+            "datasets; identity and agency status are not independently verified"
+        )
+        limitations["accuracy"] = (
+            "observed-label provenance is participant-reported and not independently "
+            "verified; reported metrics are not eligible for live model promotion"
+        )
+        limitations["geography"] = (
+            "training cells are checked against the platform's coarse India ADM1 "
+            "geofence; agency identity and jurisdiction are not independently verified"
+        )
+    return limitations
+
+
+def _read_observed_dataset(path: Path) -> dict[str, Any]:
+    """Validate a participant-local training-dataset-v1 manifest and rows."""
+
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read observed training dataset {path}: {exc}") from exc
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("examples"), list):
+        raise ValueError("observed federation input must be a training-dataset-v1 manifest")
+    expected = {
+        "schema_version": "training-dataset-v1",
+        "label_unit": "ug/m3",
+        "data_mode": DataMode.LIVE.value,
+        "target_kind": "observed",
+        "synthetic_only": False,
+    }
+    for field, value in expected.items():
+        if manifest.get(field) != value:
+            raise ValueError(f"observed federation dataset requires {field}={value!r}")
+    dataset = export_training_dataset(manifest["examples"], mode=DataMode.LIVE)
+    for field in (
+        "feature_schema_version",
+        "region",
+        "example_count",
+        "station_count",
+        "horizons_hours",
+        "dataset_ids",
+        "spatial_exclusion_verified",
+    ):
+        if field in manifest and manifest[field] != dataset[field]:
+            raise ValueError(f"observed dataset manifest {field} does not match its examples")
+    if len({row["target_at"] for row in dataset["examples"]}) < 5:
+        raise ValueError("observed federation dataset needs at least five target timestamps")
+    for cell in {row["h3_cell"] for row in dataset["examples"]}:
+        try:
+            latitude, longitude = h3.cell_to_latlng(cell)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"observed dataset contains an invalid H3 cell: {cell!r}") from exc
+        if not is_inside_india(latitude, longitude):
+            raise ValueError(f"observed dataset contains an H3 cell outside India: {cell}")
+    dataset["start"] = manifest.get("start")
+    dataset["end_exclusive"] = manifest.get("end_exclusive")
+    if manifest.get("generated_at") is not None:
+        dataset["generated_at"] = manifest["generated_at"]
+    return dataset
+
+
 def prepare_client_update(
     *,
     participant_id: str,
@@ -314,6 +413,7 @@ def prepare_client_update(
     ridge_alpha: float = 1.0,
     store: Path | None = None,
     scopes: dict[str, dict[str, Any]] | None = None,
+    dataset_path: Path | None = None,
 ) -> ClientResult:
     """Build this client's own data store, train on it, and sign its update.
 
@@ -322,37 +422,67 @@ def prepare_client_update(
     """
     from app.services.federation import local_fit, region_label_for
 
+    if not valid_participant_id(participant_id):
+        raise ValueError("participant id must be a safe 1-63 character slug")
     catalog = scopes or CLIENT_SCOPES
-    if participant_id not in catalog:
+    if dataset_path is None and participant_id not in catalog:
         raise ValueError(
             f"unknown client {participant_id!r}; known: {', '.join(sorted(catalog))}"
         )
-    scope = dict(catalog[participant_id])
-    dataset = generate_synthetic_training_dataset(
-        hours=hours,
-        station_count=int(scope["station_count"]),
-        anchor_utc=anchor_utc,
-        scope_label=str(scope["scope_id"]),
-        origin_latitude=float(scope["origin_latitude"]),
-        origin_longitude=float(scope["origin_longitude"]),
-    )
+    scope = dict(catalog.get(participant_id, {}))
+    if dataset_path is None:
+        dataset = generate_synthetic_training_dataset(
+            hours=hours,
+            station_count=int(scope["station_count"]),
+            anchor_utc=anchor_utc,
+            scope_label=str(scope["scope_id"]),
+            origin_latitude=float(scope["origin_latitude"]),
+            origin_longitude=float(scope["origin_longitude"]),
+        )
+        synthetic_only = True
+        scope_id = str(scope["scope_id"])
+        scope_label = str(scope["scope_label"])
+        scope_kind = "synthetic"
+        station_count = int(scope["station_count"])
+        dataset_hours = hours
+        data_anchor = anchor_utc.isoformat()
+        generated_at = anchor_utc.isoformat()
+        generated_at_kind = "deterministic-dataset-anchor"
+    else:
+        dataset = _read_observed_dataset(dataset_path)
+        synthetic_only = False
+        scope_id = f"participant-reported:{dataset['region']}"
+        scope_label = str(dataset["region"])
+        scope_kind = "participant-reported-observed"
+        station_count = int(dataset["station_count"])
+        dataset_hours = len(
+            {
+                row["target_at"]
+                for row in dataset["examples"]
+            }
+        )
+        data_anchor = dataset.get("start")
+        generated_at = dataset.get("generated_at")
+        generated_at_kind = "participant-provided-dataset-manifest"
     examples = [example_from_dict(row) for row in dataset["examples"]]
+    if len({example.target_at for example in examples}) < 5:
+        raise ValueError("federated local training requires at least five target timestamps")
     payload, heldout = local_fit(
         participant_id=participant_id, examples=examples, ridge_alpha=ridge_alpha
     )
     scope_record = {
-        "scope_id": scope["scope_id"],
-        "scope_label": scope["scope_label"],
-        "scope_kind": "synthetic",
-        "synthetic_only": True,
+        "scope_id": scope_id,
+        "scope_label": scope_label,
+        "scope_kind": scope_kind,
+        "synthetic_only": synthetic_only,
         "independent_agency": False,
         "region_label": region_label_for(participant_id),
-        "station_count": int(scope["station_count"]),
-        "hours": hours,
-        "anchor_utc": anchor_utc.isoformat(),
+        "station_count": station_count,
+        "hours": dataset_hours,
+        "anchor_utc": data_anchor,
         "dataset_sha256": payload_sha256(
             {
-                "scope_id": scope["scope_id"],
+                "scope_id": scope_id,
                 "examples": dataset["examples"],
             }
         ),
@@ -361,18 +491,22 @@ def prepare_client_update(
         # Deterministic, not a wall clock: a client retried with the same
         # arguments must produce byte-identical signed bytes, or the
         # aggregator's duplicate check would refuse its own retry.
-        "generated_at": anchor_utc.isoformat(),
-        "generated_at_kind": "deterministic-dataset-anchor",
+        "generated_at": generated_at,
+        "generated_at_kind": generated_at_kind,
+        "data_mode": dataset["data_mode"],
+        "label_provenance": dataset["target_kind"],
+        "dataset_ids": dataset.get("dataset_ids", []),
     }
     payload = dict(payload)
     payload["update_schema_version"] = WORKFLOW_UPDATE_SCHEMA
+    payload["synthetic_only"] = synthetic_only
     payload["scope"] = scope_record
     payload["client_identity"] = {
         "participant_id": participant_id,
         "process_role": "federated-client",
         "holds_raw_rows": True,
     }
-    payload["limitations"] = dict(WORKFLOW_LIMITATIONS)
+    payload["limitations"] = _limitations_for(synthetic_only)
     payload.pop("update_sha256", None)
     assert_no_raw_rows(payload)
     payload["update_sha256"] = payload_sha256(payload)
@@ -420,7 +554,10 @@ def client_evaluation_report(
     rows stay with the client, the model comes back, and only metrics (plus
     counts) go to the aggregator.
     """
-    metrics = evaluate_aggregate(aggregate, heldout_by_participant={participant_id: heldout_examples})
+    metrics = evaluate_aggregate(
+        aggregate, heldout_by_participant={participant_id: heldout_examples}
+    )
+    synthetic_only = bool(aggregate.get("synthetic_only", True))
     return {
         "evaluation_schema_version": WORKFLOW_EVALUATION_SCHEMA,
         "participant_id": participant_id,
@@ -429,18 +566,25 @@ def client_evaluation_report(
         "horizons": metrics.get("horizons", []),
         "status": metrics.get("status", "unavailable"),
         "usable_as_real_world_evidence": False,
-        "synthetic_only": True,
-        "label_provenance": "synthetic",
+        "synthetic_only": synthetic_only,
+        "label_provenance": "synthetic" if synthetic_only else "participant-reported-observed",
         "reason": (
-            "computed on this client's own synthetic held-out rows; not evidence of "
-            "real-world accuracy"
+            "computed on this client's own synthetic held-out rows; "
+            "not evidence of real-world accuracy"
+            if synthetic_only
+            else "computed on this client's own participant-provided observed held-out rows; "
+            "source provenance is not independently verified"
         ),
         "raw_rows_sent": 0,
     }
 
 
 def verify_evaluation_report(
-    report: dict[str, Any], *, participant_id: str, aggregate_sha256: str
+    report: dict[str, Any],
+    *,
+    participant_id: str,
+    aggregate_sha256: str,
+    expected_synthetic_only: bool | None = None,
 ) -> None:
     """An evaluation report must be about this run's aggregate and this client."""
     if report.get("evaluation_schema_version") != WORKFLOW_EVALUATION_SCHEMA:
@@ -457,6 +601,14 @@ def verify_evaluation_report(
         raise UpdateRejected(
             "evaluation report is about a different aggregate artifact",
             code="aggregate_mismatch",
+        )
+    if (
+        expected_synthetic_only is not None
+        and report.get("synthetic_only") is not expected_synthetic_only
+    ):
+        raise UpdateRejected(
+            "evaluation label provenance differs from the aggregate's declared data mode",
+            code="evaluation_provenance_mismatch",
         )
     if report.get("usable_as_real_world_evidence"):
         # Nobody may promote a synthetic-label metric through this endpoint.
@@ -554,7 +706,10 @@ class FederationAggregator:
                 code="aggregate_not_ready",
             )
         verify_evaluation_report(
-            report, participant_id=participant_id, aggregate_sha256=self._aggregate["artifact_sha256"]
+            report,
+            participant_id=participant_id,
+            aggregate_sha256=self._aggregate["artifact_sha256"],
+            expected_synthetic_only=bool(self._aggregate.get("synthetic_only", True)),
         )
         self._evaluations[participant_id] = report
         return {"accepted": True, "evaluations_received": len(self._evaluations)}
@@ -578,7 +733,8 @@ class FederationAggregator:
         aggregate["workflow_schema_version"] = WORKFLOW_STATUS_SCHEMA
         aggregate["region"] = AGGREGATE_REGION
         aggregate["independent_agencies"] = False
-        aggregate["synthetic_only"] = True
+        synthetic_only = bool(aggregate.get("synthetic_only", True))
+        aggregate["synthetic_only"] = synthetic_only
         aggregate["client_processes"] = len(ordered)
         aggregate["authentication"] = {
             "scheme": "hmac-sha256-over-canonical-payload",
@@ -596,7 +752,7 @@ class FederationAggregator:
             }
             for participant in self.participant_ids
         ]
-        aggregate["limitations"] = dict(WORKFLOW_LIMITATIONS)
+        aggregate["limitations"] = _limitations_for(synthetic_only)
         return aggregate
 
     # -- reads ---------------------------------------------------------
@@ -628,14 +784,32 @@ class FederationAggregator:
         for report in self._evaluations.values():
             for entry in report.get("horizons", []):
                 horizons.setdefault(float(entry["horizon_hours"]), []).append(entry)
+        if self._aggregate is not None:
+            synthetic_only = bool(self._aggregate.get("synthetic_only", True))
+        elif self._updates:
+            first_update = next(iter(self._updates.values()))
+            synthetic_only = bool(first_update.get("synthetic_only", True))
+        else:
+            synthetic_only = True
         evaluation = {
-            "status": "synthetic_evaluation_only" if horizons else "awaiting_client_evaluations",
+            "status": (
+                "awaiting_client_evaluations"
+                if not horizons
+                else (
+                    "synthetic_evaluation_only"
+                    if synthetic_only
+                    else "observed_evaluation_unverified"
+                )
+            ),
             "usable_as_real_world_evidence": False,
-            "label_provenance": "synthetic",
+            "label_provenance": "synthetic" if synthetic_only else "participant-reported-observed",
             "client_reports": len(self._evaluations),
             "reason": (
                 "each client scored the aggregate on its own synthetic held-out rows; "
                 "these metrics are not evidence of real-world accuracy"
+                if synthetic_only
+                else "each client scored its own participant-provided observed held-out rows; "
+                "provenance and agency identity remain unverified"
             ),
             "horizons": [
                 {
@@ -659,7 +833,7 @@ class FederationAggregator:
             ),
             "workflow": "separately runnable federated clients with distinct data stores",
             "independent_agencies": False,
-            "synthetic_only": True,
+            "synthetic_only": synthetic_only,
             "participants_expected": self.expected_updates,
             "participants_received": len(self._updates),
             "participants": participants,
@@ -670,10 +844,10 @@ class FederationAggregator:
                 "artifact_sha256": self._aggregate["artifact_sha256"],
                 "algorithm": self._aggregate["algorithm"],
                 "model_schema_version": ARTIFACT_SCHEMA_VERSION,
-                "synthetic_only": True,
+                "synthetic_only": synthetic_only,
             },
             "evaluation": evaluation,
-            "limitations": dict(WORKFLOW_LIMITATIONS),
+            "limitations": _limitations_for(synthetic_only),
         }
 
 
@@ -705,4 +879,5 @@ __all__ = [
     "sign_update",
     "verify_evaluation_report",
     "verify_signature",
+    "valid_participant_id",
 ]
