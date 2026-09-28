@@ -375,6 +375,54 @@ body,
   color: #fcd34d;
 }
 
+.banner-mode {
+  margin-top: 0.5rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 999px;
+  background: rgba(20, 26, 32, 0.94);
+  color: #d1d5db;
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
+}
+
+.banner-mode-demo {
+  border-color: rgba(245, 158, 11, 0.46);
+  background: rgba(45, 36, 18, 0.96);
+  color: #fcd34d;
+}
+
+.banner-mode-live {
+  border-color: rgba(52, 211, 153, 0.42);
+  background: rgba(13, 42, 36, 0.96);
+  color: #6ee7b7;
+}
+
+.banner-mode-mixed {
+  border-color: rgba(96, 165, 250, 0.46);
+  background: rgba(24, 38, 58, 0.96);
+  color: #93c5fd;
+}
+
+.banner-mode-error {
+  border-color: rgba(248, 113, 113, 0.5);
+  background: rgba(45, 18, 21, 0.96);
+  color: #fca5a5;
+}
+
+.banner-mode-retry {
+  padding: 0.05rem 0.35rem;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: normal;
+  cursor: pointer;
+}
+
 .spinner {
   width: 0.7rem;
   height: 0.7rem;

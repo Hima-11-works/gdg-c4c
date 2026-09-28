@@ -22,8 +22,7 @@ import { Legend } from './Legend'
 import { LayerToggle } from './LayerToggle'
 import { ScopeChip } from './ScopeChip'
 import { SearchBar } from './SearchBar'
-import { StatusBanner } from './StatusBanner'
-import { ProvenanceBanner } from './ProvenanceBanner'
+import { DataModeBanner } from './DataModeBanner'
 import { TimelineControl } from './TimelineControl'
 import type { AsyncResource } from '../hooks/useApiResource'
 import type { LodQuery } from '../lib/api'
@@ -337,14 +336,14 @@ export function MapPage() {
   return (
     <main className="map-page" aria-labelledby="dashboard-title">
       <div className="banner-stack">
-        <StatusBanner
+        <DataModeBanner
           label={activeLabel}
           resource={activeBaseLayer.resource}
+          meta={publishedMeta.resource}
           onRetry={activeBaseLayer.refetch}
           warming={warming}
           interpolated={!isNow && isInterpolated}
         />
-        <ProvenanceBanner meta={publishedMeta.resource} />
       </div>
 
       <Suspense fallback={<FeatureLoading label="Loading India air-quality map…" />}>
