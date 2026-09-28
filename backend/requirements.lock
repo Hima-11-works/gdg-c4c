@@ -27,6 +27,8 @@ h11==0.16.0
     #   uvicorn
 h3==4.5.0
     # via pollution-backend (pyproject.toml)
+h5py==3.16.0
+    # via pollution-backend (pyproject.toml)
 httpcore==1.0.9
     # via httpx
 httptools==0.8.0
@@ -41,6 +43,10 @@ mako==1.4.1
     # via alembic
 markupsafe==3.0.3
     # via mako
+numpy==2.4.6
+    # via
+    #   h5py
+    #   pollution-backend (pyproject.toml)
 packaging==26.3
     # via geoalchemy2
 psycopg==3.3.5

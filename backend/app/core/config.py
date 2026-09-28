@@ -162,6 +162,21 @@ class Settings(BaseSettings):
     # for history, but are never silently treated as current observations.
     firms_stale_after_hours: float = Field(default=6.0, gt=0)
 
+    # --- Live Sentinel-5P TROPOMI UV aerosol-index scanning ---
+    # CDSE downloads require a registered account and refresh token. The
+    # scanner queries NRT Level-2 AER_AI swaths, filters qa_value, and stores
+    # raw UVAI separately from its normalized detector input.
+    cdse_refresh_token: SecretStr | None = None
+    hotspot_sentinel5p_max_age_hours: float = Field(default=30.0, gt=0)
+    hotspot_sentinel5p_min_quality: float = Field(default=0.8, ge=0, le=1)
+    # Initial review-screening thresholds in raw dimensionless UVAI units;
+    # these are operational knobs, not validated detection probabilities.
+    hotspot_sentinel5p_uvai_threshold: float = Field(default=1.0, ge=-1, le=5)
+    hotspot_sentinel5p_uvai_strong_threshold: float = Field(default=2.0, ge=-1, le=5)
+    hotspot_sentinel5p_h3_resolution: int = Field(default=6, ge=0, le=15)
+    hotspot_sentinel5p_timeout_seconds: float = Field(default=60.0, gt=0)
+    hotspot_sentinel5p_max_products: int = Field(default=3, ge=1, le=10)
+
     # Prepared, license-approved corridor samples; no traffic vendor is
     # contacted unless a separate provider is deliberately added.
     traffic_stale_after_hours: float = Field(default=2.0, gt=0)
@@ -511,6 +526,18 @@ class Settings(BaseSettings):
                 f"HOTSPOT_STRONG_INDEX_THRESHOLD ({self.hotspot_strong_index_threshold}) must be "
                 f"> HOTSPOT_SMOKE_INDEX_THRESHOLD ({self.hotspot_smoke_index_threshold}) — a "
                 "strong reading must score above the trigger it is measured against."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_sentinel5p_thresholds_ordered(self) -> "Settings":
+        if (
+            self.hotspot_sentinel5p_uvai_strong_threshold
+            <= self.hotspot_sentinel5p_uvai_threshold
+        ):
+            raise ValueError(
+                "HOTSPOT_SENTINEL5P_UVAI_STRONG_THRESHOLD must exceed "
+                "HOTSPOT_SENTINEL5P_UVAI_THRESHOLD"
             )
         return self
 

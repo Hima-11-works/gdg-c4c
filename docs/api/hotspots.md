@@ -102,10 +102,32 @@ The detector takes one required input and two optional ones.
 **Imagery artifact (required).** `artifact_id`, `source`, `product`,
 `product_version`, `index_name`, `license`, `h3_resolution`, `acquired_at`,
 `available_at`, `synthetic`, and `tiles`. Each tile: `tile_id`, `h3_cell`,
-`latitude`, `longitude`, `acquired_at`, `index_value` (0–1), `cloud_fraction`
-(0–1). The recorded provenance digest (`imagery_digest`) is **computed from the
-tiles the detector read**, not copied from a claimed value, so the record cannot be
-contradicted by its own input.
+`latitude`, `longitude`, `acquired_at`, and `index_value` (0–1). `cloud_fraction`
+is optional; `raw_index_value`, `raw_index_unit`, and `quality_value` retain the
+product's calibrated measurement and QA score when available. The recorded
+provenance digest (`imagery_digest`) is **computed from the tiles the detector
+read**, not copied from a claimed value, so the record cannot be contradicted by
+its own input.
+
+### Live Sentinel-5P source
+
+The pipeline now searches Copernicus Data Space for recent Sentinel-5P TROPOMI
+Level-2 AER_AI NRTI products intersecting the configured ingestion bounding box.
+It downloads at most `HOTSPOT_SENTINEL5P_MAX_PRODUCTS` new swaths per run, skips
+products already recorded, decodes NetCDF/HDF5 scale and offset metadata, drops
+pixels with `qa_value` at or below `HOTSPOT_SENTINEL5P_MIN_QUALITY`, and averages
+retained pixels into H3 resolution 6 cells by default. The raw 340/380 nm UV
+aerosol index and mean QA remain visible in candidate evidence. The detector's
+0–1 input is the documented UVAI range [-1, 5] linearly normalized to [0, 1]; the
+raw trigger and strong thresholds are stored in the scan's provenance notes.
+
+Sentinel-5P is a daily swath source, not continuous monitoring. NRT availability
+depends on product publication and a run only sees a new pass once it is
+published. Positive UVAI indicates UV-absorbing aerosols such as smoke or dust;
+it is not PM2.5, does not cover every pollutant, and cannot identify the source.
+The default UVAI thresholds are initial triage settings that still need local
+validation against reviewed events. A CDSE account and refresh token are needed
+to download products; without one the pipeline reports the scan stage as skipped.
 
 **FIRMS signals (optional).** `detection_id`, `h3_cell`, `latitude`, `longitude`,
 `acquired_at`, `available_at`, `frp_mw`, `confidence_class`, `satellite`, `source`,
@@ -328,12 +350,20 @@ supporting signals that might have "explained" either cell created nothing.
 | `HOTSPOT_MAX_FUTURE_SKEW_SECONDS` | `300` | tolerated clock skew into the future |
 | `HOTSPOT_MAX_TILES` | `20000` | tiles per scan; more is refused |
 | `HOTSPOT_MAX_CANDIDATES` | `500` | candidates per scan; excess dropped worst-first and recorded |
+| `CDSE_REFRESH_TOKEN` | unset | Copernicus Data Space refresh token; required for downloads |
+| `HOTSPOT_SENTINEL5P_MAX_AGE_HOURS` | `30.0` | maximum satellite acquisition age |
+| `HOTSPOT_SENTINEL5P_MIN_QUALITY` | `0.8` | minimum pixel QA score; pixels at or below it are excluded |
+| `HOTSPOT_SENTINEL5P_UVAI_THRESHOLD` | `1.0` | raw UV aerosol-index candidate trigger; initial triage setting |
+| `HOTSPOT_SENTINEL5P_UVAI_STRONG_THRESHOLD` | `2.0` | raw UV aerosol-index strong-evidence threshold |
+| `HOTSPOT_SENTINEL5P_H3_RESOLUTION` | `6` | H3 resolution for satellite pixels |
+| `HOTSPOT_SENTINEL5P_TIMEOUT_SECONDS` | `60` | catalogue, token, and product request timeout |
+| `HOTSPOT_SENTINEL5P_MAX_PRODUCTS` | `3` | maximum new swaths downloaded per pipeline run |
 
 ## 10. Limits, and what is not wired
 
-- **No live imagery provider.** The detector consumes a declared index artifact;
-  nothing in this repository downloads imagery, derives an index, or schedules a
-  scan. The committed fixtures are the only callers.
+- **Live satellite source is narrow.** The wired provider screens UV-absorbing
+  aerosol plumes only and runs from the main data pipeline. It does not produce
+  continuous coverage; detections depend on Sentinel-5P overpass and NRT publication.
 - **No live FIRMS/station adapter.** `fire_signal_from_hotspot` maps the stored
   FIRMS rows, but no pipeline stage calls it yet, and no station repository is read
   here.
@@ -348,5 +378,6 @@ supporting signals that might have "explained" either cell created nothing.
   fixtures describe this detector on this fixture. They are not real-world
   performance, and no figure here may be quoted as such.
 - **A high index is not a cause.** Cloud, haze, dust and biomass burning all raise
-  an aerosol index; separating them needs a source-attribution analysis this
-  detector does not perform.
+  aerosol-index signals; separating them needs a source-attribution analysis this
+  detector does not perform. The quality cutoff is not a cloud mask or a guarantee
+  that an accepted retrieval is correct.

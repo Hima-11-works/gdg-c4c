@@ -187,8 +187,8 @@ export function HotspotEvidencePanel({
         )}
         {eventCatalog.resource.status === 'success' && events.length === 0 && (
           <p className="muted">
-            No potential events are recorded. Run an imagery scan to create reviewable, deduplicated
-            events.
+            No potential events are recorded yet. The pipeline creates these from new, qualifying
+            satellite swaths when live scanning is configured.
           </p>
         )}
         {events.length > 0 && (
@@ -229,8 +229,9 @@ export function HotspotEvidencePanel({
         )}
         {scanCatalog.resource.status === 'success' && scans.length === 0 && (
           <p className="muted">
-            No imagery scan is recorded here. The detector needs a prepared, georeferenced imagery
-            artifact; shipped fixtures are authored examples, not live satellite observations.
+            No imagery scan is recorded yet. Configure CDSE_REFRESH_TOKEN and run the backend
+            pipeline to scan new Sentinel-5P satellite swaths. Demo mode skips live imagery; shipped
+            fixtures are authored examples, not observations.
           </p>
         )}
         {scans.length > 0 && (
@@ -399,12 +400,34 @@ function RecordedScanDetails({
   }
 
   const scan = resource.data
+  const uvaiTrigger = scan.config.sentinel5p_uvai_threshold_raw
+  const uvaiStrong = scan.config.sentinel5p_uvai_strong_threshold_raw
+  const qualityMinimum = scan.config.sentinel5p_quality_min_exclusive
   return (
     <div className="hotspot-scan-details">
       <p className="muted">
         {scan.detector_version} · evaluated {when(scan.evaluated_at, true)}
         {scan.imagery?.synthetic ? ' · authored imagery fixture' : ''}
       </p>
+      {scan.imagery !== null && (
+        <div className="hotspot-row-meta">
+          <b>{scan.imagery.source}</b> · {scan.imagery.product} · version{' '}
+          {scan.imagery.product_version}
+          <div>
+            Acquired {when(scan.imagery.acquired_at, true)} · available{' '}
+            {when(scan.imagery.available_at, true)} · H3 resolution {scan.imagery.h3_resolution}
+          </div>
+          <div>{scan.imagery.index_name}</div>
+          {typeof uvaiTrigger === 'number' && typeof uvaiStrong === 'number' && (
+            <div>
+              Screening thresholds: UVAI ≥ {uvaiTrigger.toFixed(1)}; strong ≥{' '}
+              {uvaiStrong.toFixed(1)}
+              {typeof qualityMinimum === 'number' && ` · pixel quality > ${qualityMinimum.toFixed(2)}`}
+            </div>
+          )}
+          <div className="muted">{scan.imagery.notes}</div>
+        </div>
+      )}
       {summary.synthetic_input && (
         <p className="hotspot-caveat">
           Fixture score only: {summary.false_positives} false positive(s), {summary.false_negatives}{' '}
@@ -412,13 +435,18 @@ function RecordedScanDetails({
         </p>
       )}
       {scan.candidates.length === 0 ? (
-        <p className="muted">This scan returned no candidate locations.</p>
+        <>
+          <p className="muted">This scan returned no candidate locations ({scan.verdict}).</p>
+          {scan.reasons.map((reason) => (
+            <p className="muted" key={reason}>{reason}</p>
+          ))}
+        </>
       ) : (
         <ul className="hotspot-list">
           {scan.candidates.map((candidate) => (
             <li className="hotspot-scan-candidate" key={candidate.candidate_id}>
               <b>{candidate.review_status.replaceAll('_', ' ')}</b> · {candidate.confidence}{' '}
-              confidence ({Math.round(candidate.confidence_score * 100)}%)
+              triage score {candidate.confidence_score.toFixed(2)} (not a probability)
               <div className="hotspot-row-meta">
                 {candidate.supporting_sources.join(', ')} · {when(candidate.acquired_at, true)}
               </div>
@@ -427,6 +455,11 @@ function RecordedScanDetails({
                 {candidate.h3_cell}
               </div>
               <div className="muted">Candidate location for human review; no PM2.5 value.</div>
+              {candidate.evidence.map((evidence, index) => (
+                <div className="muted" key={`${evidence.source}-${evidence.observed_at}-${index}`}>
+                  {evidence.source}: {evidence.detail}
+                </div>
+              ))}
             </li>
           ))}
         </ul>

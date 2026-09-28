@@ -514,24 +514,46 @@ export interface HotspotCandidateOut {
   detector_version: string
   confidence: string
   confidence_score: number
+  confidence_basis: string[]
   supporting_sources: string[]
+  evidence: {
+    source: string
+    observed_at: string
+    available_at: string | null
+    detail: string
+    index_value: number | null
+    raw_index_value?: number | null
+    raw_index_unit?: string | null
+    quality_value?: number | null
+  }[]
+  index_value: number
   review_status: string
   notes: string
 }
 
 export interface HotspotScanOut {
   scan_id: string
+  case_id: string
   case_title: string
   detector_version: string
   evaluated_at: string
   verdict: string
   reasons: string[]
+  h3_resolution: number
+  tile_counts: Record<string, number>
+  config: Record<string, unknown>
   imagery: {
+    artifact_id: string
     source: string
     product: string
     product_version: string
+    index_name: string
+    license: string
+    h3_resolution: number
     acquired_at: string
     available_at: string
+    acquisition_window: Record<string, string>
+    tile_count: number
     synthetic: boolean
     notes: string
   } | null

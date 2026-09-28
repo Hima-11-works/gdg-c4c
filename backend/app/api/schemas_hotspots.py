@@ -35,6 +35,9 @@ class HotspotEvidenceOut(BaseModel):
     detection_id: str | None = None
     station_id: str | None = None
     station_pm25_ugm3: float | None = None
+    raw_index_value: float | None = None
+    raw_index_unit: str | None = None
+    quality_value: float | None = None
 
 
 class HotspotCandidateOut(BaseModel):

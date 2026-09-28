@@ -41,24 +41,23 @@ import math
 import os
 import re
 import sqlite3
+from collections.abc import Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import h3
 
 from app.core.config import Settings, get_settings
 from app.domain.environmental_observations import FireHotspot
-from app.domain.india import is_inside_india
 from app.domain.hotspots import (
     CANDIDATE_SEMANTICS,
     CONFIDENCE_FIRE,
     CONFIDENCE_IMAGERY,
     CONFIDENCE_IMAGERY_STRONG,
     CONFIDENCE_MAX,
-    CONFIDENCE_MEDIUM_THRESHOLD,
     CONFIDENCE_STATION,
     DETECTOR_VERSION,
     UNATTRIBUTED,
@@ -79,6 +78,7 @@ from app.domain.hotspots import (
     no_input_evaluation,
     require_case_id,
 )
+from app.domain.india import is_inside_india
 from app.domain.types import _require_utc
 
 #: The standing limits, repeated on every scan and every API response. These
@@ -103,8 +103,16 @@ HOTSPOT_LIMITATIONS: dict[str, str] = {
     ),
     "imagery": (
         "the imagery index is produced upstream and consumed here; this detector does "
-        "not derive smoke or aerosol physics from raw pixels, and a high index can be "
-        "cloud, haze, dust or biomass burning"
+        "not derive smoke or aerosol physics from raw pixels; a high aerosol index can "
+        "indicate smoke, dust or other UV-absorbing aerosol and does not identify a source"
+    ),
+    "sentinel5p": (
+        "live Sentinel-5P TROPOMI UV aerosol-index scans arrive with satellite swaths, "
+        "not continuously; UVAI is not PM2.5 and does not detect every pollutant"
+    ),
+    "quality": (
+        "the Sentinel-5P qa_value cutoff filters low-quality pixels; it is not a guarantee "
+        "that every retained pixel is correct or cloud-free"
     ),
     "confidence": (
         "confidence is a bounded triage ordering built from fixed contributions, not a "
@@ -397,7 +405,14 @@ class HotspotDetector:
 
     # -- georeferencing ------------------------------------------------
 
-    def _verify_cell(self, h3_cell: str, latitude: float, longitude: float, resolution: int, where: str) -> None:
+    def _verify_cell(
+        self,
+        h3_cell: str,
+        latitude: float,
+        longitude: float,
+        resolution: int,
+        where: str,
+    ) -> None:
         """Recompute the cell from the coordinates; a mismatch is an input error.
 
         Without this, "georeferenced imagery" would be a claim in a JSON field
@@ -539,11 +554,19 @@ class HotspotDetector:
         # 2. Verify every location, then decide which tiles may be looked at.
         for tile in imagery.tiles:
             self._verify_cell(
-                tile.h3_cell, tile.latitude, tile.longitude, h3_resolution, f"imagery tile {tile.tile_id}"
+                tile.h3_cell,
+                tile.latitude,
+                tile.longitude,
+                h3_resolution,
+                f"imagery tile {tile.tile_id}",
             )
         for fire in fires:
             self._verify_cell(
-                fire.h3_cell, fire.latitude, fire.longitude, h3_resolution, f"fire {fire.detection_id}"
+                fire.h3_cell,
+                fire.latitude,
+                fire.longitude,
+                h3_resolution,
+                f"fire {fire.detection_id}",
             )
         for station in stations:
             self._verify_cell(
@@ -570,7 +593,10 @@ class HotspotDetector:
                 # contract publishes.
                 tile_counts["not_yet_available" if state == "unavailable" else state] += 1
                 continue
-            if tile.cloud_fraction > self.config.max_cloud_fraction:
+            if (
+                tile.cloud_fraction is not None
+                and tile.cloud_fraction > self.config.max_cloud_fraction
+            ):
                 tile_counts["cloud_masked"] += 1
                 continue
             eligible.append(tile)
@@ -579,7 +605,7 @@ class HotspotDetector:
             reasons.append(
                 "no imagery tile was eligible: "
                 f"{tile_counts['stale']} stale, {tile_counts['cloud_masked']} cloud-masked, "
-                f"{tile_counts['not_yet_available']} not yet available, "
+                    f"{tile_counts['not_yet_available']} not yet available, "
                 f"{tile_counts['outside_india']} outside India "
                 f"(imagery max age {self.config.imagery_max_age_hours:g}h, cloud fraction "
                 f"ceiling {self.config.max_cloud_fraction:g})"
@@ -809,21 +835,51 @@ class HotspotDetector:
                 f"{self.config.strong_index_threshold:g} (+{CONFIDENCE_IMAGERY_STRONG:g})"
             )
 
+        cloud_description = (
+            f"cloud fraction {tile.cloud_fraction:.2f}"
+            if tile.cloud_fraction is not None
+            else "cloud fraction not supplied by this product"
+        )
+        raw_description = (
+            f"; raw {tile.raw_index_value:.2f} {tile.raw_index_unit}"
+            if tile.raw_index_value is not None and tile.raw_index_unit is not None
+            else ""
+        )
+        quality_description = (
+            f"; quality {tile.quality_value:.2f}"
+            if tile.quality_value is not None
+            else ""
+        )
+        evidence_detail = (
+            f"{tile.index_value:.2f} on the declared imagery index, cloud fraction "
+            f"{tile.cloud_fraction:.2f}"
+            if (
+                tile.raw_index_value is None
+                and tile.quality_value is None
+                and tile.cloud_fraction is not None
+            )
+            else (
+                f"{tile.index_value:.2f} on the declared imagery index"
+                f"{raw_description}{quality_description}; {cloud_description}"
+            )
+        )
         evidence: list[SupportingEvidence] = [
             SupportingEvidence(
                 source=SignalSource.SATELLITE_IMAGERY,
                 observed_at=tile.acquired_at,
                 available_at=imagery_available_at,
-                detail=(
-                    f"{tile.index_value:.2f} on the declared imagery index, cloud fraction "
-                    f"{tile.cloud_fraction:.2f}"
-                ),
+                detail=evidence_detail,
                 index_value=tile.index_value,
+                raw_index_value=tile.raw_index_value,
+                raw_index_unit=tile.raw_index_unit,
+                quality_value=tile.quality_value,
             )
         ]
         sources: list[SignalSource] = [SignalSource.SATELLITE_IMAGERY]
 
-        supporting_fires = [fire for fire in fires if fire.frp_mw >= self.config.fire_frp_support_mw]
+        supporting_fires = [
+            fire for fire in fires if fire.frp_mw >= self.config.fire_frp_support_mw
+        ]
         if supporting_fires:
             score += CONFIDENCE_FIRE
             sources.append(SignalSource.FIRMS)
@@ -991,10 +1047,14 @@ def _load_imagery(payload: Any, where: str) -> ImageryArtifact:
                 "longitude",
                 "acquired_at",
                 "index_value",
-                "cloud_fraction",
             ),
+            optional=("cloud_fraction", "raw_index_value", "raw_index_unit", "quality_value"),
             where=tile_where,
         )
+        cloud_fraction = tile.get("cloud_fraction")
+        raw_index_value = tile.get("raw_index_value")
+        quality_value = tile.get("quality_value")
+        raw_index_unit = tile.get("raw_index_unit")
         tiles.append(
             ImageryTile(
                 tile_id=_require_str(tile, "tile_id", tile_where),
@@ -1003,7 +1063,26 @@ def _load_imagery(payload: Any, where: str) -> ImageryArtifact:
                 longitude=_require_number(tile, "longitude", tile_where),
                 acquired_at=_parse_utc(tile["acquired_at"], f"{tile_where}.acquired_at"),
                 index_value=_require_number(tile, "index_value", tile_where),
-                cloud_fraction=_require_number(tile, "cloud_fraction", tile_where),
+                cloud_fraction=(
+                    None
+                    if cloud_fraction is None
+                    else _require_number(tile, "cloud_fraction", tile_where)
+                ),
+                raw_index_value=(
+                    None
+                    if raw_index_value is None
+                    else _require_number(tile, "raw_index_value", tile_where)
+                ),
+                raw_index_unit=(
+                    None
+                    if raw_index_unit is None
+                    else _require_str(tile, "raw_index_unit", tile_where)
+                ),
+                quality_value=(
+                    None
+                    if quality_value is None
+                    else _require_number(tile, "quality_value", tile_where)
+                ),
             )
         )
     synthetic = data.get("synthetic", False)

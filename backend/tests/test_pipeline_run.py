@@ -12,24 +12,28 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import h3
 import pytest
 
 from app.core.config import Settings
 from app.domain.environmental_observations import FireHotspot
 from app.domain.features import InputKind
+from app.domain.hotspots import ImageryArtifact, ImageryTile
 from app.domain.scenario import DatasetVersion
 from app.domain.types import BoundingBox
 from app.pipeline.run import (
     PipelineReport,
     StageOutcome,
-    _fire_feature_inputs,
     _expand_bbox,
+    _fire_feature_inputs,
     _ingest_fires,
     _ingest_sensors,
+    _scan_live_satellite_hotspots,
 )
 
 GENERATED_AT = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 BBOX = BoundingBox(min_lat=37.6, min_lon=-122.6, max_lat=37.9, max_lon=-122.1)
+DELHI_BBOX = BoundingBox(min_lat=28.4, min_lon=76.8, max_lat=28.9, max_lon=77.5)
 
 
 def _settings(**overrides) -> Settings:
@@ -231,3 +235,99 @@ def test_firms_request_bounds_include_a_50_km_source_neighborhood() -> None:
     assert expanded.max_lon > BBOX.max_lon
     assert -90 <= expanded.min_lat < expanded.max_lat <= 90
     assert -180 <= expanded.min_lon < expanded.max_lon <= 180
+
+
+async def test_live_satellite_scan_is_non_blocking_when_cdse_is_not_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(demo_mode=False, cdse_refresh_token=None)
+    health: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "app.pipeline.run._record_source_health",
+        lambda session, **kwargs: health.append(kwargs),
+    )
+
+    outcome = await _scan_live_satellite_hotspots(
+        None,  # type: ignore[arg-type]
+        settings,
+        BBOX,
+        GENERATED_AT,
+        "run-test",
+    )
+
+    assert outcome.succeeded is True
+    assert outcome.name == "satellite_hotspot_scanning"
+    assert "CDSE_REFRESH_TOKEN" in outcome.summary
+    assert health[0]["called"] is False
+    assert health[0]["dataset_id"] == "copernicus-sentinel5p-aer-ai"
+
+
+async def test_live_satellite_scan_records_provenanced_uvai_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    settings = _settings(
+        demo_mode=False,
+        cdse_refresh_token="refresh-token-test",
+        hotspot_scan_dir=str(tmp_path),
+    )
+    now = datetime.now(UTC)
+    cell = h3.latlng_to_cell(28.6, 77.2, 6)
+    artifact = ImageryArtifact(
+        artifact_id="cdse-s5p:b0f9e574-73d2-4c8a-96d1-2f679e9717a7",
+        source="Copernicus Data Space Ecosystem",
+        product="Sentinel-5P TROPOMI Level-2 UV Aerosol Index NRTI",
+        product_version="02.06.00",
+        index_name="UVAI_340_380 dimensionless",
+        license="Copernicus Sentinel data",
+        h3_resolution=6,
+        tiles=(
+            ImageryTile(
+                tile_id=f"s5p:test:{cell}",
+                h3_cell=cell,
+                latitude=28.6,
+                longitude=77.2,
+                acquired_at=now - timedelta(minutes=10),
+                index_value=0.6,
+                raw_index_value=2.6,
+                raw_index_unit="unitless UV aerosol index (340/380 nm)",
+                quality_value=0.95,
+            ),
+        ),
+        acquired_at=now - timedelta(minutes=10),
+        available_at=now - timedelta(minutes=5),
+        notes="QA-qualified calibrated UVAI pixels; not PM2.5.",
+    )
+
+    class _Provider:
+        def __init__(self, client, **kwargs) -> None:
+            pass
+
+        async def fetch_new_artifacts(self, **kwargs):
+            return [artifact]
+
+    health: list[dict[str, object]] = []
+    monkeypatch.setattr("app.pipeline.run.CopernicusSentinel5PProvider", _Provider)
+    monkeypatch.setattr(
+        "app.pipeline.run._record_source_health",
+        lambda session, **kwargs: health.append(kwargs),
+    )
+
+    outcome = await _scan_live_satellite_hotspots(
+        None,  # type: ignore[arg-type]
+        settings,
+        DELHI_BBOX,
+        now,
+        "run-test",
+    )
+
+    assert outcome.succeeded is True
+    assert "new_swaths=1 candidates=1" in outcome.summary
+    assert health[0]["item_count"] == 1
+    from app.services.hotspot_detection import HotspotScanStore
+
+    [scan_summary] = HotspotScanStore(tmp_path).summaries()
+    scan = HotspotScanStore(tmp_path).read(scan_summary["scan_id"])
+    assert scan["imagery"]["source"] == "Copernicus Data Space Ecosystem"
+    assert scan["config"]["sentinel5p_uvai_threshold_raw"] == 1.0
+    assert scan["candidates"][0]["evidence"][0]["raw_index_value"] == 2.6

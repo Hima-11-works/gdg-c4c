@@ -33,7 +33,6 @@ and found nothing" are very different statements.
 
 from __future__ import annotations
 
-import math
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -66,7 +65,9 @@ CONFIDENCE_STATION = 0.15
 
 #: Upper bound of the confidence scale, so a future signal cannot silently push
 #: every candidate into the top band.
-CONFIDENCE_MAX = CONFIDENCE_IMAGERY + CONFIDENCE_IMAGERY_STRONG + CONFIDENCE_FIRE + CONFIDENCE_STATION
+CONFIDENCE_MAX = (
+    CONFIDENCE_IMAGERY + CONFIDENCE_IMAGERY_STRONG + CONFIDENCE_FIRE + CONFIDENCE_STATION
+)
 
 CONFIDENCE_HIGH_THRESHOLD = 0.75
 CONFIDENCE_MEDIUM_THRESHOLD = 0.50
@@ -171,11 +172,10 @@ def _require_fraction(value: float, name: str) -> None:
 class ImageryTile:
     """One georeferenced cell of an upstream-derived imagery index.
 
-    `index_value` is **not** computed here. The detector consumes a declared
-    index product (its name, version and scale live on the artifact), so no
-    smoke-detection physics is invented at this layer. `cloud_fraction` is kept
-    because an uncorrected high-cloud cell is a classic false positive, and a
-    detector that cannot see cloud cannot be assessed for false positives at all.
+    `index_value` is the source-normalized detector input; `raw_index_value` and
+    `raw_index_unit` preserve the upstream measurement for audit. `cloud_fraction`
+    is optional because some calibrated satellite products publish a QA score
+    instead of a cloud fraction.
     """
 
     tile_id: str
@@ -184,7 +184,10 @@ class ImageryTile:
     longitude: float
     acquired_at: datetime
     index_value: float
-    cloud_fraction: float
+    cloud_fraction: float | None = None
+    raw_index_value: float | None = None
+    raw_index_unit: str | None = None
+    quality_value: float | None = None
 
     def __post_init__(self) -> None:
         if not self.tile_id.strip() or not self.h3_cell.strip():
@@ -192,10 +195,19 @@ class ImageryTile:
         _require_location(self.latitude, self.longitude, "tile")
         _require_utc(self.acquired_at, "tile acquired_at")
         _require_fraction(self.index_value, "index_value")
-        _require_fraction(self.cloud_fraction, "cloud_fraction")
+        if self.cloud_fraction is not None:
+            _require_fraction(self.cloud_fraction, "cloud_fraction")
+        if self.raw_index_value is not None:
+            _require_finite(self.raw_index_value, "raw_index_value")
+        if self.raw_index_unit is not None and not self.raw_index_unit.strip():
+            raise ValueError("raw_index_unit must not be blank when supplied")
+        if self.raw_index_value is not None and not self.raw_index_unit:
+            raise ValueError("raw_index_unit is required with raw_index_value")
+        if self.quality_value is not None:
+            _require_fraction(self.quality_value, "quality_value")
 
     def to_dict(self) -> dict:
-        return {
+        payload = {
             "tile_id": self.tile_id,
             "h3_cell": self.h3_cell,
             "latitude": self.latitude,
@@ -204,6 +216,12 @@ class ImageryTile:
             "index_value": self.index_value,
             "cloud_fraction": self.cloud_fraction,
         }
+        if self.raw_index_value is not None:
+            payload["raw_index_value"] = self.raw_index_value
+            payload["raw_index_unit"] = self.raw_index_unit
+        if self.quality_value is not None:
+            payload["quality_value"] = self.quality_value
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,8 +259,8 @@ class ImageryArtifact:
                 raise ValueError(f"{name} must not be empty")
         if not 0 <= self.h3_resolution <= 15:
             raise ValueError(f"h3_resolution must be within [0, 15], got {self.h3_resolution}")
-        if not self.tiles:
-            raise ValueError("an imagery artifact must carry at least one tile")
+        # An artifact with no eligible pixels is meaningful: the scan records
+        # that the satellite looked but QA masking left no usable measurements.
         _require_utc(self.acquired_at, "imagery acquired_at")
         _require_utc(self.available_at, "imagery available_at")
         if self.available_at < self.acquired_at:
@@ -255,6 +273,8 @@ class ImageryArtifact:
     @property
     def acquisition_window(self) -> tuple[datetime, datetime]:
         times = [tile.acquired_at for tile in self.tiles]
+        if not times:
+            return self.acquired_at, self.acquired_at
         return min(times), max(times)
 
     def to_dict(self) -> dict:
@@ -426,6 +446,9 @@ class SupportingEvidence:
     detection_id: str | None = None
     station_id: str | None = None
     station_pm25_ugm3: float | None = None
+    raw_index_value: float | None = None
+    raw_index_unit: str | None = None
+    quality_value: float | None = None
 
     def __post_init__(self) -> None:
         _require_utc(self.observed_at, "evidence observed_at")
@@ -433,9 +456,13 @@ class SupportingEvidence:
             _require_utc(self.available_at, "evidence available_at")
             if self.available_at < self.observed_at:
                 raise ValueError("evidence available_at must not precede observed_at")
+        if self.raw_index_value is not None:
+            _require_finite(self.raw_index_value, "evidence raw_index_value")
+        if self.quality_value is not None:
+            _require_fraction(self.quality_value, "evidence quality_value")
 
     def to_dict(self) -> dict:
-        return {
+        payload = {
             "source": self.source.value,
             "observed_at": self.observed_at.isoformat(),
             "available_at": None if self.available_at is None else self.available_at.isoformat(),
@@ -446,6 +473,12 @@ class SupportingEvidence:
             "station_id": self.station_id,
             "station_pm25_ugm3": self.station_pm25_ugm3,
         }
+        if self.raw_index_value is not None:
+            payload["raw_index_value"] = self.raw_index_value
+            payload["raw_index_unit"] = self.raw_index_unit
+        if self.quality_value is not None:
+            payload["quality_value"] = self.quality_value
+        return payload
 
 
 @dataclass(frozen=True, slots=True)

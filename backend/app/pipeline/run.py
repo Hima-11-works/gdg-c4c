@@ -69,17 +69,19 @@ from app.domain.features import DataMode, DatasetRef, FeatureSnapshot, InputKind
 from app.domain.prediction import DEFAULT_REGION
 from app.domain.types import BoundingBox, Forecast, WeatherReading
 from app.ingestion.demo_reports import demo_fire_reports
-from app.ingestion.firms import FirmsProvider
 from app.ingestion.factory import build_pollution_provider, build_weather_provider
+from app.ingestion.firms import FirmsProvider
+from app.ingestion.sentinel5p import CopernicusSentinel5PProvider, normalized_threshold
 from app.services.alert_generation import AlertGenerationService
 from app.services.dispersion import DeterministicH3DispersionModel
-from app.services.estimation import IDWPollutionEstimator
 from app.services.environmental_ingestion import EnvironmentalIngestionService
+from app.services.estimation import IDWPollutionEstimator
 from app.services.features import FIRE_FEATURE_MAX_DISTANCE_KM, FeatureBuilder
 from app.services.fire_gradient import PlumeFireGradientModel
 from app.services.forecasting import ForecastingService
 from app.services.geospatial import GeospatialService
 from app.services.grid_computation import GridComputationService
+from app.services.hotspot_detection import DetectorConfig, HotspotDetector, HotspotScanStore
 from app.services.ingestion import SensorIngestionService, WeatherIngestionService
 from app.services.national_overview import build_national_overview
 from app.services.pdi import HeuristicPDIModel
@@ -564,6 +566,150 @@ async def _ingest_fires(
     )
 
 
+def _sentinel5p_case_id(product_id: str) -> str:
+    """Stable, safe case id so retries do not reprocess the same swath."""
+    return f"live-s5p-{product_id.lower()}"
+
+
+async def _scan_live_satellite_hotspots(
+    session: Session,
+    settings: Settings,
+    bbox: BoundingBox,
+    timestamp: datetime,
+    pipeline_run_id: str,
+) -> StageOutcome:
+    """Fetch new Sentinel-5P NRT swaths and record QA-filtered candidates."""
+    dataset_id = "copernicus-sentinel5p-aer-ai"
+    if settings.demo_mode:
+        _record_source_health(
+            session,
+            pipeline_run_id=pipeline_run_id,
+            dataset_id=dataset_id,
+            called=False,
+            failed=False,
+            item_count=0,
+        )
+        return StageOutcome(
+            "satellite_hotspot_scanning",
+            True,
+            "skipped in demo mode; live satellite imagery is not mixed with scenario data",
+        )
+    if settings.cdse_refresh_token is None:
+        _record_source_health(
+            session,
+            pipeline_run_id=pipeline_run_id,
+            dataset_id=dataset_id,
+            called=False,
+            failed=False,
+            item_count=0,
+        )
+        return StageOutcome(
+            "satellite_hotspot_scanning", True, "skipped: CDSE_REFRESH_TOKEN is not configured"
+        )
+
+    store = HotspotScanStore(settings.hotspot_scan_dir)
+    summaries = store.summaries()
+    product_ids = {
+        case_id.removeprefix("live-s5p-")
+        for summary in summaries
+        if isinstance(case_id := summary.get("case_id"), str)
+        and case_id.startswith("live-s5p-")
+    }
+
+    now = max(timestamp, datetime.now(UTC))
+    since = now - timedelta(hours=settings.hotspot_sentinel5p_max_age_hours)
+    try:
+        async with httpx.AsyncClient(
+            timeout=settings.hotspot_sentinel5p_timeout_seconds
+        ) as client:
+            provider = CopernicusSentinel5PProvider(
+                client,
+                refresh_token=settings.cdse_refresh_token.get_secret_value(),
+                timeout_seconds=settings.hotspot_sentinel5p_timeout_seconds,
+                max_products=settings.hotspot_sentinel5p_max_products,
+                max_tiles=settings.hotspot_max_tiles,
+            )
+            artifacts = await provider.fetch_new_artifacts(
+                bbox=bbox,
+                since=since,
+                until=now,
+                processed_ids=product_ids,
+                h3_resolution=settings.hotspot_sentinel5p_h3_resolution,
+                min_quality=settings.hotspot_sentinel5p_min_quality,
+            )
+
+        base_config = DetectorConfig.from_settings(settings)
+        detector_config = replace(
+            base_config,
+            smoke_index_threshold=normalized_threshold(
+                settings.hotspot_sentinel5p_uvai_threshold
+            ),
+            strong_index_threshold=normalized_threshold(
+                settings.hotspot_sentinel5p_uvai_strong_threshold
+            ),
+            imagery_max_age_hours=settings.hotspot_sentinel5p_max_age_hours,
+        )
+        candidates = 0
+        for artifact in artifacts:
+            product_id = artifact.artifact_id.removeprefix("cdse-s5p:")
+            case_id = _sentinel5p_case_id(product_id)
+            evaluated_at = max(now, artifact.available_at)
+            scan = HotspotDetector(detector_config).detect(
+                case_id=case_id,
+                case_title=artifact.product,
+                h3_resolution=artifact.h3_resolution,
+                evaluated_at=evaluated_at,
+                imagery=artifact,
+            )
+            scan = replace(
+                scan,
+                config={
+                    **scan.config,
+                    "sentinel5p_uvai_threshold_raw": (
+                        settings.hotspot_sentinel5p_uvai_threshold
+                    ),
+                    "sentinel5p_uvai_strong_threshold_raw": (
+                        settings.hotspot_sentinel5p_uvai_strong_threshold
+                    ),
+                    "sentinel5p_quality_min_exclusive": (
+                        settings.hotspot_sentinel5p_min_quality
+                    ),
+                    "sentinel5p_index_normalization": "clamp((raw_uvai + 1) / 6, 0, 1)",
+                },
+            )
+            store.write(scan)
+            candidates += len(scan.candidates)
+
+        _record_source_health(
+            session,
+            pipeline_run_id=pipeline_run_id,
+            dataset_id=dataset_id,
+            called=True,
+            failed=False,
+            item_count=len(artifacts),
+        )
+        return StageOutcome(
+            "satellite_hotspot_scanning",
+            True,
+            f"new_swaths={len(artifacts)} candidates={candidates} "
+            f"(UVAI trigger={settings.hotspot_sentinel5p_uvai_threshold:g}, "
+            f"quality>{settings.hotspot_sentinel5p_min_quality:g})",
+        )
+    except Exception as exc:
+        message = f"CDSE Sentinel-5P scan failed: {exc}"
+        logger.exception(message)
+        _record_source_health(
+            session,
+            pipeline_run_id=pipeline_run_id,
+            dataset_id=dataset_id,
+            called=True,
+            failed=True,
+            item_count=0,
+            error_summary=str(exc)[:500],
+        )
+        return StageOutcome("satellite_hotspot_scanning", False, message[:500])
+
+
 def _expand_bbox(*, bbox: BoundingBox, distance_km: float) -> BoundingBox:
     """Add a bounded neighborhood so upwind sources outside the view are included."""
     latitude_margin = distance_km / 110.574
@@ -914,6 +1060,9 @@ async def run_pipeline(bbox: BoundingBox, *, timestamp: datetime) -> PipelineRep
         fire_outcome, fire_feed_available, fire_dataset_id = await _ingest_fires(
             session, settings, bbox, pipeline_run_id
         )
+        satellite_hotspot_outcome = await _scan_live_satellite_hotspots(
+            session, settings, bbox, timestamp, pipeline_run_id
+        )
         # FIRMS's available_at is the fetch completion time. Issue the forecast
         # after that time so only data already fetched can enter its features.
         issue_timestamp = (
@@ -923,6 +1072,7 @@ async def run_pipeline(bbox: BoundingBox, *, timestamp: datetime) -> PipelineRep
             sensor_outcome,
             weather_outcome,
             fire_outcome,
+            satellite_hotspot_outcome,
             _seed_fire_reports(session, settings, issue_timestamp),
             _compute_grid(session, settings, bbox, issue_timestamp),
         ]
