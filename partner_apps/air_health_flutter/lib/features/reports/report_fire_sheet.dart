@@ -1,6 +1,9 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../domain/models/fire_report.dart';
 import '../../providers/data_providers.dart';
@@ -29,6 +32,11 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
   int _smokeIntensity = 3;
   double _durationHours = FireDurationOption.justStarted.hours;
   final _notesController = TextEditingController();
+  final _imagePicker = ImagePicker();
+  Uint8List? _photoBytes;
+  String? _photoFilename;
+  bool _photoConsent = false;
+  FireReport? _submittedReport;
   bool _submitting = false;
 
   @override
@@ -58,36 +66,83 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
     final client = ref.read(fireReportApiClientProvider);
     if (client == null || _submitting) return;
 
-    final location = ref.read(resolvedLocationProvider);
-    final FireReportDraft draft;
-    try {
-      draft = FireReportDraft.create(
-        latitude: location.latitude,
-        longitude: location.longitude,
-        kind: _kind,
-        smokeIntensity: _smokeIntensity,
-        durationHours: _durationHours,
-        notes: _notesController.text,
-        clientReportId: _clientReportId,
-      );
-    } catch (error) {
-      _showMessage('$error');
+    if (_photoBytes != null && !_photoConsent) {
+      _showMessage('Please consent before attaching the photo.');
       return;
+    }
+
+    FireReportDraft? draft;
+    if (_submittedReport == null) {
+      final location = ref.read(resolvedLocationProvider);
+      try {
+        draft = FireReportDraft.create(
+          latitude: location.latitude,
+          longitude: location.longitude,
+          kind: _kind,
+          smokeIntensity: _smokeIntensity,
+          durationHours: _durationHours,
+          notes: _notesController.text,
+          clientReportId: _clientReportId,
+        );
+      } catch (error) {
+        _showMessage('$error');
+        return;
+      }
     }
 
     HapticFeedback.mediumImpact();
     setState(() => _submitting = true);
     try {
-      final report = await client.submitReport(draft);
+      final report = _submittedReport ?? await client.submitReport(draft!);
+      _submittedReport ??= report;
+      if (_photoBytes != null) {
+        if (client is! CitizenPhotoApiClient) {
+          throw StateError('Photo upload is unavailable for this API client.');
+        }
+        await client.attachPhoto(
+          reportId: report.id,
+          bytes: _photoBytes!,
+          filename: _photoFilename ?? 'citizen-photo.jpg',
+        );
+      }
       if (!mounted) return;
       Navigator.of(context).pop(report);
     } catch (_) {
       if (!mounted) return;
       setState(() => _submitting = false);
-      _showMessage(
-        'Could not send the report — check your connection and try again.',
-      );
+      _showMessage(_submittedReport == null
+          ? 'Could not send the report — check your connection and try again.'
+          : 'Your report was saved, but the photo could not be uploaded. Retry or remove the photo.');
     }
+  }
+
+  Future<void> _pickPhoto(ImageSource source) async {
+    try {
+      final photo = await _imagePicker.pickImage(
+        source: source,
+        imageQuality: 85,
+        maxWidth: 2048,
+        maxHeight: 2048,
+      );
+      if (photo == null || !mounted) return;
+      final bytes = await photo.readAsBytes();
+      if (!mounted) return;
+      setState(() {
+        _photoBytes = bytes;
+        _photoFilename = photo.name;
+        _photoConsent = false;
+      });
+    } catch (_) {
+      _showMessage('Could not open the photo picker. Check app permissions and try again.');
+    }
+  }
+
+  void _removePhoto() {
+    setState(() {
+      _photoBytes = null;
+      _photoFilename = null;
+      _photoConsent = false;
+    });
   }
 
   void _showMessage(String message) {
@@ -163,6 +218,63 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
                 counterText: '',
               ),
             ),
+            const SizedBox(height: AppSpacing.lg),
+            _SectionLabel('Add a photo (optional)'),
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              'A photo can help responders assess smoke or burning. Photos are stored privately; '
+              'reviewers see a metadata-stripped copy.',
+              style: AppTypography.bodySmall.copyWith(color: cs.onSurfaceVariant),
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            if (_photoBytes == null)
+              Wrap(
+                spacing: AppSpacing.sm,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: _submitting ? null : () => _pickPhoto(ImageSource.camera),
+                    icon: const Icon(Icons.camera_alt_outlined),
+                    label: const Text('Take photo'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _submitting ? null : () => _pickPhoto(ImageSource.gallery),
+                    icon: const Icon(Icons.photo_library_outlined),
+                    label: const Text('Choose photo'),
+                  ),
+                ],
+              )
+            else ...[
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: Image.memory(
+                  _photoBytes!,
+                  height: 160,
+                  width: double.infinity,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => const SizedBox(
+                    height: 80,
+                    child: Center(child: Text('Photo selected')),
+                  ),
+                ),
+              ),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: _submitting ? null : _removePhoto,
+                  icon: const Icon(Icons.delete_outline),
+                  label: const Text('Remove photo'),
+                ),
+              ),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                value: _photoConsent,
+                onChanged: _submitting
+                    ? null
+                    : (value) => setState(() => _photoConsent = value ?? false),
+                title: const Text('I consent to storing this photo with my report.'),
+                controlAffinity: ListTileControlAffinity.leading,
+              ),
+            ],
             const SizedBox(height: AppSpacing.xxl),
             SizedBox(
               width: double.infinity,
@@ -175,7 +287,13 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.send),
-                label: Text(_submitting ? 'Sending…' : 'Submit report'),
+                label: Text(
+                  _submitting
+                      ? 'Sending…'
+                      : _submittedReport != null && _photoBytes != null
+                          ? 'Retry photo upload'
+                          : 'Submit report',
+                ),
               ),
             ),
           ],

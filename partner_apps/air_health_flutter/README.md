@@ -19,7 +19,16 @@ rationale, see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 Flutter / Dart · **Riverpod** (state & DI) · **go_router** (navigation) ·
 **Dio** (HTTP) · `flutter_local_notifications` · `geolocator` +
 `permission_handler` · `flutter_secure_storage` + `shared_preferences` ·
-`fl_chart` · `intl`.
+`fl_chart` · `intl` · `image_picker`.
+
+## Citizen reports
+
+When connected to the backend, the fire/smoke report sheet can attach one
+camera or gallery photo to a report. The app asks for explicit consent before
+uploading and resizes the selected image for mobile upload. The backend stores
+the original privately and exposes only its metadata-stripped review derivative.
+If photo upload fails after the report is saved, the sheet keeps the report id
+and lets the citizen retry the photo upload without creating a duplicate report.
 
 ## Layout
 

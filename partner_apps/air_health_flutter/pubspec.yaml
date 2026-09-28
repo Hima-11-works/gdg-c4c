@@ -37,6 +37,9 @@ dependencies:
   # HTTP (grid API integration)
   dio: ^5.8.0+1
 
+  # Citizen photo evidence on fire and smoke reports
+  image_picker: ^1.2.3
+
   # Formatting
   intl: ^0.20.2
 

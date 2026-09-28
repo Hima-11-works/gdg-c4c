@@ -6,9 +6,20 @@
 /// here. Envelopes are the same `{generated_at, is_demo, data}` shape.
 library;
 
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 
 import '../../domain/models/fire_report.dart';
+
+/// Optional photo upload surface for clients that support citizen evidence.
+abstract interface class CitizenPhotoApiClient {
+  Future<void> attachPhoto({
+    required int reportId,
+    required Uint8List bytes,
+    required String filename,
+  });
+}
 
 /// `{generated_at, is_demo, data}` — every grid API response.
 class ReportEnvelope<T> {
@@ -87,7 +98,8 @@ abstract class FireReportApiClient {
 /// Dio-backed [FireReportApiClient]. [dio]'s base URL is the API origin
 /// (the same instance base the grid client uses); this class adds the
 /// `/api/v1` prefix.
-class DioFireReportApiClient implements FireReportApiClient {
+class DioFireReportApiClient
+    implements FireReportApiClient, CitizenPhotoApiClient {
   DioFireReportApiClient({required Dio dio}) : _dio = dio;
 
   final Dio _dio;
@@ -120,6 +132,24 @@ class DioFireReportApiClient implements FireReportApiClient {
           .map((e) => FireReportDto.fromJson(e as Map<String, dynamic>).toDomain())
           .toList(),
     ).data;
+  }
+
+  @override
+  Future<void> attachPhoto({
+    required int reportId,
+    required List<int> bytes,
+    required String filename,
+  }) async {
+    final response = await _dio.post<Map<String, dynamic>>(
+      '$_apiPrefix/reports/$reportId/evidence',
+      data: FormData.fromMap({
+        'photo': MultipartFile.fromBytes(bytes, filename: filename),
+        'consent': 'true',
+      }),
+    );
+    if (response.data == null || response.data!['data'] is! Map<String, dynamic>) {
+      throw const FormatException('The server returned an invalid photo receipt.');
+    }
   }
 
   Future<Map<String, dynamic>> _get(String path) async {
