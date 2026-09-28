@@ -80,32 +80,92 @@ export interface FreightNode {
   congestion: number
   /** Estimated daily emission impact from corridor freight activity. */
   dailyEmissionTonnes: number
+  /** Forecast air-quality spike risk along corridor section */
+  spikeRisk: 'Elevated' | 'High' | 'Severe'
+  /** Statutory freight logistics advisory */
+  advisory: string
 }
 
 export const FREIGHT_NODES: FreightNode[] = [
   {
     name: 'Manesar Logistics Hub',
-    corridor: 'Western DFC · DMIC',
+    corridor: 'Western DFC · DMIC (Delhi–Mumbai)',
     lat: 28.35,
     lon: 76.94,
-    congestion: 74,
-    dailyEmissionTonnes: 820,
+    congestion: 78,
+    dailyEmissionTonnes: 890,
+    spikeRisk: 'Severe',
+    advisory: 'Downwind industrial & vehicular entrapment; recommend low-emission freight scheduling.',
   },
   {
     name: 'Sanand Freight Node',
-    corridor: 'DMIC Gujarat Spine',
+    corridor: 'DMIC Gujarat Industrial Spine',
     lat: 22.98,
     lon: 72.38,
     congestion: 58,
     dailyEmissionTonnes: 640,
+    spikeRisk: 'Elevated',
+    advisory: 'Steady maritime trade flow; ambient particulates within operational limits.',
+  },
+  {
+    name: 'Surat Industrial Transit Hub',
+    corridor: 'Western DFC Chemical & Textile Spine',
+    lat: 21.17,
+    lon: 72.83,
+    congestion: 72,
+    dailyEmissionTonnes: 810,
+    spikeRisk: 'High',
+    advisory: 'Heavy diesel transit corridor; recommend speed regulation and dry sweeping.',
   },
   {
     name: 'JNPT Gateway Terminal',
-    corridor: 'Western DFC Terminus',
+    corridor: 'Western DFC Terminus (Mumbai)',
     lat: 18.95,
     lon: 72.95,
-    congestion: 81,
-    dailyEmissionTonnes: 1130,
+    congestion: 84,
+    dailyEmissionTonnes: 1180,
+    spikeRisk: 'High',
+    advisory: 'Port-bound drayage emissions; enforce shore power and idle-reduction directives.',
+  },
+  {
+    name: 'Ludhiana Cargo Logistics Park',
+    corridor: 'Eastern DFC Northern Origin',
+    lat: 30.90,
+    lon: 75.85,
+    congestion: 76,
+    dailyEmissionTonnes: 720,
+    spikeRisk: 'Severe',
+    advisory: 'Seasonal stubble burning & industrial smoke; activate freight bypass routing.',
+  },
+  {
+    name: 'Dadri Multimodal Hub',
+    corridor: 'WDFC / EDFC Strategic Interchange',
+    lat: 28.55,
+    lon: 77.55,
+    congestion: 88,
+    dailyEmissionTonnes: 1250,
+    spikeRisk: 'Severe',
+    advisory: 'Critical interchange junction; stage-triggered truck diversion protocols in effect.',
+  },
+  {
+    name: 'Kanpur Freight Terminal',
+    corridor: 'Eastern DFC (Indo-Gangetic Spine)',
+    lat: 26.45,
+    lon: 80.33,
+    congestion: 69,
+    dailyEmissionTonnes: 790,
+    spikeRisk: 'High',
+    advisory: 'Winter inversion layer vulnerability; strict boiler & stack emission vigil.',
+  },
+  {
+    name: 'Dankuni Eastern Freight Terminal',
+    corridor: 'Eastern DFC Maritime Gateway (Kolkata)',
+    lat: 22.68,
+    lon: 88.29,
+    congestion: 64,
+    dailyEmissionTonnes: 710,
+    spikeRisk: 'Elevated',
+    advisory: 'Riverine basin dispersion; monitor thermal power plant stack plumes.',
   },
 ]
 
@@ -118,7 +178,14 @@ export function freightLinesFeatureCollection(): FeatureCollection<
 
 export function freightNodesFeatureCollection(): FeatureCollection<
   Point,
-  { name: string; corridor: string; congestion: number; emission: number }
+  {
+    name: string
+    corridor: string
+    congestion: number
+    emission: number
+    spikeRisk: string
+    advisory: string
+  }
 > {
   return {
     type: 'FeatureCollection',
@@ -129,6 +196,8 @@ export function freightNodesFeatureCollection(): FeatureCollection<
         corridor: node.corridor,
         congestion: node.congestion,
         emission: node.dailyEmissionTonnes,
+        spikeRisk: node.spikeRisk,
+        advisory: node.advisory,
       },
       geometry: { type: 'Point', coordinates: [node.lon, node.lat] },
     })),

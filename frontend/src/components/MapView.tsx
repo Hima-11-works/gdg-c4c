@@ -1291,7 +1291,13 @@ export function MapView({
               `<strong>${props.name}</strong>` +
                 `<span class="freight-popup-corridor">${props.corridor}</span>` +
                 `<span>Corridor congestion: <b>${props.congestion}%</b></span>` +
-                `<span>Emission impact: <b>${props.emission}</b> t CO₂e / day</span>`,
+                `<span>Emission impact: <b>${props.emission}</b> t CO₂e / day</span>` +
+                (props.spikeRisk
+                  ? `<span class="freight-popup-risk">Corridor spike risk: <b class="freight-risk-badge freight-risk-${props.spikeRisk.toLowerCase()}">${props.spikeRisk}</b></span>`
+                  : '') +
+                (props.advisory
+                  ? `<span class="freight-popup-advisory">${props.advisory}</span>`
+                  : ''),
               12,
             )
           })

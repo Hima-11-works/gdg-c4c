@@ -1267,6 +1267,45 @@ body,
   font-size: 0.68rem;
 }
 
+.freight-popup-risk {
+  font-size: 0.7rem;
+  margin-top: 0.15rem;
+}
+
+.freight-risk-badge {
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+}
+
+.freight-risk-elevated {
+  background: rgba(234, 179, 8, 0.2);
+  color: #fde047;
+  border: 1px solid rgba(234, 179, 8, 0.4);
+}
+
+.freight-risk-high {
+  background: rgba(249, 115, 22, 0.2);
+  color: #fdba74;
+  border: 1px solid rgba(249, 115, 22, 0.5);
+}
+
+.freight-risk-severe {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.6);
+}
+
+.freight-popup-advisory {
+  font-size: 0.68rem;
+  color: #cbd5e1;
+  line-height: 1.35;
+  margin-top: 0.25rem;
+  padding-top: 0.25rem;
+  border-top: 1px dashed rgba(255, 255, 255, 0.15);
+}
+
 /* --- satellite fire anomaly popup --- */
 
 .fire-anomaly-popup .maplibregl-popup-content {

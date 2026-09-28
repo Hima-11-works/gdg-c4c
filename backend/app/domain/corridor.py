@@ -128,7 +128,53 @@ DELHI_KANPUR = Corridor(
     ),
 )
 
-CORRIDORS: dict[str, Corridor] = {DELHI_KANPUR.corridor_id: DELHI_KANPUR}
+DMIC_CORRIDOR = Corridor(
+    corridor_id="dmic",
+    name="Delhi–Mumbai Industrial Corridor (DMIC)",
+    kind=CorridorKind.CORRIDOR,
+    region="india",
+    endpoints=(
+        ("Dadri/Delhi", 28.5492, 77.5539),
+        ("JNPT Mumbai", 18.9499, 72.9515),
+    ),
+    h3_resolution=7,
+    cell_count=36,
+    geometry_source=GeometrySource.ILLUSTRATIVE,
+    geometry_note=(
+        "ILLUSTRATIVE geometry: Delhi-Mumbai high-capacity industrial corridor axis "
+        "linking northern logistics nodes with western container ports."
+    ),
+    notes=(
+        "Key economic freight corridor connecting NCR, Rajasthan, Gujarat, and Maharashtra."
+    ),
+)
+
+EDFC_CORRIDOR = Corridor(
+    corridor_id="edfc",
+    name="Eastern Dedicated Freight Corridor (EDFC)",
+    kind=CorridorKind.CORRIDOR,
+    region="india",
+    endpoints=(
+        ("Ludhiana (Sahnewal)", 30.8525, 75.9863),
+        ("Dankuni Kolkata", 22.6865, 88.2985),
+    ),
+    h3_resolution=7,
+    cell_count=42,
+    geometry_source=GeometrySource.ILLUSTRATIVE,
+    geometry_note=(
+        "ILLUSTRATIVE geometry: Sahnewal (Ludhiana) to Dankuni (Kolkata) freight artery "
+        "intersecting heavy coal, agricultural, and mineral transport zones."
+    ),
+    notes=(
+        "Traverses Punjab, Haryana, UP, Bihar, Jharkhand, and West Bengal."
+    ),
+)
+
+CORRIDORS: dict[str, Corridor] = {
+    DELHI_KANPUR.corridor_id: DELHI_KANPUR,
+    DMIC_CORRIDOR.corridor_id: DMIC_CORRIDOR,
+    EDFC_CORRIDOR.corridor_id: EDFC_CORRIDOR,
+}
 
 
 def get_corridor(corridor_id: str) -> Corridor | None:
