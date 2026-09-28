@@ -390,22 +390,9 @@ def get_alerts_v2(
     service: PredictionQueryService = Depends(get_prediction_query_service),
 ) -> V2Envelope[list[AlertV2Out]]:
     run = _run_or_404(service, run_id)
-    rows = service.results(
-        run,
-        cells=service.target_cells(run, service.native_resolution)
-        if run.run_id.startswith("demo-fallback-")
-        else None,
-    )
-    current_by_cell = {row.h3_cell: row for row in rows if row.horizon_hours == 0}
+    candidates = service.alert_candidates(run, threshold_pm25=ALERT_WARNING_PM25)
     alerts = []
-    for row in rows:
-        if (
-            row.horizon_hours <= 0
-            or row.predicted_pm25 is None
-            or row.predicted_pm25 < ALERT_WARNING_PM25
-        ):
-            continue
-        current = current_by_cell.get(row.h3_cell)
+    for row in candidates:
         identity = PublishedAlertIdentity(
             run_id=run.run_id,
             h3_cell=row.h3_cell,
@@ -419,10 +406,10 @@ def get_alerts_v2(
                 severity=severity,
                 message=f"Published run forecasts PM2.5 at {row.predicted_pm25:.0f} µg/m³.",
                 created_at=run.generated_at,
-                current_pm25=current.predicted_pm25 if current else None,
+                current_pm25=row.current_pm25,
                 forecast_pm25=row.predicted_pm25,
                 forecast_hours=row.horizon_hours,
-                confidence=row.quality.coverage_fraction,
+                confidence=row.confidence,
                 forecast_time=row.valid_at,
             )
         )
@@ -430,7 +417,7 @@ def get_alerts_v2(
         generated_at=run.generated_at,
         run_id=run.run_id,
         mode=run.mode,
-        is_demo=run.mode is DataMode.DEMO or any(row.synthetic for row in rows),
+        is_demo=run.mode is DataMode.DEMO or any(row.synthetic for row in candidates),
         data=alerts,
         attribution=_refs(run.dataset_refs),
     )

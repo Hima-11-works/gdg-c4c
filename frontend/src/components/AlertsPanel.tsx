@@ -6,6 +6,7 @@ import { useMapUi } from '../state/MapUiContext'
 import type { AlertOut, AlertSeverity } from '../lib/types'
 
 const POLL_INTERVAL_MS = 60_000
+const ALERT_PAGE_SIZE = 100
 
 const SEVERITY_LABEL: Record<AlertSeverity, string> = {
   watch: 'Watch',
@@ -102,6 +103,7 @@ export function AlertsPanel({ publishedRunId }: { publishedRunId?: string }) {
   // The checklist is per-alert and lives here (not inside AlertItem) so a
   // 60s poll re-rendering the list cannot wipe what an operator ticked.
   const [checked, setChecked] = useState<Set<string>>(new Set())
+  const [page, setPage] = useState({ runId: publishedRunId, count: ALERT_PAGE_SIZE })
   const { dispatch } = useMapUi()
   const { resource, refetch } = useApiResource(
     () => fetchAlerts(publishedRunId),
@@ -113,9 +115,13 @@ export function AlertsPanel({ publishedRunId }: { publishedRunId?: string }) {
   )
 
   const count = resource.status === 'success' ? resource.data.length : 0
+  const visibleCount = page.runId === publishedRunId ? page.count : ALERT_PAGE_SIZE
+  const visibleAlerts = resource.status === 'success'
+    ? resource.data.slice(0, visibleCount)
+    : []
 
   const keyFor = (alert: AlertOut, action: string) =>
-    `${alert.h3_cell}-${alert.created_at}-${action}`
+    `${alert.h3_cell}-${alert.created_at}-${alert.forecast_hours}-${action}`
   const toggle = (alert: AlertOut, action: string) =>
     setChecked((prev) => {
       const next = new Set(prev)
@@ -181,10 +187,16 @@ export function AlertsPanel({ publishedRunId }: { publishedRunId?: string }) {
             </p>
           )}
 
+          {resource.status === 'success' && resource.data.length > visibleAlerts.length && (
+            <p className="muted alerts-checklist-note">
+              Showing {visibleAlerts.length.toLocaleString()} of {resource.data.length.toLocaleString()} alerts.
+            </p>
+          )}
+
           {resource.status === 'success' &&
-            resource.data.map((alert) => (
+            visibleAlerts.map((alert) => (
               <AlertItem
-                key={`${alert.h3_cell}-${alert.created_at}`}
+                key={`${alert.h3_cell}-${alert.created_at}-${alert.forecast_hours}`}
                 alert={alert}
                 onSelect={() => {
                   if (alert.forecast_hours !== null) {
@@ -199,6 +211,19 @@ export function AlertsPanel({ publishedRunId }: { publishedRunId?: string }) {
                 onToggle={(action) => toggle(alert, action)}
               />
             ))}
+
+          {resource.status === 'success' && resource.data.length > visibleAlerts.length && (
+            <button
+              type="button"
+              className="alert-cta"
+              onClick={() => setPage((current) => ({
+                runId: publishedRunId,
+                count: (current.runId === publishedRunId ? current.count : ALERT_PAGE_SIZE) + ALERT_PAGE_SIZE,
+              }))}
+            >
+              Show next {Math.min(ALERT_PAGE_SIZE, resource.data.length - visibleAlerts.length)} alerts
+            </button>
+          )}
         </div>
       )}
     </div>

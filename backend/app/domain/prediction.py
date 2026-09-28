@@ -91,3 +91,16 @@ class PredictionResult:
         if self.lower_pm25 is not None and self.upper_pm25 is not None:
             if self.lower_pm25 > self.upper_pm25:
                 raise ValueError("lower_pm25 must not exceed upper_pm25")
+
+
+@dataclass(frozen=True, slots=True)
+class AlertCandidate:
+    """Small projection for a forecast row that qualifies as an alert."""
+
+    h3_cell: str
+    horizon_hours: float
+    valid_at: datetime
+    predicted_pm25: float
+    current_pm25: float | None
+    confidence: float | None
+    synthetic: bool

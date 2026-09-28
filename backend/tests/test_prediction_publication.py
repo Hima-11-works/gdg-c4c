@@ -14,7 +14,7 @@ from app.domain.features import (
     FeatureSnapshot,
     InputKind,
 )
-from app.domain.prediction import PredictionResult, PredictionRun
+from app.domain.prediction import AlertCandidate, PredictionResult, PredictionRun
 from app.services.prediction_publication import (
     PredictionPublicationService,
     assert_live_snapshots_available,
@@ -55,6 +55,26 @@ class MemoryPublicationRepository:
         return sorted(
             {item.h3_cell for item in self.result_values if item.run_id == run_id}
         )
+
+    def list_alert_candidates(self, run_id, *, threshold_pm25):
+        rows = [item for item in self.result_values if item.run_id == run_id]
+        current = {item.h3_cell: item for item in rows if item.horizon_hours == 0}
+        return [
+            AlertCandidate(
+                h3_cell=item.h3_cell,
+                horizon_hours=item.horizon_hours,
+                valid_at=item.valid_at,
+                predicted_pm25=item.predicted_pm25,
+                current_pm25=(current[item.h3_cell].predicted_pm25
+                              if item.h3_cell in current else None),
+                confidence=item.quality.coverage_fraction,
+                synthetic=item.synthetic,
+            )
+            for item in rows
+            if item.horizon_hours > 0
+            and item.predicted_pm25 is not None
+            and item.predicted_pm25 >= threshold_pm25
+        ]
 
 
 def _snapshot(cell, horizon, issued_at, *, pm25=20.0, refs=()):
@@ -329,3 +349,58 @@ def test_quarter_hour_forecast_interpolates_anchors_without_claiming_an_interval
     assert view.prediction_method == "interpolated-between-published-anchors"
     assert view.lower_pm25 is None and view.upper_pm25 is None
     assert view.exposure.population_weighted_pm25 == pytest.approx(15)
+
+
+def test_alert_candidates_are_thresholded_and_include_current_context():
+    now = datetime(2026, 9, 22, tzinfo=UTC)
+    cell = h3.latlng_to_cell(28.6, 77.1, 8)
+    run = PredictionRun(
+        run_id="alerts-1",
+        generated_at=now,
+        published_at=now,
+        region="india",
+        mode=DataMode.LIVE,
+        feature_run_id="features-1",
+        feature_schema_version="environmental-v1",
+    )
+    repository = MemoryPublicationRepository(run, [
+        PredictionResult(
+            run_id=run.run_id,
+            h3_cell=cell,
+            horizon_hours=0,
+            valid_at=now,
+            baseline_pm25=10,
+            predicted_pm25=18,
+            prediction_method="observed-current",
+            input_kind=InputKind.OBSERVED,
+        ),
+        PredictionResult(
+            run_id=run.run_id,
+            h3_cell=cell,
+            horizon_hours=1,
+            valid_at=now + timedelta(hours=1),
+            baseline_pm25=18,
+            predicted_pm25=75,
+            prediction_method="residual-ridge",
+            input_kind=InputKind.MODELED,
+            quality=FeatureQuality(coverage_fraction=0.8),
+        ),
+        PredictionResult(
+            run_id=run.run_id,
+            h3_cell=cell,
+            horizon_hours=2,
+            valid_at=now + timedelta(hours=2),
+            baseline_pm25=18,
+            predicted_pm25=55,
+            prediction_method="residual-ridge",
+            input_kind=InputKind.MODELED,
+        ),
+    ])
+
+    [candidate] = repository.list_alert_candidates(run.run_id, threshold_pm25=60)
+
+    assert candidate.h3_cell == cell
+    assert candidate.horizon_hours == 1
+    assert candidate.predicted_pm25 == 75
+    assert candidate.current_pm25 == 18
+    assert candidate.confidence == pytest.approx(0.8)

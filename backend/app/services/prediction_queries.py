@@ -18,7 +18,7 @@ from app.domain.features import (
     InputKind,
 )
 from app.domain.h3_grid import cell_center
-from app.domain.prediction import DEFAULT_REGION, PredictionResult, PredictionRun
+from app.domain.prediction import AlertCandidate, DEFAULT_REGION, PredictionResult, PredictionRun
 from app.db.repositories.source_health import SourceHealth, SourceHealthRepository
 from app.domain.repositories import PredictionPublicationRepository
 from app.services import demo_data
@@ -217,6 +217,40 @@ class PredictionQueryService:
             if (cell_set is None or row.h3_cell in cell_set)
             and (horizons is None or row.horizon_hours in horizons)
         ]
+
+    def alert_candidates(
+        self, run: PredictionRun, *, threshold_pm25: float
+    ) -> list[AlertCandidate]:
+        """Fetch just qualifying alert rows instead of every row in a run."""
+        if run.run_id.startswith(DEMO_FALLBACK_PREFIX):
+            rows = self.results(
+                run, cells=self.target_cells(run, self.native_resolution)
+            )
+            current_by_cell = {
+                row.h3_cell: row for row in rows if row.horizon_hours == 0
+            }
+            candidates = []
+            for row in rows:
+                if (
+                    row.horizon_hours <= 0
+                    or row.predicted_pm25 is None
+                    or row.predicted_pm25 < threshold_pm25
+                ):
+                    continue
+                current = current_by_cell.get(row.h3_cell)
+                candidates.append(AlertCandidate(
+                    h3_cell=row.h3_cell,
+                    horizon_hours=row.horizon_hours,
+                    valid_at=row.valid_at,
+                    predicted_pm25=row.predicted_pm25,
+                    current_pm25=current.predicted_pm25 if current else None,
+                    confidence=row.quality.coverage_fraction,
+                    synthetic=row.synthetic,
+                ))
+            return candidates
+        return self._repository.list_alert_candidates(
+            run.run_id, threshold_pm25=threshold_pm25
+        )
 
     def target_cells(self, run: PredictionRun, resolution: int) -> list[str]:
         if run.run_id.startswith(DEMO_FALLBACK_PREFIX):

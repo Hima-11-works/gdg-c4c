@@ -23,7 +23,7 @@ from app.domain.incidents import (
     IncidentStatus,
     ResponderRole,
 )
-from app.domain.prediction import PredictionResult, PredictionRun
+from app.domain.prediction import AlertCandidate, PredictionResult, PredictionRun
 from app.domain.report_lifecycle import ReportAuditEvent
 from app.domain.scenario import DatasetVersion, IngestionRun
 from app.domain.training import ModelVersion
@@ -347,6 +347,12 @@ class PredictionPublicationRepository(Protocol):
         Selecting the whole run made a country read cost the same as a
         single-cell one.
         """
+        ...
+
+    def list_alert_candidates(
+        self, run_id: str, *, threshold_pm25: float
+    ) -> list[AlertCandidate]:
+        """Only forecast rows over threshold, joined to their current value."""
         ...
 
     def list_horizons(self, run_id: str) -> list[float]:

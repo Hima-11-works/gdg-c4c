@@ -11,7 +11,7 @@ from sqlalchemy.engine import Row
 from sqlalchemy.orm import Session
 
 from app.domain.features import DataMode, DatasetRef, FeatureQuality, InputKind
-from app.domain.prediction import PredictionResult, PredictionRun
+from app.domain.prediction import AlertCandidate, PredictionResult, PredictionRun
 from app.models.tables import prediction_result, prediction_run
 
 _RESULT_CHUNK_SIZE = 2_000
@@ -182,6 +182,36 @@ def _cells_stmt(run_id: str) -> Select:
     )
 
 
+def _alert_candidates_stmt(run_id: str, threshold_pm25: float) -> Select:
+    current = prediction_result.alias("current_prediction")
+    forecast = prediction_result.alias("forecast_prediction")
+    return (
+        select(
+            forecast.c.h3_cell,
+            forecast.c.horizon_hours,
+            forecast.c.valid_at,
+            forecast.c.predicted_pm25,
+            current.c.predicted_pm25.label("current_pm25"),
+            forecast.c.quality,
+            forecast.c.synthetic,
+        )
+        .select_from(
+            forecast.outerjoin(
+                current,
+                (current.c.run_id == forecast.c.run_id)
+                & (current.c.h3_cell == forecast.c.h3_cell)
+                & (current.c.horizon_hours == 0),
+            )
+        )
+        .where(
+            forecast.c.run_id == run_id,
+            forecast.c.horizon_hours > 0,
+            forecast.c.predicted_pm25 >= threshold_pm25,
+        )
+        .order_by(forecast.c.predicted_pm25.desc(), forecast.c.horizon_hours)
+    )
+
+
 class SqlPredictionPublicationRepository:
     """Persists the run header and every result in a single transaction."""
 
@@ -242,6 +272,25 @@ class SqlPredictionPublicationRepository:
     ) -> list[PredictionResult]:
         rows = self._session.execute(_results_stmt(run_id, horizons)).all()
         return [_row_to_result(row) for row in rows]
+
+    def list_alert_candidates(
+        self, run_id: str, *, threshold_pm25: float
+    ) -> list[AlertCandidate]:
+        rows = self._session.execute(
+            _alert_candidates_stmt(run_id, threshold_pm25)
+        ).all()
+        return [
+            AlertCandidate(
+                h3_cell=row.h3_cell,
+                horizon_hours=row.horizon_hours,
+                valid_at=row.valid_at,
+                predicted_pm25=row.predicted_pm25,
+                current_pm25=row.current_pm25,
+                confidence=(row.quality or {}).get("coverage_fraction"),
+                synthetic=row.synthetic,
+            )
+            for row in rows
+        ]
 
     def list_horizons(self, run_id: str) -> list[float]:
         """The horizons this run published, ascending.
