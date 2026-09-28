@@ -314,9 +314,14 @@ export function HotspotEvidencePanel({
                     }`}
                     onClick={() => setSelectedId(candidate.detectionId)}
                   >
-                    <span className="hotspot-row-status">
-                      {candidateStatusLabel(candidate.status)}
-                    </span>
+                    <div className="hotspot-row-header">
+                      <span className="hotspot-row-status">
+                        {candidateStatusLabel(candidate.status)}
+                      </span>
+                      <span className={`hotspot-source-tag ${candidate.sourceInfo.badgeClass}`}>
+                        {candidate.sourceInfo.icon} {candidate.sourceInfo.label}
+                      </span>
+                    </div>
                     <span className="hotspot-row-meta">
                       {candidate.confidenceClass} confidence · {candidate.satellite} ·{' '}
                       {when(candidate.acquiredAt, candidate.acquiredAtValid)}
@@ -332,6 +337,13 @@ export function HotspotEvidencePanel({
         {selected !== null && (
           <>
             <h4 className="hotspot-subhead">Evidence for {selected.detectionId}</h4>
+            <div className={`hotspot-source-banner ${selected.sourceInfo.badgeClass}`}>
+              <span className="hotspot-source-banner-icon">{selected.sourceInfo.icon}</span>
+              <div>
+                <strong className="hotspot-source-banner-title">{selected.sourceInfo.label}</strong>
+                <p className="hotspot-source-banner-desc">{selected.sourceInfo.description}</p>
+              </div>
+            </div>
             <p className={`hotspot-status ${STATUS_CLASS[selected.status]}`}>
               {candidateStatusLabel(selected.status)} — from the detector's own confidence, not a
               human review.

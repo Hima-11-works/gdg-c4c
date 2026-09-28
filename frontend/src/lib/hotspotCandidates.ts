@@ -82,12 +82,70 @@ export function candidateStatusLabel(status: CandidateStatus): string {
   return STATUS_LABEL[status]
 }
 
+export type HotspotSourceCategory = 'stubble_burning' | 'industrial' | 'urban_open'
+
+export interface HotspotSourceInfo {
+  category: HotspotSourceCategory
+  label: string
+  badgeClass: string
+  icon: string
+  description: string
+}
+
+/**
+ * Classifies an active detection into source category based on spatial coordinates,
+ * thermal characteristics (FRP, brightness), and overpass timing.
+ */
+export function classifyHotspotSource(
+  latitude: number,
+  longitude: number,
+  frpMw: number | null,
+  brightnessTi4K: number | null,
+  daynight?: string,
+): HotspotSourceInfo {
+  // Indo-Gangetic & agrarian belt (Punjab, Haryana, UP, MP rural belts)
+  const isAgriBelt = latitude >= 24.5 && latitude <= 32.5 && longitude >= 73.5 && longitude <= 85.5
+
+  if (
+    isAgriBelt &&
+    ((frpMw !== null && frpMw >= 12) || daynight === 'D' || (brightnessTi4K !== null && brightnessTi4K > 320))
+  ) {
+    return {
+      category: 'stubble_burning',
+      label: 'Agricultural Stubble Burning',
+      badgeClass: 'hotspot-source-stubble',
+      icon: '🌾',
+      description: 'Crop residue / seasonal biomass burning detected in agricultural belt',
+    }
+  }
+
+  // Nighttime high-brightness or high-intensity thermal signatures near industrial clusters
+  if (daynight === 'N' || (brightnessTi4K !== null && brightnessTi4K > 330) || (frpMw !== null && frpMw >= 35)) {
+    return {
+      category: 'industrial',
+      label: 'Industrial Emission Hotspot',
+      badgeClass: 'hotspot-source-industrial',
+      icon: '🏭',
+      description: 'High-intensity thermal source consistent with furnace, kiln, or stack flare',
+    }
+  }
+
+  return {
+    category: 'urban_open',
+    label: 'Urban / Municipal Open Burning',
+    badgeClass: 'hotspot-source-urban',
+    icon: '🔥',
+    description: 'Localized surface combustion, municipal landfill, or open waste fire',
+  }
+}
+
 export interface HotspotCandidate {
   detectionId: string
   h3Cell: string
   latitude: number
   longitude: number
   status: CandidateStatus
+  sourceInfo: HotspotSourceInfo
   /** The detector's normalised class, verbatim. */
   confidenceClass: string
   /** The raw FIRMS token (`l`/`n`/`h`, or a 0-100 string). */
@@ -110,6 +168,13 @@ export function hotspotCandidateFromRow(fire: ActiveFire): HotspotCandidate {
     latitude: fire.latitude,
     longitude: fire.longitude,
     status: candidateStatus(fire),
+    sourceInfo: classifyHotspotSource(
+      fire.latitude,
+      fire.longitude,
+      fire.frp,
+      fire.brightness,
+      fire.daynight,
+    ),
     confidenceClass: fire.confidenceClass,
     confidenceRaw: fire.confidenceLabel,
     acquiredAt: fire.acquiredAt,

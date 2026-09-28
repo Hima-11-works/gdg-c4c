@@ -1882,9 +1882,61 @@ body,
   border-color: #22d3ee;
   background: #0c2730;
 }
+.hotspot-row-header {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.4rem;
+}
 .hotspot-row-status {
   font-size: 0.75rem;
   font-weight: 700;
+}
+.hotspot-source-tag {
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 0.15rem 0.45rem;
+  border-radius: 9999px;
+  letter-spacing: 0.02em;
+}
+.hotspot-source-stubble {
+  background: rgba(251, 146, 60, 0.18);
+  border: 1px solid rgba(251, 146, 60, 0.6);
+  color: #fdba74;
+}
+.hotspot-source-industrial {
+  background: rgba(248, 113, 113, 0.18);
+  border: 1px solid rgba(248, 113, 113, 0.6);
+  color: #fca5a5;
+}
+.hotspot-source-urban {
+  background: rgba(56, 189, 248, 0.18);
+  border: 1px solid rgba(56, 189, 248, 0.6);
+  color: #7dd3fc;
+}
+.hotspot-source-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.6rem 0.8rem;
+  border-radius: 8px;
+  margin: 0.4rem 0;
+}
+.hotspot-source-banner-icon {
+  font-size: 1.3rem;
+  line-height: 1;
+}
+.hotspot-source-banner-title {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+.hotspot-source-banner-desc {
+  margin: 0.2rem 0 0 0;
+  font-size: 0.72rem;
+  opacity: 0.9;
+  line-height: 1.35;
 }
 .hotspot-row-meta,
 .hotspot-row-id {
