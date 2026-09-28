@@ -304,7 +304,7 @@ export function MapPage() {
     : `the +${forecastMinutes >= 60 ? `${Math.floor(forecastMinutes / 60)}h ` : ''}${forecastMinutes % 60 ? `${forecastMinutes % 60}m ` : ''}forecast`.trim()
 
   return (
-    <div className="map-page">
+    <main className="map-page" aria-labelledby="dashboard-title">
       <div className="banner-stack">
         <StatusBanner
           label={activeLabel}
@@ -332,6 +332,10 @@ export function MapPage() {
       />
 
       <div className="overlay overlay-top-left">
+        <header className="panel dashboard-heading">
+          <h1 id="dashboard-title">India air quality map</h1>
+          <p>Explore forecasts, pollution hotspots, and citizen reports.</p>
+        </header>
         <Legend />
         <div className="panel resolution-indicator" role="status" aria-live="polite">
           Resolution {lod.level}
@@ -410,6 +414,6 @@ export function MapPage() {
         resolutionLevel={lod.level}
         forecastMinutes={forecastMinutes}
       />
-    </div>
+    </main>
   )
 }
