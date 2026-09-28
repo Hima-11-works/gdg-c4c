@@ -147,14 +147,14 @@ export function LayerToggle() {
 
           <label
             className="layer-toggle-option"
-            title="Illustrative hand-authored corridor geometry (Western DFC / DMIC) - no routes endpoint exists yet (see lib/freightCorridors)"
+            title="Major Economic Freight Corridors — predictive interstate air-quality forecast & logistics routing"
           >
             <input
               type="checkbox"
               checked={state.showFreightCorridors}
               onChange={() => dispatch({ type: 'TOGGLE_FREIGHT_CORRIDORS' })}
             />
-            Major Freight Corridors (illustrative)
+            Major Freight Corridors
           </label>
         </div>
       </div>

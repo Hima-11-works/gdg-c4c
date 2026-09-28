@@ -41,6 +41,9 @@ const MapView = lazy(() => import('./MapView').then((module) => ({ default: modu
 const CellDetailPanel = lazy(() =>
   import('./CellDetailPanel').then((module) => ({ default: module.CellDetailPanel })),
 )
+const CorridorDetailPanel = lazy(() =>
+  import('./CorridorDetailPanel').then((module) => ({ default: module.CorridorDetailPanel })),
+)
 const ReportFireForm = lazy(() =>
   import('./ReportFireForm').then((module) => ({ default: module.ReportFireForm })),
 )
@@ -333,6 +336,7 @@ export function MapPage() {
   const activeLabel = isNow
     ? 'current conditions'
     : `the +${forecastMinutes >= 60 ? `${Math.floor(forecastMinutes / 60)}h ` : ''}${forecastMinutes % 60 ? `${forecastMinutes % 60}m ` : ''}forecast`.trim()
+  const hasDetailPanel = state.selectedCell !== null || state.selectedCorridor !== null
 
   return (
     <main className="map-page" aria-labelledby="dashboard-title">
@@ -370,7 +374,7 @@ export function MapPage() {
           <p>Explore forecasts, pollution hotspots, and citizen reports.</p>
         </header>
         <Legend />
-        {state.selectedCell !== null && (
+        {hasDetailPanel && (
           <MapActionToolbar
             inline
             onReport={() => setReportOpen(true)}
@@ -405,7 +409,7 @@ export function MapPage() {
           <AlertsPanel publishedRunId={publishedRunId} />
         </div>
         <FederatedStatusPill />
-        {state.selectedCell === null && (
+        {!hasDetailPanel && (
           <MapActionToolbar
             onReport={() => setReportOpen(true)}
             onReviewPhotos={() => setPhotoReviewOpen(true)}
@@ -426,7 +430,11 @@ export function MapPage() {
         <TimelineControl publishedRunId={publishedRunId} supportedHours={supportedHours} />
       </div>
 
-      {state.selectedCell !== null && (
+      {state.selectedCorridor !== null ? (
+        <Suspense fallback={<FeatureLoading label="Loading corridor details…" />}>
+          <CorridorDetailPanel corridor={state.selectedCorridor} />
+        </Suspense>
+      ) : state.selectedCell !== null ? (
         <Suspense fallback={<FeatureLoading label="Loading cell details…" />}>
           <CellDetailPanel
             publishedRunId={publishedRunId}
@@ -434,7 +442,7 @@ export function MapPage() {
             activeFires={activeFires.resource}
           />
         </Suspense>
-      )}
+      ) : null}
       {state.hotspotPanelOpen && (
         <Suspense fallback={<FeatureLoading label="Loading fire evidence…" />}>
           <HotspotEvidencePanel

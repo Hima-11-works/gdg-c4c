@@ -13,6 +13,7 @@ import type { Lod } from '../lib/lod'
 import type { MapScope } from '../lib/scope'
 import type { LocationKind } from '../lib/locations'
 import type { BoundingBox } from '../lib/types'
+import type { FreightCorridorProperties } from '../lib/freightCorridors'
 
 /** How the pollution field is drawn: discrete H3 hexagons, or a smooth
  *  continuous raster (Gaussian-smoothed value field). */
@@ -73,6 +74,8 @@ export interface MapUiState {
   selectedCellResolution: number | null
   /** Whether the selected fine map cell is showing its coarser parent. */
   selectedCellGeneralized: boolean
+  /** Selected major economic freight corridor for predictive interstate drawer. */
+  selectedCorridor: FreightCorridorProperties | null
   /** The current zoom tier + resolution — see lib/lod.ts. */
   lod: Lod
   /** The current map viewport, or null before MapView has reported one
@@ -110,6 +113,7 @@ export type MapUiAction =
   | { type: 'TOGGLE_SETTINGS' }
   | { type: 'SELECT_CELL'; cell: string | null; resolution?: number }
   | { type: 'TOGGLE_CELL'; cell: string; generalized?: boolean }
+  | { type: 'SELECT_CORRIDOR'; corridor: FreightCorridorProperties | null }
   | { type: 'SET_VIEWPORT'; zoom: number; bbox: BoundingBox }
 
 // The app opens fitted to all of India (see MapView's INDIA_BOUNDS), so
@@ -140,6 +144,7 @@ export const initialMapUiState: MapUiState = {
   selectedCell: null,
   selectedCellResolution: null,
   selectedCellGeneralized: false,
+  selectedCorridor: null,
   lod: { tier: 'country', level: 1, resolution: 3, scopedToViewport: false },
   bbox: null,
 }
@@ -158,6 +163,7 @@ function withSelectedCell(
 ): MapUiState {
   return {
     ...state,
+    selectedCorridor: null,
     selectedCell: cell,
     selectedCellResolution:
       cell === null ? null : (resolutionOfCell(cell) ?? fallbackResolution ?? null),
@@ -220,7 +226,11 @@ export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState
     case 'TOGGLE_CITIZEN_SENSORS':
       return { ...state, showCitizenSensors: !state.showCitizenSensors }
     case 'TOGGLE_FREIGHT_CORRIDORS':
-      return { ...state, showFreightCorridors: !state.showFreightCorridors }
+      return {
+        ...state,
+        showFreightCorridors: !state.showFreightCorridors,
+        selectedCorridor: state.showFreightCorridors ? null : state.selectedCorridor,
+      }
     case 'TOGGLE_SATELLITE_IMAGERY':
       return { ...state, showSatelliteImagery: !state.showSatelliteImagery }
     case 'TOGGLE_ACTIVE_FIRES':
@@ -250,6 +260,14 @@ export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState
         undefined,
         action.generalized,
       )
+    case 'SELECT_CORRIDOR':
+      return {
+        ...state,
+        selectedCorridor: action.corridor,
+        selectedCell: action.corridor !== null ? null : state.selectedCell,
+        selectedCellResolution: action.corridor !== null ? null : state.selectedCellResolution,
+        selectedCellGeneralized: action.corridor !== null ? false : state.selectedCellGeneralized,
+      }
     case 'SET_VIEWPORT': {
       const lod = lodForZoom(action.zoom)
       return { ...state, zoom: action.zoom, lod, bbox: lod.scopedToViewport ? action.bbox : null }
