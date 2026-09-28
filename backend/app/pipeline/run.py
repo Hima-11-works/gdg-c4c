@@ -59,6 +59,7 @@ from app.db.repositories import (
     SqlForecastRepository,
     SqlGridStateRepository,
     SqlIngestionRunRepository,
+    SqlModelVersionRepository,
     SqlPredictionPublicationRepository,
     SqlSensorReadingRepository,
     SqlTrafficObservationRepository,
@@ -318,7 +319,8 @@ def _publish_inner(
     )
 
     run, results = PredictionPublicationService(
-        SqlPredictionPublicationRepository(session)
+        SqlPredictionPublicationRepository(session),
+        SqlModelVersionRepository(session),
     ).publish(
         run_id=pipeline_run_id,
         feature_run_id=f"{pipeline_run_id}-features",
