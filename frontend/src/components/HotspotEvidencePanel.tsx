@@ -15,7 +15,6 @@ import type { HotspotScanOut, HotspotScanSummaryOut } from '../lib/types'
 import type { GridStateOut } from '../lib/types'
 import type { LocalPollutionHotspot } from '../lib/localHotspots'
 import type { AsyncResource } from '../hooks/useApiResource'
-import { SidePanel } from './SidePanel'
 
 function when(iso: string, valid: boolean): string {
   if (!valid) return 'unreadable timestamp'
@@ -73,11 +72,16 @@ export function HotspotEvidencePanel({
     const onSelected = (event: Event) => {
       const detail = (event as CustomEvent<Record<string, unknown>>).detail
       const id = detail?.detection_id
-      if (typeof id === 'string') setSelectedId(id)
+      if (typeof id === 'string') {
+        setSelectedId(id)
+        if (!state.hotspotPanelOpen) {
+          dispatch({ type: 'TOGGLE_HOTSPOT_PANEL' })
+        }
+      }
     }
     window.addEventListener('air-health:hotspot-candidate-selected', onSelected)
     return () => window.removeEventListener('air-health:hotspot-candidate-selected', onSelected)
-  }, [])
+  }, [state.hotspotPanelOpen, dispatch])
 
   const selected: HotspotCandidate | null =
     candidates.find((candidate) => candidate.detectionId === selectedId) ?? null
@@ -101,18 +105,23 @@ export function HotspotEvidencePanel({
           ? 'none-passing'
           : null
 
+  if (!state.hotspotPanelOpen) return null
+
   return (
-    <SidePanel
-      id="hotspot-evidence-panel"
-      side="left"
-      open={state.hotspotPanelOpen}
-      onToggle={() => dispatch({ type: 'TOGGLE_HOTSPOT_PANEL' })}
-      label={
-        state.hotspotPanelOpen ? 'Hide fire candidate evidence' : 'Show fire candidate evidence'
-      }
-    >
+    <div className="hotspot-panel-container" id="hotspot-evidence-panel">
       <div className="panel hotspot-panel">
-        <h3>Fire candidate evidence</h3>
+        <div className="hotspot-panel-header">
+          <h3>Fire candidate evidence</h3>
+          <button
+            type="button"
+            className="cell-detail-close"
+            onClick={() => dispatch({ type: 'TOGGLE_HOTSPOT_PANEL' })}
+            aria-label="Close fire candidate evidence"
+            title="Close"
+          >
+            ✕
+          </button>
+        </div>
         <p className="muted">
           Imagery-index candidates, optionally supported by FIRMS and verified stations. These are
           not measured PM2.5 values or confirmed pollution events; they await human review.
@@ -379,7 +388,7 @@ export function HotspotEvidencePanel({
           </>
         )}
       </div>
-    </SidePanel>
+    </div>
   )
 }
 
@@ -422,7 +431,8 @@ function RecordedScanDetails({
             <div>
               Screening thresholds: UVAI ≥ {uvaiTrigger.toFixed(1)}; strong ≥{' '}
               {uvaiStrong.toFixed(1)}
-              {typeof qualityMinimum === 'number' && ` · pixel quality > ${qualityMinimum.toFixed(2)}`}
+              {typeof qualityMinimum === 'number' &&
+                ` · pixel quality > ${qualityMinimum.toFixed(2)}`}
             </div>
           )}
           <div className="muted">{scan.imagery.notes}</div>
@@ -438,15 +448,17 @@ function RecordedScanDetails({
         <>
           <p className="muted">This scan returned no candidate locations ({scan.verdict}).</p>
           {scan.reasons.map((reason) => (
-            <p className="muted" key={reason}>{reason}</p>
+            <p className="muted" key={reason}>
+              {reason}
+            </p>
           ))}
         </>
       ) : (
         <ul className="hotspot-list">
           {scan.candidates.map((candidate) => (
             <li className="hotspot-scan-candidate" key={candidate.candidate_id}>
-              <b>{candidate.review_status.replaceAll('_', ' ')}</b> · {candidate.confidence}{' '}
-              triage score {candidate.confidence_score.toFixed(2)} (not a probability)
+              <b>{candidate.review_status.replaceAll('_', ' ')}</b> · {candidate.confidence} triage
+              score {candidate.confidence_score.toFixed(2)} (not a probability)
               <div className="hotspot-row-meta">
                 {candidate.supporting_sources.join(', ')} · {when(candidate.acquired_at, true)}
               </div>

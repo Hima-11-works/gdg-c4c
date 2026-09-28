@@ -357,14 +357,21 @@ export function MapPage() {
         </button>
         <button
           type="button"
-          className="panel report-open"
+          className={`panel report-open hotspot-toggle-btn ${state.hotspotPanelOpen ? 'active' : ''}`}
           onClick={() => {
             if (!state.showHotspotCandidates) dispatch({ type: 'TOGGLE_HOTSPOT_CANDIDATES' })
-            if (!state.hotspotPanelOpen) dispatch({ type: 'TOGGLE_HOTSPOT_PANEL' })
+            dispatch({ type: 'TOGGLE_HOTSPOT_PANEL' })
           }}
-          aria-haspopup="dialog"
+          aria-expanded={state.hotspotPanelOpen}
+          aria-controls="hotspot-evidence-panel"
+          aria-label={
+            state.hotspotPanelOpen ? 'Hide fire candidate evidence' : 'Show fire candidate evidence'
+          }
+          title={
+            state.hotspotPanelOpen ? 'Hide fire candidate evidence' : 'Show fire candidate evidence'
+          }
         >
-          Review pollution candidates
+          {state.hotspotPanelOpen ? 'Hide fire candidate evidence' : 'Show fire candidate evidence'}
         </button>
         {reportOpen && reportCenter !== null && (
           <ReportFireForm

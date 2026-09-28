@@ -1769,6 +1769,35 @@ body,
 
 /* --- FIRMS hotspot candidate evidence ------------------------------- */
 
+.hotspot-panel-container {
+  position: absolute;
+  top: 0.75rem;
+  left: 14.5rem;
+  z-index: 10;
+  max-width: min(85vw, 26rem);
+}
+
+.hotspot-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid #2a2e36;
+}
+
+.hotspot-panel-header h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.hotspot-toggle-btn.active {
+  background: #1e3a45;
+  border-color: #22d3ee;
+  color: #67e8f9;
+}
+
 .hotspot-panel {
   width: min(25rem, calc(100vw - 2rem));
   max-height: min(70vh, 42rem);
@@ -1892,6 +1921,15 @@ body,
 }
 .hotspot-gaps {
   color: #cbd5e1;
+}
+
+@media (max-width: 48rem) {
+  .hotspot-panel-container {
+    left: 0.75rem;
+    right: 0.75rem;
+    top: 13rem;
+    max-width: calc(100vw - 1.5rem);
+  }
 }
 
 @media (max-width: 42rem) {
