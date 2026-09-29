@@ -58,50 +58,55 @@ Built for Google's **Code for Communities (GDG C4C)** Hackathon.
 ```mermaid
 flowchart TB
     subgraph SENSORS["1. Citizen & Ground Sensing"]
-        CP[Citizen Photo Evidence<br/>EXIF-stripped & Verified]
-        CR[Citizen Smoke/Fire Reports]
-        CS[Local / Low-Cost Sensors<br/>Community PM2.5]
-        AQ[OpenAQ / CPCB CAAQMS<br/>Official Ground Monitors]
+        CP["Citizen Photo Evidence<br/>EXIF-stripped & Verified"]
+        CR["Citizen Smoke/Fire Reports"]
+        CS["Local / Low-Cost Sensors<br/>Community PM2.5"]
+        AQ["OpenAQ / CPCB CAAQMS<br/>Official Ground Monitors"]
     end
 
     subgraph SPACE["2. Spaceborne & Meteorological Inputs"]
-        S5P[Copernicus Sentinel-5P<br/>UV Aerosol Index & NO2]
-        FIRMS[NASA FIRMS<br/>VIIRS/MODIS Thermal Fires]
-        METEO[Open-Meteo<br/>Wind, Boundary Layer, Temp]
-        GIBS[NASA GIBS<br/>TrueColor & AOD Imagery]
+        S5P["Copernicus Sentinel-5P<br/>UV Aerosol Index & NO2"]
+        FIRMS["NASA FIRMS<br/>VIIRS/MODIS Thermal Fires"]
+        METEO["Open-Meteo<br/>Wind, Boundary Layer, Temp"]
+        GIBS["NASA GIBS<br/>TrueColor & AOD Imagery"]
     end
 
     subgraph CORE["3. Core Spatial Intelligence & Storage"]
-        DB[(PostgreSQL 16 + PostGIS<br/>Sensor, Weather & Grid State)]
-        H3[Uber H3 Hexagonal Grid<br/>Multi-resolution L3–L7]
-        IDW[IDW Nowcasting Engine]
-        PDI[Heuristic Pollution<br/>Development Index (PDI)]
-        DISP[Advection-Dispersion Model<br/>1h, 3h, 6h Forecasts]
+        DB[("PostgreSQL 16 + PostGIS<br/>Sensor, Weather & Grid State")]
+        H3["Uber H3 Hexagonal Grid<br/>Multi-resolution L3–L7"]
+        IDW["IDW Nowcasting Engine"]
+        PDI["Heuristic Pollution<br/>Development Index (PDI)"]
+        DISP["Advection-Dispersion Model<br/>1h, 3h, 6h Forecasts"]
     end
 
     subgraph ENGINES["4. Action & Decision Engines"]
-        HOT[Hidden Hotspot Engine<br/>Candidate Screening & Corroboration]
-        CORR[Economic Corridor Engine<br/>Delhi-Kanpur, DMIC, EDFC]
-        ALERTS[Rule-Based & Predictive Alerts<br/>Threshold & Rate-of-Change]
-        INC[Incident Lifecycle Manager<br/>Assignment & Dispatch]
+        HOT["Hidden Hotspot Engine<br/>Candidate Screening & Corroboration"]
+        CORR["Economic Corridor Engine<br/>Delhi-Kanpur, DMIC, EDFC"]
+        ALERTS["Rule-Based & Predictive Alerts<br/>Threshold & Rate-of-Change"]
+        INC["Incident Lifecycle Manager<br/>Assignment & Dispatch"]
     end
 
     subgraph FED["5. Interoperable Federation Layer"]
-        FED_CLI[Regional SPCB Client Nodes<br/>Local Training & Verification]
-        FED_AGG[Central Model Aggregator<br/>Signed Manifests & Parameter Fusion]
+        FED_CLI["Regional SPCB Client Nodes<br/>Local Training & Verification"]
+        FED_AGG["Central Model Aggregator<br/>Signed Manifests & Parameter Fusion"]
     end
 
     subgraph APPS["6. Client & Authority Interfaces"]
-        WEB[React 19 + MapLibre Web Map<br/>Interactive Multi-Layer Console]
-        CIT_APP[Air Health Flutter App<br/>Citizen Companion & Field Reporting]
-        AUTH_APP[Fire Dept Simulator<br/>Incident Dispatch & Unit Tracking]
+        WEB["React 19 + MapLibre Web Map<br/>Interactive Multi-Layer Console"]
+        CIT_APP["Air Health Flutter App<br/>Citizen Companion & Field Reporting"]
+        AUTH_APP["Fire Dept Simulator<br/>Incident Dispatch & Unit Tracking"]
     end
 
     SENSORS --> DB
     SPACE --> DB
     DB --> H3
-    H3 --> IDW & PDI --> DISP
-    DISP --> HOT & CORR & ALERTS
+    H3 --> IDW
+    H3 --> PDI
+    IDW --> DISP
+    PDI --> DISP
+    DISP --> HOT
+    DISP --> CORR
+    DISP --> ALERTS
     ALERTS --> INC
     
     DB <--> FED_CLI
@@ -109,7 +114,9 @@ flowchart TB
     
     DB --> WEB
     INC --> AUTH_APP
-    CR & CP & CS --> CIT_APP
+    CR --> CIT_APP
+    CP --> CIT_APP
+    CS --> CIT_APP
     CIT_APP --> DB
     GIBS -.-> WEB
 ```
@@ -140,9 +147,9 @@ Citizens are equipped with the **`air_health_flutter`** mobile app:
 
 ### 4. 🚨 Rapid Authority Intervention (Incident Response Console)
 When alert thresholds are breached or citizen reports are corroborated:
-- Incidents are instantiated with geographic coordinates, H3 indices, and priority levels.
+- Incidents are automatically instantiated with geographic coordinates, H3 cell indices, and priority levels.
 - The **`fire_dept_simulator`** Flutter operational console allows municipal authorities and fire departments to receive dispatch requests, view attached evidence photos, and track real-time status transitions:
-  $$\text{REPORTED} \longrightarrow \text{ACKNOWLEDGED} \longrightarrow \text{EN ROUTE} \longrightarrow \text{ON SCENE} \longrightarrow \text{RESOLVED}$$
+  `REPORTED` ➔ `ACKNOWLEDGED` ➔ `EN ROUTE` ➔ `ON SCENE` ➔ `RESOLVED`
 
 ### 5. 🤝 Federated Climate Intelligence Across States & Cities
 Air pollution does not stop at administrative boundaries. The platform features an **interoperable federated learning architecture**:
