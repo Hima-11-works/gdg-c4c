@@ -245,12 +245,11 @@ const LAYER_INDIA_OUTLINE_LINE = 'india-outline-line'
 const SOURCE_WIND = 'wind-points'
 const LAYER_WIND = 'wind-arrows'
 
-// Wind currents are drawn as a symbol layer whose icon cycles through a few
-// pre-rendered frames of a "streak": a short line pointing downwind with a
-// bright pulse that travels from tail to head. Cycling the frames on a timer
+// Wind currents are drawn as a symbol layer whose icon cycles through
+// pre-rendered frames of a bright pulse moving downwind. Cycling the frames on a timer
 // makes the streaks flow — the animated-current look — and it's just one
 // layout-property swap per animation frame over ~100 thinned symbols.
-const WIND_STREAK_FRAME_COUNT = 8
+const WIND_STREAK_FRAME_COUNT = 32
 const WIND_STREAK_FRAME_MS = 110
 const WIND_STREAK_IMAGE_PREFIX = 'wind-streak'
 const windStreakImageName = (frame: number): string => `${WIND_STREAK_IMAGE_PREFIX}-${frame}`
@@ -426,9 +425,8 @@ function thinBySpatialGrid<T extends { latitude: number; longitude: number }>(
   return kept
 }
 
-/** One frame of the wind-streak icon, north-up: a dim line along the wind
- * with a bright pulse at position `frame / WIND_STREAK_FRAME_COUNT`, so
- * cycling the frames animates a pulse flowing from tail to head. */
+/** One frame of the wind-streak icon, north-up: a bright, fading pulse at
+ * `frame / WIND_STREAK_FRAME_COUNT`. No static line remains behind it. */
 function windStreakFrame(frame: number): ImageData {
   const size = 32
   const canvas = document.createElement('canvas')
@@ -441,19 +439,10 @@ function windStreakFrame(frame: number): ImageData {
   const span = tailY - headY
   ctx.lineCap = 'round'
 
-  // Dim base so each sample still reads as a current between pulses.
-  ctx.globalAlpha = 0.35
-  ctx.strokeStyle = WIND.arrowColor
-  ctx.lineWidth = 2
-  ctx.beginPath()
-  ctx.moveTo(x, tailY)
-  ctx.lineTo(x, headY)
-  ctx.stroke()
-  ctx.globalAlpha = 1
-
   // Travelling pulse: a gradient segment, transparent at its tail and bright
   // at its head, whose position sweeps from the tail (frame 0) to past the
-  // head (last frame), then wraps — the repeating flow.
+  // head (last frame), then wraps — the repeating flow. The extra frames
+  // stretch the cycle to 3.5 seconds and smooth its movement.
   const t = frame / WIND_STREAK_FRAME_COUNT
   const pulseLen = span * 0.6
   const headPos = tailY - span * (t * 1.2)
