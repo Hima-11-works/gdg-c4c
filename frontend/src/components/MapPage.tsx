@@ -11,6 +11,7 @@ import {
   ensureForecastFrame,
   cancelForecastRequests,
   useForecastFrame,
+  useForecastProgress,
   useForecastWarming,
   warmForecastWindow,
 } from '../lib/forecastFrames'
@@ -72,6 +73,11 @@ export function MapPage() {
   const [photoReviewOpen, setPhotoReviewOpen] = useState(false)
   const [selectedHotspotId, setSelectedHotspotId] = useState<string | null>(null)
   const [viewportMoving, setViewportMoving] = useState(false)
+  const [gridProgress, setGridProgress] = useState<{
+    key: string
+    loaded: number
+    total: number
+  } | null>(null)
 
   useEffect(() => {
     const onHotspotSelected = (event: Event) => {
@@ -116,9 +122,10 @@ export function MapPage() {
     publishedMeta.resource.status === 'success' &&
     publishedMeta.resource.data.data_mode === 'demo' &&
     publishedMeta.resource.data.is_demo
+  const detailedGridProgressKey = `${viewKey}:${publishedRunId ?? 'pending'}`
 
   const detailedGrid = useApiResource(
-    (signal) => fetchGridCurrent(query, publishedRunId, signal),
+    (signal, onProgress) => fetchGridCurrent(query, publishedRunId, signal, onProgress),
     [viewKey, publishedRunId],
     {
       pollIntervalMs: POLL_INTERVAL_MS,
@@ -127,6 +134,8 @@ export function MapPage() {
         viewportReady &&
         publishedRunId !== undefined &&
         (!demoMode || lod.level >= 2),
+      onProgress: (loaded, total) =>
+        setGridProgress({ key: detailedGridProgressKey, loaded, total }),
     },
   )
   // Keep a coarse India grid available as a visual fallback when detailed
@@ -135,12 +144,16 @@ export function MapPage() {
   // parent when clicked. This runs only in demo mode, where that overview is
   // explicitly illustrative.
   const overviewQuery = lodQueryFor(lodForZoom(0), null)
+  const overviewGridProgressKey = `${lodKey(overviewQuery)}:${publishedRunId ?? 'pending'}`
   const overviewGrid = useApiResource(
-    () => fetchGridCurrent(overviewQuery, publishedRunId),
+    (signal, onProgress) =>
+      fetchGridCurrent(overviewQuery, publishedRunId, signal, onProgress),
     [lodKey(overviewQuery), publishedRunId],
     {
       pollIntervalMs: POLL_INTERVAL_MS,
       enabled: demoMode && publishedRunId !== undefined,
+      onProgress: (loaded, total) =>
+        setGridProgress({ key: overviewGridProgressKey, loaded, total }),
     },
   )
   const parentLod = { ...lod, tier: 'state' as const, resolution: 4, scopedToViewport: true }
@@ -331,9 +344,51 @@ export function MapPage() {
   }, [queryKey, viewportReady, viewportMoving, supportedHours, publishedRunId, isNow])
 
   const warming = useForecastWarming(queryKey)
+  const forecastProgress = useForecastProgress(forecastMinutes, queryKey)
   const isInterpolated = forecastMinutes > 0 && !supportedHours.includes(forecastMinutes / 60)
 
   const activeBaseLayer = isNow ? currentGrid : forecastGrid
+  const activeGridProgressKey =
+    demoMode && lod.level === 1 ? overviewGridProgressKey : detailedGridProgressKey
+  const activeGridProgress = viewportMoving
+    ? null
+    : isNow
+      ? activeBaseLayer.resource.status === 'success'
+        ? {
+            loaded: activeBaseLayer.resource.data.length,
+            total: activeBaseLayer.resource.data.length,
+          }
+        : gridProgress?.key === activeGridProgressKey
+          ? gridProgress
+          : null
+      : forecastProgress
+  const loadedFraction =
+    activeGridProgress && activeGridProgress.total > 0
+      ? Math.min(1, activeGridProgress.loaded / activeGridProgress.total)
+      : 0
+  const cellsLoadedPercent =
+    !viewportMoving &&
+    activeGridProgress?.total === 0 &&
+    activeBaseLayer.resource.status === 'success' &&
+    (isNow || forecastProgress?.complete === true)
+      ? 100
+      : loadedFraction * 100
+  const cellsLoadedLabel = `${cellsLoadedPercent
+    .toFixed(2)
+    .replace(/\.?0+$/, '')}%`
+  const loadedCellCount = activeGridProgress?.loaded ?? 0
+  const totalCellCount = activeGridProgress?.total ?? 0
+  const cellsProgressDescription =
+    totalCellCount > 0
+      ? `${loadedCellCount.toLocaleString()} of ${totalCellCount.toLocaleString()} map cells loaded`
+      : `${cellsLoadedLabel} of map cells loaded`
+  const cellsLoading =
+    viewportMoving ||
+    warming ||
+    activeBaseLayer.resource.status === 'idle' ||
+    activeBaseLayer.resource.status === 'loading' ||
+    (isNow && activeBaseLayer.resource.status !== 'error' && activeGridProgress === null) ||
+    (!isNow && forecastProgress !== null && !forecastProgress.complete)
   const activeLabel = isNow
     ? 'current conditions'
     : `the +${forecastMinutes >= 60 ? `${Math.floor(forecastMinutes / 60)}h ` : ''}${forecastMinutes % 60 ? `${forecastMinutes % 60}m ` : ''}forecast`.trim()
@@ -410,8 +465,22 @@ export function MapPage() {
 
       <div className="overlay overlay-bottom-center">
         <ScopeChip />
-        <div className="panel resolution-indicator" role="status" aria-live="polite">
-          Resolution {lod.level}
+        <div
+          className="panel resolution-indicator"
+          role="status"
+          aria-live="polite"
+          aria-label={`Resolution ${lod.level}; ${cellsProgressDescription}${cellsLoading ? '; loading' : ''}`}
+        >
+          <span className="resolution-indicator-spinner-slot">
+            {cellsLoading && <span className="spinner" aria-hidden="true" />}
+          </span>
+          <span>Resolution {lod.level}</span>
+          <span
+            className="resolution-indicator-progress"
+            title={cellsProgressDescription}
+          >
+            {cellsLoadedLabel}
+          </span>
         </div>
         <TimelineControl publishedRunId={publishedRunId} supportedHours={supportedHours} />
       </div>

@@ -131,13 +131,34 @@ body,
 }
 
 .resolution-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
   width: max-content;
-  padding: 0.3rem 0.6rem;
+  padding: 0.2rem 0.45rem;
+  border-radius: 6px;
   color: #e5e7eb;
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.03em;
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
   pointer-events: none;
+}
+
+.resolution-indicator-spinner-slot {
+  display: inline-flex;
+  flex: 0 0 0.7rem;
+  width: 0.7rem;
+  height: 0.7rem;
+  align-items: center;
+  justify-content: center;
+}
+
+.resolution-indicator-progress {
+  min-width: 3.3rem;
+  color: #9ca3af;
+  font-size: 0.6rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
 .overlay-top-right {
@@ -502,11 +523,16 @@ body,
 }
 
 .spinner {
+  display: block;
   width: 0.7rem;
   height: 0.7rem;
+  flex: 0 0 0.7rem;
+  aspect-ratio: 1;
+  box-sizing: border-box;
   border-radius: 50%;
-  border: 2px solid currentColor;
-  border-right-color: transparent;
+  border: 2px solid color-mix(in srgb, currentColor 35%, transparent);
+  border-top-color: currentColor;
+  border-right-color: currentColor;
   animation: spin 0.8s linear infinite;
 }
 

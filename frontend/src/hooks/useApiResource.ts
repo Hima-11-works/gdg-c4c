@@ -21,11 +21,15 @@ export type AsyncResource<T> =
     }
   | { status: 'error'; message: string }
 
+export type ApiResourceProgress = (loaded: number, total: number) => void
+
 interface UseApiResourceOptions {
   /** Re-fetch on this interval while the tab/component is mounted. */
   pollIntervalMs?: number
   /** Skip fetching entirely (e.g. no cell selected yet). */
   enabled?: boolean
+  /** Report foreground streaming progress; background refreshes stay quiet. */
+  onProgress?: ApiResourceProgress
 }
 
 export interface ApiResource<T> {
@@ -35,13 +39,14 @@ export interface ApiResource<T> {
 }
 
 export function useApiResource<T>(
-  fetcher: (signal: AbortSignal) => Promise<Envelope<T>>,
+  fetcher: (signal: AbortSignal, onProgress?: ApiResourceProgress) => Promise<Envelope<T>>,
   deps: DependencyList,
-  { pollIntervalMs, enabled = true }: UseApiResourceOptions = {},
+  { pollIntervalMs, enabled = true, onProgress }: UseApiResourceOptions = {},
 ): ApiResource<T> {
   const [resource, setResource] = useState<AsyncResource<T>>({ status: 'idle' })
   const [reloadToken, setReloadToken] = useState(0)
   const fetcherRef = useRef(fetcher)
+  const progressRef = useRef(onProgress)
   const activeControllerRef = useRef<AbortController | null>(null)
 
   // Keep the latest fetcher without making it a dependency of the effect
@@ -50,6 +55,9 @@ export function useApiResource<T>(
   // never runs while React is rendering.
   useEffect(() => {
     fetcherRef.current = fetcher
+  })
+  useEffect(() => {
+    progressRef.current = onProgress
   })
 
   const refetch = useCallback(() => setReloadToken((token) => token + 1), [])
@@ -78,7 +86,7 @@ export function useApiResource<T>(
       // stale data being mistaken for the new one's while it's in flight.
       if (!isBackgroundRefresh) setResource({ status: 'loading' })
       fetcherRef
-        .current(controller.signal)
+        .current(controller.signal, isBackgroundRefresh ? undefined : progressRef.current)
         .then((envelope) => {
           if (!cancelled && !controller.signal.aborted)
             setResource({

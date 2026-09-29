@@ -258,7 +258,6 @@ const WIND_STREAK_IMAGES = Array.from({ length: WIND_STREAK_FRAME_COUNT }, (_, i
 )
 
 const SOURCE_SELECTED = 'selected-cell'
-const LAYER_SELECTED_OUTLINE_CASING = 'selected-cell-outline-casing'
 const LAYER_SELECTED_OUTLINE = 'selected-cell-outline'
 
 // Economic freight corridors — a glowing polyline overlay plus clickable
@@ -428,14 +427,18 @@ function thinBySpatialGrid<T extends { latitude: number; longitude: number }>(
 /** One frame of the wind-streak icon, north-up: a bright, fading pulse at
  * `frame / WIND_STREAK_FRAME_COUNT`. No static line remains behind it. */
 function windStreakFrame(frame: number): ImageData {
-  const size = 32
+  // Give the pulse room to sweep three times farther without changing its
+  // on-screen length. MapLibre scales the full icon, so scale its canvas and
+  // path together while keeping the pulse itself at its current pixel length.
+  const travelScale = 3
+  const size = 32 * travelScale
   const canvas = document.createElement('canvas')
   canvas.width = size
   canvas.height = size
   const ctx = canvas.getContext('2d')!
   const x = size / 2
-  const headY = 4
-  const tailY = 28
+  const headY = 4 * travelScale
+  const tailY = 28 * travelScale
   const span = tailY - headY
   ctx.lineCap = 'round'
 
@@ -444,7 +447,7 @@ function windStreakFrame(frame: number): ImageData {
   // head (last frame), then wraps — the repeating flow. The extra frames
   // stretch the cycle to 3.5 seconds and smooth its movement.
   const t = frame / WIND_STREAK_FRAME_COUNT
-  const pulseLen = span * 0.6
+  const pulseLen = (span * 1.2) / travelScale
   const headPos = tailY - span * (t * 1.2)
   const tailPos = headPos + pulseLen
   const gradient = ctx.createLinearGradient(0, tailPos, 0, headPos)
@@ -1550,19 +1553,8 @@ export function MapView({
             },
           })
 
-          // Selected alert/cell outline — added after the data and place
-          // layers so nothing obscures its high-contrast boundary. Keep it
-          // below the scope mask so searched areas still grey out correctly.
-          map!.addLayer({
-            id: LAYER_SELECTED_OUTLINE_CASING,
-            type: 'line',
-            source: SOURCE_SELECTED,
-            paint: {
-              'line-color': '#080D16',
-              'line-width': 7,
-              'line-opacity': 0.98,
-            },
-          })
+          // Selected cell outline — a simple thin white edge above the data
+          // layers, below the scope mask.
           map!.addLayer({
             id: LAYER_SELECTED_OUTLINE,
             type: 'line',

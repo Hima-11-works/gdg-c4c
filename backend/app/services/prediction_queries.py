@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -303,6 +303,36 @@ class PredictionQueryService:
         threshold_pm25: float = DEFAULT_EXPOSURE_THRESHOLD_PM25,
         source_cells: list[str] | None = None,
     ) -> list[PredictionCellView]:
+        return list(
+            self.iter_aggregate(
+                run,
+                target_cells=target_cells,
+                resolution=resolution,
+                horizon=horizon,
+                threshold_pm25=threshold_pm25,
+                source_cells=source_cells,
+            )
+        )
+
+    def iter_aggregate(
+        self,
+        run: PredictionRun,
+        *,
+        target_cells: list[str],
+        resolution: int,
+        horizon: float,
+        threshold_pm25: float = DEFAULT_EXPOSURE_THRESHOLD_PM25,
+        source_cells: list[str] | None = None,
+        progressive: bool = False,
+    ) -> Iterator[PredictionCellView]:
+        """Aggregate target cells in bounded reads for responsive grid streams.
+
+        The streaming grid endpoints send accurate cell progress as each target
+        cell batch has been resolved. Bounded repository reads let that progress
+        advance during a slow grid request instead of waiting for the whole run
+        to load. The regular endpoints keep their list API through
+        :meth:`aggregate` above.
+        """
         if resolution > self.native_resolution:
             raise ValueError(
                 f"resolution {resolution} exceeds native prediction resolution "
@@ -310,19 +340,124 @@ class PredictionQueryService:
             )
         if not math.isfinite(threshold_pm25) or threshold_pm25 < 0:
             raise ValueError("threshold_pm25 must be a finite non-negative concentration")
-        rows = self._rows_at_horizon(run, target_cells, horizon, source_cells)
-        grouped: dict[str, list[PredictionResult]] = {cell: [] for cell in target_cells}
-        for row in rows:
-            source_resolution = h3.get_resolution(row.h3_cell)
-            if source_resolution < resolution:
-                continue
-            parent = row.h3_cell if source_resolution == resolution else h3.cell_to_parent(row.h3_cell, resolution)
-            if parent in grouped:
-                grouped[parent].append(row)
-        return [
-            self._aggregate_cell(run, cell, resolution, horizon, grouped[cell], threshold_pm25)
-            for cell in target_cells
-        ]
+        if not target_cells:
+            return
+
+        if not progressive:
+            rows = self._rows_at_horizon(run, target_cells, horizon, source_cells)
+            grouped: dict[str, list[PredictionResult]] = {
+                cell: [] for cell in target_cells
+            }
+            for row in rows:
+                source_resolution = h3.get_resolution(row.h3_cell)
+                if source_resolution < resolution:
+                    continue
+                parent = (
+                    row.h3_cell
+                    if source_resolution == resolution
+                    else h3.cell_to_parent(row.h3_cell, resolution)
+                )
+                if parent in grouped:
+                    grouped[parent].append(row)
+            for cell in target_cells:
+                yield self._aggregate_cell(
+                    run,
+                    cell,
+                    resolution,
+                    horizon,
+                    grouped[cell],
+                    threshold_pm25,
+                )
+            return
+
+        target_set = set(target_cells)
+        sources_by_target: dict[str, list[str]] = {cell: [] for cell in target_cells}
+        if run.run_id.startswith(DEMO_FALLBACK_PREFIX):
+            # Fallback data is synthesized at the requested target resolution.
+            for cell in target_cells:
+                sources_by_target[cell].append(cell)
+        else:
+            source_candidates = (
+                source_cells
+                if source_cells is not None
+                else self._repository.list_result_cells(run.run_id)
+            )
+            for source_cell in source_candidates:
+                source_resolution = h3.get_resolution(source_cell)
+                if source_resolution < resolution:
+                    continue
+                target_cell = (
+                    source_cell
+                    if source_resolution == resolution
+                    else h3.cell_to_parent(source_cell, resolution)
+                )
+                if target_cell in target_set:
+                    sources_by_target[target_cell].append(source_cell)
+
+        # Only the streaming endpoints split the read. The regular response
+        # endpoints preserve their single-query behavior for maximum throughput.
+        # Around ten reads gives the client frequent progress updates without
+        # turning a large map into one query per cell.
+        target_batch_size = max(1, math.ceil(len(target_cells) / 10))
+        source_cell_limit = 5_000
+        target_batches: list[list[str]] = []
+        pending: list[str] = []
+        pending_source_count = 0
+        for cell in target_cells:
+            source_count = len(sources_by_target[cell])
+            if pending and (
+                len(pending) >= target_batch_size
+                or pending_source_count + source_count > source_cell_limit
+            ):
+                target_batches.append(pending)
+                pending = []
+                pending_source_count = 0
+            pending.append(cell)
+            pending_source_count += source_count
+        if pending:
+            target_batches.append(pending)
+
+        anchors = (
+            None
+            if run.run_id.startswith(DEMO_FALLBACK_PREFIX)
+            else self._repository.list_horizons(run.run_id)
+        )
+        for target_batch in target_batches:
+            batch_sources = [
+                source_cell
+                for cell in target_batch
+                for source_cell in sources_by_target[cell]
+            ]
+            rows = self._rows_at_horizon(
+                run,
+                target_batch,
+                horizon,
+                batch_sources,
+                available_horizons=anchors,
+            )
+            grouped: dict[str, list[PredictionResult]] = {
+                cell: [] for cell in target_batch
+            }
+            for row in rows:
+                source_resolution = h3.get_resolution(row.h3_cell)
+                if source_resolution < resolution:
+                    continue
+                parent = (
+                    row.h3_cell
+                    if source_resolution == resolution
+                    else h3.cell_to_parent(row.h3_cell, resolution)
+                )
+                if parent in grouped:
+                    grouped[parent].append(row)
+            for cell in target_batch:
+                yield self._aggregate_cell(
+                    run,
+                    cell,
+                    resolution,
+                    horizon,
+                    grouped[cell],
+                    threshold_pm25,
+                )
 
     def detail(
         self,
@@ -369,6 +504,8 @@ class PredictionQueryService:
         target_cells: list[str],
         horizon: float,
         source_cells: list[str] | None = None,
+        *,
+        available_horizons: list[float] | None = None,
     ) -> list[PredictionResult]:
         if run.run_id.startswith(DEMO_FALLBACK_PREFIX):
             # The fallback is synthesised in memory, so there is nothing to
@@ -388,7 +525,11 @@ class PredictionQueryService:
             # but 0 is a legitimate lower anchor to interpolate up from, and
             # using the filtered list made a +15m read find no lower anchor and
             # return nothing.
-            anchors = self._repository.list_horizons(run.run_id)
+            anchors = (
+                available_horizons
+                if available_horizons is not None
+                else self._repository.list_horizons(run.run_id)
+            )
             if horizon in anchors or horizon == 0:
                 wanted = {horizon}
             else:

@@ -165,6 +165,112 @@ async function apiGetV2<T>(
   return apiGet<V2Envelope<T>>(`${pathname}?${query.toString()}`, signal)
 }
 
+type GridLoadProgress = (loaded: number, total: number) => void
+
+interface GridStreamComplete<T> {
+  type: 'complete'
+  generated_at: string
+  run_id: string
+  mode: V2Envelope<T>['mode']
+  is_demo: boolean
+  attribution: V2Envelope<T>['attribution']
+  coverage: V2Envelope<T>['coverage']
+}
+
+/** Read a cell-counted NDJSON response. Each batch updates progress using
+ * the exact number of processed H3 cells rather than elapsed-time estimates. */
+async function apiGetV2GridStream<T>(
+  path: string,
+  pinnedRunId: string | undefined,
+  signal: AbortSignal | undefined,
+  onProgress?: GridLoadProgress,
+): Promise<V2Envelope<T[]>> {
+  onProgress?.(0, 0)
+  const runId = pinnedRunId ?? (await publishedRunId())
+  if (signal?.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError')
+  const [pathname, queryString] = path.split('?', 2)
+  const query = new URLSearchParams(queryString ?? '')
+  query.set('run_id', runId)
+
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE_URL}${pathname}?${query.toString()}`, { signal })
+  } catch (error) {
+    if (signal?.aborted) throw error
+    throw new ApiError(0, 'network_error', 'Could not reach the backend. Is it running?')
+  }
+
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as ErrorResponseBody | null
+    throw new ApiError(
+      response.status,
+      body?.error?.code ?? 'http_error',
+      body?.error?.message ?? `Request failed with status ${response.status}`,
+    )
+  }
+
+  const reader = response.body?.getReader()
+  if (!reader) throw new ApiError(0, 'stream_unavailable', 'The backend did not stream cell data.')
+
+  const decoder = new TextDecoder()
+  const data: T[] = []
+  let buffered = ''
+  let complete: GridStreamComplete<T> | null = null
+
+  const yieldToPaint = () =>
+    new Promise<void>((resolve) => {
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => resolve())
+      else setTimeout(resolve, 0)
+    })
+
+  const consumeLine = async (line: string) => {
+    if (!line.trim()) return
+    const event = JSON.parse(line) as
+      | { type: 'start'; total: number }
+      | { type: 'batch'; loaded: number; total: number; data: T[] }
+      | GridStreamComplete<T>
+    if (event.type === 'start') {
+      onProgress?.(0, event.total)
+    } else if (event.type === 'batch') {
+      data.push(...event.data)
+      onProgress?.(event.loaded, event.total)
+      // Let React paint each received batch even when the browser coalesces
+      // several NDJSON records into one network read.
+      await yieldToPaint()
+    } else if (event.type === 'complete') {
+      complete = event
+    }
+  }
+
+  while (true) {
+    const { value, done } = await reader.read()
+    buffered += decoder.decode(value, { stream: !done })
+    let newline = buffered.indexOf('\n')
+    while (newline !== -1) {
+      await consumeLine(buffered.slice(0, newline))
+      buffered = buffered.slice(newline + 1)
+      newline = buffered.indexOf('\n')
+    }
+    if (done) break
+  }
+  await consumeLine(buffered)
+  reader.releaseLock()
+
+  if (complete === null)
+    throw new ApiError(0, 'incomplete_stream', 'The backend stream ended before all cells loaded.')
+  const metadata = complete as GridStreamComplete<T>
+  onProgress?.(metadata.coverage?.requested_cells ?? data.length, metadata.coverage?.requested_cells ?? data.length)
+  return {
+    generated_at: metadata.generated_at,
+    run_id: metadata.run_id,
+    mode: metadata.mode,
+    is_demo: metadata.is_demo,
+    attribution: metadata.attribution,
+    coverage: metadata.coverage,
+    data,
+  }
+}
+
 function preserveV2Envelope<T, U>(envelope: V2Envelope<T>, data: U): Envelope<U> {
   return {
     generated_at: envelope.generated_at,
@@ -257,11 +363,13 @@ export function fetchGridCurrent(
   query: LodQuery = {},
   runId?: string,
   signal?: AbortSignal,
+  onProgress?: GridLoadProgress,
 ): Promise<Envelope<GridStateOut[]>> {
-  return apiGetV2<GridCurrentV2Out[]>(
-    `/api/v2/grid/current${buildQuery(lodParams(query))}`,
+  return apiGetV2GridStream<GridCurrentV2Out>(
+    `/api/v2/grid/current/stream${buildQuery(lodParams(query))}`,
     runId,
     signal,
+    onProgress,
   ).then((envelope) => preserveV2Envelope(envelope, envelope.data.map(fromCurrentV2)))
 }
 
@@ -270,11 +378,13 @@ export function fetchGridForecast(
   query: LodQuery = {},
   runId?: string,
   signal?: AbortSignal,
+  onProgress?: GridLoadProgress,
 ): Promise<Envelope<ForecastOut[]>> {
-  return apiGetV2<ForecastV2Out[]>(
-    `/api/v2/grid/forecast${buildQuery({ hours: minutes / 60, ...lodParams(query) })}`,
+  return apiGetV2GridStream<ForecastV2Out>(
+    `/api/v2/grid/forecast/stream${buildQuery({ hours: minutes / 60, ...lodParams(query) })}`,
     runId,
     signal,
+    onProgress,
   ).then((envelope) => preserveV2Envelope(envelope, envelope.data.map(fromForecastV2)))
 }
 

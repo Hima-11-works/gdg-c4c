@@ -26,6 +26,12 @@ export interface FrameState {
   message?: string
 }
 
+export interface GridCellProgress {
+  loaded: number
+  total: number
+  complete: boolean
+}
+
 const MAX_MINUTES = 360
 const DEFAULT_HORIZONS_HOURS = [1, 3, 6]
 
@@ -46,6 +52,7 @@ export const WARM_WINDOW = 0
 export const PREFETCH_DEPTH = 1
 
 const cache = new Map<string, Envelope<ForecastOut[]>>()
+const progressByFrame = new Map<string, GridCellProgress>()
 interface InFlightForecast {
   queryKey: string
   controller: AbortController
@@ -83,15 +90,21 @@ export function ensureForecastFrame(
   if (existing) return existing.promise
   failed.delete(key)
   const controller = new AbortController()
+  progressByFrame.set(key, { loaded: 0, total: 0, complete: false })
   const request: InFlightForecast = {
     queryKey,
     controller,
     promise: Promise.resolve(),
   }
-  request.promise = fetchGridForecast(minutes, query, runId, controller.signal)
+  request.promise = fetchGridForecast(minutes, query, runId, controller.signal, (loaded, total) => {
+    progressByFrame.set(key, { loaded, total, complete: false })
+    notify()
+  })
     .then((envelope) => {
       if (controller.signal.aborted || inFlight.get(key) !== request) return
       cache.set(key, envelope)
+      const total = envelope.coverage?.requested_cells ?? envelope.data.length
+      progressByFrame.set(key, { loaded: total, total, complete: true })
       inFlight.delete(key)
       failed.delete(key)
       notify()
@@ -99,7 +112,10 @@ export function ensureForecastFrame(
     .catch(() => {
       if (inFlight.get(key) !== request) return
       inFlight.delete(key)
-      if (!controller.signal.aborted) failed.add(key)
+      if (!controller.signal.aborted) {
+        failed.add(key)
+        progressByFrame.delete(key)
+      }
       notify()
     })
   inFlight.set(key, request)
@@ -114,6 +130,7 @@ export function cancelForecastRequests(queryKey: string): void {
     request.controller.abort()
     inFlight.delete(key)
     failed.delete(key)
+    progressByFrame.delete(key)
     cancelledAny = true
   }
   const hadWarmup = warmups.delete(queryKey)
@@ -162,6 +179,7 @@ export function warmForecastWindow(
     staleRequest?.controller.abort()
     inFlight.delete(staleKey)
     failed.delete(staleKey)
+    progressByFrame.delete(staleKey)
     warmups.delete(queryKey)
     replacedWarmup = true
   }
@@ -202,6 +220,30 @@ export function useForecastWarming(queryKey: string): boolean {
     }
   }, [queryKey])
   return warming
+}
+
+/** Progress for the selected frame's exact target-cell count. */
+export function useForecastProgress(minutes: number, queryKey: string): GridCellProgress | null {
+  const key = cacheKey(minutes, queryKey)
+  const [progress, setProgress] = useState<GridCellProgress | null>(
+    () => progressByFrame.get(key) ?? completedProgress(cache.get(key)),
+  )
+  useEffect(() => {
+    const update = () =>
+      setProgress(progressByFrame.get(key) ?? completedProgress(cache.get(key)))
+    listeners.add(update)
+    update()
+    return () => {
+      listeners.delete(update)
+    }
+  }, [key])
+  return progress
+}
+
+function completedProgress(envelope: Envelope<ForecastOut[]> | undefined): GridCellProgress | null {
+  if (!envelope) return null
+  const total = envelope.coverage?.requested_cells ?? envelope.data.length
+  return { loaded: total, total, complete: true }
 }
 
 /** Synchronously read a cached frame, or undefined. */

@@ -348,6 +348,57 @@ def test_cell_detail_queries_only_descendants_of_the_selected_cell():
     assert repository.result_queries == [([0], children)]
 
 
+def test_grid_aggregation_reads_cells_in_bounded_batches():
+    now = datetime(2026, 9, 22, tzinfo=UTC)
+    center = h3.latlng_to_cell(28.6, 77.1, 8)
+    cells = sorted(h3.grid_disk(center, 5))[:40]
+    run = PredictionRun(
+        run_id="streamed-grid-1",
+        generated_at=now,
+        published_at=now,
+        region="india",
+        mode=DataMode.LIVE,
+        feature_run_id="features-1",
+        feature_schema_version="environmental-v1",
+    )
+    repository = MemoryPublicationRepository(
+        run,
+        [
+            PredictionResult(
+                run_id=run.run_id,
+                h3_cell=cell,
+                horizon_hours=0,
+                valid_at=now,
+                baseline_pm25=20,
+                predicted_pm25=20,
+                prediction_method="observed-current",
+                input_kind=InputKind.OBSERVED,
+            )
+            for cell in cells
+        ],
+    )
+    service = PredictionQueryService(repository, native_resolution=8, region="india")
+
+    views = service.iter_aggregate(
+        run,
+        target_cells=cells,
+        resolution=8,
+        horizon=0,
+        progressive=True,
+    )
+    next(views)
+    assert len(repository.result_queries) == 1
+    for _ in range(3):
+        next(views)
+    assert len(repository.result_queries) == 1
+    next(views)
+    assert len(repository.result_queries) == 2
+
+    remaining = list(views)
+    assert len(remaining) == len(cells) - 5
+    assert len(repository.result_queries) == 10
+
+
 def test_quarter_hour_forecast_interpolates_anchors_without_claiming_an_interval():
     now = datetime(2026, 9, 22, tzinfo=UTC)
     cell = h3.latlng_to_cell(28.6, 77.1, 8)

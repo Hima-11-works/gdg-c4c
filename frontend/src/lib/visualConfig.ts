@@ -14,12 +14,11 @@ export const CELL_BORDER_WIDTH = 0.5
 /** Color of unselected hex cell borders. */
 export const CELL_BORDER_COLOR = '#00000025'
 
-/** Width of the selected cell's highlight border. A separate dark casing
- *  keeps the amber stroke legible on imagery and bright pollution fills. */
-export const SELECTED_CELL_BORDER_WIDTH = 4
+/** Width of the selected cell's thin white outline. */
+export const SELECTED_CELL_BORDER_WIDTH = 1.5
 
-/** Color of the selected cell's highlight border. */
-export const SELECTED_CELL_BORDER_COLOR = '#FDE047'
+/** Color of the selected cell's outline. */
+export const SELECTED_CELL_BORDER_COLOR = '#FFFFFF'
 
 /** Contrast mode: line drawn on the boundary between PM2.5 bands. Dark and
  *  crisp so same-range regions read as separated blocks regardless of the

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import math
+from collections.abc import Callable, Iterator
 
 import h3
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import StreamingResponse
 
 from app.api.deps import get_bbox_query, get_prediction_query_service
 from app.api.schemas_v2 import (
@@ -147,6 +151,73 @@ def _coverage(run: PredictionRun, resolution: int, requested: int, views: list[P
     )
 
 
+def _ndjson_line(event: dict[str, object]) -> bytes:
+    return (json.dumps(jsonable_encoder(event), separators=(",", ":")) + "\n").encode()
+
+
+def _stream_grid(
+    *,
+    run: PredictionRun,
+    service: PredictionQueryService,
+    cells: list[str],
+    resolution: int,
+    horizon: float,
+    threshold_pm25: float,
+    serialize_cell: Callable[
+        [PredictionRun, PredictionCellView], GridCurrentV2Out | ForecastV2Out | None
+    ],
+) -> StreamingResponse:
+    """Stream exact cell completion counts while preserving a final envelope."""
+
+    def events() -> Iterator[bytes]:
+        total = len(cells)
+        # Emit roughly one update per percentage point, including small
+        # viewport queries where a 32-cell minimum would hide all progress.
+        batch_size = max(1, min(512, math.ceil(total / 100)))
+        yield _ndjson_line({"type": "start", "total": total})
+
+        views: list[PredictionCellView] = []
+        batch: list[dict[str, object]] = []
+        loaded = 0
+        for view in service.iter_aggregate(
+            run,
+            target_cells=cells,
+            resolution=resolution,
+            horizon=horizon,
+            threshold_pm25=threshold_pm25,
+            progressive=True,
+        ):
+            views.append(view)
+            row = serialize_cell(run, view)
+            if row is not None:
+                batch.append(row.model_dump(mode="json"))
+            loaded += 1
+
+            if loaded % batch_size == 0 or loaded == total:
+                yield _ndjson_line(
+                    {"type": "batch", "loaded": loaded, "total": total, "data": batch}
+                )
+                batch = []
+
+        yield _ndjson_line(
+            {
+                "type": "complete",
+                "generated_at": run.generated_at,
+                "run_id": run.run_id,
+                "mode": run.mode,
+                "is_demo": run.mode is DataMode.DEMO or any(view.synthetic for view in views),
+                "attribution": _refs(run.dataset_refs),
+                "coverage": _coverage(run, resolution, total, views).model_dump(mode="json"),
+            }
+        )
+
+    return StreamingResponse(
+        events(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 def _current(run: PredictionRun, view: PredictionCellView) -> GridCurrentV2Out:
     vector = view.feature_vector
     return GridCurrentV2Out(
@@ -259,6 +330,27 @@ def get_current_grid_v2(
     )
 
 
+@router.get("/grid/current/stream", include_in_schema=False)
+def stream_current_grid_v2(
+    resolution: int | None = _RESOLUTION_QUERY,
+    bbox: BoundingBox | None = Depends(get_bbox_query),
+    run_id: str | None = Query(None),
+    threshold_pm25: float = Query(DEFAULT_EXPOSURE_THRESHOLD_PM25, ge=0),
+    service: PredictionQueryService = Depends(get_prediction_query_service),
+) -> StreamingResponse:
+    run = _run_or_404(service, run_id)
+    display_resolution, cells = _target_cells(service, run, resolution=resolution, bbox=bbox)
+    return _stream_grid(
+        run=run,
+        service=service,
+        cells=cells,
+        resolution=display_resolution,
+        horizon=0,
+        threshold_pm25=threshold_pm25,
+        serialize_cell=_current,
+    )
+
+
 @router.get("/grid/forecast", response_model=V2Envelope[list[ForecastV2Out]])
 def get_forecast_grid_v2(
     hours: float = Query(1, gt=0, le=6),
@@ -296,6 +388,38 @@ def get_forecast_grid_v2(
         data=forecasts,
         attribution=_refs(run.dataset_refs),
         coverage=_coverage(run, display_resolution, len(cells), views),
+    )
+
+
+@router.get("/grid/forecast/stream", include_in_schema=False)
+def stream_forecast_grid_v2(
+    hours: float = Query(1, gt=0, le=6),
+    resolution: int | None = _RESOLUTION_QUERY,
+    bbox: BoundingBox | None = Depends(get_bbox_query),
+    run_id: str | None = Query(None),
+    threshold_pm25: float = Query(DEFAULT_EXPOSURE_THRESHOLD_PM25, ge=0),
+    service: PredictionQueryService = Depends(get_prediction_query_service),
+) -> StreamingResponse:
+    run = _run_or_404(service, run_id)
+    anchors = service.horizons(run)
+    max_horizon = max(anchors, default=0.0)
+    if abs(hours * 4 - round(hours * 4)) > 1e-8 or hours > max_horizon:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=(
+                f"forecast horizon must be a 15-minute step within the published run's "
+                f"0–{max_horizon:g}h anchor window; anchors are {anchors}"
+            ),
+        )
+    display_resolution, cells = _target_cells(service, run, resolution=resolution, bbox=bbox)
+    return _stream_grid(
+        run=run,
+        service=service,
+        cells=cells,
+        resolution=display_resolution,
+        horizon=hours,
+        threshold_pm25=threshold_pm25,
+        serialize_cell=_forecast,
     )
 
 
