@@ -337,10 +337,8 @@ export function MapPage() {
   const activeLabel = isNow
     ? 'current conditions'
     : `the +${forecastMinutes >= 60 ? `${Math.floor(forecastMinutes / 60)}h ` : ''}${forecastMinutes % 60 ? `${forecastMinutes % 60}m ` : ''}forecast`.trim()
-  const hasDetailPanel = state.selectedCell !== null || state.selectedCorridor !== null
-
   return (
-    <main className="map-page" aria-labelledby="dashboard-title">
+    <main className="map-page" aria-label="India air quality map">
       <div className="banner-stack">
         <DataModeBanner
           label={activeLabel}
@@ -370,20 +368,13 @@ export function MapPage() {
       </Suspense>
 
       <div className="overlay overlay-top-left">
-        <header className="panel dashboard-heading">
-          <h1 id="dashboard-title">India air quality map</h1>
-          <p>Explore forecasts, pollution hotspots, and citizen reports.</p>
-        </header>
+        <MapActionToolbar
+          inline
+          onReport={() => setReportOpen(true)}
+          onReviewPhotos={() => setPhotoReviewOpen(true)}
+          reportAvailable={fireReportingEnabled && reportCenter !== null}
+        />
         <Legend />
-        {hasDetailPanel && (
-          <MapActionToolbar
-            inline
-            onReport={() => setReportOpen(true)}
-            onReviewPhotos={() => setPhotoReviewOpen(true)}
-            reportAvailable={reportCenter !== null}
-            showReport={fireReportingEnabled}
-          />
-        )}
         {fireReportingEnabled && reportOpen && reportCenter !== null && (
           <Suspense fallback={<FeatureLoading label="Opening fire report form…" />}>
             <ReportFireForm
@@ -411,14 +402,6 @@ export function MapPage() {
           <AlertsPanel publishedRunId={publishedRunId} />
         </div>
         <FederatedStatusPill />
-        {!hasDetailPanel && (
-          <MapActionToolbar
-            onReport={() => setReportOpen(true)}
-            onReviewPhotos={() => setPhotoReviewOpen(true)}
-            reportAvailable={reportCenter !== null}
-            showReport={fireReportingEnabled}
-          />
-        )}
       </div>
 
       <div className="overlay overlay-bottom-left">
