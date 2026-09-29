@@ -6,8 +6,8 @@
 // Context+useReducer here — the rest of the app's state (server data) is
 // NOT kept here, see hooks/useApiResource.ts.
 
-import { resolutionOfCell } from '../lib/h3Geometry'
-import { lodForZoom, MAX_UNSCOPED_ZOOM } from '../lib/lod'
+import { cellCenter, resolutionOfCell } from '../lib/h3Geometry'
+import { lodForZoom, MAX_SEARCH_ZOOM, MAX_UNSCOPED_ZOOM } from '../lib/lod'
 import { scopeForPlace } from '../lib/scope'
 import type { Lod } from '../lib/lod'
 import type { MapScope } from '../lib/scope'
@@ -32,6 +32,9 @@ export interface MapUiState {
    *  object every dispatch (never mutated) so MapView's effect fires even
    *  when the same place is picked twice. */
   focus: { latitude: number; longitude: number; zoom: number } | null
+  /** Alert cell selection temporarily unlocks close-up zoom until its detail
+   *  panel is closed. Normal, unscoped map navigation remains capped at level 2. */
+  focusedCell: boolean
   showPdi: boolean
   /** Satellite fire / thermal hotspot layer (VIIRS S-NPP). */
   showFireHotspots: boolean
@@ -112,6 +115,7 @@ export type MapUiAction =
   | { type: 'TOGGLE_LEGEND' }
   | { type: 'TOGGLE_SETTINGS' }
   | { type: 'SELECT_CELL'; cell: string | null; resolution?: number }
+  | { type: 'FOCUS_CELL'; cell: string }
   | { type: 'TOGGLE_CELL'; cell: string; generalized?: boolean }
   | { type: 'SELECT_CORRIDOR'; corridor: FreightCorridorProperties | null }
   | { type: 'SET_VIEWPORT'; zoom: number; bbox: BoundingBox }
@@ -124,6 +128,7 @@ export const initialMapUiState: MapUiState = {
   viewMode: 'hex',
   contrast: false,
   focus: null,
+  focusedCell: false,
   showPdi: false,
   showFireHotspots: false,
   showCitizenSensors: false,
@@ -171,6 +176,25 @@ function withSelectedCell(
   }
 }
 
+/** Restore the regular map zoom cap after an alert cell's detail is closed. */
+function closeFocusedCell(state: MapUiState, next: MapUiState): MapUiState {
+  if (!state.focusedCell) return next
+  const center =
+    state.bbox === null
+      ? state.focus === null
+        ? null
+        : { latitude: state.focus.latitude, longitude: state.focus.longitude }
+      : {
+          latitude: (state.bbox.minLat + state.bbox.maxLat) / 2,
+          longitude: (state.bbox.minLon + state.bbox.maxLon) / 2,
+        }
+  return {
+    ...next,
+    focusedCell: false,
+    focus: center === null ? state.focus : { ...center, zoom: MAX_UNSCOPED_ZOOM },
+  }
+}
+
 export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState {
   switch (action.type) {
     case 'SELECT_FORECAST':
@@ -196,6 +220,7 @@ export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState
       return {
         ...state,
         scope,
+        focusedCell: false,
         // Always a fresh object, so re-selecting the same place re-flies.
         focus: { latitude: action.latitude, longitude: action.longitude, zoom: action.zoom },
       }
@@ -216,6 +241,7 @@ export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState
       return {
         ...state,
         scope: null,
+        focusedCell: false,
         focus: centre === null ? state.focus : { ...centre, zoom },
       }
     }
@@ -247,19 +273,35 @@ export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState
       return { ...state, legendOpen: !state.legendOpen }
     case 'TOGGLE_SETTINGS':
       return { ...state, settingsOpen: !state.settingsOpen }
-    case 'SELECT_CELL':
-      return withSelectedCell(state, action.cell, action.resolution)
-    case 'TOGGLE_CELL':
+    case 'SELECT_CELL': {
+      const next = withSelectedCell(state, action.cell, action.resolution)
+      return action.cell === null ? closeFocusedCell(state, next) : next
+    }
+    case 'FOCUS_CELL': {
+      try {
+        const [latitude, longitude] = cellCenter(action.cell)
+        // Center one alert cell at a useful inspection size. Raw H3 res 3–7
+        // maps to zoom 8–12; max zoom stays bounded by the search ceiling.
+        const zoom = Math.min(MAX_SEARCH_ZOOM, (resolutionOfCell(action.cell) ?? 4) + 5)
+        return {
+          ...withSelectedCell(state, action.cell),
+          scope: null,
+          focusedCell: true,
+          focus: { latitude, longitude, zoom },
+        }
+      } catch {
+        return withSelectedCell(state, action.cell)
+      }
+    }
+    case 'TOGGLE_CELL': {
       // Clicking the cell that is already open closes the drawer; clicking
       // any other cell selects it. The comparison lives here rather than in
       // the click handler, which is registered once and would otherwise need
       // the current selection pushed into it through a ref.
-      return withSelectedCell(
-        state,
-        state.selectedCell === action.cell ? null : action.cell,
-        undefined,
-        action.generalized,
-      )
+      const cell = state.selectedCell === action.cell ? null : action.cell
+      const next = withSelectedCell(state, cell, undefined, action.generalized)
+      return cell === null ? closeFocusedCell(state, next) : next
+    }
     case 'SELECT_CORRIDOR':
       return {
         ...state,

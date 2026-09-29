@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { fetchAlerts } from '../lib/api'
 import { formatNumber } from '../lib/format'
 import { useApiResource } from '../hooks/useApiResource'
@@ -109,6 +110,7 @@ export function AlertsPanel({ publishedRunId }: { publishedRunId?: string }) {
   const [loadingMoreFor, setLoadingMoreFor] = useState<string | undefined>()
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null)
   const { dispatch } = useMapUi()
+  const dialogRef = useRef<HTMLElement>(null)
   const { resource, refetch } = useApiResource(
     () => fetchAlerts(publishedRunId, ALERT_PAGE_SIZE, 0),
     [publishedRunId],
@@ -118,9 +120,8 @@ export function AlertsPanel({ publishedRunId }: { publishedRunId?: string }) {
   )
 
   const extraPages = pageState.runId === publishedRunId ? pageState.pages : []
-  const visibleAlerts = resource.status === 'success'
-    ? [...resource.data, ...extraPages.flat()]
-    : []
+  const visibleAlerts =
+    resource.status === 'success' ? [...resource.data, ...extraPages.flat()] : []
   const count = visibleAlerts.length
   const lastPage = extraPages.at(-1) ?? (resource.status === 'success' ? resource.data : [])
   const hasMore = resource.status === 'success' && lastPage.length === ALERT_PAGE_SIZE
@@ -141,7 +142,7 @@ export function AlertsPanel({ publishedRunId }: { publishedRunId?: string }) {
     } catch (error) {
       setLoadMoreError(error instanceof Error ? error.message : 'Could not load more alerts.')
     } finally {
-      setLoadingMoreFor((current) => current === requestRunId ? undefined : current)
+      setLoadingMoreFor((current) => (current === requestRunId ? undefined : current))
     }
   }
 
@@ -156,12 +157,65 @@ export function AlertsPanel({ publishedRunId }: { publishedRunId?: string }) {
       return next
     })
 
+  useEffect(() => {
+    if (!open) return
+    const dialog = dialogRef.current
+    if (dialog === null) return
+    const previousFocus =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const focusableSelector =
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    const focusableItems = () =>
+      Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector)).filter(
+        (item) => item.getClientRects().length > 0 && item.getAttribute('aria-hidden') !== 'true',
+      )
+
+    const first = focusableItems()[0]
+    if (first) first.focus()
+    else dialog.focus()
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOpen(false)
+        return
+      }
+      if (event.key !== 'Tab') return
+
+      const items = focusableItems()
+      const firstItem = items[0]
+      const lastItem = items.at(-1)
+      if (firstItem === undefined || lastItem === undefined) {
+        event.preventDefault()
+        dialog.focus()
+      } else if (
+        event.shiftKey &&
+        (document.activeElement === firstItem || !dialog.contains(document.activeElement))
+      ) {
+        event.preventDefault()
+        lastItem.focus()
+      } else if (
+        !event.shiftKey &&
+        (document.activeElement === lastItem || !dialog.contains(document.activeElement))
+      ) {
+        event.preventDefault()
+        firstItem.focus()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      if (previousFocus?.isConnected) previousFocus.focus()
+    }
+  }, [open])
+
   return (
     <div className="panel alerts-panel">
       <button
         type="button"
         className="alerts-toggle"
         onClick={() => setOpen((value) => !value)}
+        aria-haspopup="dialog"
+        aria-controls="alerts-dialog"
         aria-label={
           resource.status !== 'success'
             ? 'Alerts'
@@ -194,81 +248,114 @@ export function AlertsPanel({ publishedRunId }: { publishedRunId?: string }) {
         )}
       </button>
 
-      {open && (
-        <div className="alerts-list">
-          {resource.status === 'loading' && <p>Loading alerts…</p>}
-
-          {resource.status === 'error' && (
-            <p>
-              Couldn't load alerts: {resource.message}{' '}
-              <button type="button" onClick={refetch}>
-                Retry
-              </button>
-            </p>
-          )}
-
-          {resource.status === 'success' && resource.isDemo && (
-            <p className="banner banner-demo" role="status">
-              Demo data — illustrative, not measured.
-            </p>
-          )}
-
-          {resource.status === 'success' && resource.data.length === 0 && <p>No active alerts.</p>}
-
-          {resource.status === 'success' && resource.data.length > 0 && (
-            <p className="muted alerts-checklist-note">
-              The checklist below is local to this session — this dashboard cannot dispatch or
-              notify authorities yet.
-            </p>
-          )}
-
-          {resource.status === 'success' && (
-            <p className="muted alerts-checklist-note" role="status">
-              Showing {count.toLocaleString()} alert{count === 1 ? '' : 's'}
-              {hasMore ? ' · 100 or more in this run' : ' · all in this run'}.
-            </p>
-          )}
-
-          {resource.status === 'success' &&
-            visibleAlerts.map((alert) => (
-              <AlertItem
-                key={`${alert.h3_cell}-${alert.created_at}-${alert.forecast_hours}`}
-                alert={alert}
-                onSelect={() => {
-                  if (alert.forecast_hours !== null) {
-                    dispatch({
-                      type: 'SELECT_FORECAST',
-                      minutes: Math.round(alert.forecast_hours * 60),
-                    })
-                  }
-                  dispatch({ type: 'SELECT_CELL', cell: alert.h3_cell })
-                }}
-                done={(action) => checked.has(keyFor(alert, action))}
-                onToggle={(action) => toggle(alert, action)}
-              />
-            ))}
-
-          {loadMoreError !== null && (
-            <p role="alert" className="alerts-load-error">
-              Couldn't load more alerts: {loadMoreError}{' '}
-              <button type="button" onClick={() => void loadMore()}>
-                Retry
-              </button>
-            </p>
-          )}
-
-          {hasMore && (
-            <button
-              type="button"
-              className="alert-cta"
-              onClick={() => void loadMore()}
-              disabled={loadingMore}
+      {open &&
+        createPortal(
+          <div
+            className="photo-review-backdrop alerts-backdrop"
+            role="presentation"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) setOpen(false)
+            }}
+          >
+            <section
+              className="panel alerts-list"
+              id="alerts-dialog"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="alerts-title"
+              tabIndex={-1}
+              ref={dialogRef}
             >
-              {loadingMore ? 'Loading alerts…' : `Load next ${ALERT_PAGE_SIZE} alerts`}
-            </button>
-          )}
-        </div>
-      )}
+              <header className="alerts-dialog-header">
+                <h2 id="alerts-title">Alerts</h2>
+                <button
+                  type="button"
+                  className="report-form-close"
+                  onClick={() => setOpen(false)}
+                  aria-label="Close alerts"
+                  title="Close"
+                >
+                  ×
+                </button>
+              </header>
+              {resource.status === 'loading' && <p>Loading alerts…</p>}
+
+              {resource.status === 'error' && (
+                <p>
+                  Couldn't load alerts: {resource.message}{' '}
+                  <button type="button" onClick={refetch}>
+                    Retry
+                  </button>
+                </p>
+              )}
+
+              {resource.status === 'success' && resource.isDemo && (
+                <p className="banner banner-demo" role="status">
+                  Demo data — illustrative, not measured.
+                </p>
+              )}
+
+              {resource.status === 'success' && resource.data.length === 0 && (
+                <p>No active alerts.</p>
+              )}
+
+              {resource.status === 'success' && resource.data.length > 0 && (
+                <p className="muted alerts-checklist-note">
+                  The checklist below is local to this session — this dashboard cannot dispatch or
+                  notify authorities yet.
+                </p>
+              )}
+
+              {resource.status === 'success' && (
+                <p className="muted alerts-checklist-note" role="status">
+                  Showing {count.toLocaleString()} alert{count === 1 ? '' : 's'}
+                  {hasMore ? ' · 100 or more in this run' : ' · all in this run'}.
+                </p>
+              )}
+
+              {resource.status === 'success' &&
+                visibleAlerts.map((alert) => (
+                  <AlertItem
+                    key={`${alert.h3_cell}-${alert.created_at}-${alert.forecast_hours}`}
+                    alert={alert}
+                    onSelect={() => {
+                      setOpen(false)
+                      if (alert.forecast_hours !== null) {
+                        dispatch({
+                          type: 'SELECT_FORECAST',
+                          minutes: Math.round(alert.forecast_hours * 60),
+                        })
+                      }
+                      dispatch({ type: 'FOCUS_CELL', cell: alert.h3_cell })
+                    }}
+                    done={(action) => checked.has(keyFor(alert, action))}
+                    onToggle={(action) => toggle(alert, action)}
+                  />
+                ))}
+
+              {loadMoreError !== null && (
+                <p role="alert" className="alerts-load-error">
+                  Couldn't load more alerts: {loadMoreError}{' '}
+                  <button type="button" onClick={() => void loadMore()}>
+                    Retry
+                  </button>
+                </p>
+              )}
+
+              {hasMore && (
+                <button
+                  type="button"
+                  className="alert-cta"
+                  onClick={() => void loadMore()}
+                  disabled={loadingMore}
+                >
+                  {loadingMore ? 'Loading alerts…' : `Load next ${ALERT_PAGE_SIZE} alerts`}
+                </button>
+              )}
+            </section>
+          </div>,
+          document.body,
+        )}
     </div>
   )
 }

@@ -14,11 +14,12 @@ export const CELL_BORDER_WIDTH = 0.5
 /** Color of unselected hex cell borders. */
 export const CELL_BORDER_COLOR = '#00000025'
 
-/** Width of the selected cell's highlight border. */
-export const SELECTED_CELL_BORDER_WIDTH = 2
+/** Width of the selected cell's highlight border. A separate dark casing
+ *  keeps the amber stroke legible on imagery and bright pollution fills. */
+export const SELECTED_CELL_BORDER_WIDTH = 4
 
 /** Color of the selected cell's highlight border. */
-export const SELECTED_CELL_BORDER_COLOR = '#ffffffcc'
+export const SELECTED_CELL_BORDER_COLOR = '#FDE047'
 
 /** Contrast mode: line drawn on the boundary between PM2.5 bands. Dark and
  *  crisp so same-range regions read as separated blocks regardless of the
@@ -68,8 +69,7 @@ let _reducedMotion: boolean | null = null
 export function prefersReducedMotion(): boolean {
   if (_reducedMotion === null) {
     _reducedMotion =
-      typeof window !== 'undefined' &&
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
   }
   return _reducedMotion
 }

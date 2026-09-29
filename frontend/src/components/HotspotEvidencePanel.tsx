@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useApiResource } from '../hooks/useApiResource'
 import { fetchHotspotCatalog, fetchHotspotEvents, fetchHotspotScan } from '../lib/api'
 import { useMapUi } from '../state/MapUiContext'
@@ -60,6 +60,7 @@ export function HotspotEvidencePanel({
 }) {
   const [selectedScanId, setSelectedScanId] = useState<string | null>(null)
   const { state, dispatch } = useMapUi()
+  const panelRef = useRef<HTMLElement>(null)
   const scanCatalog = useApiResource(fetchHotspotCatalog, [], { pollIntervalMs: 5 * 60 * 1000 })
   const eventCatalog = useApiResource(fetchHotspotEvents, [], { pollIntervalMs: 5 * 60 * 1000 })
 
@@ -91,13 +92,78 @@ export function HotspotEvidencePanel({
           ? 'none-passing'
           : null
 
+  useEffect(() => {
+    const panel = panelRef.current
+    if (panel === null) return
+    const previousFocus =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const focusableSelector =
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    const focusableItems = () =>
+      Array.from(panel.querySelectorAll<HTMLElement>(focusableSelector)).filter(
+        (item) => item.getClientRects().length > 0 && item.getAttribute('aria-hidden') !== 'true',
+      )
+
+    const first = focusableItems()[0]
+    if (first) first.focus()
+    else panel.focus()
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        dispatch({ type: 'TOGGLE_HOTSPOT_PANEL' })
+        return
+      }
+      if (event.key !== 'Tab') return
+
+      const items = focusableItems()
+      const firstItem = items[0]
+      const lastItem = items.at(-1)
+      if (firstItem === undefined || lastItem === undefined) {
+        event.preventDefault()
+        panel.focus()
+      } else if (
+        event.shiftKey &&
+        (document.activeElement === firstItem || !panel.contains(document.activeElement))
+      ) {
+        event.preventDefault()
+        lastItem.focus()
+      } else if (
+        !event.shiftKey &&
+        (document.activeElement === lastItem || !panel.contains(document.activeElement))
+      ) {
+        event.preventDefault()
+        firstItem.focus()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      if (previousFocus?.isConnected) previousFocus.focus()
+    }
+  }, [dispatch])
+
   if (!state.hotspotPanelOpen) return null
 
   return (
-    <div className="hotspot-panel-container" id="hotspot-evidence-panel">
-      <div className="panel hotspot-panel">
+    <div
+      className="hotspot-panel-container"
+      id="hotspot-evidence-panel"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) dispatch({ type: 'TOGGLE_HOTSPOT_PANEL' })
+      }}
+    >
+      <section
+        className="panel hotspot-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="hotspot-evidence-title"
+        aria-describedby="hotspot-evidence-description"
+        tabIndex={-1}
+        ref={panelRef}
+      >
         <div className="hotspot-panel-header">
-          <h3>Fire candidate evidence</h3>
+          <h3 id="hotspot-evidence-title">Fire candidate evidence</h3>
           <button
             type="button"
             className="cell-detail-close"
@@ -108,7 +174,7 @@ export function HotspotEvidencePanel({
             ✕
           </button>
         </div>
-        <p className="muted">
+        <p className="muted" id="hotspot-evidence-description">
           Imagery-index candidates, optionally supported by FIRMS and verified stations. These are
           not measured PM2.5 values or confirmed pollution events; they await human review.
         </p>
@@ -386,7 +452,7 @@ export function HotspotEvidencePanel({
             </ul>
           </>
         )}
-      </div>
+      </section>
     </div>
   )
 }

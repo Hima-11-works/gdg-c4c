@@ -259,6 +259,7 @@ const WIND_STREAK_IMAGES = Array.from({ length: WIND_STREAK_FRAME_COUNT }, (_, i
 )
 
 const SOURCE_SELECTED = 'selected-cell'
+const LAYER_SELECTED_OUTLINE_CASING = 'selected-cell-outline-casing'
 const LAYER_SELECTED_OUTLINE = 'selected-cell-outline'
 
 // Economic freight corridors — a glowing polyline overlay plus clickable
@@ -1172,20 +1173,10 @@ export function MapView({
             },
           })
 
-          // Selected cell highlight — drawn above the data fill layers
-          // so the selection border is always visible. Only the selected
-          // cell's hex appears here; the highlight stays stable during
-          // timeline transitions (the data layers animate underneath).
+          // The selection source is rendered above map data and labels below.
+          // Its two line layers add a dark casing around a bright amber edge,
+          // so alert targets remain easy to locate over any fill or basemap.
           map!.addSource(SOURCE_SELECTED, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
-          map!.addLayer({
-            id: LAYER_SELECTED_OUTLINE,
-            type: 'line',
-            source: SOURCE_SELECTED,
-            paint: {
-              'line-color': SELECTED_CELL_BORDER_COLOR,
-              'line-width': SELECTED_CELL_BORDER_WIDTH,
-            },
-          })
 
           // Wind currents — animated streaks, subdued gray, never dominant.
           map!.addSource(SOURCE_WIND, { type: 'geojson', data: EMPTY_FEATURE_COLLECTION })
@@ -1343,7 +1334,8 @@ export function MapView({
           // Major economic freight corridors: click event extracts predictive
           // metadata and sets it into the app's selected corridor state.
           const handleCorridorClick = (event: { features?: unknown[] }) => {
-            const feature = event.features?.[0] as { properties?: Record<string, unknown> } | undefined
+            const feature = event.features?.[0] as
+              { properties?: Record<string, unknown> } | undefined
             const props = feature?.properties
             if (!feature || !props) return
             const corridor = normalizeCorridorProperties(props)
@@ -1569,6 +1561,29 @@ export function MapView({
             },
           })
 
+          // Selected alert/cell outline — added after the data and place
+          // layers so nothing obscures its high-contrast boundary. Keep it
+          // below the scope mask so searched areas still grey out correctly.
+          map!.addLayer({
+            id: LAYER_SELECTED_OUTLINE_CASING,
+            type: 'line',
+            source: SOURCE_SELECTED,
+            paint: {
+              'line-color': '#080D16',
+              'line-width': 7,
+              'line-opacity': 0.98,
+            },
+          })
+          map!.addLayer({
+            id: LAYER_SELECTED_OUTLINE,
+            type: 'line',
+            source: SOURCE_SELECTED,
+            paint: {
+              'line-color': SELECTED_CELL_BORDER_COLOR,
+              'line-width': SELECTED_CELL_BORDER_WIDTH,
+            },
+          })
+
           // Place scope mask — added last so it sits over every data layer.
           // The geometry is the whole world with the scoped place punched out
           // as a hole (lib/scope.ts), so a hexagon straddling the boundary is
@@ -1739,8 +1754,10 @@ export function MapView({
   // fetching exactly as a manual zoom would.
   useEffect(() => {
     if (!mapReady || !mapRef.current) return
-    mapRef.current.setMaxZoom(state.scope === null ? MAX_UNSCOPED_ZOOM : MAX_SEARCH_ZOOM)
-  }, [mapReady, state.scope])
+    mapRef.current.setMaxZoom(
+      state.scope === null && !state.focusedCell ? MAX_UNSCOPED_ZOOM : MAX_SEARCH_ZOOM,
+    )
+  }, [mapReady, state.scope, state.focusedCell])
 
   useEffect(() => {
     if (!mapReady || !mapRef.current) return
