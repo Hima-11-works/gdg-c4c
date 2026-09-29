@@ -215,6 +215,7 @@ void main() {
         store: store,
       );
       when(() => service.cancelAlarm(any())).thenAnswer((_) async {});
+      when(() => store.writeAll(any())).thenAnswer((_) async {});
       when(() => service.scheduleAlarm(
             id: any(named: 'id'),
             fireAt: any(named: 'fireAt'),

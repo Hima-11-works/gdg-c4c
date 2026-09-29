@@ -14,12 +14,25 @@ class UserProfile {
   const UserProfile({
     this.healthContext = UserHealthContext.none,
     this.sensitivity = AlertSensitivity.standard,
+    this.diseaseSeverity,
     this.customRules,
     this.preferences = const UserAlertPreferences(),
   });
 
   final UserHealthContext healthContext;
   final AlertSensitivity sensitivity;
+
+  /// Disease severity for patients with respiratory/health conditions.
+  final DiseaseSeverity? diseaseSeverity;
+
+  /// Whether this user profile represents a patient with a respiratory/health condition.
+  bool get isPatient =>
+      healthContext != UserHealthContext.none &&
+      healthContext != UserHealthContext.preferNotToSay;
+
+  /// Effective disease severity (defaults to moderate for patients if unspecified).
+  DiseaseSeverity get effectiveDiseaseSeverity =>
+      diseaseSeverity ?? DiseaseSeverity.moderate;
 
   /// Only populated when [sensitivity] is [AlertSensitivity.custom].
   final CustomSensitivityRules? customRules;
@@ -32,12 +45,14 @@ class UserProfile {
   UserProfile copyWith({
     UserHealthContext? healthContext,
     AlertSensitivity? sensitivity,
+    DiseaseSeverity? diseaseSeverity,
     CustomSensitivityRules? customRules,
     UserAlertPreferences? preferences,
   }) {
     return UserProfile(
       healthContext: healthContext ?? this.healthContext,
       sensitivity: sensitivity ?? this.sensitivity,
+      diseaseSeverity: diseaseSeverity ?? this.diseaseSeverity,
       customRules: customRules ?? this.customRules,
       preferences: preferences ?? this.preferences,
     );
@@ -49,14 +64,20 @@ class UserProfile {
       other is UserProfile &&
           healthContext == other.healthContext &&
           sensitivity == other.sensitivity &&
+          diseaseSeverity == other.diseaseSeverity &&
           customRules == other.customRules &&
           preferences == other.preferences;
 
   @override
-  int get hashCode =>
-      Object.hash(healthContext, sensitivity, customRules, preferences);
+  int get hashCode => Object.hash(
+        healthContext,
+        sensitivity,
+        diseaseSeverity,
+        customRules,
+        preferences,
+      );
 
   @override
   String toString() =>
-      'UserProfile(context=${healthContext.name}, sensitivity=${sensitivity.name})';
+      'UserProfile(context=${healthContext.name}, severity=${diseaseSeverity?.name}, sensitivity=${sensitivity.name})';
 }

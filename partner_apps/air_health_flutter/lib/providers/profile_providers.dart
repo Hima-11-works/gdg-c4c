@@ -38,6 +38,7 @@ class UserProfileNotifier extends AsyncNotifier<UserProfile?> {
     AlertSensitivity? sensitivity,
     CustomSensitivityRules? customRules,
     UserAlertPreferences? preferences,
+    DiseaseSeverity? diseaseSeverity,
   }) async {
     final repo = ref.read(userProfileRepositoryProvider);
     final updated = await repo.updateProfile(
@@ -45,6 +46,7 @@ class UserProfileNotifier extends AsyncNotifier<UserProfile?> {
       sensitivity: sensitivity,
       customRules: customRules,
       preferences: preferences,
+      diseaseSeverity: diseaseSeverity,
     );
     state = AsyncData(updated);
   }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:air_health_flutter/domain/models/fire_report.dart';
 import 'package:air_health_flutter/domain/models/location_point.dart';
@@ -68,6 +69,10 @@ Future<void> pumpSheet(
 }
 
 void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
   testWidgets('renders the form: kinds, smoke slider, duration, note',
       (tester) async {
     await pumpSheet(tester, _RecordingFireReportApiClient());
@@ -81,7 +86,7 @@ void main() {
     expect(find.text('Just started'), findsOneWidget);
     expect(find.text('More than 6 hours'), findsOneWidget);
     expect(find.byType(Slider), findsOneWidget);
-    expect(find.byType(TextField), findsOneWidget);
+    expect(find.byType(TextField), findsNWidgets(2));
     expect(find.text('Submit report'), findsOneWidget);
   });
 
@@ -94,6 +99,7 @@ void main() {
     await tester.tap(find.text('Industrial fire'));
     await tester.pumpAndSettle();
 
+    await tester.ensureVisible(find.text('Submit report'));
     await tester.tap(find.text('Submit report'));
     await tester.pumpAndSettle();
 
@@ -114,6 +120,7 @@ void main() {
       (tester) async {
     await pumpSheet(tester, _FailingFireReportApiClient());
 
+    await tester.ensureVisible(find.text('Submit report'));
     await tester.tap(find.text('Submit report'));
     await tester.pumpAndSettle();
 

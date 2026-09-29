@@ -30,6 +30,7 @@ class UserProfileRepository {
     AlertSensitivity? sensitivity,
     CustomSensitivityRules? customRules,
     UserAlertPreferences? preferences,
+    DiseaseSeverity? diseaseSeverity,
   }) async {
     final existing = await _store.read();
     final updated = (existing ?? const UserProfile()).copyWith(
@@ -37,6 +38,7 @@ class UserProfileRepository {
       sensitivity: sensitivity,
       customRules: customRules,
       preferences: preferences,
+      diseaseSeverity: diseaseSeverity,
     );
     await _store.save(updated);
     return updated;

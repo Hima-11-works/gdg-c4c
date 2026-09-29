@@ -146,6 +146,12 @@ class ProfileScreen extends ConsumerWidget {
                   ),
                   onTap: () => _manageExactAlarms(context, ref),
                 ),
+              _SettingsTile(
+                icon: Icons.volume_up_outlined,
+                title: '5-second alert sound',
+                subtitle: 'Audible warning tone & haptics for rising AQI alerts',
+                onTap: () => _testAlertSound(context, ref),
+              ),
 
               // ── Alert Sensitivity ─────────────────────────────────
               _SectionHeader('Alert Sensitivity'),
@@ -179,6 +185,13 @@ class ProfileScreen extends ConsumerWidget {
                 subtitle: profile?.healthContext.label ?? 'None',
                 onTap: () => _editHealthContext(context, ref, profile),
               ),
+              if (profile?.isPatient == true)
+                _SettingsTile(
+                  icon: Icons.speed_outlined,
+                  title: 'Condition severity',
+                  subtitle: profile?.effectiveDiseaseSeverity.label ?? 'Moderate',
+                  onTap: () => _editDiseaseSeverity(context, ref, profile),
+                ),
               Container(
                 margin: const EdgeInsets.symmetric(
                   horizontal: AppSpacing.xl,
@@ -445,6 +458,40 @@ class ProfileScreen extends ConsumerWidget {
     );
   }
 
+  void _editDiseaseSeverity(
+    BuildContext context,
+    WidgetRef ref,
+    UserProfile? profile,
+  ) {
+    if (profile == null) return;
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (BuildContext sheetContext) => _DiseaseSeverityPicker(
+        current: profile.effectiveDiseaseSeverity,
+        onSelected: (sev) {
+          ref.read(userProfileProvider.notifier).updateFields(diseaseSeverity: sev);
+          Navigator.pop(sheetContext);
+        },
+      ),
+    );
+  }
+
+  void _testAlertSound(BuildContext context, WidgetRef ref) {
+    final soundService = ref.read(alertSoundServiceProvider);
+    soundService.play5SecondAlertSound();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Playing 5-second alert warning sound & haptics…'),
+        duration: const Duration(seconds: 5),
+        action: SnackBarAction(
+          label: 'Stop',
+          onPressed: () => soundService.stopAlertSound(),
+        ),
+      ),
+    );
+  }
+
   // ── Location permission ──────────────────────────────────────────────
 
   Future<void> _manageLocationPermission(
@@ -636,6 +683,7 @@ class ProfileScreen extends ConsumerWidget {
       healthContext: p.healthContext,
       sensitivity: p.sensitivity,
       preferences: p.preferences,
+      diseaseSeverity: p.diseaseSeverity,
       customRules: p.customRules,
     );
   }
@@ -873,6 +921,50 @@ class _HealthContextPicker extends StatelessWidget {
                   label: h.label,
                   selected: h == current,
                   onTap: () => onSelected(h),
+                ),
+              );
+            }),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DiseaseSeverityPicker extends StatelessWidget {
+  const _DiseaseSeverityPicker({required this.current, required this.onSelected});
+
+  final DiseaseSeverity current;
+  final ValueChanged<DiseaseSeverity> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+            AppSpacing.xl, AppSpacing.xxl, AppSpacing.xl, AppSpacing.xxxxl),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Condition Severity',
+                style: AppTypography.headlineSmall.copyWith(color: cs.onSurface)),
+            const SizedBox(height: AppSpacing.md),
+            Text(
+              'Determines your threshold for rising AQI alerts and rapid rise warnings.',
+              style: AppTypography.bodyMedium.copyWith(color: cs.onSurfaceVariant),
+            ),
+            const SizedBox(height: AppSpacing.xxl),
+            ...DiseaseSeverity.values.map((sev) {
+              return Padding(
+                padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                child: _PickerOption(
+                  label: sev.label,
+                  subtitle: sev.description,
+                  selected: sev == current,
+                  onTap: () => onSelected(sev),
                 ),
               );
             }),

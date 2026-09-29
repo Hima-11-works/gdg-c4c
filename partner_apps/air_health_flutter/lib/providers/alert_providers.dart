@@ -12,9 +12,16 @@ import 'alert_history_provider.dart';
 import 'home_providers.dart';
 import 'profile_providers.dart';
 
+import '../services/alert_sound_service.dart';
+
 /// NotificationService instance.
 final notificationServiceProvider = Provider<NotificationService>((ref) {
   return NotificationService();
+});
+
+/// AlertSoundService instance.
+final alertSoundServiceProvider = Provider<AlertSoundService>((ref) {
+  return AlertSoundService();
 });
 
 /// AlertMessageService instance (pure Dart, no dependencies).
@@ -33,6 +40,7 @@ final alertNotificationDispatcherProvider =
   return AlertNotificationDispatcher(
     notificationService: ref.read(notificationServiceProvider),
     messageService: ref.read(alertMessageServiceProvider),
+    soundService: ref.read(alertSoundServiceProvider),
   );
 });
 
@@ -115,6 +123,7 @@ class AlertCoordinator {
       sensitivity: profile.sensitivity,
       customRules: profile.customRules,
       preferences: profile.preferences,
+      diseaseSeverity: profile.diseaseSeverity,
     );
 
     final engine = _ref.read(alertEngineProvider);
@@ -137,6 +146,8 @@ class AlertCoordinator {
       await _ref.read(alertNotificationDispatcherProvider).dispatch(
             decisions: result.decisions,
             sensitivity: profile.sensitivity,
+            healthContext: profile.healthContext,
+            diseaseSeverity: profile.diseaseSeverity,
           );
 
       // Record for the Alerts screen, and resolve any recovery decisions.

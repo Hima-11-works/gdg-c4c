@@ -28,3 +28,22 @@ enum UserHealthContext {
   const UserHealthContext(this.label);
   final String label;
 }
+
+/// Disease severity for patients with diagnosed or known respiratory conditions.
+///
+/// Determines the AQI rise threshold and warning levels for patient alerts.
+enum DiseaseSeverity {
+  mild('Mild', 'Occasional symptoms, alerts trigger at moderate AQI rises'),
+  moderate('Moderate', 'Frequent symptoms, alerts trigger at early AQI rises'),
+  severe('Severe', 'Severe condition, alerts trigger at low threshold and subtle AQI rises');
+
+  const DiseaseSeverity(this.label, this.description);
+  final String label;
+  final String description;
+
+  static DiseaseSeverity fromName(String? name) =>
+      DiseaseSeverity.values.firstWhere(
+        (e) => e.name == name,
+        orElse: () => DiseaseSeverity.moderate,
+      );
+}

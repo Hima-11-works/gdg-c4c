@@ -9,6 +9,7 @@ import '../../features/reports/report_fire_sheet.dart';
 import '../../providers/data_providers.dart';
 import '../../providers/home_providers.dart';
 import '../../providers/profile_providers.dart';
+import '../../storage/citizen_reports_store.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
@@ -43,7 +44,16 @@ class HomeScreen extends ConsumerWidget {
     final cs = Theme.of(context).colorScheme;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Air Health')),
+      appBar: AppBar(
+        title: const Text('Air Health'),
+        actions: [
+          IconButton(
+            tooltip: 'Citizen Hotspot & Photo Report',
+            icon: const Icon(Icons.add_a_photo_outlined),
+            onPressed: () => _openReportSheet(context),
+          ),
+        ],
+      ),
       // Citizen fire reports need a backend to talk to; in dummy mode there
       // is nowhere to send one, so the entry point hides itself.
       floatingActionButton: ref.watch(fireReportApiClientProvider) == null
@@ -227,6 +237,22 @@ class HomeScreen extends ConsumerWidget {
                   },
                 ),
 
+                // ── Citizen Hotspot Reports ─────────────────────────
+                ref.watch(citizenReportsProvider).when(
+                  loading: () => const SizedBox.shrink(),
+                  error: (_, _) => const SizedBox.shrink(),
+                  data: (reports) {
+                    if (reports.isEmpty) return const SizedBox.shrink();
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const SectionHeader(title: 'Recent Citizen Hotspots'),
+                        ...reports.take(3).map((r) => _CitizenReportCard(report: r)),
+                      ],
+                    );
+                  },
+                ),
+
                 // ── Data freshness ─────────────────────────────────
                 freshness.when(
                   loading: () => const SizedBox.shrink(),
@@ -359,6 +385,93 @@ class _FreshnessBanner extends StatelessWidget {
               '$prefix${quality.label} · Updated ${Formatters.relativeDuration(freshness.age)}',
               style: AppTypography.labelSmall.copyWith(color: color),
               overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Citizen Report card ───────────────────────────────────────────────
+
+class _CitizenReportCard extends StatelessWidget {
+  const _CitizenReportCard({required this.report});
+
+  final FireReport report;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
+    return AppCard(
+      margin: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.xl,
+        vertical: AppSpacing.sm,
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (report.photoBytes != null && report.photoBytes!.isNotEmpty)
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Image.memory(
+                report.photoBytes!,
+                width: 68,
+                height: 68,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => Container(
+                  width: 68,
+                  height: 68,
+                  color: cs.surfaceContainerHighest,
+                  child: const Icon(Icons.broken_image, size: 24),
+                ),
+              ),
+            )
+          else
+            Container(
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                color: cs.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(Icons.local_fire_department, color: cs.primary),
+            ),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        report.kind.label,
+                        style: AppTypography.titleMedium.copyWith(color: cs.onSurface),
+                      ),
+                    ),
+                    StatusChip(
+                      label: 'Smoke ${report.smokeIntensity}/5',
+                      color: AppColors.warning,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: AppSpacing.xs),
+                Text(
+                  '${report.region ?? "Current region"} · ${Formatters.relativeDuration(DateTime.now().difference(report.reportedAt))} ago',
+                  style: AppTypography.bodySmall.copyWith(color: cs.onSurfaceVariant),
+                ),
+                if (report.notes != null && report.notes!.isNotEmpty) ...[
+                  const SizedBox(height: AppSpacing.xs),
+                  Text(
+                    report.notes!,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTypography.bodySmall.copyWith(color: cs.onSurface),
+                  ),
+                ],
+              ],
             ),
           ),
         ],

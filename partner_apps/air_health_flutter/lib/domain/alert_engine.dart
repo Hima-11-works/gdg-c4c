@@ -52,7 +52,7 @@ class AlertEngine {
     // 1. Generate all candidate decisions.
     final candidates = <AlertDecision>[
       ..._checkCurrentThreshold(
-          current: current, rules: rules, now: effectiveNow),
+          current: current, rules: rules, profile: profile, now: effectiveNow),
       ..._checkForecastThreshold(
           current: current,
           forecast: forecast,
@@ -62,6 +62,7 @@ class AlertEngine {
           current: current,
           forecast: forecast,
           rules: rules,
+          profile: profile,
           now: effectiveNow),
       ..._checkApproachingPollution(
           current: current,
@@ -149,11 +150,20 @@ class AlertEngine {
     required AirQualityReading current,
     required SensitivityRules rules,
     required DateTime now,
+    UserSensitivityProfile? profile,
   }) {
     final category = current.category;
     if (category.index < rules.warningCategory.index) return const [];
 
     final severity = severityForCategory(category);
+    final isPatient = profile?.isPatient ?? false;
+    final contextMessage = isPatient
+        ? 'AQI is rising in your surrounding (${category.label}, AQI ${current.aqiCpcb}). Please take necessary precautions and action.'
+        : 'Current air quality is ${category.label} (AQI ${current.aqiCpcb}).';
+    final guidanceMessage = isPatient
+        ? 'AQI in your surrounding is rising. Limit outdoor exposure, stay indoors, follow your care plan, and take necessary precaution and action.'
+        : _guidanceForSeverity(severity);
+
     return [
       AlertDecision(
         shouldAlert: true,
@@ -161,10 +171,9 @@ class AlertEngine {
         trigger: AlertTrigger.currentThreshold,
         currentAqi: current.aqiCpcb,
         confidence: 1.0,
-        messageContext:
-            'Current air quality is ${category.label} (AQI ${current.aqiCpcb}).',
+        messageContext: contextMessage,
         dedupKey: 'current_${category.name}',
-        guidance: _guidanceForSeverity(severity),
+        guidance: guidanceMessage,
       ),
     ];
   }
@@ -213,6 +222,7 @@ class AlertEngine {
     required List<ForecastPoint> forecast,
     required SensitivityRules rules,
     required DateTime now,
+    UserSensitivityProfile? profile,
   }) {
     if (forecast.isEmpty) return const [];
     final earlyPoints =
@@ -228,6 +238,14 @@ class AlertEngine {
     final peak =
         earlyPoints.reduce((a, b) => a.aqiCpcb > b.aqiCpcb ? a : b);
 
+    final isPatient = profile?.isPatient ?? false;
+    final contextMessage = isPatient
+        ? 'AQI is rising rapidly in your surrounding — please take necessary precautions and action.'
+        : 'Air quality is rising rapidly — expected to reach ${peak.category.label} within a few hours.';
+    final guidanceMessage = isPatient
+        ? 'AQI is rising rapidly nearby. Avoid outdoor exposure, stay indoors, follow your care plan, and take necessary precaution and action.'
+        : _guidanceForSeverity(AlertSeverity.warning);
+
     return [
       AlertDecision(
         shouldAlert: true,
@@ -238,11 +256,9 @@ class AlertEngine {
         predictedTime: peak.at,
         leadTime: peak.at.difference(now),
         confidence: peak.confidence,
-        messageContext:
-            'Air quality is rising rapidly — expected to reach '
-            '${peak.category.label} within a few hours.',
+        messageContext: contextMessage,
         dedupKey: 'rapid_rise_${_dateKey(peak.at)}',
-        guidance: _guidanceForSeverity(AlertSeverity.warning),
+        guidance: guidanceMessage,
       ),
     ];
   }

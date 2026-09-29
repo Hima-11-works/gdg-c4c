@@ -3,11 +3,14 @@
 /// These mirror the backend's POST /api/v1/reports contract (see
 /// app.services.reports on the server): the smoke slider is a *triage
 /// choice* the backend scales a modeled plume from, never a measurement.
+import 'dart:typed_data';
+
 enum FireKind {
   buildingFire('building_fire', 'Building fire'),
   industrialFire('industrial_fire', 'Industrial fire'),
   forestFire('forest_fire', 'Forest fire'),
   cropBurning('crop_burning', 'Wood / crop burning'),
+  garbageBurning('garbage_burning', 'Garbage / waste burning'),
   other('other', 'Other burning');
 
   const FireKind(this.value, this.label);
@@ -61,6 +64,9 @@ class FireReportDraft {
     required this.kind,
     required this.smokeIntensity,
     required this.durationHours,
+    this.region,
+    this.photoBytes,
+    this.photoFilename,
     this.notes,
     this.clientReportId,
   });
@@ -76,6 +82,18 @@ class FireReportDraft {
   /// User's estimate of how long the burning has been going (0 = just
   /// started), from [FireDurationOption].
   final double durationHours;
+
+  /// City or region (e.g. Lucknow / LKO).
+  final String? region;
+
+  /// Attached photo bytes (if any).
+  final Uint8List? photoBytes;
+
+  /// Name of the attached photo file.
+  final String? photoFilename;
+
+  /// Whether a photo is attached to this report.
+  bool get hasPhoto => photoBytes != null && photoBytes!.isNotEmpty;
 
   /// Optional free text, at most [maxNotesLength] characters.
   final String? notes;
@@ -94,6 +112,9 @@ class FireReportDraft {
     required FireKind kind,
     required int smokeIntensity,
     required double durationHours,
+    String? region,
+    Uint8List? photoBytes,
+    String? photoFilename,
     String? notes,
     String? clientReportId,
   }) {
@@ -136,6 +157,9 @@ class FireReportDraft {
       kind: kind,
       smokeIntensity: smokeIntensity,
       durationHours: durationHours,
+      region: region?.trim(),
+      photoBytes: photoBytes,
+      photoFilename: photoFilename,
       notes: note,
       clientReportId: clientId,
     );
@@ -153,6 +177,9 @@ class FireReport {
     required this.smokeIntensity,
     required this.durationHours,
     required this.reportedAt,
+    this.region,
+    this.photoBytes,
+    this.photoFilename,
     this.notes,
     this.clientReportId,
   });
@@ -167,8 +194,13 @@ class FireReport {
   final int smokeIntensity;
   final double durationHours;
   final DateTime reportedAt;
+  final String? region;
+  final Uint8List? photoBytes;
+  final String? photoFilename;
   final String? notes;
   final String? clientReportId;
+
+  bool get hasPhoto => photoBytes != null && photoBytes!.isNotEmpty;
 
   @override
   bool operator ==(Object other) =>
@@ -182,6 +214,7 @@ class FireReport {
           smokeIntensity == other.smokeIntensity &&
           durationHours == other.durationHours &&
           reportedAt == other.reportedAt &&
+          region == other.region &&
           notes == other.notes &&
           clientReportId == other.clientReportId;
 
@@ -195,11 +228,12 @@ class FireReport {
         smokeIntensity,
         durationHours,
         reportedAt,
+        region,
         notes,
         clientReportId,
       );
 
   @override
   String toString() =>
-      'FireReport(${kind.label}, intensity=$smokeIntensity, at=$reportedAt)';
+      'FireReport(${kind.label}, region=$region, intensity=$smokeIntensity, hasPhoto=$hasPhoto, at=$reportedAt)';
 }

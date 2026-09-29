@@ -8,18 +8,16 @@ import 'package:image_picker/image_picker.dart';
 import '../../domain/models/fire_report.dart';
 import '../../providers/data_providers.dart';
 import '../../providers/location_providers.dart';
+import '../../storage/citizen_reports_store.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
 
-/// Citizen report of an active fire / burning event.
+/// Citizen report of an active fire / air-polluting hotspot.
 ///
-/// Presented as a modal bottom sheet from Home's FAB (which only exists when
-/// a backend is configured — see fireReportApiClientProvider). On submit the
-/// draft is validated client-side (the same bounds the backend enforces),
-/// sent with a client-generated idempotency id so a retry can never stack
-/// reports, and the confirmation is honest about when the model picks it up:
-/// the grid updates on the backend's next pipeline run, not instantly.
+/// Presented as a modal bottom sheet from Home. On submit the
+/// draft is validated client-side, sent to the backend if configured,
+/// and persistently stored locally with citizen photograph evidence.
 class ReportFireSheet extends ConsumerStatefulWidget {
   const ReportFireSheet({super.key});
 
@@ -32,6 +30,7 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
   int _smokeIntensity = 3;
   double _durationHours = FireDurationOption.justStarted.hours;
   final _notesController = TextEditingController();
+  final _regionController = TextEditingController();
   final _imagePicker = ImagePicker();
   Uint8List? _photoBytes;
   String? _photoFilename;
@@ -40,40 +39,48 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
   bool _submitting = false;
 
   @override
+  void initState() {
+    super.initState();
+    final location = ref.read(resolvedLocationProvider);
+    _regionController.text = location.label ?? 'Lucknow (LKO)';
+  }
+
+  @override
   void dispose() {
+    _regionController.dispose();
     _notesController.dispose();
     super.dispose();
   }
 
   /// Idempotency id for this draft session: a retried submission carries the
   /// same id, so the backend's unique constraint keeps retries from stacking.
-  ///
-  /// A `late final` field, not a getter: a getter re-evaluated `DateTime.now()`
-  /// on every access, so each retry after a failed submit minted a *new* id and
-  /// the backend correctly treated it as a different report — the exact
-  /// duplicate the id exists to prevent. Initialised once per sheet instance,
-  /// so every submit attempt from this draft reuses it.
   late final String _clientReportId =
       'flutter-${DateTime.now().microsecondsSinceEpoch}';
 
   Future<void> _refreshLocation() async {
     ref.invalidate(currentLocationProvider);
     // Kick the GPS now so the row below reflects it as soon as it resolves.
-    await ref.read(currentLocationProvider.future);
+    final loc = await ref.read(currentLocationProvider.future);
+    if (loc.label != null && _regionController.text.isEmpty) {
+      _regionController.text = loc.label!;
+    }
   }
 
   Future<void> _submit() async {
-    final client = ref.read(fireReportApiClientProvider);
-    if (client == null || _submitting) return;
+    if (_submitting) return;
 
     if (_photoBytes != null && !_photoConsent) {
       _showMessage('Please consent before attaching the photo.');
       return;
     }
 
+    final location = ref.read(resolvedLocationProvider);
+    final regionText = _regionController.text.trim().isNotEmpty
+        ? _regionController.text.trim()
+        : (location.label ?? 'Lucknow (LKO)');
+
     FireReportDraft? draft;
     if (_submittedReport == null) {
-      final location = ref.read(resolvedLocationProvider);
       try {
         draft = FireReportDraft.create(
           latitude: location.latitude,
@@ -81,6 +88,9 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
           kind: _kind,
           smokeIntensity: _smokeIntensity,
           durationHours: _durationHours,
+          region: regionText,
+          photoBytes: _photoBytes,
+          photoFilename: _photoFilename,
           notes: _notesController.text,
           clientReportId: _clientReportId,
         );
@@ -92,19 +102,45 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
 
     HapticFeedback.mediumImpact();
     setState(() => _submitting = true);
+    final client = ref.read(fireReportApiClientProvider);
+
     try {
-      final report = _submittedReport ?? await client.submitReport(draft!);
-      _submittedReport ??= report;
-      if (_photoBytes != null) {
-        if (client is! CitizenPhotoApiClient) {
-          throw StateError('Photo upload is unavailable for this API client.');
+      FireReport report;
+      if (client != null) {
+        report = _submittedReport ?? await client.submitReport(draft!);
+        _submittedReport ??= report;
+        if (_photoBytes != null) {
+          if (client is! CitizenPhotoApiClient) {
+            throw StateError('Photo upload is unavailable for this API client.');
+          }
+          await (client as CitizenPhotoApiClient).attachPhoto(
+            reportId: report.id,
+            bytes: _photoBytes!,
+            filename: _photoFilename ?? 'citizen-photo.jpg',
+          );
         }
-        await (client as CitizenPhotoApiClient).attachPhoto(
-          reportId: report.id,
-          bytes: _photoBytes!,
-          filename: _photoFilename ?? 'citizen-photo.jpg',
+      } else {
+        // Standalone on-device report when remote API is not configured
+        report = FireReport(
+          id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          h3Cell: 'citizen_cell',
+          latitude: location.latitude,
+          longitude: location.longitude,
+          kind: _kind,
+          smokeIntensity: _smokeIntensity,
+          durationHours: _durationHours,
+          reportedAt: DateTime.now(),
+          region: regionText,
+          photoBytes: _photoBytes,
+          photoFilename: _photoFilename,
+          notes: _notesController.text.isEmpty ? null : _notesController.text,
+          clientReportId: _clientReportId,
         );
       }
+
+      // Record to local citizen reports store
+      await ref.read(citizenReportsProvider.notifier).addReport(report);
+
       if (!mounted) return;
       Navigator.of(context).pop(report);
     } catch (_) {
@@ -184,6 +220,15 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
               latitude: location.latitude,
               longitude: location.longitude,
               onRefresh: _refreshLocation,
+            ),
+            const SizedBox(height: AppSpacing.sm),
+            TextField(
+              controller: _regionController,
+              decoration: const InputDecoration(
+                labelText: 'City / Region name',
+                hintText: 'e.g. Lucknow, LKO, Hazratganj',
+                prefixIcon: Icon(Icons.location_city_outlined),
+              ),
             ),
             const SizedBox(height: AppSpacing.lg),
             _SectionLabel('What is burning?'),

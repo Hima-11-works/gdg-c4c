@@ -24,6 +24,7 @@ class SecureProfileStore {
       value: jsonEncode({
         'healthContext': profile.healthContext.name,
         'sensitivity': profile.sensitivity.name,
+        'diseaseSeverity': profile.diseaseSeverity?.name,
         'customRules': custom == null
             ? null
             : {
@@ -61,6 +62,7 @@ class SecureProfileStore {
     if (raw == null) return null;
     try {
       final map = jsonDecode(raw) as Map<String, dynamic>;
+      final severityName = map['diseaseSeverity'] as String?;
       return UserProfile(
         healthContext: UserHealthContext.values.firstWhere(
           (e) => e.name == map['healthContext'],
@@ -70,6 +72,9 @@ class SecureProfileStore {
           (e) => e.name == map['sensitivity'],
           orElse: () => AlertSensitivity.standard,
         ),
+        diseaseSeverity: severityName != null
+            ? DiseaseSeverity.fromName(severityName)
+            : null,
         customRules: _readCustomRules(map['customRules']),
         preferences: _readPreferences(map['preferences']),
       );

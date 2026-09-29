@@ -1,6 +1,7 @@
 import '../domain/alert_engine.dart';
 import '../domain/alert_message_service.dart';
 import '../domain/models/models.dart';
+import '../services/alert_sound_service.dart';
 import 'notification_service.dart';
 
 /// Wires [AlertEngine] output to [NotificationService].
@@ -17,11 +18,14 @@ class AlertNotificationDispatcher {
   AlertNotificationDispatcher({
     required NotificationService notificationService,
     required AlertMessageService messageService,
+    AlertSoundService? soundService,
   })  : _notificationService = notificationService,
-        _messageService = messageService;
+        _messageService = messageService,
+        _soundService = soundService;
 
   final NotificationService _notificationService;
   final AlertMessageService _messageService;
+  final AlertSoundService? _soundService;
 
   /// Track which dedupKeys have been notified this session, so we can
   /// cancel stale ones.
@@ -36,9 +40,15 @@ class AlertNotificationDispatcher {
   Future<int> dispatch({
     required List<AlertDecision> decisions,
     required AlertSensitivity sensitivity,
+    UserHealthContext healthContext = UserHealthContext.none,
+    DiseaseSeverity? diseaseSeverity,
   }) async {
     int count = 0;
     final seenKeys = <String>{};
+    bool shouldTriggerSound = false;
+
+    final isPatient = healthContext != UserHealthContext.none &&
+        healthContext != UserHealthContext.preferNotToSay;
 
     for (final decision in decisions) {
       if (!decision.shouldAlert) continue;
@@ -48,6 +58,8 @@ class AlertNotificationDispatcher {
       final message = _messageService.buildMessage(
         decision: decision,
         sensitivity: sensitivity,
+        healthContext: healthContext,
+        diseaseSeverity: diseaseSeverity,
       );
 
       // Use a deterministic ID from the dedupKey so the same alert
@@ -58,13 +70,22 @@ class AlertNotificationDispatcher {
         id: notificationId,
         title: message.title,
         body: message.lockScreenBody, // NEVER the full body
-        urgent: decision.severity == AlertSeverity.urgent,
+        urgent: decision.severity == AlertSeverity.urgent || (isPatient && decision.severity != AlertSeverity.info),
         // Tapping the notification deep-links to the Alerts screen.
         payload: 'alerts',
       );
 
+      if (decision.severity != AlertSeverity.info) {
+        shouldTriggerSound = true;
+      }
+
       _activeNotificationIds[decision.dedupKey] = notificationId;
       count++;
+    }
+
+    // Play the 5-second alert notification sound for patient alerts
+    if (shouldTriggerSound && _soundService != null) {
+      _soundService.play5SecondAlertSound();
     }
 
     return count;

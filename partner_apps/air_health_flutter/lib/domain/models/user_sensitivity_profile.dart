@@ -11,6 +11,7 @@ class UserSensitivityProfile {
     required this.healthContext,
     required this.sensitivity,
     required this.preferences,
+    this.diseaseSeverity,
     this.customRules,
   });
 
@@ -18,11 +19,23 @@ class UserSensitivityProfile {
   final AlertSensitivity sensitivity;
   final UserAlertPreferences preferences;
 
-  /// Only populated when [sensitivity] is [AlertSensitivity.custom].
-  final CustomSensitivityRules? customRules;
+  /// Disease severity for patients with respiratory/health conditions.
+  final DiseaseSeverity? diseaseSeverity;
 
   /// Whether the user has any health context set.
   bool get hasHealthContext => healthContext != UserHealthContext.none;
+
+  /// Whether this profile represents a non-normal patient with respiratory/health conditions.
+  bool get isPatient =>
+      healthContext != UserHealthContext.none &&
+      healthContext != UserHealthContext.preferNotToSay;
+
+  /// Effective disease severity for patients.
+  DiseaseSeverity get effectiveDiseaseSeverity =>
+      diseaseSeverity ?? DiseaseSeverity.moderate;
+
+  /// Only populated when [sensitivity] is [AlertSensitivity.custom].
+  final CustomSensitivityRules? customRules;
 
   /// Whether this profile uses the custom tier.
   bool get isCustom => sensitivity == AlertSensitivity.custom;
@@ -31,12 +44,14 @@ class UserSensitivityProfile {
     UserHealthContext? healthContext,
     AlertSensitivity? sensitivity,
     UserAlertPreferences? preferences,
+    DiseaseSeverity? diseaseSeverity,
     CustomSensitivityRules? customRules,
   }) {
     return UserSensitivityProfile(
       healthContext: healthContext ?? this.healthContext,
       sensitivity: sensitivity ?? this.sensitivity,
       preferences: preferences ?? this.preferences,
+      diseaseSeverity: diseaseSeverity ?? this.diseaseSeverity,
       customRules: customRules ?? this.customRules,
     );
   }
@@ -48,15 +63,22 @@ class UserSensitivityProfile {
           healthContext == other.healthContext &&
           sensitivity == other.sensitivity &&
           preferences == other.preferences &&
+          diseaseSeverity == other.diseaseSeverity &&
           customRules == other.customRules;
 
   @override
-  int get hashCode =>
-      Object.hash(healthContext, sensitivity, preferences, customRules);
+  int get hashCode => Object.hash(
+        healthContext,
+        sensitivity,
+        preferences,
+        diseaseSeverity,
+        customRules,
+      );
 
   @override
   String toString() =>
       'UserSensitivityProfile(context=${healthContext.name}, '
+      'severity=${diseaseSeverity?.name}, '
       'sensitivity=${sensitivity.name}, prefs=$preferences)';
 }
 

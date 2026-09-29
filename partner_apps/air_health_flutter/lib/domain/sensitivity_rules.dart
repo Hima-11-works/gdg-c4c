@@ -60,6 +60,37 @@ class SensitivityRules {
       );
     }
 
+    // For non-normal patients, threshold and rapid rise alerts adapt directly
+    // to their respiratory condition severity.
+    if (profile.isPatient) {
+      return switch (profile.effectiveDiseaseSeverity) {
+        DiseaseSeverity.mild => SensitivityRules(
+            warningCategory: CpcbCategory.moderate,
+            forecastCategory: CpcbCategory.moderate,
+            rapidRiseAqiPerHour: 20,
+            leadTimePreference: leadOverride ?? const Duration(hours: 3),
+            minForecastConfidence: 0.7,
+            approachingEventLeadTime: const Duration(hours: 2),
+          ),
+        DiseaseSeverity.moderate => SensitivityRules(
+            warningCategory: CpcbCategory.satisfactory,
+            forecastCategory: CpcbCategory.moderate,
+            rapidRiseAqiPerHour: 15,
+            leadTimePreference: leadOverride ?? const Duration(hours: 4),
+            minForecastConfidence: 0.6,
+            approachingEventLeadTime: const Duration(hours: 3),
+          ),
+        DiseaseSeverity.severe => SensitivityRules(
+            warningCategory: CpcbCategory.satisfactory,
+            forecastCategory: CpcbCategory.satisfactory,
+            rapidRiseAqiPerHour: 10,
+            leadTimePreference: leadOverride ?? const Duration(hours: 6),
+            minForecastConfidence: 0.5,
+            approachingEventLeadTime: const Duration(hours: 4),
+          ),
+      };
+    }
+
     return switch (profile.sensitivity) {
       AlertSensitivity.standard => SensitivityRules(
           warningCategory: CpcbCategory.poor,

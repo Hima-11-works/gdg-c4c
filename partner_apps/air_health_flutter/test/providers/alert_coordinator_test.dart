@@ -34,6 +34,7 @@ void main() {
       addTearDown(container.dispose);
       // The no-profile path cancels left-over alarms; nothing to cancel.
       when(() => store.readAll()).thenAnswer((_) async => const []);
+      when(() => store.deleteAll()).thenAnswer((_) async {});
 
       final result =
           await container.read(alertCoordinatorProvider).refreshAndEvaluate();
@@ -54,6 +55,7 @@ void main() {
       );
       addTearDown(container.dispose);
       when(() => store.readAll()).thenAnswer((_) async => const []);
+      when(() => store.deleteAll()).thenAnswer((_) async {});
 
       await container.read(alertCoordinatorProvider).refreshAndEvaluate();
 

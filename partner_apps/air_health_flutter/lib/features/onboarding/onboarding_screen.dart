@@ -35,6 +35,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   int _currentPage = 0;
 
   UserHealthContext _healthContext = UserHealthContext.none;
+  DiseaseSeverity _diseaseSeverity = DiseaseSeverity.moderate;
   AlertSensitivity _sensitivity = AlertSensitivity.standard;
 
   static const _totalSteps = 5;
@@ -63,6 +64,10 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     final profile = UserProfile(
       healthContext: _healthContext,
       sensitivity: _sensitivity,
+      diseaseSeverity: _healthContext != UserHealthContext.none &&
+              _healthContext != UserHealthContext.preferNotToSay
+          ? _diseaseSeverity
+          : null,
     );
     await ref.read(userProfileProvider.notifier).updateProfile(profile);
     await ref.read(prefsStoreProvider).setOnboardingDone(true);
@@ -127,7 +132,9 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                 _LocationStep(onNext: _next),
                 _HealthContextStep(
                   selected: _healthContext,
+                  severity: _diseaseSeverity,
                   onChanged: (ctx) => setState(() => _healthContext = ctx),
+                  onSeverityChanged: (sev) => setState(() => _diseaseSeverity = sev),
                   onNext: _next,
                 ),
                 _SensitivityStep(
@@ -304,13 +311,21 @@ class _LocationStepState extends ConsumerState<_LocationStep> {
 class _HealthContextStep extends StatelessWidget {
   const _HealthContextStep({
     required this.selected,
+    required this.severity,
     required this.onChanged,
+    required this.onSeverityChanged,
     required this.onNext,
   });
 
   final UserHealthContext selected;
+  final DiseaseSeverity severity;
   final ValueChanged<UserHealthContext> onChanged;
+  final ValueChanged<DiseaseSeverity> onSeverityChanged;
   final VoidCallback onNext;
+
+  bool get _isPatient =>
+      selected != UserHealthContext.none &&
+      selected != UserHealthContext.preferNotToSay;
 
   @override
   Widget build(BuildContext context) {
@@ -342,16 +357,43 @@ class _HealthContextStep extends StatelessWidget {
         Expanded(
           child: ListView(
             padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
-            children: UserHealthContext.values.map((ctx) {
-              return Padding(
-                padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-                child: _SelectableTile(
-                  label: ctx.label,
-                  selected: selected == ctx,
-                  onTap: () => onChanged(ctx),
+            children: [
+              ...UserHealthContext.values.map((ctx) {
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+                  child: _SelectableTile(
+                    label: ctx.label,
+                    selected: selected == ctx,
+                    onTap: () => onChanged(ctx),
+                  ),
+                );
+              }),
+              if (_isPatient) ...[
+                const SizedBox(height: AppSpacing.lg),
+                Text(
+                  'Condition Severity',
+                  style: AppTypography.titleMedium.copyWith(color: cs.onSurface),
                 ),
-              );
-            }).toList(),
+                const SizedBox(height: AppSpacing.xs),
+                Text(
+                  'Controls rising AQI alert thresholds and 5-sec warning sounds.',
+                  style: AppTypography.bodySmall.copyWith(color: cs.onSurfaceVariant),
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                Wrap(
+                  spacing: AppSpacing.sm,
+                  children: DiseaseSeverity.values.map((s) {
+                    final isSel = s == severity;
+                    return ChoiceChip(
+                      label: Text(s.label),
+                      selected: isSel,
+                      onSelected: (_) => onSeverityChanged(s),
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: AppSpacing.md),
+              ],
+            ],
           ),
         ),
         _ContinueButton(label: 'Continue', onNext: onNext),
