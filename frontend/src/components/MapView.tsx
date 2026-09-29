@@ -179,7 +179,7 @@ const LAYER_PM25_CONTOUR: Record<Pm25Set, string> = {
 // 1x1 transparent PNG — the image sources start empty; the first smooth frame
 // replaces it via updateImage.
 const TRANSPARENT_PIXEL =
-  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII='
 
 // Image-source corner order: top-left, top-right, bottom-right, bottom-left.
 type ImageCoords = [[number, number], [number, number], [number, number], [number, number]]
