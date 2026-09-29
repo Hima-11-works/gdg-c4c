@@ -4,6 +4,7 @@ import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.types import ASGIApp
 
 from app import __version__
 from app.api.errors import register_exception_handlers
@@ -12,7 +13,20 @@ from app.api.routes.evidence import router as evidence_router
 from app.api.routes.health import router as health_router
 from app.api.routes.predictions_v2 import router as api_v2_router
 from app.api.routes.reports_v2 import router as reports_v2_router
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
+
+
+def _cors_options(settings: Settings) -> dict[str, object]:
+    return {
+        "allow_origins": settings.cors_origin_list,
+        "allow_methods": ["GET", "POST", "DELETE"],
+        "allow_headers": ["*"],
+    }
+
+
+def wrap_cors_for_errors(app: ASGIApp) -> CORSMiddleware:
+    """Apply CORS outside Starlette's error middleware for deployment responses."""
+    return CORSMiddleware(app, **_cors_options(get_settings()))
 
 
 def create_app() -> FastAPI:
@@ -23,12 +37,7 @@ def create_app() -> FastAPI:
 
     # POST is deliberate: /api/v1/reports is the platform's first write side
     # (citizen fire reports). Every other route stays GET-only.
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.cors_origin_list,
-        allow_methods=["GET", "POST", "DELETE"],
-        allow_headers=["*"],
-    )
+    app.add_middleware(CORSMiddleware, **_cors_options(settings))
 
     register_exception_handlers(app)
 
@@ -45,5 +54,4 @@ def create_app() -> FastAPI:
     return app
 
 
-app = create_app()
-
+app = wrap_cors_for_errors(create_app())

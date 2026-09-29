@@ -48,7 +48,9 @@ class Settings(BaseSettings):
 
     environment: str = "development"
     log_level: str = "INFO"
-    cors_origins: str = "http://localhost:5173"
+    # Include the deployed web app so a fresh Vercel API works before optional
+    # environment-specific origins are added to CORS_ORIGINS.
+    cors_origins: str = "http://localhost:5173,https://air-health.vercel.app"
 
     # When true, app.ingestion.factory substitutes a fixed, deterministic
     # sensor/weather dataset (app.ingestion.demo) for OpenAQ/Open-Meteo —

@@ -67,6 +67,7 @@ def _client(upstream: _Upstream, *, no2_configured: bool = False) -> TestClient:
     )
     app = create_app()
     app.dependency_overrides[get_tile_service] = lambda: service
+    app.dependency_overrides[get_settings] = lambda: settings
     return TestClient(app)
 
 
@@ -189,6 +190,24 @@ def test_no2_without_a_configured_endpoint_is_404(upstream: _Upstream) -> None:
 
     assert response.status_code == 404
     assert "NO2_WMS_URL" in response.json()["error"]["message"]
+    assert upstream.requests == []
+
+
+def test_no2_status_reports_unconfigured_without_a_failed_tile_request(
+    upstream: _Upstream,
+) -> None:
+    response = _client(upstream).get("/api/v1/tiles/no2/status")
+
+    assert response.status_code == 200
+    assert response.json() == {"available": False}
+    assert upstream.requests == []
+
+
+def test_no2_status_reports_configured_endpoint(upstream: _Upstream) -> None:
+    response = _client(upstream, no2_configured=True).get("/api/v1/tiles/no2/status")
+
+    assert response.status_code == 200
+    assert response.json() == {"available": True}
     assert upstream.requests == []
 
 

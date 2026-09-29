@@ -944,10 +944,9 @@ export function MapView({
 
           // Industrial emissions - Sentinel-5P NO2, proxied through the
           // backend (GET /api/v1/tiles/no2/*) so the WMS endpoint and its token
-          // stay server-side. The proxy answers 404 while NO2_WMS_URL is unset,
-          // so ask once whether it exists and only then add the source - an
-          // unconfigured deployment keeps the toggle inert instead of firing a
-          // screenful of 404s. This resolves after the synchronous block below,
+          // stay server-side. Ask its status endpoint whether it exists before
+          // adding the source, so an unconfigured deployment keeps the toggle
+          // inert instead of firing tile requests. This resolves after the synchronous block below,
           // so the layer is inserted by id rather than appended: *before* the
           // PM2.5 field, so it lands under the H3 grid rather than on top of
           // it, and above the India base fill, so it isn't hidden over India

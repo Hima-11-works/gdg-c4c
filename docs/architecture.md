@@ -160,6 +160,7 @@ later, it's just not what exists today.
 | `GET /api/v1/fires?since_hours=&min_lat=&min_lon=&max_lat=&max_lon=` | Stored NASA FIRMS detections, worst FRP first, capped | web |
 | `GET /api/v1/tiles/gibs/{layer}/{z}/{y}/{x}?date=` | One proxied NASA GIBS WMTS tile (image, not JSON) | web |
 | `GET /api/v1/tiles/no2/{z}/{y}/{x}` | One proxied Sentinel-5P NO2 WMS GetMap tile (image) | web |
+| `GET /api/v1/tiles/no2/status` | Whether the Sentinel-5P NO2 provider is configured | web |
 
 **Who calls what, and why the legacy rows are still here.** The `Called by`
 column is the contract that keeps this from drifting again: it was written by

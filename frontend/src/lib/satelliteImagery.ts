@@ -96,10 +96,9 @@ export function gibsAerosolTileUrl(date: Date = latestImageryDate()): string {
 // account token, which now lives in the *backend* (NO2_WMS_URL / NO2_WMS_TOKEN
 // in .env) rather than in a VITE_ variable: the browser only ever calls
 // GET /api/v1/tiles/no2/{z}/{y}/{x}, which builds the GetMap request and
-// appends the credential server-side. While no endpoint is configured the
-// proxy answers 404, `no2Available()` reports false, and the layer is never
-// added — showing a fabricated heat-map where real NO2 should be would be
-// worse than showing nothing at all.
+// appends the credential server-side. The separate status endpoint reports
+// whether the provider is configured, so unconfigured deployments never send
+// a JSON error response to MapLibre as a raster image.
 // ---------------------------------------------------------------------------
 
 /** Attribution shown once a real NO2 endpoint is configured. */
@@ -110,17 +109,15 @@ export function no2TileUrl(): string {
   return `${NO2_PROXY}/{z}/{y}/{x}`
 }
 
-/** Whether the backend has a NO2 endpoint configured, asked by fetching one
- *  real tile (z2/y1/x1 - a mid-world tile, cheap and deterministic) rather
- *  than by adding a capability route. A 404 means "not configured", which is
- *  the same answer the tile route gives, so there is one source of truth.
- *  MapView calls this once at map load and only adds the layer when it is
- *  true, which keeps an unconfigured deployment's toggle inert instead of
- *  firing a screenful of 404s when someone flips it. */
+/** Whether the backend has a NO2 endpoint configured. A status endpoint keeps
+ *  the unconfigured case out of the raster path: an error response must never
+ *  be handed to MapLibre as if it were a PNG tile. */
 export async function no2Available(): Promise<boolean> {
   try {
-    const response = await fetch(no2TileUrl().replace('{z}/{y}/{x}', '2/1/1'))
-    return response.ok
+    const response = await fetch(`${NO2_PROXY}/status`)
+    if (!response.ok) return false
+    const body = (await response.json()) as { available?: unknown }
+    return body.available === true
   } catch {
     return false
   }

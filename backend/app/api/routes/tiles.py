@@ -20,6 +20,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from app.api.deps import get_tile_service
+from app.core.config import Settings, get_settings
 from app.services.tiles import TileNotFoundError, TileService, TileUpstreamError
 
 router = APIRouter(prefix="/tiles", tags=["tiles"])
@@ -48,6 +49,12 @@ def _parse_date(value: str | None) -> date | None:
         return date.fromisoformat(value)
     except ValueError as exc:
         raise ValueError("date must be a real calendar date, YYYY-MM-DD") from exc
+
+
+@router.get("/no2/status", summary="Check whether the Sentinel-5P NO2 layer is configured")
+def get_no2_status(settings: Settings = Depends(get_settings)) -> dict[str, bool]:
+    """Report availability without asking the browser to decode an error tile."""
+    return {"available": bool(settings.no2_wms_url and settings.no2_wms_url.strip())}
 
 
 @router.get(

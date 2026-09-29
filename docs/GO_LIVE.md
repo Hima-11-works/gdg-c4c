@@ -67,10 +67,11 @@ connection strings or secret keys into chat, source control, or a public issue.
 
 ## 4. Allow the web app to call the API
 
-1. In the backend Vercel project, add `CORS_ORIGINS` with the exact web origin,
-   such as `https://air-health.vercel.app`.
-2. Save and redeploy the backend. Add any other browser origins as a comma-
-   separated list. Do not use `*` for a production site.
+1. The backend defaults to allowing the production origin
+   `https://air-health.vercel.app` and local development. For a custom or
+   preview domain, add `CORS_ORIGINS` to the backend Vercel project with the
+   exact comma-separated origins.
+2. Save and redeploy the backend. Do not use `*` for a production site.
 
 ## 5. Optional: enable private citizen photo storage
 
