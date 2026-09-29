@@ -137,7 +137,7 @@ class DioFireReportApiClient
   @override
   Future<void> attachPhoto({
     required int reportId,
-    required List<int> bytes,
+    required Uint8List bytes,
     required String filename,
   }) async {
     final response = await _dio.post<Map<String, dynamic>>(

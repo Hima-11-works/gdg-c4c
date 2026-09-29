@@ -1,6 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:air_health_flutter/domain/alert_engine.dart';
-import 'package:air_health_flutter/domain/sensitivity_rules.dart';
 import 'package:air_health_flutter/domain/models/models.dart';
 
 void main() {

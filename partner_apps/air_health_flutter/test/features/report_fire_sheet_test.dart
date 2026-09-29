@@ -26,6 +26,9 @@ class _RecordingFireReportApiClient implements FireReportApiClient {
       reportedAt: DateTime.utc(2026, 9, 21, 12),
     );
   }
+
+  @override
+  Future<List<FireReport>> listActiveReports() async => const [];
 }
 
 /// Always fails, to exercise the error path.
@@ -46,9 +49,9 @@ const testLocation = LocationPoint(
 );
 
 Future<void> pumpSheet(
-  WidgetTester tester, {
-  required FireReportApiClient? client,
-}) async {
+  WidgetTester tester, [
+  FireReportApiClient? client,
+]) async {
   await tester.pumpWidget(
     ProviderScope(
       overrides: [

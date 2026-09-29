@@ -518,7 +518,6 @@ class _IncidentsScreenState extends State<IncidentsScreen>
               trailing: const Icon(Icons.chevron_right),
               isThreeLine: true,
             ),
-            ),
           ),
         ],
       ),

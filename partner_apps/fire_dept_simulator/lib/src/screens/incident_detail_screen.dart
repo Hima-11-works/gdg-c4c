@@ -486,6 +486,8 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
         return Icons.assignment_ind_outlined;
       case IncidentEventType.transition:
         return Icons.sync_alt;
+      case IncidentEventType.delivered:
+        return Icons.mark_email_read_outlined;
       case null:
         return Icons.help_outline;
     }

@@ -68,7 +68,7 @@ class NotificationService {
   Future<void> initialise({
     void Function(String? payload)? onNotificationTap,
   }) async {
-    const androidSettings = AndroidInitializationSettings('ic_notification');
+    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
     const darwinSettings = DarwinInitializationSettings(
       requestAlertPermission: false,
       requestBadgePermission: false,
@@ -79,13 +79,17 @@ class NotificationService {
       iOS: darwinSettings,
       macOS: darwinSettings,
     );
-    await _plugin.initialize(
-      initSettings,
-      onDidReceiveNotificationResponse: (response) {
-        onNotificationTap?.call(response.payload);
-      },
-    );
-    await _registerChannels();
+    try {
+      await _plugin.initialize(
+        initSettings,
+        onDidReceiveNotificationResponse: (response) {
+          onNotificationTap?.call(response.payload);
+        },
+      );
+      await _registerChannels();
+    } catch (_) {
+      // Non-fatal: notification setup error should not crash the app.
+    }
   }
 
   /// Create the Android notification channels explicitly so their
@@ -93,12 +97,16 @@ class NotificationService {
   /// plugin would otherwise create them with only the bare id/name used at
   /// post time.
   Future<void> _registerChannels() async {
-    final android = _plugin.resolvePlatformSpecificImplementation<
-        AndroidFlutterLocalNotificationsPlugin>();
-    if (android == null) return;
-    await android.createNotificationChannel(_alertsChannel);
-    await android.createNotificationChannel(_urgentChannel);
-    await android.createNotificationChannel(_alarmChannel);
+    try {
+      final android = _plugin.resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
+      if (android == null) return;
+      await android.createNotificationChannel(_alertsChannel);
+      await android.createNotificationChannel(_urgentChannel);
+      await android.createNotificationChannel(_alarmChannel);
+    } catch (_) {
+      // Channel registration failure should not halt execution
+    }
   }
 
   /// Load the timezone database once, before any [tz.TZDateTime] is built.

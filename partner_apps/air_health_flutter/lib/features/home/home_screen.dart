@@ -3,7 +3,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/formatters.dart';
-import '../../data/reports/fire_report_api.dart';
 import '../../domain/models/models.dart';
 import '../../features/reports/citizen_sensor_sheet.dart';
 import '../../features/reports/report_fire_sheet.dart';

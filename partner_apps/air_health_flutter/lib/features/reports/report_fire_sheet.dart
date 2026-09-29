@@ -99,7 +99,7 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
         if (client is! CitizenPhotoApiClient) {
           throw StateError('Photo upload is unavailable for this API client.');
         }
-        await client.attachPhoto(
+        await (client as CitizenPhotoApiClient).attachPhoto(
           reportId: report.id,
           bytes: _photoBytes!,
           filename: _photoFilename ?? 'citizen-photo.jpg',

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../data/reports/citizen_sensor_api.dart';
 import '../../providers/data_providers.dart';
 import '../../providers/location_providers.dart';
 

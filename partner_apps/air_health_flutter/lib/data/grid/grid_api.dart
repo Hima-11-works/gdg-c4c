@@ -390,7 +390,7 @@ class DioGridApiClient implements GridApiClient {
     String path,
     Map<String, dynamic> query, {
     String? runId,
-  ) async {
+  }) async {
     final pinnedRunId = runId ?? (await latestPublication()).runId;
     return _get(path, <String, dynamic>{...query, 'run_id': pinnedRunId});
   }

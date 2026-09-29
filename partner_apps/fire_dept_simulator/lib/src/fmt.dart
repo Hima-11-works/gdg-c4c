@@ -45,6 +45,8 @@ String sourceLabel(IncidentSourceType? source) {
         return 'Citizen report';
       case IncidentSourceType.publishedAlert:
         return 'Published PM2.5 alert';
+      case IncidentSourceType.hotspotEvent:
+        return 'Hotspot event';
     case null:
       return 'Unknown source';
   }

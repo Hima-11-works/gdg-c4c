@@ -10,6 +10,9 @@ import '../data/providers/scenario_data.dart';
 import '../data/reports/citizen_sensor_api.dart';
 import '../data/reports/fire_report_api.dart';
 
+export '../data/reports/citizen_sensor_api.dart';
+export '../data/reports/fire_report_api.dart';
+
 /// Grid API client, or null when `POLLUTION_API_BASE_URL` is not set.
 ///
 /// The grid API is unauthenticated, so only the base URL is required:

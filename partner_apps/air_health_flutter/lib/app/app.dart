@@ -84,6 +84,13 @@ class _AirHealthAppState extends ConsumerState<AirHealthApp>
       darkTheme: AppTheme.dark,
       routerConfig: router,
       builder: (context, child) {
+        // On mobile (Android / iOS), render the native UI directly without desktop container constraints
+        if (!kIsWeb &&
+            (defaultTargetPlatform == TargetPlatform.android ||
+                defaultTargetPlatform == TargetPlatform.iOS)) {
+          return child ?? const SizedBox.shrink();
+        }
+
         // Dark desktop background — fills the entire window so the
         // sides of the 430px frame aren't blinding white.
         return Container(
@@ -93,6 +100,7 @@ class _AirHealthAppState extends ConsumerState<AirHealthApp>
               constraints: const BoxConstraints(maxWidth: 430),
               child: ClipRect(
                 child: Stack(
+                  fit: StackFit.expand,
                   children: [
                     // The actual app content from the router.
                     child ?? const SizedBox.shrink(),

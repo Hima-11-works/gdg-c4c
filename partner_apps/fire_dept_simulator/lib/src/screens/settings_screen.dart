@@ -131,7 +131,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 const SizedBox(height: 12),
                 DropdownButtonFormField<ResponderRole>(
-                  value: _role,
+                  initialValue: _role,
                   decoration: const InputDecoration(labelText: 'Authority role', border: OutlineInputBorder()),
                   items: ResponderRole.values
                       .map((role) => DropdownMenuItem(value: role, child: Text(roleLabel(role))))

@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../domain/alert_engine.dart';
 import '../domain/alert_message_service.dart';
 import '../domain/models/models.dart';
-import '../domain/sensitivity_rules.dart';
 import '../notifications/alert_notification_dispatcher.dart';
 import '../notifications/forecast_alarm_scheduler.dart';
 import '../notifications/notification_service.dart';

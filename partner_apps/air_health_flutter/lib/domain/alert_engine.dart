@@ -1,6 +1,8 @@
 import '../domain/models/models.dart';
 import 'sensitivity_rules.dart';
 
+export 'sensitivity_rules.dart';
+
 /// Result of an engine evaluation — decisions plus updated dedup state.
 class AlertEngineResult {
   const AlertEngineResult({
