@@ -1,8 +1,8 @@
 """The complete processing pipeline for the configured region:
 
     OpenAQ city + national overview -> sensor ingestion -> H3 grid + PM2.5 interpolation -> PDI
-    -> Open-Meteo -> weather ingestion -> dispersion model -> 1h/3h/6h
-    forecasts -> alerts
+    -> Open-Meteo -> weather ingestion -> dispersion model -> forecasts
+    -> prediction publication -> alerts
 
 Run with:
 
@@ -163,20 +163,13 @@ def _publish(
 ) -> StageOutcome:
     """Publish this run's grid as an immutable, queryable v2 result (F3).
 
-    Everything above this stage wrote rows that nothing in the v2 read path
-    looks at: the grid is computed, forecasts are generated, alerts are raised,
-    and then the API serves a `demo-fallback-<hour>` run synthesised from those
-    same rows, flagged as a fallback because no publication exists. So the
-    pipeline ran and reported success while producing no publication at all -
-    the exact failure mode F3 is about.
+    The grid and forecasts are written before this stage; the v2 read path does
+    not read those legacy rows directly. This publishes them as an immutable
+    prediction run, which alerts can then safely reference by foreign key.
 
-    This stage is what makes the run real. It is the only stage whose failure
-    changes what every other stage meant: the grid, forecast and alerts above
-    are all persisted and still useful, so a publication failure is reported as
-    a failed stage and the rest of the report still prints. Letting it
-    propagate would abandon the run's own contract - no stage failure aborts
-    the process - and would discard a successful run's worth of work over the
-    one step that only affects the v2 read path.
+    This stage is what makes the run real. A publication failure is reported as
+    a failed stage; alerts are skipped afterward because they cannot reference
+    a prediction run that was not published.
     """
     try:
         return _publish_inner(
@@ -1160,26 +1153,34 @@ async def run_pipeline(bbox: BoundingBox, *, timestamp: datetime) -> PipelineRep
         ]
         forecast_outcome, forecasts = _forecast(session, settings, issue_timestamp)
         stages.append(forecast_outcome)
-        stages.append(
-            _generate_alerts(
-                session, settings, issue_timestamp, forecasts, pipeline_run_id
-            )
+        # Publish before generating alerts: alert.run_id is a foreign key to
+        # prediction_run.id, and publication commits that parent row together
+        # with this run's results. If publication fails, skip alert persistence
+        # instead of triggering a second error on the aborted transaction.
+        publication_outcome = _publish(
+            session,
+            settings,
+            pipeline_run_id,
+            issue_timestamp,
+            forecasts,
+            fire_feed_available=fire_feed_available,
+            fire_dataset_id=fire_dataset_id,
         )
-        # Publication comes last, deliberately: it publishes the grid and
-        # forecast that the stages above just produced, so anything that failed
-        # above is visible as a failed stage before its output is presented as a
-        # published run.
-        stages.append(
-            _publish(
-                session,
-                settings,
-                pipeline_run_id,
-                issue_timestamp,
-                forecasts,
-                fire_feed_available=fire_feed_available,
-                fire_dataset_id=fire_dataset_id,
+        stages.append(publication_outcome)
+        if publication_outcome.succeeded:
+            stages.append(
+                _generate_alerts(
+                    session, settings, issue_timestamp, forecasts, pipeline_run_id
+                )
             )
-        )
+        else:
+            stages.append(
+                StageOutcome(
+                    "alert_generation",
+                    False,
+                    "skipped: publication failed; alert run_id requires a published prediction run",
+                )
+            )
     finally:
         session.close()
 
