@@ -61,6 +61,13 @@ from app.domain.types import BoundingBox
 from app.ingestion.demo_scenarios import ScenarioGenerator
 from app.ingestion.factory import build_pollution_provider, build_weather_provider
 from app.ingestion.firms import FirmsProvider
+from app.services.corridor_evaluation import (
+    DEFAULT_MIN_LABELS,
+    EventNotFoundError,
+    evaluate_event,
+    event_for_run,
+    event_peak,
+)
 from app.services.dispersion import DeterministicH3DispersionModel
 from app.services.environmental_ingestion import EnvironmentalIngestionService
 from app.services.features import (
@@ -68,9 +75,19 @@ from app.services.features import (
     feature_snapshot_from_dict,
     feature_snapshot_to_dict,
 )
+from app.services.federation import run_federation_demo
 from app.services.forecasting import ForecastingResult, ForecastingService
 from app.services.geospatial import GeospatialService
+from app.services.hotspot_detection import (
+    DetectorConfig,
+    HotspotDetector,
+    HotspotInputError,
+    HotspotScanStore,
+    load_case,
+    run_case,
+)
 from app.services.ingestion import IngestionResult, SensorIngestionService, WeatherIngestionService
+from app.services.media_storage import MediaStoreError, MediaStoreUnavailable, build_media_store
 from app.services.model_operations import (
     activate_registry_model,
     assert_model_can_be_activated,
@@ -89,23 +106,6 @@ from app.services.prediction_publication import (
     PredictionPublicationService,
     assert_live_snapshots_available,
 )
-from app.services.corridor_evaluation import (
-    DEFAULT_MIN_LABELS,
-    EventNotFoundError,
-    evaluate_event,
-    event_for_run,
-    event_peak,
-)
-from app.services.federation import run_federation_demo
-from app.services.hotspot_detection import (
-    DetectorConfig,
-    HotspotDetector,
-    HotspotInputError,
-    HotspotScanStore,
-    load_case,
-    run_case,
-)
-from app.services.media_storage import MediaStoreError, build_media_store
 from app.services.prediction_queries import (
     DEFAULT_EXPOSURE_THRESHOLD_PM25,
     PredictionQueryService,
@@ -1477,45 +1477,27 @@ async def _run_verify_media_storage(args: argparse.Namespace) -> int:
     """Prove the F2 evidence store is configured, writable and self-consistent.
 
     The failure this exists to catch is the quiet one: `CITIZEN_MEDIA_STORAGE`
-    left at the default `disabled`, or `CITIZEN_MEDIA_DIR` pointing somewhere the
-    process cannot write. Neither raises at startup - the API just answers 503
+    left at the default `disabled`, or a configured filesystem/object store
+    that cannot complete a write/read/delete round trip. Either way, it answers
     `media_unavailable` to every upload, which from a client's side reads as
     "this deployment does not take photos" rather than as a misconfiguration.
 
-    So this writes a probe object, reads it back and deletes it, rather than
-    stat-ing the directory. A root the process cannot write to passes a stat and
-    fails here.
+    So this writes a probe object, reads it back and deletes it rather than
+    merely checking that a directory or bucket name exists.
 
     Exit 0 when the store verified, 1 when it is disabled or unreachable.
     """
     settings = get_settings()
 
-    if settings.citizen_media_storage != "filesystem":
-        print(
-            f"media storage is DISABLED (citizen_media_storage="
-            f"{settings.citizen_media_storage!r}). Uploads answer 503 "
-            "media_unavailable and reports must be filed without a photo. Set "
-            "CITIZEN_MEDIA_STORAGE=filesystem and CITIZEN_MEDIA_DIR to enable "
-            "them.",
-            file=sys.stderr,
-        )
-        return 1
-
-    if not settings.citizen_media_dir:
-        print(
-            "citizen_media_storage is 'filesystem' but citizen_media_dir is unset",
-            file=sys.stderr,
-        )
-        return 1
-
-    from app.services.media_storage import (
-        FilesystemMediaStore,
-        MediaStoreError,
-        MediaStoreUnavailable,
-    )
-
     try:
-        store = FilesystemMediaStore(settings.citizen_media_dir)
+        store = build_media_store(settings)
+        if store is None:
+            print(
+                "media storage is DISABLED; uploads answer 503 media_unavailable. "
+                "Set CITIZEN_MEDIA_STORAGE=filesystem or s3 to enable them.",
+                file=sys.stderr,
+            )
+            return 1
         print(f"storage: {store.verify()}")
     except (MediaStoreUnavailable, MediaStoreError) as exc:
         print(f"Fatal: media store unusable: {exc}", file=sys.stderr)

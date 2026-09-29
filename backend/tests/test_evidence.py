@@ -17,6 +17,7 @@ from __future__ import annotations
 import io
 import os
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 
 import pytest
 from PIL import Image
@@ -37,12 +38,12 @@ from app.services.evidence import (
 )
 from app.services.media_storage import (
     FilesystemMediaStore,
-    MediaStore,
     MediaStoreError,
+    S3MediaStore,
     new_media_key,
 )
 
-MAX = 8 * 1024 * 1024
+MAX = 4 * 1024 * 1024
 
 
 # --------------------------------------------------------------------------
@@ -367,6 +368,74 @@ class TestFilesystemMediaStore:
         key = new_media_key()
         store.put(key, b"durable")
         assert FilesystemMediaStore(tmp_path / "media").get(key) == b"durable"
+
+
+class TestS3MediaStore:
+    class MemoryClient:
+        def __init__(self):
+            self.objects: dict[tuple[str, str], bytes] = {}
+            self.put_calls: list[dict] = []
+
+        def put_object(self, **kwargs):
+            self.put_calls.append(kwargs)
+            self.objects[(kwargs["Bucket"], kwargs["Key"])] = kwargs["Body"]
+
+        def get_object(self, **kwargs):
+            object_key = (kwargs["Bucket"], kwargs["Key"])
+            if object_key not in self.objects:
+                from botocore.exceptions import ClientError
+
+                raise ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
+            return {"Body": BytesIO(self.objects[object_key])}
+
+        def head_object(self, **kwargs):
+            if (kwargs["Bucket"], kwargs["Key"]) not in self.objects:
+                from botocore.exceptions import ClientError
+
+                raise ClientError({"Error": {"Code": "404"}}, "HeadObject")
+            return {"ContentLength": len(self.objects[(kwargs["Bucket"], kwargs["Key"])])}
+
+        def delete_object(self, **kwargs):
+            self.objects.pop((kwargs["Bucket"], kwargs["Key"]), None)
+
+    @pytest.fixture
+    def s3_store(self, monkeypatch):
+        import boto3
+
+        client = self.MemoryClient()
+        monkeypatch.setattr(boto3, "client", lambda *_args, **_kwargs: client)
+        store = S3MediaStore(
+            "private-evidence",
+            region="us-east-1",
+            endpoint_url=None,
+            access_key_id="test-access-key",
+            secret_access_key="test-secret-key",
+        )
+        return store, client
+
+    def test_round_trips_private_objects(self, s3_store):
+        store, client = s3_store
+        key = new_media_key()
+        stored = store.put(key, b"payload")
+        assert stored.size_bytes == 7
+        assert store.get(key) == b"payload"
+        assert store.exists(key)
+        assert client.put_calls[0]["Key"] == f"citizen-evidence/{key}"
+        assert store.delete(key) is True
+        assert store.delete(key) is False
+        with pytest.raises(MediaStoreError, match="no such media object"):
+            store.get(key)
+
+    def test_rejects_path_keys_before_requesting_s3(self, s3_store):
+        store, client = s3_store
+        with pytest.raises(MediaStoreError, match="invalid media key"):
+            store.put("../outside", b"payload")
+        assert client.put_calls == []
+
+    def test_verify_exercises_upload_read_and_delete(self, s3_store):
+        store, client = s3_store
+        assert "round trip verified" in store.verify()
+        assert client.objects == {}
 
 
 # --------------------------------------------------------------------------

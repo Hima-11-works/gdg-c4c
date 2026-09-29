@@ -45,6 +45,12 @@ jobs:
       FIRMS_MAP_KEY: ${{ secrets.FIRMS_MAP_KEY }}
       CDSE_REFRESH_TOKEN: ${{ secrets.CDSE_REFRESH_TOKEN }}
       HOTSPOT_SCAN_BACKEND: ${{ vars.HOTSPOT_SCAN_BACKEND || 'database' }}
+      CITIZEN_MEDIA_STORAGE: ${{ vars.CITIZEN_MEDIA_STORAGE || 'disabled' }}
+      CITIZEN_MEDIA_S3_BUCKET: ${{ vars.CITIZEN_MEDIA_S3_BUCKET }}
+      CITIZEN_MEDIA_S3_REGION: ${{ vars.CITIZEN_MEDIA_S3_REGION || 'us-east-1' }}
+      CITIZEN_MEDIA_S3_ENDPOINT_URL: ${{ vars.CITIZEN_MEDIA_S3_ENDPOINT_URL }}
+      CITIZEN_MEDIA_S3_ACCESS_KEY_ID: ${{ secrets.CITIZEN_MEDIA_S3_ACCESS_KEY_ID }}
+      CITIZEN_MEDIA_S3_SECRET_ACCESS_KEY: ${{ secrets.CITIZEN_MEDIA_S3_SECRET_ACCESS_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -69,3 +75,7 @@ jobs:
 
       - name: Run pipeline
         run: python -m app.pipeline.run
+
+      - name: Verify photo storage and expire old evidence
+        if: ${{ vars.CITIZEN_MEDIA_STORAGE == 's3' }}
+        run: python -m app.cli verify-media-storage --sweep-expired

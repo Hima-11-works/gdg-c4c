@@ -199,7 +199,8 @@ export async function setEvidenceReviewState(
  *  nothing because the server does not believe it either. Mirrored here purely
  *  to save the user a pointless upload.
  */
-export const MAX_PHOTO_BYTES = 8 * 1024 * 1024
+// Leave headroom below Vercel's 4.5 MB whole-request cap for multipart framing.
+export const MAX_PHOTO_BYTES = 4 * 1024 * 1024
 
 export function describePhotoProblem(file: File): string | null {
   if (file.size === 0) return 'That file is empty.'

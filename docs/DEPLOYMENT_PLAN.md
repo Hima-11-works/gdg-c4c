@@ -1,5 +1,11 @@
 # Deployment & app-integration plan
 
+> **Historical implementation and rehearsal record (2026-09-18).** Some
+> findings and setup notes below describe the code as it existed during that
+> rehearsal; do not use them as current deployment steps. Follow
+> [`GO_LIVE.md`](GO_LIVE.md), which targets the current `main` branch and
+> includes the deployed database, CORS, photo-storage, and pipeline settings.
+
 Goal: host the **web MVP** (frontend + backend) on Vercel and point the
 **Flutter partner app** at the deployed backend, with the minimum necessary
 code change.

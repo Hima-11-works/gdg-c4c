@@ -8,9 +8,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import __version__
 from app.api.errors import register_exception_handlers
 from app.api.router import api_v1_router
+from app.api.routes.evidence import router as evidence_router
 from app.api.routes.health import router as health_router
 from app.api.routes.predictions_v2 import router as api_v2_router
-from app.api.routes.evidence import router as evidence_router
 from app.api.routes.reports_v2 import router as reports_v2_router
 from app.core.config import get_settings
 
@@ -26,7 +26,7 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origin_list,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["*"],
     )
 

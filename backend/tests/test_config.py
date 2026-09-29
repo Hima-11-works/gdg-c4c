@@ -138,3 +138,24 @@ def test_empty_environment_variables_fall_back_to_defaults(monkeypatch) -> None:
     assert settings.demo_mode is False
     assert settings.database_url_override is None
     assert settings.database_url.host == "localhost"
+
+
+def test_s3_photo_storage_requires_bucket_and_credentials() -> None:
+    with pytest.raises(ValueError, match="CITIZEN_MEDIA_S3_BUCKET"):
+        Settings(citizen_media_storage="s3", _env_file=None)
+
+
+def test_s3_photo_storage_accepts_complete_private_bucket_config() -> None:
+    settings = Settings(
+        citizen_media_storage="s3",
+        citizen_media_s3_bucket="private-photos",
+        citizen_media_s3_region="auto",
+        citizen_media_s3_endpoint_url="https://account.r2.cloudflarestorage.com",
+        citizen_media_s3_access_key_id="test-access-key",
+        citizen_media_s3_secret_access_key="test-secret-key",
+        _env_file=None,
+    )
+
+    assert settings.citizen_media_max_bytes == 4 * 1024 * 1024
+    assert settings.citizen_media_s3_secret_access_key is not None
+    assert "test-secret-key" not in repr(settings)

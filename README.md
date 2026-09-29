@@ -207,7 +207,7 @@ For database integration tests, configure a test PostgreSQL/PostGIS database and
 - Federation is a prototype; no agencies are enrolled, and there is no differential privacy or independently verified participant identity.
 - Provider credentials, scheduled database configuration, deployment secrets, and ongoing source validation are required for a live service.
 
-Further calibration and operational requirements are in [model evaluation](docs/M3_MODEL_AND_EVALUATION.md), [operations](docs/M6_OPERATIONS.md), [go-live checklist](docs/GO_LIVE.md), and [deployment plan](docs/DEPLOYMENT_PLAN.md).
+Further calibration and operational requirements are in [model evaluation](docs/M3_MODEL_AND_EVALUATION.md), [operations](docs/M6_OPERATIONS.md), and the [current go-live checklist](docs/GO_LIVE.md). The [deployment plan](docs/DEPLOYMENT_PLAN.md) is a historical implementation record.
 
 ## Repository guide
 

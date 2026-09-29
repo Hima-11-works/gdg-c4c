@@ -22,7 +22,7 @@ ordering of repeated requests.
 
 1. **The reviewer's screen.** A reviewer looking at a derivative decides
    whether a fire is real. Deceiving that screen corrupts the review queue.
-2. **The disk.** Every accepted byte is stored. Unbounded growth is an
+2. **The private object store.** Every accepted byte is stored. Unbounded growth is an
    availability problem for the whole API.
 3. **The uploader's privacy.** A photo carries location, time and sometimes
    faces. The derivative is shown to reviewers; the original must not be.
@@ -65,7 +65,7 @@ ordering of repeated requests.
 
 | Threat | Control | Where |
 |---|---|---|
-| Disk fill | 8 MB per file, **3 per report**, plus a retention sweep. | `citizen_media_*` settings, `purge_expired` |
+| Disk fill / request size | 4 MiB per file, **3 per report**, plus a retention sweep. | `citizen_media_*` settings, `purge_expired` |
 | Memory exhaustion per request | The body is read once, held once, and the size check precedes any decode. | `attach` |
 | Upload flood | **Not implemented for evidence.** The per-/24 cap from F1 covers report *submission*, not photo upload; a caller who cannot submit reports can still try to attach. Bounded only by the 3-per-report cap per report id, which is not a global limit. **Known gap.** | — |
 | CPU via repeated decode | The per-report cap bounds decodes per report to three. | `attach` |
@@ -80,7 +80,9 @@ renames, so a crash never leaves a half object that reads as a valid photo.
 
 The residual risk is a crash between `put` and the row insert. That window is
 real and F2 does **not** close it — there is no reconciliation pass. **Known
-gap.**
+gap.** The scheduled GitHub Actions workflow runs the retention sweep when
+`CITIZEN_MEDIA_STORAGE=s3` is configured; keep its S3 credentials aligned with
+the API deployment.
 
 ## What a reviewer actually sees, and what they must not conclude
 
@@ -97,7 +99,8 @@ evidence a precondition rather than support.
    decodes as an image is stored and can be shown to a reviewer.
 2. **No reconciliation for orphans** after a crash in the write/link window.
 3. **No upload rate limit** independent of the report-submission cap.
-4. **Filesystem store is single-node.** Right for one container, wrong for a
-   scaled-out deployment, which is why `MediaStore` is an interface.
+4. **Filesystem store is single-node.** Right for one persistent container,
+   wrong for a serverless or scaled-out deployment. Use the S3-compatible store
+   there and keep its bucket private.
 5. **A polyglot that decodes** is shown to a reviewer as an image. The byte
    checks raise the cost; they do not make it impossible.

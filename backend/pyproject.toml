@@ -28,7 +28,9 @@ dependencies = [
     # register a route that takes an UploadFile without it, so this is a hard
     # requirement of the endpoint, not an optimisation.
     "python-multipart>=0.0.20",
-    ]
+    # Private, durable storage for citizen photo evidence on serverless hosts.
+    "boto3>=1.40,<2.0",
+]
 
 [project.optional-dependencies]
 dev = [

@@ -461,11 +461,18 @@ class Settings(BaseSettings):
     # which the clients treat as "photos are off here" and continue with a
     # text-only report. F2 requires a report to succeed without a photo, so the
     # conservative default costs a feature, never a report.
-    citizen_media_storage: Literal["disabled", "filesystem"] = "disabled"
+    citizen_media_storage: Literal["disabled", "filesystem", "s3"] = "disabled"
     citizen_media_dir: str = ""
-    # Per-file ceiling. 8 MB is generous for a phone photo and small enough that
-    # a handful of concurrent uploads cannot exhaust a small container's disk.
-    citizen_media_max_bytes: int = Field(default=8 * 1024 * 1024, gt=0, le=64 * 1024 * 1024)
+    # Serverless request gateways cap the complete multipart request at about
+    # 4.5 MB. Keep the file itself to 4 MiB to leave room for multipart fields.
+    citizen_media_max_bytes: int = Field(default=4 * 1024 * 1024, gt=0, le=4 * 1024 * 1024)
+    # Private S3-compatible storage (AWS S3 or Cloudflare R2). The endpoint is
+    # optional for AWS and required by providers such as R2.
+    citizen_media_s3_bucket: str = ""
+    citizen_media_s3_region: str = "us-east-1"
+    citizen_media_s3_endpoint_url: str | None = None
+    citizen_media_s3_access_key_id: str = ""
+    citizen_media_s3_secret_access_key: SecretStr | None = None
     # Per-report ceiling. Three is enough to show a fire from two angles; more
     # than that is bulk upload, not evidence.
     citizen_media_max_per_report: int = Field(default=3, ge=1, le=20)
@@ -552,6 +559,21 @@ class Settings(BaseSettings):
                 "may not survive a restart — set both variables, then run "
                 "`python -m app.cli verify-media-storage`."
             )
+        if self.citizen_media_storage == "s3":
+            missing = []
+            if not self.citizen_media_s3_bucket.strip():
+                missing.append("CITIZEN_MEDIA_S3_BUCKET")
+            if not self.citizen_media_s3_access_key_id.strip():
+                missing.append("CITIZEN_MEDIA_S3_ACCESS_KEY_ID")
+            if self.citizen_media_s3_secret_access_key is None:
+                missing.append("CITIZEN_MEDIA_S3_SECRET_ACCESS_KEY")
+            if missing:
+                raise ValueError(
+                    "CITIZEN_MEDIA_STORAGE=s3 requires " + ", ".join(missing)
+                )
+            endpoint = self.citizen_media_s3_endpoint_url
+            if endpoint and not endpoint.lower().startswith("https://"):
+                raise ValueError("CITIZEN_MEDIA_S3_ENDPOINT_URL must use HTTPS")
         return self
 
     @property

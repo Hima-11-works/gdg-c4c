@@ -48,9 +48,7 @@ from app.services.incidents import (
     SimulatorDisabledError,
 )
 from app.services.media_storage import (
-    FilesystemMediaStore,
-    MediaStore,
-    MediaStoreUnavailable,
+    build_media_store,
 )
 from app.services.prediction_queries import PredictionQueryService
 from app.services.published_alerts import PublishedAlertService
@@ -183,15 +181,7 @@ def get_evidence_service(
     `media_unavailable` rather than accept-and-drop, so a deployment that has
     not configured storage cannot appear to be keeping photos.
     """
-    store: MediaStore | None = None
-    if settings.citizen_media_storage == "filesystem":
-        if not settings.citizen_media_dir:
-            # Configured as filesystem with no directory is an operator error,
-            # and failing loudly here beats a store rooted at the CWD.
-            raise MediaStoreUnavailable(
-                "citizen_media_storage is 'filesystem' but citizen_media_dir is unset"
-            )
-        store = FilesystemMediaStore(settings.citizen_media_dir)
+    store = build_media_store(settings)
     return EvidenceService(
         settings=settings,
         store=store,

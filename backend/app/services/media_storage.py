@@ -22,21 +22,26 @@ read-back is paranoia with a purpose: it is the only way to know the bytes
 reached the disk rather than merely the page cache, and it is the difference
 between "we stored a photo" and "we think we stored a photo".
 
-**Why an interface.** S3 or GCS is the production answer for a deployment with
-more than one API container, and neither can share a POSIX filesystem. The
-adapter is deliberately narrow - put, get, delete, verify - so a second backend
-is a new class rather than a rewrite of the service above it. Nothing above
-this line knows whether the bytes are on a disk or in a bucket.
+**Why an interface.** A local directory is convenient on one persistent
+machine; S3-compatible object storage works across serverless instances. The
+adapter is deliberately narrow - put, get, delete, verify - so evidence
+handling does not depend on where the bytes live.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+
+from botocore.config import Config
+from botocore.exceptions import BotoCoreError, ClientError
+
+from app.core.config import Settings
 
 
 class MediaStoreError(RuntimeError):
@@ -50,6 +55,15 @@ class MediaStoreUnavailable(MediaStoreError):
     operator problem and must surface as a 503, never as "your upload failed",
     and never as a silent accept.
     """
+
+
+_KEY_PATTERN = re.compile(r"[0-9a-f]{1,64}\Z")
+
+
+def _validate_key(key: str) -> None:
+    """Storage keys are opaque UUID hex strings, never paths or caller input."""
+    if not _KEY_PATTERN.fullmatch(key or ""):
+        raise MediaStoreError("invalid media key")
 
 
 @dataclass(frozen=True)
@@ -129,12 +143,7 @@ class FilesystemMediaStore(MediaStore):
         is rejected outright instead of being sanitised, because a key that
         needed sanitising was already a bug.
         """
-        if not key or len(key) > 64:
-            raise MediaStoreError("invalid media key")
-        if any(sep in key for sep in ("/", "\\")) or key in (".", ".."):
-            raise MediaStoreError("invalid media key")
-        if not all(character in "0123456789abcdef" for character in key):
-            raise MediaStoreError("invalid media key")
+        _validate_key(key)
         path = self._root / key
         # Belt and braces: the resolved path must still be inside the root.
         try:
@@ -204,6 +213,145 @@ class FilesystemMediaStore(MediaStore):
         if self.exists(key):
             raise MediaStoreUnavailable("media store delete did not take effect")
         return f"filesystem store ok at {self._root} ({stored.size_bytes} byte round trip)"
+
+
+class S3MediaStore(MediaStore):
+    """Private S3-compatible object storage for serverless deployments.
+
+    Supports AWS S3 and compatible providers such as Cloudflare R2. Objects
+    are stored beneath a fixed private prefix; no caller controls the bucket,
+    key, or URL. Reads remain behind the evidence API's reviewer authorization.
+    """
+
+    _PREFIX = "citizen-evidence/"
+
+    def __init__(
+        self,
+        bucket: str,
+        *,
+        region: str,
+        endpoint_url: str | None,
+        access_key_id: str,
+        secret_access_key: str,
+    ) -> None:
+        if not bucket.strip():
+            raise MediaStoreUnavailable("S3 media bucket is not configured")
+        try:
+            import boto3
+
+            s3_config = {"addressing_style": "path"} if endpoint_url else {}
+            self._client = boto3.client(
+                "s3",
+                region_name=region,
+                endpoint_url=endpoint_url or None,
+                aws_access_key_id=access_key_id,
+                aws_secret_access_key=secret_access_key,
+                config=Config(
+                    connect_timeout=3,
+                    read_timeout=10,
+                    retries={"max_attempts": 2, "mode": "standard"},
+                    s3=s3_config,
+                ),
+            )
+        except (BotoCoreError, ImportError, ValueError) as exc:
+            raise MediaStoreUnavailable("could not initialize S3 media storage") from exc
+        self._bucket = bucket
+
+    def _object_key(self, key: str) -> str:
+        _validate_key(key)
+        return f"{self._PREFIX}{key}"
+
+    def put(self, key: str, data: bytes) -> StoredObject:
+        object_key = self._object_key(key)
+        try:
+            self._client.put_object(
+                Bucket=self._bucket,
+                Key=object_key,
+                Body=data,
+                ContentLength=len(data),
+                ContentType="application/octet-stream",
+            )
+        except (BotoCoreError, ClientError) as exc:
+            raise MediaStoreError("could not write S3 media object") from exc
+        return StoredObject(key=key, size_bytes=len(data))
+
+    def get(self, key: str) -> bytes:
+        object_key = self._object_key(key)
+        try:
+            response = self._client.get_object(Bucket=self._bucket, Key=object_key)
+            body = response["Body"]
+            try:
+                return body.read()
+            finally:
+                body.close()
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
+                raise MediaStoreError("no such media object") from exc
+            raise MediaStoreError("could not read S3 media object") from exc
+        except (BotoCoreError, KeyError, OSError) as exc:
+            raise MediaStoreError("could not read S3 media object") from exc
+
+    def exists(self, key: str) -> bool:
+        object_key = self._object_key(key)
+        try:
+            self._client.head_object(Bucket=self._bucket, Key=object_key)
+            return True
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
+                return False
+            raise MediaStoreError("could not check S3 media object") from exc
+        except BotoCoreError as exc:
+            raise MediaStoreError("could not check S3 media object") from exc
+
+    def delete(self, key: str) -> bool:
+        object_key = self._object_key(key)
+        if not self.exists(key):
+            return False
+        try:
+            self._client.delete_object(Bucket=self._bucket, Key=object_key)
+        except (BotoCoreError, ClientError) as exc:
+            raise MediaStoreError("could not delete S3 media object") from exc
+        return True
+
+    def verify(self) -> str:
+        """Prove the configured bucket can store, retrieve, and delete bytes."""
+        key = new_media_key()
+        payload = b"media-store-selftest"
+        self.put(key, payload)
+        try:
+            if self.get(key) != payload:
+                raise MediaStoreUnavailable("S3 media store read-back mismatch")
+        finally:
+            self.delete(key)
+        if self.exists(key):
+            raise MediaStoreUnavailable("S3 media store delete did not take effect")
+        return f"S3-compatible store ok in bucket {self._bucket} (round trip verified)"
+
+
+def build_media_store(settings: Settings) -> MediaStore | None:
+    """Create the configured store; None means photo evidence is disabled."""
+    if settings.citizen_media_storage == "disabled":
+        return None
+    if settings.citizen_media_storage == "filesystem":
+        if not settings.citizen_media_dir:
+            raise MediaStoreUnavailable("CITIZEN_MEDIA_DIR is required for filesystem storage")
+        return FilesystemMediaStore(settings.citizen_media_dir)
+    if not (
+        settings.citizen_media_s3_bucket
+        and settings.citizen_media_s3_access_key_id
+        and settings.citizen_media_s3_secret_access_key
+    ):
+        raise MediaStoreUnavailable(
+            "CITIZEN_MEDIA_S3_BUCKET, CITIZEN_MEDIA_S3_ACCESS_KEY_ID and "
+            "CITIZEN_MEDIA_S3_SECRET_ACCESS_KEY are required for S3 storage"
+        )
+    return S3MediaStore(
+        settings.citizen_media_s3_bucket,
+        region=settings.citizen_media_s3_region,
+        endpoint_url=settings.citizen_media_s3_endpoint_url,
+        access_key_id=settings.citizen_media_s3_access_key_id,
+        secret_access_key=settings.citizen_media_s3_secret_access_key.get_secret_value(),
+    )
 
 
 def iter_store_keys(store: FilesystemMediaStore) -> Iterator[str]:

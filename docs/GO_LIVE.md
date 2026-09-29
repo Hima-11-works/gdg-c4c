@@ -1,304 +1,164 @@
-# Go-live checklist (detailed)
+# Deploy the web app and API
 
-Deploy the web MVP (frontend + backend) on Vercel and point the Flutter app
-at it. Everything is already implemented in the repo — this is all
-configuration. Background: [`DEPLOYMENT_PLAN.md`](DEPLOYMENT_PLAN.md).
+This guide targets the current `main` branch. It deploys the Vite web app and
+FastAPI backend as two Vercel projects, with Neon Postgres + PostGIS. GitHub
+Actions can run the data pipeline and photo-retention sweep. Never paste real
+connection strings or secret keys into chat, source control, or a public issue.
 
-Read a whole step before doing it. Lines in `<>` are placeholders you fill
-in. **Never paste a real password or connection string into chat or commit
-it** — it belongs only in Vercel/GitHub.
+## What you need
 
-## What you'll end up with
+- A GitHub account with access to this repository.
+- Vercel and Neon accounts.
+- Docker Desktop for the one-time database migration command.
+- Optional: an AWS S3 or Cloudflare R2 bucket for citizen photos.
 
-| Thing | Where | Example |
-|---|---|---|
-| Database | Neon (Postgres + PostGIS) | — |
-| API | Vercel project, root `backend/` | `https://air-health-api.vercel.app` |
-| Web app | Vercel project, root `frontend/` | `https://air-health.vercel.app` |
-| Phone app | built locally | points at the API URL |
-| Scheduler (optional) | GitHub Actions | hourly pipeline run |
+## 1. Create the database and apply migrations
 
----
+1. In Neon, create a Postgres project in a region close to your users/API.
+   Confirm the project supports PostGIS.
+2. Open **Connect** and save both connection strings privately:
+   - **Pooled URL** for the Vercel API.
+   - **Direct URL** for migrations and GitHub Actions.
+3. In PowerShell, build the backend image and apply every migration to `head`:
 
-## Step 0 — Put the deployment code on `main`
-
-All deployment work is on the branch `flutter-completion`. Vercel and
-GitHub's scheduler use `main`, which is the default branch.
-
-1. Open a browser and go to `https://github.com/Hima-11-works/gdg-c4c`.
-2. Sign in if needed.
-3. In the address bar, go directly to:
-   `https://github.com/Hima-11-works/gdg-c4c/compare/main...flutter-completion`
-4. You should see **"Comparing changes"** with `base: main` ←
-   `compare: flutter-completion`, and **"Able to merge"** in green.
-5. Click **Create pull request**.
-6. Give it a title (e.g. `Deployment: Vercel + scheduled pipeline`) and click
-   **Create pull request** again.
-7. Click **Merge pull request** → **Confirm merge**.
-8. Verify: open `https://github.com/Hima-11-works/gdg-c4c/blob/main/backend/vercel.json`
-   — it should load (not 404).
-
-> If you'd rather not merge now, skip this and instead set each Vercel
-> project's **Production Branch** to `flutter-completion` in Step 3/4. The
-> scheduled job (Step 8) only runs from `main`, so it needs the merge.
-
----
-
-## Step 1 — Neon database
-
-1. Go to `https://neon.tech` → click **Sign Up** → **Continue with GitHub**
-   → **Authorize**.
-2. On the project screen click **Create project** (or **New project**).
-   - Name: `air-health`.
-   - Region: the one closest to you.
-   - Postgres version: leave default.
-3. Click **Create project** and wait a few seconds.
-4. On the project dashboard, find the **Connect** button (top-right of the
-   project panel) and click it. A panel opens with a connection string.
-5. In that panel there's a **Connection pooling** switch/toggle.
-   - Turn it **ON** → copy the string. Host will contain `-pooler`.
-     Save it as: **POOLED URL** = `postgresql://...-pooler...?sslmode=require`
-   - Turn it **OFF** → copy the string again (host has no `-pooler`).
-     Save it as: **DIRECT URL** = `postgresql://...?sslmode=require`
-6. Keep both somewhere safe for the next steps (e.g. a scratch note you
-   delete later). The password is the part after `neondb_owner:`.
-
-**You should see** a string like
-`postgresql://neondb_owner:AbC123xyz@ep-cool-name-123456.us-east-2.aws.neon.tech/neondb?sslmode=require`.
-
----
-
-## Step 2 — Create the tables
-
-You'll run this on your Windows PC with Docker, so no Python install is
-needed.
-
-1. Start **Docker Desktop** and wait until the whale icon in the taskbar
-   stops animating (Docker is running).
-2. Press `Windows`, type `PowerShell`, press Enter.
-3. Change to the backend folder:
    ```powershell
    cd C:\Users\KIIT\Documents\GitHub\gdg-c4c\backend
-   ```
-4. Build the backend image (first time takes a few minutes):
-   ```powershell
    docker build -t air-health-backend .
-   ```
-   **You should see** it end with something like `naming to ... air-health-backend`.
-5. Run the migrations, pasting the **DIRECT URL** from Step 1 inside the
-   single quotes:
-   ```powershell
    docker run --rm -e 'DATABASE_URL=<DIRECT URL>' air-health-backend alembic upgrade head
    ```
-6. **You should see** three lines beginning `Running upgrade`, the last being
-   `... -> 0003_forecast_hours_float`.
 
-Verify the tables:
-7. Back in the Neon dashboard, open **SQL Editor** (left sidebar).
-8. Paste and run:
-   ```sql
-   SELECT PostGIS_Lib_Version();
-   SELECT table_name FROM information_schema.tables
-   WHERE table_schema = 'public' ORDER BY table_name;
-   ```
-9. **You should get** a PostGIS version (e.g. `3.4.3`) and the tables
-   `alert`, `forecast`, `grid_state`, `sensor_reading`, `weather_reading`.
+   Replace `<DIRECT URL>` with the direct connection string. Do not use a
+   hard-coded migration number; `head` follows the current `main` schema.
+4. In Neon’s SQL Editor, run `SELECT PostGIS_Lib_Version();` to confirm PostGIS
+   is available.
 
-**If it fails:**
-| Message | Cause / fix |
-|---|---|
-| `Database configuration is incomplete` | The `DATABASE_URL` didn't reach the container — check the single quotes and that you used the DIRECT URL. |
-| `invalid interpolation syntax` | You're on a branch without the fix — do Step 0. |
-| `password authentication failed` | You copied the URL wrong (missing/extra character). Re-copy from Neon. |
-| `could not connect` / timeout | Wrong region host, or you used the pooled host — use the DIRECT one. |
+## 2. Deploy the backend to Vercel
 
-Leave the database empty — the API serves a country-wide demo field until
-Step 8.
+1. In Vercel, choose **Add New → Project** and import this repository.
+2. Set **Root Directory** to `backend`. Keep the detected FastAPI settings.
+3. Add these Production environment variables:
 
----
-
-## Step 3 — Backend on Vercel
-
-1. Go to `https://vercel.com` → **Sign Up** → **Continue with GitHub** →
-   **Authorize**.
-2. Click **Add New…** → **Project**.
-3. Under **Import Git Repository**, find `gdg-c4c` and click **Import**.
-   - If it's not listed: click **Adjust GitHub App Permissions** (or
-     **Add GitHub Account**), grant access to the repo, come back.
-4. On the configure page:
-   - **Project Name**: `air-health-api` (or anything; this becomes part of
-     the URL).
-   - **Framework Preset**: leave as detected.
-   - **Root Directory**: click **Edit** next to it, choose/type **`backend`**,
-     click **Continue**. ← **required**
-   - **Build and Output Settings**: leave everything default.
-5. Scroll to **Environment Variables**. For each row, type the Name, type
-   the Value, then click **Add**:
    | Name | Value |
    |---|---|
-   | `DATABASE_URL` | `<POOLED URL>` |
+   | `DATABASE_URL` | Neon **Pooled URL** |
    | `ENVIRONMENT` | `production` |
    | `LOG_LEVEL` | `INFO` |
-   > **Vercel may pre-fill ~50 variables from the committed
-   > `.env.example`.** Delete them all. They are not your settings, and an
-   > empty value can shadow a working default. The backend now treats empty
-   > as "unset", so it will still boot if you miss some — but the only
-   > variable required here is `DATABASE_URL`.
-6. Click **Deploy**. Watch the log; it installs Python deps and finishes with
-   **"Deployment ready"** / **"Congratulations"**.
-7. Copy the production URL. Either the big **Visit** button, or
-   **Domains** in the project sidebar — e.g.
-   `https://air-health-api.vercel.app`. Save as **API URL**.
+   | `HOTSPOT_SCAN_BACKEND` | `database` |
 
-Test it (replace the host with your API URL):
-8. Open these in the browser:
-   - `https://<API URL>/health` → `{"status":"ok",...}`
-   - `https://<API URL>/health/ready` → `{"status":"ok","database":"ok","postgis_version":"..."}`
-   - `https://<API URL>/docs` → the Swagger API page
-   - `https://<API URL>/api/v1/grid/current?resolution=3&min_lat=6.5&min_lon=68&max_lat=37.5&max_lon=97.5`
-     → a big JSON with `"is_demo":true` and `"data":[...]`
+   Set `CORS_ORIGINS` after you create the web project in step 4. The database
+   setting is required for the map, alerts, reports, and photo metadata.
+4. Deploy, then copy the API origin, for example
+   `https://air-health-api.vercel.app` (no path after the domain).
 
-> Note: `/health` is on the same host as the API (the project root), **not**
-> under `/api/v1`.
+## 3. Deploy the frontend to Vercel
 
-**If `/health/ready` returns `503`:** the DB URL is wrong. Vercel →
-project → **Settings → Environment Variables → `DATABASE_URL` → Edit** →
-paste the POOLED URL again → **Save** → **Deployments → ⋯ → Redeploy**.
+1. Create another Vercel project from the same repository.
+2. Set **Root Directory** to `frontend` and use the Vite preset.
+3. Add these Production environment variables before deploying:
 
----
-
-## Step 4 — Frontend on Vercel
-
-The frontend is a second Vercel project from the **same** repo.
-
-1. Vercel → **Add New… → Project** → **Import** `gdg-c4c` again.
-2. Configure:
-   - **Project Name**: `air-health` (this becomes the web URL).
-   - **Root Directory**: click **Edit** → **`frontend`** → **Continue**.
-     ← **required**
-   - **Framework Preset**: Vite (auto-detected).
-3. **Environment Variables**:
    | Name | Value |
    |---|---|
-   | `VITE_API_BASE_URL` | `https://<API URL>` (origin only — no `/api/v1`, no trailing slash) |
-   > If Vercel pre-fills variables from `.env.example`, delete them and keep
-   > only `VITE_API_BASE_URL`. An empty value falls back to
-   > `http://localhost:8000`, so it must be set before building.
-4. Click **Deploy** and wait for **"Deployment ready"**.
-5. Copy the URL (e.g. `https://air-health.vercel.app`). Save as **WEB URL**.
+   | `VITE_API_BASE_URL` | Backend origin from step 2, without `/api/v1` or a trailing slash |
+   | `VITE_ENABLE_FIRE_REPORTING` | `true` to enable the citizen report button; otherwise leave unset/false |
 
-> `VITE_API_BASE_URL` is baked into the build. If you change it later you
-> must **Redeploy** (Deployments → ⋯ → Redeploy).
+   `VITE_API_BASE_URL` is baked into the frontend build. If you change it,
+   redeploy the frontend. Without it, the browser falls back to localhost.
+4. Deploy and copy the web app origin.
 
----
+## 4. Allow the web app to call the API
 
-## Step 5 — Let the web app call the API (CORS)
+1. In the backend Vercel project, add `CORS_ORIGINS` with the exact web origin,
+   such as `https://air-health.vercel.app`.
+2. Save and redeploy the backend. Add any other browser origins as a comma-
+   separated list. Do not use `*` for a production site.
 
-Right now the browser will block the API calls until the backend allows the
-web origin.
+## 5. Optional: enable private citizen photo storage
 
-1. Vercel → open the **backend** project (`air-health-api`).
-2. **Settings → Environment Variables**.
-3. Add a variable:
-   - Name: `CORS_ORIGINS`
-   - Value: `<WEB URL>` (e.g. `https://air-health.vercel.app`)
-   - For extra origins later, comma-separate them.
-4. **Save**, then **Deployments** tab → the top deployment → **⋯** →
-   **Redeploy** → confirm. Wait for ready.
+Photo upload is off by default. Vercel’s local filesystem is temporary, so do
+not set `CITIZEN_MEDIA_STORAGE=filesystem` there. Configure a **private** S3
+bucket (AWS S3 or an S3-compatible service such as Cloudflare R2) and add these
+Production variables to the backend project:
 
----
-
-## Step 6 — Test the web app
-
-1. Open your **WEB URL** in the browser.
-2. You should see a map of India with a coloured hex grid and wind arrows.
-3. Press `F12` → **Network** tab → reload the page.
-   - Requests should go to `https://<API URL>/api/v1/...` and show `200`.
-   - **Console** tab should show no red CORS errors.
-4. Click a hex → a detail panel opens (PM2.5, PDI, wind, forecast).
-5. Zoom in a couple of steps → the grid should get finer.
-
-**If it fails:**
-| Symptom | Fix |
+| Name | Value |
 |---|---|
-| Blank map + CORS error in Console | Redo Step 5, then hard-refresh (`Ctrl+F5`). |
-| Requests to `http://localhost:8000` | `VITE_API_BASE_URL` wasn't set before the build — Step 4, then redeploy. |
-| `/health/ready` is 503 | Step 3 database URL. |
-| Everything 500s | Backend logs: Vercel → backend project → **Deployments → the deployment → Functions/Logs**. |
+| `CITIZEN_MEDIA_STORAGE` | `s3` |
+| `CITIZEN_MEDIA_S3_BUCKET` | Private bucket name |
+| `CITIZEN_MEDIA_S3_REGION` | Provider region; use `auto` for Cloudflare R2 |
+| `CITIZEN_MEDIA_S3_ENDPOINT_URL` | S3 API endpoint; blank for AWS S3 |
+| `CITIZEN_MEDIA_S3_ACCESS_KEY_ID` | Restricted bucket access key |
+| `CITIZEN_MEDIA_S3_SECRET_ACCESS_KEY` | Matching secret key |
+| `CITIZEN_MEDIA_MAX_BYTES` | `4194304` (4 MiB) |
 
----
+The frontend and backend cap each photo at 4 MiB to leave multipart overhead
+under Vercel’s 4.5 MB request limit. After saving the variables, redeploy the
+backend. Keep the bucket private; reviewers retrieve images through the API.
 
-## Step 7 — Point the Flutter app at the API
+To run the automatic 72-hour retention sweep, add matching GitHub Actions
+configuration under **Repository Settings → Secrets and variables → Actions**:
 
-On the machine that has the Flutter SDK:
+- Variables: `CITIZEN_MEDIA_STORAGE=s3`, `CITIZEN_MEDIA_S3_BUCKET`,
+  `CITIZEN_MEDIA_S3_REGION`, and (for R2) `CITIZEN_MEDIA_S3_ENDPOINT_URL`.
+- Secrets: `CITIZEN_MEDIA_S3_ACCESS_KEY_ID` and
+  `CITIZEN_MEDIA_S3_SECRET_ACCESS_KEY`.
 
-1. Open PowerShell and check Flutter is available:
-   ```powershell
-   flutter --version
-   ```
-2. Go to the app and fetch packages:
-   ```powershell
-   cd C:\Users\KIIT\Documents\GitHub\gdg-c4c\partner_apps\air_health_flutter
-   flutter pub get
-   ```
-3. Run it (first run downloads Gradle deps, can take several minutes):
-   ```powershell
-   flutter run --dart-define=POLLUTION_API_BASE_URL=https://<API URL>
-   ```
-   - If asked to pick a device, choose your emulator or connected phone.
-   - The app should show the current AQI from the backend.
-4. Build a release APK:
-   ```powershell
-   flutter build apk --release --dart-define=POLLUTION_API_BASE_URL=https://<API URL>
-   ```
-   Output path is printed; typically
-   `build\app\outputs\flutter-apk\app-release.apk`.
+The hourly workflow verifies the bucket can write/read/delete, then removes
+expired evidence and its bytes. The API’s `REPORTS_REVIEWER_KEY` is optional;
+set a strong secret on Vercel to enable reviewer-only photo/report moderation.
+The review screen asks the reviewer for that key at runtime.
 
-> If you omit `--dart-define`, the app falls back to bundled dummy data; a
-> debug build without it uses the on-screen scenario simulator.
+## 6. Optional: run the data pipeline
 
----
+The web app can show its clearly labelled demo field without live ingestion.
+To populate the database, open **GitHub → Actions → Pollution pipeline → Run
+workflow** after configuring:
 
-## Step 8 (optional) — Real Delhi-NCR data on a schedule
-
-The web MVP works without this. It adds real persisted cells for Delhi NCR
-on an hourly schedule (GitHub Actions). Requires Step 0 (so the workflow is
-on `main`).
-
-1. GitHub repo → **Settings** (top bar).
-2. Left sidebar → **Secrets and variables → Actions**.
-3. On the **Secrets** tab, click **New repository secret**:
-   - Name: `DATABASE_URL`
-   - Secret: `<DIRECT URL>` (direct, not pooled)
-   - **Add secret**.
-4. Switch to the **Variables** tab → **New repository variable**:
-   - Name: `PIPELINE_DEMO_MODE`
-   - Value: `true`  (use `false` only for live OpenAQ/Open-Meteo data)
-   - **Add variable**.
-5. Only if you set `PIPELINE_DEMO_MODE=false`: back on **Secrets**, add
-   `OPENAQ_API_KEY` with a key from
-   `https://explore.openaq.org/register`.
-6. Go to the **Actions** tab. If prompted, click **"I understand my
-   workflows, go ahead and enable them"**.
-7. In the left list click **Pollution pipeline** → **Run workflow** →
-   **Run workflow**. Watch it run (green check). Its log should show
-   `[OK  ]` for all five stages.
-8. After it succeeds, the map still shows the country-wide field, and Delhi
-   NCR now has real cells (`"is_demo":false`).
-
-> Scheduled runs happen hourly and can be delayed; GitHub pauses a schedule
-> after ~60 days with no repo activity (just re-enable it).
-
----
-
-## Environment-variable reference
-
-| Where | Name | Value |
+| Kind | Name | Value |
 |---|---|---|
-| Backend (Vercel) | `DATABASE_URL` | POOLED Neon string |
-| Backend (Vercel) | `CORS_ORIGINS` | WEB URL (comma-separated for more) |
-| Backend (Vercel) | `ENVIRONMENT`, `LOG_LEVEL` | `production`, `INFO` |
-| Frontend (Vercel) | `VITE_API_BASE_URL` | API URL (origin) |
-| GitHub Actions | `DATABASE_URL` | DIRECT Neon string |
-| GitHub Actions | `PIPELINE_DEMO_MODE` | `true` / `false` |
-| GitHub Actions | `OPENAQ_API_KEY` | only when `PIPELINE_DEMO_MODE=false` |
+| Secret | `DATABASE_URL` | Neon **Direct URL** |
+| Variable | `HOTSPOT_SCAN_BACKEND` | `database` |
+| Variable | `PIPELINE_DEMO_MODE` | `true` for demo/synthetic inputs; `false` for live ingestion |
+| Secret | `OPENAQ_API_KEY` | Required when `PIPELINE_DEMO_MODE=false` |
+| Secret | `FIRMS_MAP_KEY` | Optional NASA FIRMS corroboration |
+| Secret | `CDSE_REFRESH_TOKEN` | Optional Sentinel-5P imagery access |
+
+The default pipeline mode is demo. Keep the UI’s **DEMO SIM** label visible for
+synthetic data. Live inputs are not a guarantee of complete coverage or an
+official air-quality warning.
+
+For the optional photo retention sweep, also set the S3 GitHub variables and
+secrets listed in step 5. The schedule runs hourly; GitHub may delay scheduled
+jobs, and disables schedules after long periods without repository activity.
+
+## 7. Verify the deployment
+
+Open these endpoints using the backend origin:
+
+- `/health` — API process is running.
+- `/health/ready` — database connection and PostGIS are ready.
+- `/docs` — interactive API documentation.
+
+Then open the web origin and check the browser’s Network and Console panels.
+API requests should go to the backend domain without CORS errors. The map
+should render and show whether its data is demo or live. Test an alert click,
+cell details, and search. If photo storage is enabled, submit a small report
+photo, then review it with the configured reviewer key.
+
+The authority incident endpoints are for the fire-department **simulator**.
+They do not dispatch real emergency services or send push notifications. Their
+writes remain disabled unless `SIMULATOR_API_KEY` and `SIMULATOR_ACTORS` are
+configured on the backend. Never bundle that shared server key in the public
+frontend or a downloadable mobile app.
+
+## 8. Optional: run the Flutter client
+
+On a machine with Flutter installed:
+
+```powershell
+cd C:\Users\KIIT\Documents\GitHub\gdg-c4c\partner_apps\air_health_flutter
+flutter pub get
+flutter run --dart-define=POLLUTION_API_BASE_URL=https://<BACKEND ORIGIN>
+```
+
+For an APK, use `flutter build apk --release` with the same `--dart-define`.
+The app needs only the API origin; it appends API paths itself. Do not put
+server-only credentials in `--dart-define` values for a public build.
