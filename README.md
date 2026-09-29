@@ -30,9 +30,11 @@ An India-focused platform for exploring air pollution, reporting local smoke and
 |---|---|
 | India pollution map | H3 grid, administrative boundaries, location search, pollutant and time controls, and multiple map detail levels. |
 | Air quality | OpenAQ PM2.5 readings and Open-Meteo weather can feed the ingestion and forecast pipeline. NASA FIRMS fire observations are an optional contextual input. |
-| Citizen reports and photos | People can submit geolocated fire or smoke reports with photo evidence. Reports enter a review workflow; corroborated reports can influence modeled smoke and incidents. Photo derivatives remove EXIF metadata; originals remain private. |
+| Citizen reports and photos | People can submit geolocated fire or smoke reports with photo evidence. Reports enter a review workflow; corroborated reports can influence modeled smoke and incidents. Photo derivatives remove EXIF metadata; originals remain private. Stored locally or via cloud object storage (S3/GCS). |
 | Hidden hotspot leads | Recent Copernicus Sentinel-5P UV aerosol-index scans create reviewable candidates. FIRMS and air readings may add corroboration. Candidates do not identify a source or measure ground-level PM2.5. |
 | Alerts and authority workflow | Rule-based air-quality alerts and reviewed incidents are available in the app workflow. A Flutter fire-department simulator can receive, assign, and update incidents. |
+| Freight corridors | Predictive corridor analysis calculates pollution exposure across highway routes to identify lower-exposure transit windows. |
+| Partner mobile apps | Flutter citizen health companion (`air_health_flutter`) for exposure awareness and reports, plus an authority incident response console (`fire_dept_simulator`). |
 | Forecasting | A deterministic H3 dispersion model estimates short-range movement; an offline ridge-residual model can be evaluated and manually promoted. |
 | Federation prototype | A workflow accepts local training manifests and shares fitted parameters and metrics. It is an experimental interface, not a deployed multi-agency network. |
 
@@ -159,8 +161,10 @@ The API exposes legacy `/api/v1` routes and run-pinned `/api/v2` routes. Useful 
 
 See the [API index](docs/api/README.md) and focused contracts for [hotspots](docs/api/hotspots.md), [citizen reports](docs/api/citizen-reports.md), [photo evidence](docs/api/citizen-photos.md), [sensor readings](docs/api/citizen-sensor-readings.md), [incidents](docs/api/incidents.md), and [federation](docs/api/federation.md).
 
-- `partner_apps/air_health_flutter/` — citizen reporting app. See its [README](partner_apps/air_health_flutter/README.md).
-- `partner_apps/fire_dept_simulator/` — incident assignment and response simulator. Alerts are delivered inside the app while it is active or after refresh/resume. It does not send remote push, SMS, email, or emergency dispatch.
+### Partner applications
+
+- **`partner_apps/air_health_flutter/`** — Citizen air-quality companion and reporting mobile app. Provides personal exposure awareness, local CPCB AQI classifications, short-term forecasts, sensitivity profiles, and allows citizens to submit smoke/fire reports with photo evidence and external sensor PM2.5 readings. See its [README](partner_apps/air_health_flutter/README.md).
+- **`partner_apps/fire_dept_simulator/`** — Operational incident response console for fire and pollution-control authorities. Provides incident queue management, simulated inbox notifications, assignment, and status transitions (`acknowledged` → `en route` → `on scene` → `resolved`). See its [README](partner_apps/fire_dept_simulator/README.md).
 
 ## Development
 
@@ -185,13 +189,37 @@ npm run build
 npm run lint
 ```
 
-Flutter apps (run from each app directory):
+Flutter apps (run from each app directory under `partner_apps/`):
 
 ```bash
 flutter pub get
 flutter analyze
 flutter test
 ```
+
+To run an app locally connected to your development backend:
+
+```bash
+# Air Health Companion:
+flutter run --dart-define=POLLUTION_API_BASE_URL=http://localhost:8000
+
+# Fire Department Simulator:
+flutter run \
+  --dart-define=INCIDENT_API_BASE_URL=http://localhost:8000 \
+  --dart-define=SIMULATOR_API_KEY=your-local-secret \
+  --dart-define=SIMULATOR_ACTOR_ID=fire-unit-7 \
+  --dart-define=SIMULATOR_ROLE=fire_department
+```
+
+To build lean release APKs for manual Android testing:
+
+```bash
+# Builds architecture-specific APKs (~16–20 MB per ABI):
+flutter build apk --release --split-per-abi
+```
+The output APKs are located in `build/app/outputs/flutter-apk/`:
+- `app-arm64-v8a-release.apk` (Recommended for modern 64-bit Android phones)
+- `app-armeabi-v7a-release.apk` (For 32-bit ARM phones)
 
 For database integration tests, configure a test PostgreSQL/PostGIS database and run `RUN_DB_TESTS=1 pytest` from `backend/`.
 
