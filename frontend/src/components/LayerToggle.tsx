@@ -115,7 +115,7 @@ export function LayerToggle() {
               Active Fires (NASA FIRMS)
             </label>
             <span className="layer-sub-hint">
-              Real NRT VIIRS detections. If empty, see illustrative hotspots below.
+              Real NRT VIIRS detections. If empty, no active-fire detections were returned.
             </span>
           </div>
 
@@ -173,17 +173,23 @@ export function LayerToggle() {
             Industrial Emissions (Sentinel-5P NO2)
           </label>
 
-          <label
-            className="layer-toggle-option"
-            title="Illustrative VIIRS-style thermal anomalies - no satellite ingest exists yet; these are hand-authored mock detections (see lib/fireAnomalies)"
-          >
-            <input
-              type="checkbox"
-              checked={state.showFireHotspots}
-              onChange={() => dispatch({ type: 'TOGGLE_FIRE_HOTSPOTS' })}
-            />
-            Satellite Fire / Thermal Hotspots (illustrative)
-          </label>
+          <div className="layer-toggle-group-item">
+            <label
+              className="layer-toggle-option"
+              title="Shows backend-verified citizen fire reports and map-derived PM2.5 anomaly predictions. Predictions are candidates, not confirmed fires."
+            >
+              <input
+                type="checkbox"
+                checked={state.showFireHotspots}
+                onChange={() => dispatch({ type: 'TOGGLE_FIRE_HOTSPOTS' })}
+              />
+              Verified & Predicted Fire Hotspots
+            </label>
+            <span className="layer-sub-hint">
+              Verified reports are green; amber markers are map-derived candidates, not confirmed
+              fires. Predictions require fine-resolution map data.
+            </span>
+          </div>
 
           <label
             className="layer-toggle-option"

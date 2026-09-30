@@ -19,8 +19,10 @@ from app.services.gemini_assessment import (
     GeminiAssessmentService,
     GeminiConsentRequired,
     GeminiInvalidApiKey,
+    GeminiInvalidConfiguration,
     GeminiInvalidOutput,
     GeminiProviderFailure,
+    GeminiProviderResponse,
     GeminiProviderTimeout,
     GeminiQuotaExceeded,
     GeminiVisionAnalyzer,
@@ -195,6 +197,14 @@ def test_invalid_provider_output_is_rejected_and_not_persisted():
         (TimeoutError("private timeout detail"), GeminiProviderTimeout),
         (type("QuotaError", (Exception,), {"code": 429})("provider detail"), GeminiQuotaExceeded),
         (type("AuthError", (Exception,), {"code": 403})("provider detail"), GeminiInvalidApiKey),
+        (
+            type("BadRequestError", (Exception,), {"code": 400})("invalid schema"),
+            GeminiInvalidConfiguration,
+        ),
+        (
+            type("NotFoundError", (Exception,), {"code": 404})("unknown model"),
+            GeminiInvalidConfiguration,
+        ),
         (RuntimeError("provider detail"), GeminiProviderFailure),
     ],
 )
@@ -242,7 +252,14 @@ def test_google_sdk_receives_only_derivative_and_strict_json_schema(monkeypatch)
     assert captured["http_options"].timeout == 35_000
     assert captured["http_options"].retry_options.attempts == 1
     assert captured["config"].response_mime_type == "application/json"
-    assert captured["config"].response_schema is GeminiVisualAssessment
+    assert captured["config"].response_schema is GeminiProviderResponse
+    provider_schema = GeminiProviderResponse.model_json_schema()
+    serialized_schema = str(provider_schema)
+    assert "minLength" not in serialized_schema
+    assert "maxLength" not in serialized_schema
+    assert "additionalProperties" not in serialized_schema
+    assert provider_schema["properties"]["visible_observations"]["minItems"] == 1
+    assert provider_schema["properties"]["visible_observations"]["maxItems"] == 8
     assert captured["config"].max_output_tokens == 512
     assert captured["contents"][0].inline_data.mime_type == "image/jpeg"
     assert captured["contents"][1].startswith("Review this image")
@@ -330,7 +347,8 @@ def test_analysis_route_requires_reviewer_key_and_rejects_arbitrary_input():
     [
         (GeminiProviderTimeout(), 504, "gemini_timeout"),
         (GeminiQuotaExceeded(), 429, "gemini_quota_exceeded"),
-        (GeminiInvalidApiKey(), 503, "gemini_configuration_invalid"),
+        (GeminiInvalidApiKey(), 503, "gemini_credentials_invalid"),
+        (GeminiInvalidConfiguration(), 503, "gemini_request_invalid"),
         (GeminiAnalysisDisabled(), 503, "gemini_unavailable"),
         (GeminiProviderFailure(), 502, "gemini_provider_error"),
         (GeminiAssessmentNotFound(), 404, "not_found"),

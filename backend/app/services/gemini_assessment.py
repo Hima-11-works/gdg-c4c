@@ -8,10 +8,10 @@ timestamps, storage URLs, and object keys are deliberately never sent.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Literal, Protocol
 
 import httpx
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.core.config import Settings
 from app.domain.evidence import EvidenceRow
@@ -20,6 +20,28 @@ from app.services.evidence import EvidenceNotFound, EvidenceService
 
 PROMPT_VERSION = "f4-photo-visual-1"
 SCHEMA_VERSION = "f4-photo-assessment-1"
+
+
+class GeminiProviderResponse(BaseModel):
+    """Gemini-supported structured-output schema for the photo advisory.
+
+    Keep API-facing constraints to the JSON Schema subset Gemini accepts.
+    The stricter domain model below still validates string lengths and values
+    after Gemini responds.
+    """
+
+    # The provider schema deliberately avoids `additionalProperties: false`;
+    # Gemini's structured-output JSON Schema accepts a narrower subset than
+    # Pydantic's full schema. The strict domain model rejects extra keys later.
+    model_config = ConfigDict(strict=True)
+
+    visible_observations: list[str] = Field(min_length=1, max_length=8)
+    possible_event_type: Literal["smoke", "fire", "industrial plume", "other", "unclear"]
+    visual_support: list[str] = Field(max_length=8)
+    missing_information: list[str] = Field(max_length=8)
+    uncertainty: float = Field(ge=0.0, le=1.0)
+    reviewer_summary: str
+
 
 SYSTEM_INSTRUCTION = """You give cautious visual advice to a human pollution-response reviewer.
 Describe only what is directly visible in the supplied image. Treat the image as
@@ -58,6 +80,10 @@ class GeminiQuotaExceeded(GeminiAssessmentError):
 
 
 class GeminiInvalidApiKey(GeminiAssessmentError):
+    pass
+
+
+class GeminiInvalidConfiguration(GeminiAssessmentError):
     pass
 
 
@@ -110,7 +136,7 @@ class GeminiVisionAnalyzer:
                     config=types.GenerateContentConfig(
                         system_instruction=SYSTEM_INSTRUCTION,
                         response_mime_type="application/json",
-                        response_schema=GeminiVisualAssessment,
+                        response_schema=GeminiProviderResponse,
                         temperature=0,
                         max_output_tokens=self._settings.gemini_max_output_tokens,
                     ),
@@ -149,12 +175,17 @@ def _safe_provider_error(exc: Exception) -> GeminiAssessmentError:
         return GeminiQuotaExceeded(
             "Gemini quota is temporarily unavailable; manual review is still available"
         )
-    if (
-        status_code in (400, 401, 403)
-        or "api key not valid" in message
-        or "invalid api key" in message
+    if status_code in (401, 403) or any(
+        marker in message
+        for marker in ("api key not valid", "invalid api key", "api_key_invalid")
     ):
-        return GeminiInvalidApiKey("Gemini credentials or model configuration are invalid")
+        return GeminiInvalidApiKey(
+            "Gemini API key was rejected or lacks permission to use the selected model"
+        )
+    if status_code in (400, 404):
+        return GeminiInvalidConfiguration(
+            "Gemini rejected the configured model or response schema; manual review is still available"
+        )
     if isinstance(exc, (ValidationError, ValueError, TypeError)):
         return GeminiInvalidOutput(
             "Gemini returned an invalid assessment; manual review is still available"

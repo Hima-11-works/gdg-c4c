@@ -7,7 +7,6 @@ import {
   Popup,
   setWorkerUrl,
 } from 'maplibre-gl'
-import type { FilterSpecification } from 'maplibre-gl'
 import { cellToBoundary } from 'h3-js'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
@@ -24,9 +23,12 @@ import {
   normalizeCorridorProperties,
 } from '../lib/freightCorridors'
 import { EMPTY_REPORTS, cameraPinImage, reportsFeatureCollection } from '../lib/citizenReports'
-import { anomalyById, anomalyPopupHtml, fireAnomalyFeatureCollection } from '../lib/fireAnomalies'
 import { activeFirePopupHtml, activeFiresFeatureCollection } from '../lib/activeFires'
 import type { ActiveFire } from '../lib/activeFires'
+import {
+  fireHotspotSignalPopupHtml,
+  fireHotspotSignalsFeatureCollection,
+} from '../lib/fireHotspotSignals'
 import { localHotspotsFeatureCollection } from '../lib/localHotspots'
 import type { LocalPollutionHotspot } from '../lib/localHotspots'
 import {
@@ -295,34 +297,17 @@ const CITIZEN_IMAGE = 'citizen-camera-pin'
 // palette - a tint over red/amber would not.
 const CITIZEN_IMAGE_COUNTED = 'citizen-camera-pin-counted'
 
-// VIIRS 375m active-fire detections — the spec-named `satellite-fires-layer`
-// is the blurred glowing halo; under it sit an animated pulse ring and a
-// hot core dot, so the points read as satellite thermal detections.
+// Fire signals shown by the settings toggle: backend-verified citizen
+// reports and explicitly unverified predictions from local PM2.5 anomalies.
 const SOURCE_FIRE = 'satellite-fires'
-/** The spec-named thermal-anomaly halo layer. */
 const LAYER_FIRE_HEATMAP = 'satellite-fires-layer'
-const LAYER_FIRE_PULSE = 'satellite-fires-pulse'
 const LAYER_FIRE_CORE = 'satellite-fires-core'
-// Thermal anomalies are triaged by severity (lib/fireAnomalies): minor
-// detections stay small and amber, elevated ones orange, critical ones
-// large deep-red. The glow halo and the pulse are filtered to severity 3,
-// so the animation marks what is actually urgent rather than animating
-// every detection — the triage the spec asks for, expressed in the paint.
 const FIRE_MINOR_COLOR = '#FBBF24'
 const FIRE_ELEVATED_COLOR = '#F97316'
 const FIRE_CRITICAL_COLOR = '#E11D48'
-const FIRE_GLOW_COLOR = '#E11D48'
-const FIRE_GLOW_OPACITY = 0.5
 const FIRE_CORE_OPACITY = 0.95
-/** Only critical detections get bloom + pulse. */
-const FIRE_CRITICAL_ONLY: FilterSpecification = ['==', ['get', 'severity'], 3]
-const FIRE_PULSE_FRAME_COUNT = 6
-const FIRE_PULSE_FRAME_MS = 380
-const FIRE_PULSE_IMAGE_PREFIX = 'fire-pulse'
-const firePulseImageName = (frame: number): string => `${FIRE_PULSE_IMAGE_PREFIX}-${frame}`
-const FIRE_PULSE_IMAGES = Array.from({ length: FIRE_PULSE_FRAME_COUNT }, (_, i) =>
-  firePulseImageName(i),
-)
+const FIRE_VERIFIED_COLOR = '#16A34A'
+const FIRE_PREDICTION_COLOR = '#F59E0B'
 
 // NASA GIBS True Color satellite raster — a real daily VIIRS composite laid
 // under the hex grid but above the vector basemap, so the pollution fill
@@ -330,10 +315,8 @@ const FIRE_PULSE_IMAGES = Array.from({ length: FIRE_PULSE_FRAME_COUNT }, (_, i) 
 const SOURCE_GIBS = 'gibs-true-color'
 const LAYER_GIBS = 'gibs-true-color-raster'
 
-// NASA FIRMS active thermal anomalies — a real near-real-time feed, kept
-// separate from the illustrative `satellite-fires-*` layers above so the
-// two can never be mistaken for one another. Deep red/magenta with a
-// blurred halo reads as glowing heat.
+// NASA FIRMS active thermal anomalies — a real near-real-time feed. Kept
+// separate from the verified-report / map-prediction fire-signal toggle.
 const SOURCE_ACTIVE_FIRES = 'active-fires'
 const LAYER_ACTIVE_FIRES_GLOW = 'active-fires-glow'
 const LAYER_ACTIVE_FIRES_CORE = 'active-fires-core'
@@ -460,25 +443,6 @@ function windStreakFrame(frame: number): ImageData {
   ctx.lineTo(x, headPos)
   ctx.stroke()
 
-  return ctx.getImageData(0, 0, size, size)
-}
-
-/** One frame of the thermal-anomaly pulse ring: an expanding orange ring
- *  that fades out — frame 0 tight and bright, the last frame wide and
- *  nearly gone. Cycling the frames animates the satellite-detection pulse. */
-function firePulseFrame(frame: number): ImageData {
-  const size = 44
-  const canvas = document.createElement('canvas')
-  canvas.width = size
-  canvas.height = size
-  const ctx = canvas.getContext('2d')!
-  const t = frame / FIRE_PULSE_FRAME_COUNT
-  const radius = 7 + t * 10
-  ctx.beginPath()
-  ctx.arc(size / 2, size / 2, radius, 0, Math.PI * 2)
-  ctx.globalAlpha = (1 - t) * 0.55
-  ctx.fillStyle = FIRE_GLOW_COLOR
-  ctx.fill()
   return ctx.getImageData(0, 0, size, size)
 }
 
@@ -1384,42 +1348,28 @@ export function MapView({
             map!.getCanvas().style.cursor = ''
           })
 
-          // VIIRS thermal anomalies — glow halo (the spec-named layer),
-          // animated pulse ring, then the hot core dot. Registered after the
-          // citizen pins so a fire next to a camera pin still reads hot.
+          // This source contains only verified citizen reports and explicitly
+          // unverified predictions derived from the local PM2.5 map data.
           map!.addSource(SOURCE_FIRE, {
             type: 'geojson',
-            data: fireAnomalyFeatureCollection(),
+            data: EMPTY_FEATURE_COLLECTION,
           })
-          for (let frame = 0; frame < FIRE_PULSE_FRAME_COUNT; frame++) {
-            map!.addImage(firePulseImageName(frame), firePulseFrame(frame))
-          }
           map!.addLayer({
             id: LAYER_FIRE_HEATMAP,
             type: 'circle',
             source: SOURCE_FIRE,
-            // Critical detections only: the bloom should draw the eye to
-            // what needs a response, not to every small burn.
-            filter: FIRE_CRITICAL_ONLY,
             layout: { visibility: 'none' },
             paint: {
-              'circle-color': FIRE_GLOW_COLOR,
-              // radius 8–12px halo, blurred to read as thermal bloom.
+              'circle-color': [
+                'match',
+                ['get', 'source'],
+                'verified-citizen-report',
+                FIRE_VERIFIED_COLOR,
+                FIRE_PREDICTION_COLOR,
+              ],
               'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 6, 8, 11, 12, 15],
               'circle-blur': 1,
-              'circle-opacity': FIRE_GLOW_OPACITY,
-            },
-          })
-          map!.addLayer({
-            id: LAYER_FIRE_PULSE,
-            type: 'symbol',
-            source: SOURCE_FIRE,
-            filter: FIRE_CRITICAL_ONLY,
-            layout: {
-              'icon-image': FIRE_PULSE_IMAGES[0],
-              'icon-allow-overlap': true,
-              'icon-ignore-placement': true,
-              visibility: 'none',
+              'circle-opacity': 0.34,
             },
           })
           map!.addLayer({
@@ -1428,8 +1378,6 @@ export function MapView({
             source: SOURCE_FIRE,
             layout: { visibility: 'none' },
             paint: {
-              // 4px for a minor burn up to 10px for a critical fire at the
-              // deepest zoom tier, so size alone carries the triage.
               'circle-radius': [
                 'interpolate',
                 ['linear'],
@@ -1440,19 +1388,28 @@ export function MapView({
                 ['match', ['get', 'severity'], 1, 4, 2, 7, 3, 10, 4],
               ],
               'circle-color': [
-                'match',
-                ['get', 'severity'],
-                1,
-                FIRE_MINOR_COLOR,
-                2,
-                FIRE_ELEVATED_COLOR,
-                3,
-                FIRE_CRITICAL_COLOR,
-                // Fallback for a missing severity: fail loud, not quiet.
-                FIRE_CRITICAL_COLOR,
+                'case',
+                ['==', ['get', 'source'], 'verified-citizen-report'],
+                FIRE_VERIFIED_COLOR,
+                [
+                  'match',
+                  ['get', 'severity'],
+                  1,
+                  FIRE_MINOR_COLOR,
+                  2,
+                  FIRE_ELEVATED_COLOR,
+                  3,
+                  FIRE_CRITICAL_COLOR,
+                  FIRE_PREDICTION_COLOR,
+                ],
               ],
-              'circle-stroke-color': ['match', ['get', 'severity'], 3, '#FECDD3', '#1A0C08'],
-              'circle-stroke-width': ['match', ['get', 'severity'], 3, 1.6, 1.2],
+              'circle-stroke-color': [
+                'case',
+                ['==', ['get', 'source'], 'verified-citizen-report'],
+                '#DCFCE7',
+                '#78350F',
+              ],
+              'circle-stroke-width': 1.7,
               'circle-opacity': FIRE_CORE_OPACITY,
             },
           })
@@ -1616,20 +1573,18 @@ export function MapView({
             },
           })
 
-          // Fire dot popups — VIIRS metadata + the triage priority.
+          // Explain whether a signal is backend-verified or a map-derived
+          // prediction; the latter must never read as a confirmed fire.
           map!.on('click', LAYER_FIRE_CORE, (event) => {
             const feature = event.features?.[0]
-            const props = feature?.properties
+            const props = feature?.properties as Record<string, unknown> | undefined
             if (!feature || !props) return
-            const anomaly = anomalyById(props.id)
-            if (anomaly === null) return
-            // Anomaly features are authored Points (see fireAnomalies.ts).
             const geometry = feature.geometry as unknown as { coordinates: [number, number] }
             togglePopup(
-              `fire:${props.id}`,
+              `fire:${String(props.id)}`,
               geometry.coordinates,
               'fire-anomaly-popup',
-              anomalyPopupHtml(anomaly),
+              fireHotspotSignalPopupHtml(props),
               10,
             )
           })
@@ -2021,6 +1976,17 @@ export function MapView({
     source.setData(reportsFeatureCollection(reports) as never)
   }, [mapReady, citizenReports])
 
+  // Fire / hotspot signals are sourced only from verified citizen reports or
+  // the existing PM2.5 anomaly model. A failed report fetch contributes no
+  // reports; predictions remain available when the map data supports them.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    const source = mapRef.current.getSource(SOURCE_FIRE)
+    if (!(source instanceof GeoJSONSource)) return
+    const reports = citizenReports.status === 'success' ? citizenReports.data : []
+    source.setData(fireHotspotSignalsFeatureCollection(reports, localHotspots) as never)
+  }, [mapReady, citizenReports, localHotspots])
+
   // Switching the render mode (or toggling contrast) resets the double buffer
   // to a known state (set 'a' shown, 'b' hidden, buffer roles reset) so the
   // frame effect below repaints the current data into the active layers.
@@ -2354,17 +2320,12 @@ export function MapView({
     return () => cancelAnimationFrame(raf)
   }, [mapReady, reducedMotion])
 
-  // Fire-layer toggle — visibility-based hiding for every satellite-fire
-  // layer. Opacity tricks can't be trusted here: the core dot's *stroke*
-  // ring renders even at circle-opacity 0 (stroke opacity is a separate
-  // paint property), which is what left the black outlines behind.
-  // Layout visibility removes the layer from rendering entirely.
+  // Fire signal toggle — both the glow and core are hidden when disabled.
   useEffect(() => {
     if (!mapReady || !mapRef.current) return
     const map = mapRef.current
     const visibility: 'visible' | 'none' = state.showFireHotspots ? 'visible' : 'none'
     map.setLayoutProperty(LAYER_FIRE_HEATMAP, 'visibility', visibility)
-    map.setLayoutProperty(LAYER_FIRE_PULSE, 'visibility', visibility)
     map.setLayoutProperty(LAYER_FIRE_CORE, 'visibility', visibility)
   }, [mapReady, state.showFireHotspots])
 
@@ -2457,34 +2418,6 @@ export function MapView({
       setRoadsLoaded(true)
     }
   }, [roadsLoaded, mapReady, state.lod.resolution])
-
-  // Animate the thermal-anomaly pulse ring by cycling the icon frames —
-  // same pattern as the wind streaks. Static under prefers-reduced-motion.
-  useEffect(() => {
-    if (!mapReady || !mapRef.current) return
-    if (!state.showFireHotspots) return
-    const map = mapRef.current
-
-    if (reducedMotion) {
-      map.setLayoutProperty(LAYER_FIRE_PULSE, 'icon-image', FIRE_PULSE_IMAGES[0])
-      return
-    }
-
-    let raf = 0
-    let lastFrame = -1
-    const tick = (now: number) => {
-      if (document.visibilityState === 'visible') {
-        const frame = Math.floor(now / FIRE_PULSE_FRAME_MS) % FIRE_PULSE_FRAME_COUNT
-        if (frame !== lastFrame) {
-          lastFrame = frame
-          map.setLayoutProperty(LAYER_FIRE_PULSE, 'icon-image', FIRE_PULSE_IMAGES[frame])
-        }
-      }
-      raf = requestAnimationFrame(tick)
-    }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
-  }, [mapReady, reducedMotion, state.showFireHotspots])
 
   return <div ref={containerRef} className="map-canvas" />
 }
