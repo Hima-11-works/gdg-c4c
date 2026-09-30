@@ -1,146 +1,141 @@
-# Google Stack Integration Plan
+# Neon Object Storage + Vercel + Gemini Implementation Plan
 
-**Target:** integrate Gemini, Firebase Hosting, Cloud Functions for Firebase, Firebase Storage, and Google Maps while preserving the app's existing visual style and core pollution-reporting workflow.
+**Goal:** finish a deployable, two-hour integration for Gemini-assisted review of citizen photos while preserving the existing India pollution map, API contracts, alert workflow, and fire-department simulator.
 
-**Time budget:** 175 minutes of implementation and verification, leaving five minutes of contingency. This schedule assumes Firebase access, Blaze billing, credentials, and the existing database are ready. The backend adaptation is an additional risk; these time slots are targets, not a guarantee of full compatibility within three hours.
+**Selected stack**
 
-**Deployment approach:** manage the application through Firebase Console and the Firebase CLI. Firebase still uses an underlying Google Cloud project and infrastructure; Functions and Storage require billing. Google Maps retains its separate Maps Platform API setup. Keep the existing PostgreSQL/PostGIS database and Gemini integration.
-
-## Integration choices
-
-| Service | Use in this project |
+| Need | Service |
 |---|---|
-| Gemini API | Advisory assessment of citizen photo evidence, with structured output for human reviewers. |
-| Firebase Hosting | Host the React frontend and route API requests to Cloud Functions for Firebase. |
-| Firebase Storage | Private, durable photo storage accessed through the backend. |
-| Cloud Functions for Firebase | Serve the existing API through a Python HTTPS function, adapting the HTTP entry point while reusing backend services. |
-| PostgreSQL/PostGIS | Keep the existing database for reports, spatial data, forecasts, and incidents. |
-| Google Maps JavaScript API + deck.gl | Google basemap with the existing H3, hotspot, report, and boundary overlays. |
+| Relational database and spatial data | Neon PostgreSQL + PostGIS |
+| Private photo bucket | Neon Object Storage through its S3-compatible API |
+| Frontend hosting | Existing Vercel Vite project |
+| API runtime | Existing FastAPI project on Vercel |
+| AI photo assessment | Gemini Developer API, key managed through Google AI Studio |
 
-The Google Maps migration is the largest risk: `MapView` is a large MapLibre-specific component. Preserve the existing React panels, controls, API hooks, and H3 calculations; replace the map renderer in stages. Aim first for the dark basemap, H3 cells, cell selection, search, alerts, and timeline. Defer wind animation, smooth-field rendering, contours, and optional raster overlays if time runs short.
+**Important:** Neon provides PostgreSQL and Object Storage, not a host for the existing FastAPI application. Keep that API on Vercel. The frontend calls it; the API connects to Neon PostgreSQL, the private Neon Object Storage bucket, and Gemini. Keep database, object-storage, and Gemini credentials on the backend.
 
-## Step-by-step schedule
+**Two-hour assumption:** Neon and Vercel already work as documented in [GO_LIVE.md](GO_LIVE.md). This schedule covers configuration, the Gemini feature, deployment, and a focused verification pass. It does not include replacing the map, migrating databases, or building new notification infrastructure.
 
-### 1. Prepare Firebase and API credentials — 0–15 minutes
+## Cost and privacy gates
 
-1. Create or choose one project in Firebase Console and enable the Blaze plan.
-2. Register a web app and initialize Firebase Hosting, Storage, and Python Functions through the Firebase CLI. Let Firebase provision the required deployment services; no separately managed Cloud Run service is planned.
-3. Enable Maps JavaScript API for the same underlying project using Google Maps Platform. This step remains necessary for the Google Maps migration.
-4. Create a Gemini API key in Google AI Studio.
-5. Create a separate Maps browser key. Restrict it to the Maps JavaScript API and allowed localhost/deployed web referrers. Keep the Gemini key server-side.
+- Gemini: use an image-capable model currently listed on the Gemini API free tier. Do not link billing, choose a paid tier, or enable paid tools. Free-tier requests may be used to improve Google products, so disclose Gemini processing and obtain consent before sending citizen photos. Otherwise leave AI analysis off and keep manual review.
+- Neon Object Storage: Neon currently includes up to 5 GB per project on its Free plan. Keep this project within the included quota and check current Neon pricing and usage before scaling; do not assume usage above the allowance is free. Preserve the no-billing-details constraint: use the existing Neon account/plan, and if enabling Object Storage requires an upgrade or payment details, leave photo uploads disabled until that constraint is resolved. [Neon backend GA and plan limits](https://neon.com/blog/neon-backend-is-ga)
+- Keep the Neon bucket private. Neon controls bucket visibility through its Console, API, or configuration; S3 ACL and bucket-policy calls do not set Neon access. Do not enable `public_read` or expose object URLs. Photos remain available through the existing reviewer-authorized API. [Neon Object Storage details](https://neon.com/blog/building-neon-object-storage)
+- Keep the Gemini key, Neon Object Storage credentials, database URLs, and reviewer key out of browser bundles, Flutter builds, logs, and source control.
+- Gemini is advisory only: it cannot confirm the pollution source, infer AQI or pollutant concentration from an image, approve reports, or dispatch responders.
 
-### 2. Verify and deploy the backend — 15–35 minutes
+## Step-by-step plan (120 minutes)
 
-1. Fix the current API 500s before adding features. Check database connectivity, migrations, and the metadata/report endpoints.
-2. Add a Python HTTPS function named `api`. Firebase's Python HTTP handler uses Flask request/response semantics; FastAPI is ASGI, so the existing container is not a drop-in deployment. Prove a compatible adapter in the emulator, including async handling, authorization, query strings, multipart photos, binary responses, and error codes. If necessary, write thin HTTP handlers that call the existing services while preserving API contracts.
-3. Keep PostgreSQL/PostGIS and run its migrations once as a deployment step, never during individual function invocations. Verify database connectivity from Functions and cap instances/database pools to the existing database's connection capacity. Run long ingestion/forecast work outside user HTTP requests; preserve the current pipeline runner for this deadline.
-4. Configure database, Gemini, and provider secrets with `firebase functions:secrets:set SECRET_NAME`, and bind them explicitly to the function. Firebase manages the underlying secret service. Configure region, memory, timeout, and maximum instances in the function configuration.
-5. Deploy with `firebase deploy --only functions` and verify:
+### 1. Confirm access and current deployment — 0–10 minutes
 
-   - `/health`
-   - `/health/ready`
-   - `/api/v2/meta`
-   - `/api/v2/reports`
+1. Confirm the existing Vercel frontend and FastAPI projects are deployed.
+2. Confirm Neon is reachable and PostGIS is enabled.
+3. Confirm Neon Object Storage is available on the existing Neon project and production branch. Check the Free plan allowance and current usage; do not upgrade or enter billing details for this setup.
+4. Confirm the backend reviewer key is configured and the private-photo review endpoints work.
 
-**Gate:** these routes and a protected photo request return valid responses from the deployed function before continuing. Validate existing endpoint contracts; do not treat a working health check alone as a completed backend migration.
+**Gate:** do not start AI work until the API, database, reviewer flow, and private object storage are healthy. If Neon requires an upgrade or payment details to enable storage, leave production photo uploads disabled and resolve that account requirement separately.
 
-### 3. Connect Firebase Hosting to Cloud Functions — 35–45 minutes
+### 2. Provision the private Neon bucket and backend credentials — 10–25 minutes
 
-1. Configure Firebase Hosting to serve the frontend's `dist` directory.
-2. Add rewrites before the React fallback:
+1. Link the repository to the existing Neon project and its production branch. Do not create a duplicate project or point production at a development branch.
+2. Declare a private bucket in the project's `neon.ts` configuration, for example `buckets: { "citizen-evidence": {} }` (private by default), then run `neon deploy` against the linked production branch. Neon provisions the bucket with that branch.
+3. Keep bucket access private. Neon manages visibility in its Console/configuration; do not use S3 ACL or bucket-policy calls to change access, and do not set `public_read`. [Neon Object Storage setup](https://neon.com/blog/building-neon-object-storage)
+4. Use `neon env pull --service object-storage` (or the generated environment output from `neon deploy`) to retrieve the branch-specific S3 endpoint and AWS-compatible credentials into an ignored local `.env.local`. Map those generated values into the backend settings:
 
-   ```json
-   {
-     "source": "/api/**",
-     "function": { "functionId": "api", "region": "YOUR_REGION" }
-   }
-   ```
+   | Variable | Value |
+   |---|---|
+   | `CITIZEN_MEDIA_STORAGE` | `s3` |
+   | `CITIZEN_MEDIA_S3_BUCKET` | `citizen-evidence` (or the exact declared bucket name) |
+   | `CITIZEN_MEDIA_S3_REGION` | Neon’s documented signing region; use `us-east-1` only if Neon’s generated configuration does not specify one |
+   | `CITIZEN_MEDIA_S3_ENDPOINT_URL` | The S3 endpoint generated for the Neon branch |
+   | `CITIZEN_MEDIA_S3_ACCESS_KEY_ID` | The Neon-generated S3 access key |
+   | `CITIZEN_MEDIA_S3_SECRET_ACCESS_KEY` | The matching Neon-generated secret key |
+   | `CITIZEN_MEDIA_MAX_BYTES` | `4194304` |
 
-   Add a matching `/reports/**` rewrite because photo routes use that prefix, plus `/health` and `/health/**` for the health routes. Preserve the original request paths in the function adapter. Keep the final `/**` rewrite pointed at `/index.html` for React routing.
-3. Update frontend API configuration to use relative URLs in production. The current fallback to `localhost` must not be used in a deployed build.
-4. Deploy with `firebase deploy --only hosting` and confirm browser API calls reach the HTTPS function. Keep requests within Firebase Hosting's 60-second timeout; longer work needs an asynchronous job/status flow.
+5. Put production-branch values in the backend Vercel project's Production environment and development-branch values in the ignored local environment file. Never add Neon storage credentials to the frontend or Flutter projects.
+6. Redeploy the backend, then run the existing `python -m app.cli verify-media-storage` check to upload, read, and delete a test object. Confirm unauthenticated/public access is unavailable.
 
-### 4. Replace MapLibre rendering with Google Maps — 45–95 minutes
+The existing `MediaStore` already supports S3-compatible endpoints, so Neon should use the current adapter and configuration rather than a new storage layer. Keep the 72-hour evidence-retention job enabled and verify that it can delete an expired object. Use separate Neon branches for development and production so test uploads and deletions cannot affect production files. [Neon CLI environment workflow](https://neon.com/blog/just-landed-in-the-neon-cli)
 
-1. Create a Google Maps JavaScript map ID and associate a dark, muted style with it. Match land, water, roads, and labels; hide unnecessary POIs. MapLibre style JSON is not directly reusable.
-2. Integrate Google Maps JavaScript API with deck.gl's `GoogleMapsOverlay`. Start with a flat map and `interleaved: false` to reduce integration risk.
-3. Port overlays in this order:
+### 3. Verify Neon and set up Gemini — 25–40 minutes
 
-   - H3 cell polygons and current color scales with `GeoJsonLayer`.
-   - Selected-cell white outline.
-   - Citizen reports and hotspot points.
-   - State/district boundaries and selected-area dimming.
-   - Cell click picking wired to the existing detail panel.
-   - Search and alert navigation wired to Google Maps camera movement.
-   - Existing resolution limits, loading progress, and request cancellation.
+1. Use the existing Neon PostgreSQL project with PostGIS. For the Vercel API runtime, use Neon's pooled connection string as `DATABASE_URL`; use the direct connection string only for Alembic migrations, as documented in [GO_LIVE.md](GO_LIVE.md).
+2. Check `/health/ready`, `/api/v2/meta`, and `/api/v2/reports` against the deployed API.
+3. In [Google AI Studio](https://aistudio.google.com/), create a current Gemini API key and select an image-capable model available on the free tier. Store its model ID in `GEMINI_MODEL`.
+4. Use a current Auth key. Google's September 2026 key migration rejects legacy Standard keys; replace any old Standard key and test the new key. Restrict the key to Gemini API usage where the AI Studio controls allow it. [Gemini API keys](https://ai.google.dev/gemini-api/docs/api-key)
+5. Add `GEMINI_API_KEY` and `GEMINI_MODEL` to the backend Vercel environment only. Add blank examples to the repository's `.env.example`; never commit the actual key.
+6. Do not put a Gemini key in a Vite environment variable, React, or either Flutter app. Gemini free-tier requests may be used to improve Google products; keep analysis disabled until the photo consent/privacy copy discloses that processing. [Gemini pricing and data use](https://ai.google.dev/gemini-api/docs/pricing)
 
-4. Check initial rendering, zoom/resolution changes, search, alert selection, and cell details before moving on. Keep a rollback path to the current map implementation until this passes.
+**Gate:** a test call from the backend can reach the selected free-tier model. If the model requires paid billing, choose another free-tier model or leave Gemini disabled.
 
-**Defer if needed:** wind trails, smooth raster view, contours, and satellite raster overlays. Google basemap styling will be close to the existing look, but Google labels and attribution prevent an exact copy.
+### 4. Implement backend Gemini assessment and persistence — 40–80 minutes
 
-### 5. Store photos in Firebase Storage — 95–110 minutes
+1. Add Google's supported `google-genai` Python SDK to `backend/pyproject.toml` and update the backend lock file.
+2. Add optional backend settings for `GEMINI_API_KEY`, `GEMINI_MODEL`, and a request timeout/output limit below the configured Vercel function maximum duration. Missing key means AI analysis is disabled, not that the API fails to start.
+3. Add an analysis operation under the existing citizen-evidence API. Require the same reviewer authorization as existing photo reads and review actions.
+4. Load the evidence through the existing service and send only its sanitized derivative from private Neon Object Storage to Gemini. Do not accept a caller-supplied URL, bucket key, or arbitrary image bytes.
+5. Ask for schema-constrained JSON containing:
+   - `visible_observations`
+   - `possible_event_type` (`smoke`, `fire`, `industrial plume`, `other`, or `unclear`)
+   - `visual_support`
+   - `missing_information`
+   - `uncertainty`
+   - `reviewer_summary`
+6. Instruct Gemini to describe visible evidence only, return uncertainty for ambiguous photos, and never invent source, location, event time, AQI, pollutant, or concentration.
+7. Validate model output with a strict Pydantic schema. Add an Alembic migration to save the validated advisory, evidence/report IDs, model ID, prompt/schema version, and generated time. Do not store a second copy of the photo or any API credentials.
+8. Reuse a saved assessment when a reviewer reopens it. Only call Gemini again after an explicit reviewer action; this limits duplicate calls and quota usage.
+9. Map timeout, provider quota, invalid-key, and Neon Object Storage/database errors to safe API responses. Preserve manual review on every failure.
+10. Add mocked tests for valid/invalid output, missing key, timeout, quota failure, reviewer authorization, missing/deleted evidence, and saved-result reuse. No test should depend on a live Gemini call.
 
-1. Add a Firebase Storage adapter using the Firebase Admin SDK to the existing backend `MediaStore` interface.
-2. Give the Functions runtime service account access to the private Firebase Storage bucket. Admin SDK access uses IAM; enforce user authorization in the API because Firebase client Security Rules do not protect server SDK operations.
-3. Keep uploads and reads behind the API. Preserve image validation, EXIF removal, reviewer authorization, retention, and deletion.
-4. Test upload, authorized read, deletion, and persistence after a service restart. Confirm unauthenticated direct bucket access is denied.
+Use the official Python SDK's image and structured-output support. [Google GenAI SDKs](https://ai.google.dev/gemini-api/docs/libraries) · [Image input](https://ai.google.dev/gemini-api/docs/image-understanding) · [Structured output](https://ai.google.dev/gemini-api/docs/structured-output)
 
-### 6. Add Gemini photo assessment — 110–140 minutes
+### 5. Add the reviewer UI and consent disclosure — 80–100 minutes
 
 1. Add **Analyze with Gemini** to the existing citizen-photo review dialog.
-2. Send the sanitized photo derivative and available report/environmental context to Gemini from the backend.
-3. Validate structured output with these fields:
+2. Update the photo consent/privacy wording to disclose that an authorized reviewer may send the sanitized image to Gemini. Require the needed consent before enabling analysis for that photo.
+3. Show a loading state, prevent duplicate requests, and display the structured advisory, uncertainty, model ID, and analysis time.
+4. Keep human approval/rejection separate from the model output. The model cannot change evidence/report state.
+5. Show clear disabled, no-consent, timeout, quota, and provider-error states. Keep manual review available.
 
-   ```text
-   visible_observations
-   possible_event_type
-   supporting_evidence
-   missing_information
-   uncertainty
-   reviewer_summary
-   ```
+### 6. Apply migrations and deploy through Vercel — 100–110 minutes
 
-4. Store the assessment with the photo/report reference, model identifier, and generation time. Reuse the saved assessment when the reviewer reopens it.
-5. Add a bounded timeout and a retry/manual-review state for quota, network, or validation errors.
-6. Keep Gemini advisory: it cannot invent pollutant readings, approve reports, or dispatch responders.
+1. Set production `DATABASE_URL` to Neon's pooled connection string and retain the direct URL for the documented migration procedure.
+2. Apply the new Alembic migration once using the Neon direct connection.
+3. Verify the backend Vercel Production environment has Neon PostgreSQL, Neon Object Storage, and Gemini variables. Secrets belong only in the backend project.
+4. Redeploy the backend. Deploy the frontend Vercel project after its reviewer dialog changes.
+5. Keep `VITE_API_BASE_URL` pointed to the backend origin and preserve the existing exact-origin CORS allowlist. Vercel's current two-project deployment steps are in [GO_LIVE.md](GO_LIVE.md).
 
-### 7. Connect reviewed evidence to authority workflow — 140–150 minutes
+### 7. Run a focused end-to-end check — 110–120 minutes
 
-1. Attach the saved assessment to the existing incident or link to it from the incident.
-2. Point the Flutter authority simulator to the Firebase Hosting API URL backed by the HTTPS function.
-3. Verify an incident appears in its queue and can be acknowledged and resolved.
-4. Use the existing in-app inbox for this deadline; describe it as simulated/polling delivery, not a real emergency notification.
+- The Vercel-hosted map, search, cells, alerts, reports, and timeline still load from the production API.
+- A citizen photo uploads to private Neon Object Storage, is retrievable through the reviewer API, and is not publicly accessible.
+- An authorized reviewer can request an advisory for a consented smoke/fire test image.
+- An unrelated or ambiguous image produces an uncertain response, not a fabricated pollution claim.
+- Missing consent, reviewer key, Gemini key, Neon Object Storage object, or database access leaves manual review usable and reports a clear error.
+- A saved advisory reloads without another model call.
+- Browser requests, Vite bundles, Flutter apps, and logs contain no Gemini or Neon Object Storage secret.
+- The Flutter simulator still reaches the existing API and can acknowledge/resolve incidents.
 
-### 8. Verify and rehearse — 150–175 minutes
+If any integration gate fails, preserve the existing deployment and leave the affected optional feature clearly unavailable. Do not weaken the private-bucket or reviewer-authorization requirements to meet the time limit.
 
-- Google map renders on first load with colored H3 cells.
-- Search, resolution limits, alerts, selection outline, and timeline work.
-- Moving the map cancels obsolete cell requests.
-- A smoke photo receives a Gemini assessment; an unrelated image produces an uncertain assessment.
-- Gemini failure leaves manual review available.
-- Private photos require authorization.
-- A reviewed incident reaches the authority app and can be acknowledged.
-- Production requests contain no localhost URLs or server secrets.
-- Deploy final backend and frontend, then rehearse the complete report-to-authority workflow.
+## Explicitly excluded
 
-## Defer beyond the three-hour window
-
-- Firestore or Cloud SQL migration.
-- Firebase Authentication migration across both Flutter apps.
-- Firebase Cloud Messaging push notifications.
-- New forecasting models or nationwide data expansion.
-- Full parity for every MapLibre animation and raster overlay.
-
-Keep forecasts and the federation prototype visible only with accurate descriptions of their current coverage and status.
+- Firebase services, Cloud Functions, Cloud Run, or moving the API to a new host.
+- Google Maps migration; keep MapLibre.
+- Public Neon Object Storage buckets or direct browser access to the bucket.
+- Gemini calls from the frontend or Flutter app.
+- Automatic report approvals, source attribution, AQI inference from photos, or real emergency dispatch.
+- Paid Gemini models/features or unapproved billing changes.
 
 ## Official references
 
-- [Firebase Hosting with Cloud Functions](https://firebase.google.com/docs/hosting/functions)
-- [Firebase Python HTTP functions](https://firebase.google.com/docs/functions/http-events)
-- [Firebase Functions configuration and secrets](https://firebase.google.com/docs/functions/config-env)
-- [Firebase Storage Admin SDK](https://firebase.google.com/docs/storage/admin/start)
-- [Gemini structured output](https://ai.google.dev/gemini-api/docs/structured-output)
-- [Google Maps cloud styling](https://developers.google.com/maps/documentation/javascript/cloud-customization/map-styles)
-- [Google Maps API key security](https://developers.google.com/maps/api-security-best-practices)
-- [deck.gl Google Maps integration](https://deck.gl/docs/developer-guide/base-maps/using-with-google-maps)
-- [Firebase Functions deployment and runtime settings](https://firebase.google.com/docs/functions/manage-functions)
+- [Current deployment and environment-variable map](GO_LIVE.md)
+- [Neon connection setup](https://neon.tech/docs/connect/connect-from-any-app)
+- [Neon Object Storage setup and S3 compatibility](https://neon.com/blog/building-neon-object-storage)
+- [Neon backend GA and Object Storage Free plan allowance](https://neon.com/blog/neon-backend-is-ga)
+- [Neon CLI branch and environment workflow](https://neon.com/blog/just-landed-in-the-neon-cli)
+- [Vercel environment variables](https://vercel.com/docs/environment-variables)
+- [Gemini API keys](https://ai.google.dev/gemini-api/docs/api-key)
+- [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing)
+- [Google GenAI Python SDK](https://ai.google.dev/gemini-api/docs/libraries)
+- [Gemini image input and structured output](https://ai.google.dev/gemini-api/docs/image-understanding)
