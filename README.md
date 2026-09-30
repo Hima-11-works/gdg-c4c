@@ -64,6 +64,7 @@ For in-depth component-level guides, architectural deep-dives, and setup instruc
 
 | Subsystem | Stack | Description | Dedicated Guide |
 |---|---|---|:---:|
+| 📊 **Hackathon Pitch Deck** | 12-Slide Deck · Speaker Script · Rubric Map | Official 10–12 slide presentation deck, visual diagrams, and speaker notes | [**Pitch Deck Guide**](docs/PITCH_DECK.md) |
 | 🖥️ **Web Dashboard** | React 19 · TypeScript · MapLibre GL · Tailwind | Dynamic H3 multi-resolution spatial explorer, corridor routing, and hotspot inspection | [**Frontend Guide**](frontend/README.md) |
 | ⚙️ **Backend Core & Pipeline** | FastAPI · PostgreSQL/PostGIS · Uber H3 · Python 3.11+ | Spatial nowcasting, advection-dispersion forecasting, satellite fusion, and REST API | [**Backend Guide**](backend/README.md) |
 | 📱 **Air Health Citizen App** | Flutter · Riverpod · Clean Architecture | Personal exposure tracking, sensitivity health profiles, offline reverse-geocoding, and reports | [**Air Health App Guide**](partner_apps/air_health_flutter/README.md) |
@@ -492,6 +493,7 @@ See [`docs/GO_LIVE.md`](docs/GO_LIVE.md) for the pre-deployment checklist and op
 │   └── fire_dept_simulator/    # Authority incident response & dispatch console
 │                               # 📖 See partner_apps/fire_dept_simulator/README.md
 ├── docs/                       # Architecture specifications and API contracts
+│   ├── PITCH_DECK.md           # 📊 Official 12-slide hackathon pitch deck & speaker notes
 │   ├── api/                    # OpenAPI contracts (hotspots, corridors, federation, etc.)
 │   ├── architecture.md         # In-depth architectural blueprint
 │   ├── GO_LIVE.md              # Production deployment checklist

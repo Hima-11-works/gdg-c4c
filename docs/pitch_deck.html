@@ -1,0 +1,1008 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Air Health — GDG Code for Communities Pitch Deck</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: rgba(18, 24, 38, 0.7);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --primary: #38bdf8;
+      --primary-gradient: linear-gradient(135deg, #38bdf8 0%, #818cf8 100%);
+      --accent: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --text: #f1f5f9;
+      --text-muted: #94a3b8;
+      --font-display: 'Outfit', -apple-system, sans-serif;
+      --font-body: 'Plus Jakarta Sans', -apple-system, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: var(--font-body);
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      user-select: none;
+      background-image: 
+        radial-gradient(circle at 15% 15%, rgba(56, 189, 248, 0.08) 0%, transparent 40%),
+        radial-gradient(circle at 85% 85%, rgba(129, 140, 248, 0.08) 0%, transparent 40%);
+    }
+
+    /* Deck Layout */
+    .deck-container {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 30px 50px;
+    }
+
+    .slide {
+      position: absolute;
+      width: 92%;
+      max-width: 1250px;
+      height: 85%;
+      max-height: 750px;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-radius: 24px;
+      padding: 40px 50px;
+      display: flex;
+      flex-direction: column;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(20px) scale(0.98);
+      transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+    }
+
+    .slide.active {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(0) scale(1);
+    }
+
+    /* Slide Header */
+    .slide-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 24px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      padding-bottom: 16px;
+    }
+
+    .slide-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      background: rgba(56, 189, 248, 0.1);
+      border: 1px solid rgba(56, 189, 248, 0.25);
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--primary);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 8px;
+    }
+
+    .slide-title {
+      font-family: var(--font-display);
+      font-size: 2.1rem;
+      font-weight: 700;
+      color: #fff;
+      line-height: 1.15;
+    }
+
+    .slide-subtitle {
+      font-size: 0.95rem;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    .slide-logo-badge {
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      background: rgba(255, 255, 255, 0.04);
+      padding: 6px 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    /* Slide Body Content */
+    .slide-content {
+      flex: 1;
+      display: flex;
+      gap: 30px;
+      overflow-y: auto;
+    }
+
+    .col-half {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    /* Cards & Components */
+    .card {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 14px;
+      padding: 18px 22px;
+    }
+
+    .card.highlight {
+      background: linear-gradient(135deg, rgba(56, 189, 248, 0.05) 0%, rgba(129, 140, 248, 0.05) 100%);
+      border-color: rgba(56, 189, 248, 0.2);
+    }
+
+    .card h3 {
+      font-family: var(--font-display);
+      font-size: 1.15rem;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .card p, .card li {
+      font-size: 0.9rem;
+      line-height: 1.5;
+      color: #cbd5e1;
+    }
+
+    .card ul {
+      list-style-type: none;
+    }
+
+    .card li {
+      position: relative;
+      padding-left: 20px;
+      margin-bottom: 6px;
+    }
+
+    .card li::before {
+      content: "•";
+      color: var(--primary);
+      position: absolute;
+      left: 6px;
+      font-size: 1.2rem;
+      line-height: 1;
+    }
+
+    /* Metrics Grid */
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+      gap: 12px;
+      margin-top: 8px;
+    }
+
+    .metric-box {
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 10px;
+      padding: 12px 14px;
+      text-align: center;
+    }
+
+    .metric-val {
+      font-family: var(--font-display);
+      font-size: 1.5rem;
+      font-weight: 700;
+      background: var(--primary-gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .metric-lbl {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-top: 4px;
+    }
+
+    /* Diagram & Pipeline Boxes */
+    .flow-step {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 14px;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 10px;
+      font-size: 0.85rem;
+    }
+
+    .flow-badge {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: rgba(56, 189, 248, 0.15);
+      color: var(--primary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 0.8rem;
+    }
+
+    /* Table Styling */
+    table.table-custom {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+      text-align: left;
+    }
+
+    table.table-custom th {
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--primary);
+      padding: 8px 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      font-weight: 600;
+    }
+
+    table.table-custom td {
+      padding: 8px 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      color: #cbd5e1;
+    }
+
+    /* Speaker Notes Drawer */
+    .notes-drawer {
+      position: absolute;
+      bottom: 60px;
+      left: 50%;
+      transform: translateX(-50%) translateY(100%);
+      width: 90%;
+      max-width: 950px;
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 16px;
+      padding: 20px 24px;
+      color: #e2e8f0;
+      font-size: 0.9rem;
+      line-height: 1.5;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.8);
+      opacity: 0;
+      pointer-events: none;
+      transition: all 0.3s ease;
+      z-index: 100;
+    }
+
+    .notes-drawer.open {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .notes-header {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 8px;
+      font-weight: 700;
+      color: var(--primary);
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    /* Deck Footer & Controls */
+    .deck-footer {
+      height: 60px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 40px;
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+      background: rgba(10, 15, 26, 0.8);
+      backdrop-filter: blur(10px);
+    }
+
+    .progress-bar-container {
+      width: 250px;
+      height: 4px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+
+    .progress-bar {
+      height: 100%;
+      background: var(--primary-gradient);
+      width: 8.33%;
+      transition: width 0.3s ease;
+    }
+
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .btn-ctrl {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: #fff;
+      padding: 6px 14px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-weight: 500;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .btn-ctrl:hover {
+      background: rgba(56, 189, 248, 0.15);
+      border-color: rgba(56, 189, 248, 0.4);
+      color: var(--primary);
+    }
+
+    .slide-counter {
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    /* Title Slide Specifics */
+    .title-slide {
+      text-align: center;
+      justify-content: center;
+      align-items: center;
+      gap: 24px;
+    }
+
+    .hero-title {
+      font-family: var(--font-display);
+      font-size: 3.8rem;
+      font-weight: 800;
+      background: linear-gradient(135deg, #ffffff 0%, #38bdf8 50%, #818cf8 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      letter-spacing: -0.02em;
+      line-height: 1.1;
+    }
+
+    .hero-subtitle {
+      font-size: 1.25rem;
+      color: #cbd5e1;
+      max-width: 850px;
+      line-height: 1.6;
+      font-weight: 400;
+    }
+
+    .hero-badges {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .tech-pill {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 6px 16px;
+      border-radius: 999px;
+      font-size: 0.82rem;
+      color: #e2e8f0;
+      font-weight: 500;
+    }
+
+    .tech-pill.google {
+      background: rgba(66, 133, 244, 0.12);
+      border-color: rgba(66, 133, 244, 0.3);
+      color: #93c5fd;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="deck-container">
+
+    <!-- SLIDE 1: TITLE & VISION -->
+    <div class="slide title-slide active" data-slide="1">
+      <div class="slide-badge">GDG Code for Communities (C4C) · Clean Air & Climate Resilience</div>
+      <h1 class="hero-title">AIR HEALTH</h1>
+      <p class="hero-subtitle">
+        An AI-powered, federated climate action platform that bridges macro-monitoring blindspots across India by fusing satellite observations with citizen science, high-resolution meteorology, and rapid emergency intervention.
+      </p>
+      <div class="hero-badges">
+        <span class="tech-pill google">Google Flutter (Citizen & Fire Apps)</span>
+        <span class="tech-pill google">Google Gemini Multimodal Vision API</span>
+        <span class="tech-pill">Uber H3 Hexagonal Discrete Grid</span>
+        <span class="tech-pill">PostGIS + FastAPI</span>
+        <span class="tech-pill">Privacy-Preserving Federated ML</span>
+      </div>
+      <div style="margin-top: 15px; font-size: 0.85rem; color: var(--text-muted);">
+        Use <strong>← / →</strong> or <strong>Space</strong> to navigate · Press <strong>'S'</strong> for Speaker Notes
+      </div>
+    </div>
+
+    <!-- SLIDE 2: THE PROBLEM -->
+    <div class="slide" data-slide="2">
+      <div class="slide-header">
+        <div>
+          <div class="slide-badge">The Problem & Urgency</div>
+          <h2 class="slide-title">Macro Blindspots & Fragmented Climate Action</h2>
+          <div class="slide-subtitle">Why traditional ambient monitoring fails episodic, hyper-local pollution surges in India</div>
+        </div>
+        <div class="slide-logo-badge">THE CHALLENGE</div>
+      </div>
+      <div class="slide-content">
+        <div class="col-half">
+          <div class="card highlight">
+            <h3>🛑 The Sparse Sensor Reality</h3>
+            <p>India operates ~500 official CAAQMS stations for 1.4 billion people. Stations are clustered in metro centers (Delhi, Mumbai, Bengaluru), leaving peri-urban, rural agricultural, and industrial corridors unmonitored.</p>
+          </div>
+          <div class="card">
+            <h3>🌫️ Unmonitored Episodic Surges</h3>
+            <ul>
+              <li><strong>Agricultural Stubble Burning</strong> across Punjab, Haryana, and Western UP occurs between stations.</li>
+              <li><strong>Unregistered Brick Kilns & Industrial Bypasses</strong> dump emissions during nocturnal thermal inversions.</li>
+              <li><strong>Landfill Fires</strong> create toxic dioxin plumes that disperse before macro stations register spikes.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="col-half">
+          <div class="card">
+            <h3>🚧 Inter-Agency Jurisdictional Silos</h3>
+            <p>Air pollution respects no administrative boundaries. Wind transports particulate plumes across state lines, yet regional authorities (DPCC, PPCB, UPPCB) cannot share raw citizen reports or sensor data due to privacy and jurisdiction walls.</p>
+          </div>
+          <div class="card">
+            <h3>⏱️ The Critical 48-Hour Inaction Gap</h3>
+            <p>Macro station alerts often arrive 24–48 hours after an emission surge has dispersed into residential communities, rendering municipal emergency intervention reactive rather than preventive.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SLIDE 3: THE SOLUTION -->
+    <div class="slide" data-slide="3">
+      <div class="slide-header">
+        <div>
+          <div class="slide-badge">The Solution</div>
+          <h2 class="slide-title">Closed-Loop Spatial Climate Intelligence</h2>
+          <div class="slide-subtitle">Unifying spaceborne satellites, ground truth, and rapid municipal response</div>
+        </div>
+        <div class="slide-logo-badge">AIR HEALTH PLATFORM</div>
+      </div>
+      <div class="slide-content">
+        <div class="col-half">
+          <div class="flow-step">
+            <div class="flow-badge">1</div>
+            <div><strong>Multi-Source Sensing</strong>: Spaceborne Sentinel-5P UVAI + NASA FIRMS + OpenAQ ground CAAQMS + crowdsourced citizen photos and sensors.</div>
+          </div>
+          <div class="flow-step">
+            <div class="flow-badge">2</div>
+            <div><strong>Uber H3 Spatial Discretization</strong>: Normalizes all data points onto multi-resolution hexagonal cells (Res 3 to Res 7) across India.</div>
+          </div>
+          <div class="flow-step">
+            <div class="flow-badge">3</div>
+            <div><strong>Physical Advection-Dispersion Engine</strong>: Computes forward 1h, 3h, and 6h pollution plume vectors using wind and boundary layer dynamics.</div>
+          </div>
+          <div class="flow-step">
+            <div class="flow-badge">4</div>
+            <div><strong>Autonomous Corroboration</strong>: Matches satellite aerosol anomalies with thermal fire pixels and citizen ground reports.</div>
+          </div>
+        </div>
+        <div class="col-half">
+          <div class="card highlight">
+            <h3>⚡ Action, Not Just Dashboards</h3>
+            <p>Air Health goes beyond passive visualization by integrating three concrete operational tools:</p>
+            <ul style="margin-top: 8px;">
+              <li><strong>Citizen Companion</strong>: Personalized vulnerability advisories (asthma, elderly, pediatric, cardiac) + offline clean air routing.</li>
+              <li><strong>Fire Dept Simulator</strong>: Real emergency dispatch state machine (`REPORTED` ➔ `RESOLVED`).</li>
+              <li><strong>Federated Machine Learning</strong>: Inter-state model calibration without sharing raw data.</li>
+            </ul>
+          </div>
+          <div class="metric-grid">
+            <div class="metric-box">
+              <div class="metric-val">1h-6h</div>
+              <div class="metric-lbl">Forward Forecast</div>
+            </div>
+            <div class="metric-box">
+              <div class="metric-val">10,600+</div>
+              <div class="metric-lbl">India Safe Havens</div>
+            </div>
+            <div class="metric-box">
+              <div class="metric-val">100%</div>
+              <div class="metric-lbl">Data Sovereignty</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SLIDE 4: GOOGLE AI & TECH STACK -->
+    <div class="slide" data-slide="4">
+      <div class="slide-header">
+        <div>
+          <div class="slide-badge">Google Technologies</div>
+          <h2 class="slide-title">Google AI & GDG Community Ecosystem</h2>
+          <div class="slide-subtitle">Deep, production-grade integration across Google Developer technologies</div>
+        </div>
+        <div class="slide-logo-badge">POWERED BY GOOGLE</div>
+      </div>
+      <div class="slide-content">
+        <div class="col-half">
+          <div class="card highlight">
+            <h3>✨ Google Gemini Multimodal Vision API</h3>
+            <p>Automated advisory assessment of citizen smoke/fire photo submissions via Google AI Studio:</p>
+            <ul>
+              <li><strong>EXIF Sanitization First</strong>: Privacy-preserving backend strips device serials & metadata before passing images to Gemini.</li>
+              <li><strong>Schema-Constrained Extraction</strong>: Returns validated JSON: `visible_observations`, `event_type`, `uncertainty`, and `reviewer_summary`.</li>
+              <li><strong>Strict Guardrails</strong>: Instructed never to hallucinate AQI or concentration numbers from visual rasters.</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>🌍 Google Earth Engine Catalog Pipeline</h3>
+            <p>Ingests Copernicus Sentinel-5P Near Real-Time (NRTI) UV Aerosol Index and tropospheric NO₂ column density for anomaly screening.</p>
+          </div>
+        </div>
+        <div class="col-half">
+          <div class="card highlight">
+            <h3>📱 Google Flutter (Dual Mobile Applications)</h3>
+            <p>Engineered two dedicated native Android applications with Flutter 3.13+ and Riverpod:</p>
+            <ul>
+              <li><strong>Air Health Citizen Companion</strong>: Clean reactive UI, local secure storage, geofencing, and offline gazetteer.</li>
+              <li><strong>Fire Dept Simulator</strong>: Zero third-party pub dependencies (`dart:io` native architecture) for bulletproof reliability.</li>
+              <li><strong>Android Release Optimization</strong>: Obfuscation and `--split-per-abi` reducing APK payload size by 67%.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SLIDE 5: HIDDEN HOTSPOTS -->
+    <div class="slide" data-slide="5">
+      <div class="slide-header">
+        <div>
+          <div class="slide-badge">Core Capability 1</div>
+          <h2 class="slide-title">Autonomous Hidden Hotspot Detection</h2>
+          <div class="slide-subtitle">Corroborating satellite screening anomalies with ground truth</div>
+        </div>
+        <div class="slide-logo-badge">SPACE + GROUND FUSION</div>
+      </div>
+      <div class="slide-content">
+        <div class="col-half">
+          <div class="card">
+            <h3>🛰️ Satellite Anomaly Screening</h3>
+            <p>Copernicus Sentinel-5P UV Aerosol Index (UVAI) passes detect elevated absorbing aerosols. When UVAI breaches threshold values, an autonomous <strong>Hotspot Candidate</strong> is generated on the corresponding H3 cell.</p>
+          </div>
+          <div class="card highlight">
+            <h3>🔥 Multi-Sensor Cross-Corroboration</h3>
+            <p>A single satellite pixel can be distorted by cloud reflection. The engine searches downwind and adjacent cells for:</p>
+            <ul>
+              <li><strong>NASA FIRMS VIIRS Pixels</strong>: 375m thermal fire anomaly detections.</li>
+              <li><strong>Citizen Smoke Reports</strong>: Geotagged plume submissions with EXIF-free photos.</li>
+              <li><strong>Community Micro-Sensors</strong>: Particulate spikes in low-cost PM2.5 monitors.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="col-half">
+          <div class="card">
+            <h3>🎯 Confidence Scoring & False-Alarm Rejection</h3>
+            <p>Candidates are evaluated against a multi-factor confidence scoring algorithm (0.00 – 1.00). High-confidence candidates trigger an immediate inspection ticket in the authority review console, preventing false dispatch alarms.</p>
+          </div>
+          <div class="card">
+            <h3>🧑‍💼 Human-in-the-Loop Moderation</h3>
+            <p>Municipal officers inspect the corroborated evidence packet, satellite tile, and Gemini image assessment before approving field intervention orders.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SLIDE 6: CORRIDOR FORECASTING -->
+    <div class="slide" data-slide="6">
+      <div class="slide-header">
+        <div>
+          <div class="slide-badge">Core Capability 2</div>
+          <h2 class="slide-title">Economic Corridor Forecasting & Routing</h2>
+          <div class="slide-subtitle">Spatio-temporal exposure modeling along India's major freight arteries</div>
+        </div>
+        <div class="slide-logo-badge">LOGISTICS & RESILIENCE</div>
+      </div>
+      <div class="slide-content">
+        <div class="col-half">
+          <div class="card highlight">
+            <h3>🛣️ National Economic Corridors</h3>
+            <ul>
+              <li><strong>Delhi–Kanpur Interstate Corridor</strong> (NH-19 / Indo-Gangetic Plain axis).</li>
+              <li><strong>DMIC (Delhi–Mumbai Industrial Corridor)</strong> connecting NCR, Rajasthan, Gujarat, and Maharashtra.</li>
+              <li><strong>EDFC (Eastern Dedicated Freight Corridor)</strong> from Sahnewal to Dankuni.</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>⏰ 1h, 3h, 6h Forward Projection</h3>
+            <p>Using physical advection-dispersion modeling driven by Open-Meteo wind fields ($u/v$ vectors) and boundary layer heights, the platform models particulate transport along transport corridors.</p>
+          </div>
+        </div>
+        <div class="col-half">
+          <div class="card">
+            <h3>🚛 Exposure-Aware Logistics Routing</h3>
+            <p>Logistics operators and fleet managers identify cleaner transit windows to avoid severe winter temperature inversions, reducing fleet driver occupational exposure and freight transit delays.</p>
+          </div>
+          <div class="card highlight">
+            <h3>📊 Strictly Honest Evaluation</h3>
+            <p>Corridor forecasts are scored against real withheld ground stations using RMSE and MAE metrics. The platform strictly rejects synthetic score inflation or claiming unvalidated accuracy.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SLIDE 7: AIR HEALTH CITIZEN COMPANION -->
+    <div class="slide" data-slide="7">
+      <div class="slide-header">
+        <div>
+          <div class="slide-badge">Core Capability 3</div>
+          <h2 class="slide-title">Air Health Citizen Companion (Flutter)</h2>
+          <div class="slide-subtitle">Personalized exposure awareness, offline safe havens & field reporting</div>
+        </div>
+        <div class="slide-logo-badge">CITIZEN SCIENCE</div>
+      </div>
+      <div class="slide-content">
+        <div class="col-half">
+          <div class="card highlight">
+            <h3>🩺 Personalized Health Profiles</h3>
+            <p>Tailored health advisories based on medical vulnerability categories:</p>
+            <ul>
+              <li><strong>Asthma / Respiratory</strong>: Strict PM2.5 sensitivity with proactive bronchospasm warnings.</li>
+              <li><strong>Elderly</strong>: Morning & evening temperature inversion advisories.</li>
+              <li><strong>Pediatric / Children</strong>: Safe outdoor school play recommendations.</li>
+              <li><strong>Cardiac / Heart</strong>: Alerts for cardiovascular strain during high-smog peaks.</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>🔔 Dual-Tier Alerts & Audio Sound Alarms</h3>
+            <p>Community CPCB NAQI category transitions paired with personalized vulnerability alerts and optional audible chimes for critical spikes.</p>
+          </div>
+        </div>
+        <div class="col-half">
+          <div class="card highlight">
+            <h3>📍 Offline India Safe Haven Resolver (10.6k+ Places)</h3>
+            <p>The Nearby tab surfaces cleaner air pockets within 25 km backed by an offline geocoded dataset of <strong>over 10,600 Indian cities and localities</strong> with instant offline seed tables. <strong>Zero raw H3 hex IDs are ever shown!</strong></p>
+          </div>
+          <div class="card">
+            <h3>📷 Field Evidence Reporting</h3>
+            <p>Citizens photograph smoke and fire incidents. The app compresses images, manages offline retries, and uploads to the backend for EXIF stripping and Gemini review.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SLIDE 8: FIRE DEPT SIMULATOR -->
+    <div class="slide" data-slide="8">
+      <div class="slide-header">
+        <div>
+          <div class="slide-badge">Core Capability 4</div>
+          <h2 class="slide-title">Fire Dept Simulator & Response Console</h2>
+          <div class="slide-subtitle">Operational incident response state machine for emergency intervention</div>
+        </div>
+        <div class="slide-logo-badge">RAPID DISPATCH</div>
+      </div>
+      <div class="slide-content">
+        <div class="col-half">
+          <div class="card highlight">
+            <h3>🚒 Enforced Incident State Machine</h3>
+            <p>Follows standard operating procedures for fire and pollution emergency response:</p>
+            <div style="font-family: var(--font-mono); font-size: 0.8rem; margin: 10px 0; color: var(--primary);">
+              REPORTED ➔ ASSIGNED ➔ ACKNOWLEDGED ➔ EN ROUTE ➔ ON SCENE ➔ RESOLVED
+            </div>
+            <p>Enforces server-side transition tables and append-only audit histories for complete inter-agency accountability.</p>
+          </div>
+          <div class="card">
+            <h3>📸 On-Scene Evidence Inspection</h3>
+            <p>Responders view citizen photos, exact GPS coordinates, H3 cell boundaries, and initiating source reports before mobilizing suppression units.</p>
+          </div>
+        </div>
+        <div class="col-half">
+          <div class="card highlight">
+            <h3>⚡ Zero-Dependency Native Architecture</h3>
+            <p>Engineered entirely with Dart's native standard library (`dart:io`) — zero third-party pub dependencies. Eliminates dependency drift, reduces binary size, and ensures ultra-reliable network socket recovery.</p>
+          </div>
+          <div class="card">
+            <h3>🛠️ In-App Settings & Diagnostics</h3>
+            <p>Features an official emergency crest logo and an interactive <strong>Test Connection</strong> tool that distinguishes network transport drops from server authentication refusals.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SLIDE 9: FEDERATED LEARNING -->
+    <div class="slide" data-slide="9">
+      <div class="slide-header">
+        <div>
+          <div class="slide-badge">Core Capability 5</div>
+          <h2 class="slide-title">Inter-Agency Federated Climate Intelligence</h2>
+          <div class="slide-subtitle">Collaborative AI modeling across states while preserving data sovereignty</div>
+        </div>
+        <div class="slide-logo-badge">FEDERATED ML</div>
+      </div>
+      <div class="slide-content">
+        <div class="col-half">
+          <div class="card">
+            <h3>🏛️ The Inter-State Challenge</h3>
+            <p>Air pollution crosses state boundaries freely, but state pollution control boards (Delhi DPCC, Punjab PPCB, Haryana SPCB) operate under strict legal and jurisdictional silos and cannot pool raw citizen data or proprietary factory sensor registries.</p>
+          </div>
+          <div class="card highlight">
+            <h3>🔒 Privacy-Preserving Architecture</h3>
+            <ul>
+              <li><strong>Local Training</strong>: Each regional node trains localized ridge-residual calibration models on its private local data.</li>
+              <li><strong>Cryptographic Weight Exchange</strong>: Only signed model parameter weights are transmitted to the central aggregator over HTTP.</li>
+              <li><strong>100% Data Sovereignty</strong>: Raw sensor measurements and citizen reports never leave the local node's perimeter.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="col-half">
+          <div class="card highlight">
+            <h3>⚙️ Working Multi-Party CLI Tooling</h3>
+            <p>Ships with fully operational aggregator and client command-line interfaces:</p>
+            <div style="font-family: var(--font-mono); font-size: 0.78rem; background: rgba(0,0,0,0.3); padding: 10px; border-radius: 8px; margin: 8px 0; color: #38bdf8;">
+              python -m app.federation_aggregator --port 8010<br/>
+              python -m app.federation_client --participant delhi<br/>
+              python -m app.federation_client --participant punjab
+            </div>
+            <p>Includes a two-partition local simulation mode (`app.cli federation-demo`) testable in seconds.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SLIDE 10: PRODUCTION DEPLOYMENT & METRICS -->
+    <div class="slide" data-slide="10">
+      <div class="slide-header">
+        <div>
+          <div class="slide-badge">Implementation & Status</div>
+          <h2 class="slide-title">Working Prototype, Real Data & Honest Metrics</h2>
+          <div class="slide-subtitle">A production-ready platform evaluated end-to-end</div>
+        </div>
+        <div class="slide-logo-badge">REAL DATASET PROVENANCE</div>
+      </div>
+      <div class="slide-content">
+        <div class="col-half">
+          <table class="table-custom">
+            <thead>
+              <tr>
+                <th>Artifact</th>
+                <th>Status & Provenance</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Ground Monitors</strong></td>
+                <td>OpenAQ CAAQMS stations across India</td>
+              </tr>
+              <tr>
+                <td><strong>Satellites</strong></td>
+                <td>Copernicus Sentinel-5P UVAI & NASA FIRMS VIIRS</td>
+              </tr>
+              <tr>
+                <td><strong>Meteorology</strong></td>
+                <td>Open-Meteo wind vectors & boundary layer height</td>
+              </tr>
+              <tr>
+                <td><strong>Spatial Grid</strong></td>
+                <td>Uber H3 Hexagonal Grid (Res 3 to Res 7)</td>
+              </tr>
+              <tr>
+                <td><strong>Gazetteer</strong></td>
+                <td>10,600+ geocoded Indian localities (offline)</td>
+              </tr>
+              <tr>
+                <td><strong>CI/CD Ingestion</strong></td>
+                <td>Automated hourly GitHub Actions pipeline</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="col-half">
+          <div class="card highlight">
+            <h3>📱 Shipped Release Binaries</h3>
+            <p>Production release APKs compiled, tree-shaken, and ready to test in `apks/`:</p>
+            <ul>
+              <li><strong>Air Health Citizen Companion</strong>: `air_health_flutter-arm64.apk` (~19.1 MB)</li>
+              <li><strong>Fire Dept Simulator</strong>: `fire_dept_simulator-arm64.apk` (~19.4 MB)</li>
+              <li><strong>Universal APKs</strong>: Fat builds available for emulator/universal testing.</li>
+            </ul>
+          </div>
+          <div class="card">
+            <h3>🧪 Verified Test Suites</h3>
+            <p>255+ passing Flutter unit/domain tests + complete backend `pytest` coverage verifying contracts, EXIF stripping, and H3 conversions.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SLIDE 11: SCALABILITY & ROADMAP -->
+    <div class="slide" data-slide="11">
+      <div class="slide-header">
+        <div>
+          <div class="slide-badge">Scalability & Future Vision</div>
+          <h2 class="slide-title">Scaling Across India on Google Cloud</h2>
+          <div class="slide-subtitle">From the Indo-Gangetic Plain to a Pan-India National Network</div>
+        </div>
+        <div class="slide-logo-badge">GOOGLE CLOUD ROADMAP</div>
+      </div>
+      <div class="slide-content">
+        <div class="col-half">
+          <div class="card highlight">
+            <h3>☁️ Google Cloud & Vertex AI Architecture</h3>
+            <ul>
+              <li><strong>BigQuery GIS</strong>: Scaling spatial time-series storage to BigQuery for petabyte-scale historical trend analysis across all 700+ Indian districts.</li>
+              <li><strong>Vertex AI AutoML & Pipelines</strong>: Automating federated parameter aggregation into managed Vertex AI continuous retraining pipelines.</li>
+              <li><strong>Cloud Run</strong>: Stateless containerized microservices scaling automatically during peak autumn stubble burning seasons.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="col-half">
+          <div class="card">
+            <h3>🗣️ Multilingual Indic Voice Agents</h3>
+            <p>Integrating Google Cloud Speech-to-Text and Translation APIs (Hindi, Punjabi, Odia, Bengali, Tamil, Telugu) to enable hands-free, voice-first smoke reporting for rural farming communities.</p>
+          </div>
+          <div class="card">
+            <h3>🌐 Google Maps Platform + deck.gl</h3>
+            <p>Migrating map visualization to Google Maps Platform Vector Maps + deck.gl 3D hexagonal rendering for high-performance municipal GIS integration.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SLIDE 12: CONCLUSION & PITCH SUMMARY -->
+    <div class="slide title-slide" data-slide="12">
+      <div class="slide-badge">GDG Code for Communities · Clean Air & Sustainability</div>
+      <h2 class="hero-title" style="font-size: 2.8rem;">Clean Air Through Community & Code</h2>
+      <p class="hero-subtitle" style="max-width: 900px;">
+        Air Health bridges India's macro monitoring blindspots by turning spaceborne satellites and citizen ground science into rapid, coordinated emergency action — powered by Google Flutter, Gemini Multimodal AI, and federated intelligence.
+      </p>
+      
+      <div class="metric-grid" style="width: 100%; max-width: 800px; margin: 15px 0;">
+        <div class="metric-box">
+          <div class="metric-val">100%</div>
+          <div class="metric-lbl">Working Prototype</div>
+        </div>
+        <div class="metric-box">
+          <div class="metric-val">Dual</div>
+          <div class="metric-lbl">Flutter APKs Shipped</div>
+        </div>
+        <div class="metric-box">
+          <div class="metric-val">Gemini</div>
+          <div class="metric-lbl">Multimodal AI Vision</div>
+        </div>
+        <div class="metric-box">
+          <div class="metric-val">Federated</div>
+          <div class="metric-lbl">State Data Sovereignty</div>
+        </div>
+      </div>
+
+      <div style="font-size: 0.95rem; color: #94a3b8;">
+        Repository: <span style="color: var(--primary); font-family: var(--font-mono);">github.com/Hima-11-works/gdg-c4c</span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- SPEAKER NOTES DRAWER -->
+  <div class="notes-drawer" id="notesDrawer">
+    <div class="notes-header">
+      <span>Speaker Notes / Demo Walkthrough Script</span>
+      <span id="notesSlideNumber">Slide 1 of 12</span>
+    </div>
+    <div id="notesText"></div>
+  </div>
+
+  <!-- DECK FOOTER & CONTROLS -->
+  <div class="deck-footer">
+    <div class="progress-bar-container">
+      <div class="progress-bar" id="progressBar"></div>
+    </div>
+
+    <div class="controls">
+      <button class="btn-ctrl" id="prevBtn">← Prev</button>
+      <span class="slide-counter" id="slideCounter">01 / 12</span>
+      <button class="btn-ctrl" id="nextBtn">Next →</button>
+      <button class="btn-ctrl" id="notesToggleBtn">🎙️ Speaker Notes [S]</button>
+    </div>
+  </div>
+
+  <script>
+    const speakerNotes = {
+      1: "Good morning, judges and fellow builders. We are presenting Air Health — an AI-powered, federated climate action platform engineered specifically for Indian cities, states, and citizens. Air pollution is India's most urgent environmental crisis, yet our existing response mechanisms remain severely fragmented. Air Health bridges the critical divide between sparse macro-monitoring stations and hyper-local, high-consequence pollution events by fusing spaceborne satellites, citizen ground science, and privacy-preserving federated intelligence.",
+      2: "Across India, official ambient monitoring relies on sparse monitoring stations. While they measure regional background levels, they consistently miss episodic, hyper-local pollution surges: stubble fires in rural belts, industrial flue-gas dumping at midnight, and spontaneous garbage fires. Worse, pollution does not stop at state lines, yet regional authorities operate in complete data silos without the tools to forecast dispersion along freight corridors or dispatch emergency responders in real time.",
+      3: "Our solution, Air Health, creates a closed-loop platform that turns raw environmental data into rapid human intervention. We fuse official ground monitors with Copernicus Sentinel-5P satellite observations, NASA thermal fire detections, and high-resolution meteorology over an Uber H3 hexagonal grid. Our physical advection-dispersion engine projects forward pollution plumes along major economic arteries, while our mobile apps connect citizens and emergency authorities into a single, cohesive workflow.",
+      4: "For the GDG hackathon, we built deep integrations with the Google stack. We deployed Flutter to build two separate production-grade mobile applications. For multimodal citizen science, we integrated the Google Gemini Multimodal Vision API via Google AI Studio. When a citizen submits a smoke plume photo, our backend automatically strips sensitive EXIF device metadata and passes the sanitized derivative to Gemini. Gemini performs structured visual assessment, classifying plume characteristics and uncertainty scores so municipal reviewers can verify reports in seconds.",
+      5: "Traditional monitoring misses rural stubble burning and industrial bypass events between macro stations. Air Health continuously scans Sentinel-5P UV Aerosol Index swaths. When an aerosol anomaly is detected, our engine generates an autonomous candidate and matches it against NASA thermal fire pixels and citizen reports. Only corroborated, high-confidence candidates are routed to authorities for verification — ensuring zero false-alarm spam.",
+      6: "Northern India's freight corridors concentrate hundreds of thousands of trucks daily under dense winter smog. Air Health models spatio-temporal exposure along three critical national freight arteries: the Delhi-Kanpur Interstate Corridor, the Delhi-Mumbai Industrial Corridor, and the Eastern Dedicated Freight Corridor. By forecasting 1, 3, and 6 hours ahead using wind advection and boundary-layer physics, logistics managers can dispatch freight during cleaner transit windows, drastically reducing fleet driver exposure.",
+      7: "Our Flutter Citizen Companion turns passive victims of air pollution into empowered, active participants. Citizens configure medical sensitivity profiles — asthma, elderly, pediatric, or cardiac — to receive tailored advisories and audible alarms. To help citizens escape pollution, the app features an offline reverse-geocoder covering 10,600 Indian towns and localities that directs users to cleaner nearby safe havens without showing cryptic hex IDs. Citizens can capture smoke plumes directly with their cameras, with sensitive device metadata stripped automatically before upload.",
+      8: "Data without rapid intervention is useless. That's why we built our second Flutter application: the Fire Department Simulator. This response console implements an immutable dispatch state machine: Reported, Assigned, Acknowledged, En Route, On Scene, and Resolved. Built with zero external third-party dependencies using native Dart, it allows municipal responders to inspect evidence photos, verify fire coordinates, and coordinate emergency suppression units.",
+      9: "Air pollution is fundamentally cross-jurisdictional. Delhi cannot simply force Punjab or Uttar Pradesh to surrender raw industrial or citizen data. Our platform solves this through an interoperable federated learning architecture. Each state pollution board runs a local client node that trains models on its private data. Nodes exchange only signed mathematical model parameter weights with a central aggregator. This delivers national predictive accuracy while preserving 100% data sovereignty and citizen privacy.",
+      10: "We believe in building working prototypes, not just pitch concepts. Air Health is fully implemented and deployable today. We ingest real OpenAQ CPCB stations, real Copernicus Sentinel-5P satellite swaths, real NASA FIRMS fire pixels, and real Open-Meteo wind fields. Our release APKs are compiled, obfuscated, and stored in our repo. Most importantly, we maintain strict scientific honesty: we clearly separate spaceborne column indicators from surface concentrations and never fabricate synthetic performance numbers.",
+      11: "Air Health is built for national scale. Our Uber H3 hexagonal grid covers the entirety of India seamlessly. Our architecture roadmap natively integrates Google Cloud: migrating spatial analytics to BigQuery GIS, automating federated training pipelines via Vertex AI, and leveraging Google Cloud Speech-to-Text to bring voice-first multilingual reporting in Hindi, Punjabi, Bengali, and regional Indian languages to rural farming communities.",
+      12: "Clean air is not a luxury — it is a fundamental human right. By connecting citizen science, spaceborne satellites, and rapid emergency response through the power of Google Flutter, Gemini AI, and federated learning, Air Health provides the operational blueprint for climate resilience across India. Our code is public, our APKs are built and ready to test, and our platform is ready to deploy. Thank you."
+    };
+
+    let currentSlide = 1;
+    const totalSlides = 12;
+
+    const slides = document.querySelectorAll('.slide');
+    const progressBar = document.getElementById('progressBar');
+    const slideCounter = document.getElementById('slideCounter');
+    const prevBtn = document.getElementById('prevBtn');
+    const nextBtn = document.getElementById('nextBtn');
+    const notesDrawer = document.getElementById('notesDrawer');
+    const notesText = document.getElementById('notesText');
+    const notesSlideNumber = document.getElementById('notesSlideNumber');
+    const notesToggleBtn = document.getElementById('notesToggleBtn');
+
+    function updateSlide(index) {
+      if (index < 1) index = 1;
+      if (index > totalSlides) index = totalSlides;
+      currentSlide = index;
+
+      slides.forEach(slide => {
+        slide.classList.remove('active');
+        if (parseInt(slide.getAttribute('data-slide')) === currentSlide) {
+          slide.classList.add('active');
+        }
+      });
+
+      progressBar.style.width = `${(currentSlide / totalSlides) * 100}%`;
+      slideCounter.innerText = `${String(currentSlide).padStart(2, '0')} / ${totalSlides}`;
+      
+      notesSlideNumber.innerText = `Slide ${currentSlide} of ${totalSlides}`;
+      notesText.innerText = speakerNotes[currentSlide] || "No notes available for this slide.";
+    }
+
+    prevBtn.addEventListener('click', () => updateSlide(currentSlide - 1));
+    nextBtn.addEventListener('click', () => updateSlide(currentSlide + 1));
+
+    notesToggleBtn.addEventListener('click', () => {
+      notesDrawer.classList.toggle('open');
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') {
+        updateSlide(currentSlide + 1);
+      } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+        updateSlide(currentSlide - 1);
+      } else if (e.key === 's' || e.key === 'S') {
+        notesDrawer.classList.toggle('open');
+      }
+    });
+
+    // Initialize
+    updateSlide(1);
+  </script>
+</body>
+</html>
