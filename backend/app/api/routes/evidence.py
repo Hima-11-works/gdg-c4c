@@ -60,6 +60,7 @@ from app.services.gemini_assessment import (
     GeminiAssessmentService,
     GeminiConsentRequired,
     GeminiInvalidApiKey,
+    GeminiInvalidConfiguration,
     GeminiInvalidOutput,
     GeminiProviderFailure,
     GeminiProviderTimeout,
@@ -130,7 +131,13 @@ def _analysis_error(exc: Exception) -> HTTPException:
         return HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
-            headers={"X-Error-Code": "gemini_configuration_invalid"},
+            headers={"X-Error-Code": "gemini_credentials_invalid"},
+        )
+    if isinstance(exc, GeminiInvalidConfiguration):
+        return HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+            headers={"X-Error-Code": "gemini_request_invalid"},
         )
     if isinstance(exc, (GeminiInvalidOutput, GeminiProviderFailure)):
         return HTTPException(
@@ -357,6 +364,7 @@ def analyze_evidence(
         GeminiAssessmentNotFound,
         GeminiConsentRequired,
         GeminiInvalidApiKey,
+        GeminiInvalidConfiguration,
         GeminiInvalidOutput,
         GeminiProviderFailure,
         GeminiProviderTimeout,

@@ -252,8 +252,17 @@ export function PhotoReviewPanel({
           setGeminiError('Gemini analysis timed out. Manual review is still available.')
         } else if (error.code === 'gemini_quota_exceeded') {
           setGeminiError('Gemini API quota is temporarily exhausted. Manual review is still available.')
-        } else if (error.code === 'gemini_configuration_invalid') {
-          setGeminiError('Gemini API credentials or model configuration are invalid. Manual review is still available.')
+        } else if (
+          error.code === 'gemini_credentials_invalid' ||
+          error.code === 'gemini_configuration_invalid'
+        ) {
+          setGeminiError(
+            'The backend Gemini API key was rejected or lacks access to this model. Check GEMINI_API_KEY in the backend deployment. Manual review is still available.',
+          )
+        } else if (error.code === 'gemini_request_invalid') {
+          setGeminiError(
+            'Gemini rejected the configured model or response schema. Check GEMINI_MODEL and the backend schema configuration. Manual review is still available.',
+          )
         } else if (error.code === 'gemini_provider_error') {
           setGeminiError('Gemini analysis failed. Manual review is still available.')
         } else {
