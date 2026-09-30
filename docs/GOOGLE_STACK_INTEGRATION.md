@@ -1,6 +1,6 @@
 # Neon Object Storage + Vercel + Gemini Implementation Plan
 
-**Goal:** finish a deployable, three-hour integration for Gemini-assisted review of citizen photos and satellite context per H3 cell while preserving the existing India pollution map, API contracts, alert workflow, and fire-department simulator.
+**Goal:** finish a deployable, four-hour integration for Gemini-assisted review of citizen photos, satellite context per H3 cell, and verification of both Flutter apps against the backend while preserving the existing India pollution map, API contracts, alert workflow, and fire-department simulator.
 
 **Selected stack**
 
@@ -14,7 +14,7 @@
 
 **Important:** Neon provides PostgreSQL and Object Storage, not a host for the existing FastAPI application. Keep that API on Vercel. The frontend calls it; the API connects to Neon PostgreSQL, the private Neon Object Storage bucket, and Gemini. Keep database, object-storage, and Gemini credentials on the backend.
 
-**Three-hour assumption:** Neon and Vercel already work as documented in [GO_LIVE.md](GO_LIVE.md). This schedule covers configuration, the Gemini features, deployment, and a focused verification pass. It does not include replacing the map, migrating databases, training a pollution-estimation model, or building new notification infrastructure.
+**Four-hour cap:** Neon and Vercel already work as documented in [GO_LIVE.md](GO_LIVE.md). The timed steps take 225 minutes and leave a 15-minute contingency. This covers configuration, the Gemini features, Flutter integration fixes and verification, deployment, and a focused end-to-end pass. It does not include replacing the map, migrating databases, training a pollution-estimation model, or adding a remote push-notification provider.
 
 ## Cost and privacy gates
 
@@ -24,7 +24,7 @@
 - Keep the Gemini key, Neon Object Storage credentials, database URLs, and reviewer key out of browser bundles, Flutter builds, logs, and source control.
 - Gemini is advisory only: it cannot confirm the pollution source, infer AQI or pollutant concentration from an image, approve reports, or dispatch responders.
 
-## Step-by-step plan (180 minutes)
+## Step-by-step plan (225 minutes + 15-minute contingency)
 
 ### 1. Confirm access and current deployment — 0–10 minutes
 
@@ -116,7 +116,20 @@ Treat the satellite pipeline as the source of measurements and Gemini as a visua
 
 **Acceptance gate:** the cell view distinguishes measured surface air quality from satellite indicators; every number carries its source, unit, timestamp, and coverage/quality; Gemini cannot generate or overwrite numbers; and sparse/cloudy evidence stays unavailable instead of appearing clean. CPCB AQI remains based on its prescribed pollutant inputs and averaging periods: at least three pollutant measurements, including PM₂.₅ or PM₁₀, are needed, and the highest valid sub-index determines the AQI. [CPCB National AQI](https://cpcb.nic.in/displaypdf.php?id=bmF0aW9uYWwtYWlyLXF1YWxpdHktaW5kZXgvRklOQUwtUkVQT1JUX0FRSV8ucGRm) · [Gemini image understanding](https://ai.google.dev/gemini-api/docs/image-understanding) · [Gemini structured output](https://ai.google.dev/gemini-api/docs/structured-output)
 
-### 7. Apply migrations and deploy through Vercel — 155–165 minutes
+### 7. Verify both Flutter apps against the backend — 155–200 minutes
+
+Run this against a staging/test backend first. Fix contract or UX gaps found here before treating the integration as complete.
+
+1. **Air Health connection and location:** configure `POLLUTION_API_BASE_URL` to the intended backend. Grant or deny location permission and verify the app's resolved coordinates select the expected backend H3 cell, and that current PM₂.₅, forecasts, and alerts are clearly marked live/demo/stale according to the API response. Changing location must refresh the cell data and alert evaluation.
+2. **Fire report and evidence:** test a valid fire report from both the camera and gallery on a real device/emulator with camera/photo permissions. Cover permission denial, picker cancellation, missing location, invalid/large images, offline submission, and retry. Verify submission uses one stable `client_report_id`, records the correct coordinates, uploads consented evidence through the backend, and a retry does not create duplicate reports. Confirm failed image upload is visible and recoverable without resubmitting the report.
+3. **Report review status:** the backend already exposes lifecycle state through `GET /api/v2/reports` and `/api/v2/reports/{id}`, but the current Flutter report client only submits/lists v1 report data and does not expose that status. Add the v2 client/DTO and a citizen-facing status view if still missing. Show `submitted` as received/pending, `under_review` as being checked, `corroborated` as accepted and eligible to affect the model, and `rejected`/`expired` with their meaning. Verify the status changes after a reviewer changes it; a successful HTTP submission alone must never be shown as acceptance.
+4. **Location-based AQI alerts:** use a controlled backend response or test dataset that puts the user's selected H3 cell below and then above the configured alert threshold. Verify the Air Health app evaluates the backend's current/forecast data for that location, respects alert preferences and notification permission, deduplicates repeated alerts, updates when the user changes location, and opens the Alerts view when a notification is tapped. Test stale/no-data and denied-notification states. The current AQI alert mechanism is generated on-device from backend data during refresh/resume (with forecast alarms scheduled locally); the backend does not send remote push notifications. Do not promise a report-review or newly changed AQI push while the app is closed unless a push provider is added separately.
+5. **Fire-department simulator:** configure `INCIDENT_API_BASE_URL`, a test `SIMULATOR_API_KEY`, actor ID, and fire-department role. Verify public reads, then exercise a backend-backed test incident through assignment, acknowledgement, en-route, on-scene, and resolution; confirm status and history survive refresh/restart and duplicate requests do not create duplicate incidents. Verify invalid keys, role/jurisdiction refusals, disabled simulator, and network errors are shown accurately. The simulator's inbox is explicitly simulated and sends no email, SMS, webhook, or push; never describe it as a real dispatch channel.
+6. Run `flutter analyze` and `flutter test` in both app directories, then complete the report/photo/status and incident journeys on devices configured for the target backend. Keep reviewer, Gemini, Neon, and production-only credentials out of Flutter builds; use only appropriately restricted test credentials for simulator writes.
+
+**Acceptance gate:** a citizen can submit an image-backed report and later see the backend's actual review decision; AQI alerts correspond to the user's current backend location/cell and honor OS/app preferences; the fire simulator can read and advance a backend incident through its documented states; and users see clear errors instead of local/demo data being mistaken for live success. AQI notifications are on-device alerts, not backend push or emergency dispatch.
+
+### 8. Apply migrations and deploy through Vercel — 200–210 minutes
 
 1. Set production `DATABASE_URL` to Neon's pooled connection string and retain the direct URL for the documented migration procedure.
 2. Apply the new Alembic migration once using the Neon direct connection.
@@ -124,7 +137,7 @@ Treat the satellite pipeline as the source of measurements and Gemini as a visua
 4. Redeploy the backend. Deploy the frontend Vercel project after its reviewer dialog changes.
 5. Keep `VITE_API_BASE_URL` pointed to the backend origin and preserve the existing exact-origin CORS allowlist. Vercel's current two-project deployment steps are in [GO_LIVE.md](GO_LIVE.md).
 
-### 8. Run a focused end-to-end check — 165–180 minutes
+### 9. Run a focused end-to-end check — 210–225 minutes
 
 - The Vercel-hosted map, search, cells, alerts, reports, and timeline still load from the production API.
 - A citizen photo uploads to private Neon Object Storage, is retrievable through the reviewer API, and is not publicly accessible.
@@ -135,8 +148,10 @@ Treat the satellite pipeline as the source of measurements and Gemini as a visua
 - A cell detail shows sourced satellite indicators separately from observed or validated surface PM₂.₅/AQI; each shows units, acquisition time, and valid coverage.
 - An H3 cell with cloudy, stale, or insufficient satellite coverage shows unavailable data and does not receive a fabricated zero, AQI, or Gemini-generated concentration.
 - Gemini's visual interpretation is advisory only and cannot alter server-returned numeric measurements, approve a report, or dispatch responders.
+- A test fire report with camera/gallery evidence moves from `submitted` through reviewer status changes, and Air Health displays the backend's current `under_review`, `corroborated` (accepted), or `rejected` state after refresh.
+- A controlled AQI threshold crossing for the test user's backend-selected H3 cell produces the expected on-device alert and Alerts-screen deep link when notification permission is granted; denied permission and stale data produce clear states.
+- The fire-department simulator reads a test incident, records each allowed response transition, and reloads the final status/history from the backend.
 - Browser requests, Vite bundles, Flutter apps, and logs contain no Gemini or Neon Object Storage secret.
-- The Flutter simulator still reaches the existing API and can acknowledge/resolve incidents.
 
 If any integration gate fails, preserve the existing deployment and leave the affected optional feature clearly unavailable. Do not weaken the private-bucket or reviewer-authorization requirements to meet the time limit.
 
@@ -146,6 +161,7 @@ If any integration gate fails, preserve the existing deployment and leave the af
 - Google Maps migration; keep MapLibre.
 - Public Neon Object Storage buckets or direct browser access to the bucket.
 - Gemini calls from the frontend or Flutter app.
+- Remote push notifications (including FCM); this plan verifies Air Health's on-device AQI notifications and does not claim push delivery while the app is closed.
 - Automatic report approvals, source attribution, AQI inference from photos, or real emergency dispatch.
 - Paid Gemini models/features or unapproved billing changes.
 
