@@ -1,5 +1,6 @@
 import '../../domain/models/models.dart';
 import '../../domain/pm25_aqi.dart';
+import '../../services/place_name_resolver.dart';
 import '../grid/grid_api.dart';
 import '../pollution_data_provider.dart';
 
@@ -141,6 +142,8 @@ class GridApiPollutionDataProvider implements PollutionDataProvider {
       forecastByCell.putIfAbsent(f.h3Cell, () => f);
     }
 
+    await PlaceNameResolver.instance.ensureLoaded();
+
     final snapshots = <_CellSnapshot>[];
     for (final state in current.data) {
       if (state.pm25 == null) continue;
@@ -148,10 +151,15 @@ class GridApiPollutionDataProvider implements PollutionDataProvider {
       final latitude = state.latitude ?? weather?.latitude;
       final longitude = state.longitude ?? weather?.longitude;
       if (latitude == null || longitude == null) continue;
+      final placeName = PlaceNameResolver.instance.resolve(
+        latitude: latitude,
+        longitude: longitude,
+        referenceLocation: location,
+      );
       final point = LocationPoint(
         latitude: latitude,
         longitude: longitude,
-        label: state.h3Cell,
+        label: placeName,
       );
       snapshots.add(_CellSnapshot(
         h3Cell: state.h3Cell,
@@ -173,7 +181,7 @@ class GridApiPollutionDataProvider implements PollutionDataProvider {
       final fc = forecastByCell[s.h3Cell];
       return NearbyArea(
         location: s.location,
-        name: _cellLabel(s.h3Cell),
+        name: s.location.label ?? _cellLabel(s.h3Cell),
         aqiNow: pm25ToCpcbAqi(s.pm25),
         forecast: _areaForecast(s, fc),
         trend: _trend(s.pm25, fc),
@@ -195,9 +203,14 @@ class GridApiPollutionDataProvider implements PollutionDataProvider {
         .where((a) => a.h3Cell == snapshot.h3Cell)
         .map((a) {
       final peakPm25 = a.forecastPm25 ?? a.currentPm25 ?? snapshot.pm25;
+      final eventAreaName = PlaceNameResolver.instance.resolve(
+        latitude: snapshot.location.latitude,
+        longitude: snapshot.location.longitude,
+        referenceLocation: location,
+      );
       return PollutionEvent(
         id: '${a.h3Cell}-${a.severity}-${a.createdAt.millisecondsSinceEpoch}',
-        sourceArea: _cellLabel(a.h3Cell),
+        sourceArea: eventAreaName,
         expectedArrivalAt: a.forecastTime ?? a.createdAt,
         peakAqiEstimate: pm25ToCpcbAqi(peakPm25),
         confidence: a.confidence ?? 0.5,

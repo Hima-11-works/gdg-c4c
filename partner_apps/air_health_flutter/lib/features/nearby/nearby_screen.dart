@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/formatters.dart';
 import '../../domain/models/models.dart';
 import '../../providers/home_providers.dart';
+import '../../services/place_name_resolver.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
 import '../../theme/app_typography.dart';
@@ -201,9 +202,16 @@ class _NearbyAreaCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(area.name,
-                        style: AppTypography.titleMedium
-                            .copyWith(color: cs.onSurface)),
+                    Text(
+                      (!area.name.startsWith('88') && !area.name.contains('…') && area.name.isNotEmpty)
+                          ? area.name
+                          : PlaceNameResolver.instance.resolve(
+                              latitude: area.location.latitude,
+                              longitude: area.location.longitude,
+                            ),
+                      style: AppTypography.titleMedium
+                          .copyWith(color: cs.onSurface),
+                    ),
                     const SizedBox(height: AppSpacing.xs),
                     Text(
                       Formatters.distance(area.distanceKm),
