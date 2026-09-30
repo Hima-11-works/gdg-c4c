@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import io
+import logging
 import math
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
+
+logger = logging.getLogger(__name__)
 
 import h3
 from PIL import Image, ImageDraw, ImageFont
@@ -404,38 +407,44 @@ class CellSatelliteService:
         """Looks up closest surface monitor or validated grid state."""
         # Try sensor_reading repository first
         if self._sensor_repo is not None and hasattr(self._sensor_repo, "list_since"):
-            readings = self._sensor_repo.list_since(window_start, pollutant="pm25")
-            if readings:
-                # Find nearest station
-                closest = min(
-                    readings,
-                    key=lambda r: _haversine_distance_km(center_lat, center_lon, r.latitude, r.longitude),
-                )
-                dist_km = _haversine_distance_km(center_lat, center_lon, closest.latitude, closest.longitude)
-                return SurfacePM25Context(
-                    status="available",
-                    value_ugm3=closest.value,
-                    is_estimate=False,
-                    source=f"Ground Monitor ({closest.source})",
-                    station_id=closest.external_sensor_id,
-                    station_distance_km=round(dist_km, 2),
-                    measured_at=closest.measured_at,
-                    uncertainty_ugm3=5.0,
-                )
+            try:
+                readings = self._sensor_repo.list_since(window_start, pollutant="pm25")
+                if readings:
+                    # Find nearest station
+                    closest = min(
+                        readings,
+                        key=lambda r: _haversine_distance_km(center_lat, center_lon, r.latitude, r.longitude),
+                    )
+                    dist_km = _haversine_distance_km(center_lat, center_lon, closest.latitude, closest.longitude)
+                    return SurfacePM25Context(
+                        status="available",
+                        value_ugm3=closest.value,
+                        is_estimate=False,
+                        source=f"Ground Monitor ({closest.source})",
+                        station_id=closest.external_sensor_id,
+                        station_distance_km=round(dist_km, 2),
+                        measured_at=closest.measured_at,
+                        uncertainty_ugm3=5.0,
+                    )
+            except Exception as exc:
+                logger.warning("Error fetching surface PM2.5 readings for cell %s: %s", h3_cell, exc)
 
         # Fallback to latest grid state if available (modeled estimate)
         if self._grid_repo is not None and hasattr(self._grid_repo, "latest_for_cell"):
-            grid = self._grid_repo.latest_for_cell(h3_cell)
-            if grid is not None and grid.pm25 is not None:
-                return SurfacePM25Context(
-                    status="available",
-                    value_ugm3=grid.pm25,
-                    is_estimate=True,
-                    source="Calibrated Surface Model",
-                    station_distance_km=0.0,
-                    measured_at=grid.timestamp,
-                    uncertainty_ugm3=12.0,
-                )
+            try:
+                grid = self._grid_repo.latest_for_cell(h3_cell)
+                if grid is not None and grid.pm25 is not None:
+                    return SurfacePM25Context(
+                        status="available",
+                        value_ugm3=grid.pm25,
+                        is_estimate=True,
+                        source="Calibrated Surface Model",
+                        station_distance_km=0.0,
+                        measured_at=grid.timestamp,
+                        uncertainty_ugm3=12.0,
+                    )
+            except Exception as exc:
+                logger.warning("Error fetching grid state for cell %s: %s", h3_cell, exc)
 
         return SurfacePM25Context(
             status="unavailable",
@@ -448,10 +457,13 @@ class CellSatelliteService:
         """Determines CPCB National AQI strictly based on CPCB criteria (minimum 3 pollutants)."""
         pollutants: dict[str, float | None] = {}
         if self._sensor_repo is not None and hasattr(self._sensor_repo, "list_since"):
-            for pol in ("pm25", "pm10", "no2", "so2", "co", "o3"):
-                readings = self._sensor_repo.list_since(window_start, pollutant=pol)
-                if readings:
-                    pollutants[pol] = readings[0].value
+            try:
+                for pol in ("pm25", "pm10", "no2", "so2", "co", "o3"):
+                    readings = self._sensor_repo.list_since(window_start, pollutant=pol)
+                    if readings:
+                        pollutants[pol] = readings[0].value
+            except Exception as exc:
+                logger.warning("Error querying pollutants for CPCB AQI in cell %s: %s", h3_cell, exc)
 
         cpcb_res = calculate_cpcb_aqi(pollutants)
         return CPCBContext(
@@ -513,17 +525,20 @@ class CellSatelliteService:
         window_start: datetime,
     ) -> ThermalAnomalyContext:
         if self._fire_repo is not None and hasattr(self._fire_repo, "list_in_cell"):
-            fires = self._fire_repo.list_in_cell(h3_cell)
-            if fires:
-                max_frp = max((f.frp_mw for f in fires), default=0.0)
-                return ThermalAnomalyContext(
-                    detection_count=len(fires),
-                    nearest_distance_km=0.0,
-                    max_frp_mw=max_frp,
-                    confidence_class=fires[0].confidence_class,
-                    satellite=fires[0].satellite,
-                    observed_at=fires[0].acquired_at,
-                )
+            try:
+                fires = self._fire_repo.list_in_cell(h3_cell)
+                if fires:
+                    max_frp = max((f.frp_mw for f in fires), default=0.0)
+                    return ThermalAnomalyContext(
+                        detection_count=len(fires),
+                        nearest_distance_km=0.0,
+                        max_frp_mw=max_frp,
+                        confidence_class=fires[0].confidence_class,
+                        satellite=fires[0].satellite,
+                        observed_at=fires[0].acquired_at,
+                    )
+            except Exception as exc:
+                logger.warning("Error querying thermal anomalies for cell %s: %s", h3_cell, exc)
 
         return ThermalAnomalyContext(
             detection_count=0,
@@ -533,16 +548,21 @@ class CellSatelliteService:
 
     def _get_weather(self, h3_cell: str, now: datetime) -> WeatherContext:
         if self._weather_repo is not None and hasattr(self._weather_repo, "latest_for_cell"):
-            weather = self._weather_repo.latest_for_cell(h3_cell)
-            if weather is not None:
-                return WeatherContext(
-                    wind_speed_ms=weather.wind_speed,
-                    wind_direction_deg=weather.wind_direction,
-                    humidity_pct=weather.humidity,
-                    temperature_c=weather.temperature,
-                    boundary_layer_height_m=None,  # Not reported by standard weather reading
-                    observed_at=weather.timestamp,
-                )
+            try:
+                weather = self._weather_repo.latest_for_cell(h3_cell)
+                if weather is not None:
+                    # WeatherReading stores measured_at; fallback to timestamp if present
+                    observed_at = getattr(weather, "measured_at", None) or getattr(weather, "timestamp", None)
+                    return WeatherContext(
+                        wind_speed_ms=weather.wind_speed,
+                        wind_direction_deg=weather.wind_direction,
+                        humidity_pct=weather.humidity,
+                        temperature_c=weather.temperature,
+                        boundary_layer_height_m=getattr(weather, "boundary_layer_height", None),
+                        observed_at=observed_at,
+                    )
+            except Exception as exc:
+                logger.warning("Error querying weather reading for cell %s: %s", h3_cell, exc)
 
         return WeatherContext(
             wind_speed_ms=3.5,

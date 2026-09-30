@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy import Select, delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -124,17 +127,25 @@ class CellSatelliteInterpretationRepository:
         prompt_version: str,
         now: datetime,
     ) -> CellSatelliteInterpretationRecord | None:
-        row = self._session.execute(
-            _get_cached_stmt(
-                h3_cell=h3_cell,
-                window_start=window_start,
-                window_end=window_end,
-                model_id=model_id,
-                prompt_version=prompt_version,
-                now=now,
+        try:
+            row = self._session.execute(
+                _get_cached_stmt(
+                    h3_cell=h3_cell,
+                    window_start=window_start,
+                    window_end=window_end,
+                    model_id=model_id,
+                    prompt_version=prompt_version,
+                    now=now,
+                )
+            ).first()
+            return None if row is None else _row_to_record(row)
+        except Exception as exc:
+            self._session.rollback()
+            logger.warning(
+                "Satellite interpretation cache lookup failed (table may not be migrated yet): %s",
+                exc,
             )
-        ).first()
-        return None if row is None else _row_to_record(row)
+            return None
 
     def save(
         self,
@@ -150,8 +161,31 @@ class CellSatelliteInterpretationRepository:
         generated_at: datetime,
         expires_at: datetime,
     ) -> CellSatelliteInterpretationRecord:
-        row = self._session.execute(
-            _save_stmt(
+        try:
+            row = self._session.execute(
+                _save_stmt(
+                    h3_cell=h3_cell,
+                    window_start=window_start,
+                    window_end=window_end,
+                    evidence_bundle=evidence_bundle,
+                    interpretation=interpretation,
+                    model_id=model_id,
+                    prompt_version=prompt_version,
+                    schema_version=schema_version,
+                    generated_at=generated_at,
+                    expires_at=expires_at,
+                )
+            ).one()
+            self._session.commit()
+            return _row_to_record(row)
+        except Exception as exc:
+            self._session.rollback()
+            logger.warning(
+                "Satellite interpretation cache save failed (table may not be migrated yet): %s",
+                exc,
+            )
+            return CellSatelliteInterpretationRecord(
+                id=0,
                 h3_cell=h3_cell,
                 window_start=window_start,
                 window_end=window_end,
@@ -163,13 +197,20 @@ class CellSatelliteInterpretationRepository:
                 generated_at=generated_at,
                 expires_at=expires_at,
             )
-        ).one()
-        self._session.commit()
-        return _row_to_record(row)
 
     def prune_expired(self, now: datetime) -> int:
-        result = self._session.execute(
-            delete(interp_table).where(interp_table.c.expires_at <= now)
-        )
-        self._session.commit()
-        return result.rowcount
+        try:
+            result = self._session.execute(
+                delete(interp_table).where(interp_table.c.expires_at <= now)
+            )
+            self._session.commit()
+            return result.rowcount or 0
+        except Exception as exc:
+            self._session.rollback()
+            logger.warning("Satellite interpretation cache prune failed: %s", exc)
+            return 0
+
+
+# Backwards-compatible export alias
+SqlCellSatelliteInterpretationRepository = CellSatelliteInterpretationRepository
+
