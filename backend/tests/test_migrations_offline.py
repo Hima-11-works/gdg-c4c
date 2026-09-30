@@ -114,6 +114,16 @@ def test_revision_ids_fit_the_alembic_version_column() -> None:
         )
 
 
+def test_gemini_assessment_migration_matches_its_table_definition(capsys) -> None:
+    """Check F4's new table even while historic migration drift is tracked separately."""
+    migration_tables = _table_bodies(_run_offline_upgrade(capsys))
+    table = metadata.tables["evidence_visual_assessment"]
+    model_ddl = str(CreateTable(table).compile(dialect=postgresql.dialect()))
+    [model_clauses] = _table_bodies(model_ddl).values()
+
+    assert migration_tables[table.name] == model_clauses
+
+
 def test_migration_columns_and_constraints_match_the_models_exactly(capsys) -> None:
     """Every migration is hand-written — there is no live database to
     autogenerate one against when a new migration is added — so nothing

@@ -18,6 +18,7 @@ from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
+from app.domain.gemini_assessment import GeminiVisualAssessment
 from app.domain.types import AlertSeverity, FireKind, ReportStatus
 
 T = TypeVar("T")
@@ -268,6 +269,22 @@ class EvidenceOut(BaseModel):
     width: int | None = Field(default=None, description="Derivative width in pixels.")
     height: int | None = Field(default=None, description="Derivative height in pixels.")
     byte_count: int = Field(description="Size of the stored original, not the derivative.")
+
+
+class EvidenceAssessmentOut(BaseModel):
+    """A saved Gemini advisory and its provenance; never a review decision."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    report_id: int
+    evidence_id: int
+    assessment: GeminiVisualAssessment
+    model_id: str
+    prompt_version: str
+    schema_version: str
+    consented_at: datetime
+    generated_at: datetime
 
 
 class ReportDetailOut(BaseModel):

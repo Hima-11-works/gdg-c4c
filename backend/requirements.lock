@@ -1,16 +1,21 @@
 alembic==1.20.0
-    # via pollution-backend (pyproject.toml)
+    # via
+    #   pollution-backend (pyproject.toml)
 annotated-doc==0.0.5
-    # via fastapi
+    # via
+    #   fastapi
 annotated-types==0.8.0
-    # via pydantic
+    # via
+    #   pydantic
 anyio==4.15.1
     # via
+    #   google-genai
     #   httpx
     #   starlette
     #   watchfiles
 boto3==1.43.104
-    # via pollution-backend (pyproject.toml)
+    # via
+    #   pollution-backend (pyproject.toml)
 botocore==1.43.104
     # via
     #   boto3
@@ -19,86 +24,140 @@ certifi==2026.7.22
     # via
     #   httpcore
     #   httpx
+    #   requests
+cffi==2.1.1
+    # via cryptography
+charset-normalizer==3.5.1
+    # via requests
 click==8.5.0
-    # via uvicorn
+    # via
+    #   uvicorn
+cryptography==50.0.1
+    # via google-auth
+distro==1.9.0
+    # via google-genai
 fastapi==0.141.1
-    # via pollution-backend (pyproject.toml)
+    # via
+    #   pollution-backend (pyproject.toml)
 geoalchemy2==0.20.0
+    # via
+    #   pollution-backend (pyproject.toml)
+google-auth==2.59.0
+    # via google-genai
+google-genai==2.25.0
     # via pollution-backend (pyproject.toml)
 greenlet==3.5.5
-    # via sqlalchemy
+    # via
+    #   sqlalchemy
 h11==0.16.0
     # via
     #   httpcore
     #   uvicorn
 h3==4.5.0
-    # via pollution-backend (pyproject.toml)
+    # via
+    #   pollution-backend (pyproject.toml)
 h5py==3.16.0
-    # via pollution-backend (pyproject.toml)
+    # via
+    #   pollution-backend (pyproject.toml)
 httpcore==1.0.9
-    # via httpx
+    # via
+    #   httpx
 httptools==0.8.0
-    # via uvicorn
+    # via
+    #   uvicorn
 httpx==0.28.1
-    # via pollution-backend (pyproject.toml)
+    # via
+    #   pollution-backend (pyproject.toml)
+    #   google-genai
 idna==3.19
     # via
     #   anyio
     #   httpx
+    #   requests
 jmespath==1.1.0
     # via
     #   boto3
     #   botocore
 mako==1.4.1
-    # via alembic
+    # via
+    #   alembic
 markupsafe==3.0.3
-    # via mako
+    # via
+    #   mako
 numpy==2.4.6
     # via
     #   pollution-backend (pyproject.toml)
     #   h5py
 packaging==26.3
-    # via geoalchemy2
+    # via
+    #   geoalchemy2
 pillow==11.3.0
-    # via pollution-backend (pyproject.toml)
+    # via
+    #   pollution-backend (pyproject.toml)
 psycopg==3.3.5
-    # via pollution-backend (pyproject.toml)
+    # via
+    #   pollution-backend (pyproject.toml)
 psycopg-binary==3.3.5
-    # via psycopg
+    # via
+    #   psycopg
+pyasn1==0.6.4
+    # via pyasn1-modules
+pyasn1-modules==0.4.2
+    # via google-auth
+pycparser==3.0
+    # via cffi
 pydantic==2.13.5
     # via
     #   fastapi
+    #   google-genai
     #   pydantic-settings
 pydantic-core==2.46.5
-    # via pydantic
+    # via
+    #   pydantic
 pydantic-settings==2.15.0
-    # via pollution-backend (pyproject.toml)
+    # via
+    #   pollution-backend (pyproject.toml)
 python-dateutil==2.9.0.post0
-    # via botocore
+    # via
+    #   botocore
 python-dotenv==1.2.3
     # via
     #   pydantic-settings
     #   uvicorn
 python-multipart==0.0.32
-    # via pollution-backend (pyproject.toml)
+    # via
+    #   pollution-backend (pyproject.toml)
 pyyaml==6.0.3
-    # via uvicorn
+    # via
+    #   uvicorn
+requests==2.34.2
+    # via
+    #   google-auth
+    #   google-genai
 s3transfer==0.19.2
-    # via boto3
+    # via
+    #   boto3
 six==1.17.0
-    # via python-dateutil
+    # via
+    #   python-dateutil
+sniffio==1.3.1
+    # via google-genai
 sqlalchemy==2.0.52
     # via
     #   pollution-backend (pyproject.toml)
     #   alembic
     #   geoalchemy2
 starlette==1.6.0
-    # via fastapi
+    # via
+    #   fastapi
+tenacity==9.1.4
+    # via google-genai
 typing-extensions==4.16.0
     # via
     #   alembic
     #   anyio
     #   fastapi
+    #   google-genai
     #   psycopg
     #   pydantic
     #   pydantic-core
@@ -111,12 +170,19 @@ typing-inspection==0.4.4
     #   pydantic
     #   pydantic-settings
 urllib3==2.8.0
-    # via botocore
+    # via
+    #   botocore
+    #   requests
 uvicorn==0.52.4
-    # via pollution-backend (pyproject.toml)
+    # via
+    #   pollution-backend (pyproject.toml)
 uvloop==0.22.1
-    # via uvicorn
+    # via
+    #   uvicorn
 watchfiles==1.2.0
-    # via uvicorn
-websockets==17.1
-    # via uvicorn
+    # via
+    #   uvicorn
+websockets==16.1.1
+    # via
+    #   google-genai
+    #   uvicorn

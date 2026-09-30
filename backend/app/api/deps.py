@@ -23,6 +23,7 @@ from app.db.repositories import (
     SqlFireHotspotRepository,
     SqlFireReportRepository,
     SqlForecastRepository,
+    SqlGeminiAssessmentRepository,
     SqlGridStateRepository,
     SqlIncidentDeliveryRepository,
     SqlIncidentRepository,
@@ -40,6 +41,7 @@ from app.services.citizen_sensors import CitizenSensorSubmissionService
 from app.services.evidence import EvidenceService
 from app.services.federation import FederationStatusReader
 from app.services.fires import FireHotspotService
+from app.services.gemini_assessment import GeminiAssessmentService
 from app.services.grid import GridService
 from app.services.hotspot_detection import HotspotScanStore, build_store
 from app.services.incidents import (
@@ -187,6 +189,18 @@ def get_evidence_service(
         store=store,
         repository=SqlEvidenceRepository(session),
         reports=FireReportService(SqlFireReportRepository(session)),
+    )
+
+
+def get_gemini_assessment_service(
+    session: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    evidence: EvidenceService = Depends(get_evidence_service),
+) -> GeminiAssessmentService:
+    return GeminiAssessmentService(
+        settings=settings,
+        evidence=evidence,
+        repository=SqlGeminiAssessmentRepository(session),
     )
 
 

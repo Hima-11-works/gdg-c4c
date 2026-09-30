@@ -35,20 +35,35 @@ from fastapi import (
     Form,
     Header,
     HTTPException,
-    Request,
     Response,
     UploadFile,
     status,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.exc import SQLAlchemyError
 
-from app.api.deps import get_evidence_service, get_fire_report_service
-from app.api.schemas import Envelope, EvidenceOut
+from app.api.deps import (
+    get_evidence_service,
+    get_fire_report_service,
+    get_gemini_assessment_service,
+)
+from app.api.schemas import Envelope, EvidenceAssessmentOut, EvidenceOut
 from app.services.evidence import (
     EvidenceNotFound,
     EvidenceRejected,
     EvidenceService,
     MediaUnavailable,
+)
+from app.services.gemini_assessment import (
+    GeminiAnalysisDisabled,
+    GeminiAssessmentNotFound,
+    GeminiAssessmentService,
+    GeminiConsentRequired,
+    GeminiInvalidApiKey,
+    GeminiInvalidOutput,
+    GeminiProviderFailure,
+    GeminiProviderTimeout,
+    GeminiQuotaExceeded,
 )
 from app.services.reports import FireReportService, ReviewNotConfiguredError
 
@@ -63,6 +78,76 @@ class EvidenceReviewIn(BaseModel):
         description="`approved`/`rejected` are a reviewer's judgement. Neither "
         "qualifies the report: evidence never gates the F1 lifecycle.",
     )
+
+
+class GeminiAnalysisIn(BaseModel):
+    """Only reviewer consent and an explicit reanalysis request are accepted."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    consent: bool = Field(
+        default=False,
+        description="Explicitly authorize sending this sanitized derivative to Gemini.",
+    )
+    reanalyze: bool = Field(
+        default=False,
+        description="Call Gemini again and replace the saved advisory.",
+    )
+
+
+def _analysis_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, (EvidenceNotFound, GeminiAssessmentNotFound)):
+        return HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+            headers={"X-Error-Code": "not_found"},
+        )
+    if isinstance(exc, GeminiConsentRequired):
+        return HTTPException(
+            status_code=status.HTTP_428_PRECONDITION_REQUIRED,
+            detail=str(exc),
+            headers={"X-Error-Code": "gemini_consent_required"},
+        )
+    if isinstance(exc, (GeminiAnalysisDisabled, MediaUnavailable)):
+        return HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+            headers={"X-Error-Code": "gemini_unavailable"},
+        )
+    if isinstance(exc, GeminiProviderTimeout):
+        return HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail=str(exc),
+            headers={"X-Error-Code": "gemini_timeout"},
+        )
+    if isinstance(exc, GeminiQuotaExceeded):
+        return HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=str(exc),
+            headers={"X-Error-Code": "gemini_quota_exceeded"},
+        )
+    if isinstance(exc, GeminiInvalidApiKey):
+        return HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+            headers={"X-Error-Code": "gemini_configuration_invalid"},
+        )
+    if isinstance(exc, (GeminiInvalidOutput, GeminiProviderFailure)):
+        return HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+            headers={"X-Error-Code": "gemini_provider_error"},
+        )
+    if isinstance(exc, SQLAlchemyError):
+        return HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "assessment storage is temporarily unavailable; "
+                "manual review is still available"
+            ),
+            headers={"X-Error-Code": "assessment_storage_unavailable"},
+        )
+    raise exc
 
 
 def _evidence_error(exc: Exception) -> HTTPException:
@@ -218,6 +303,72 @@ def get_derivative(
         content=data,
         media_type="image/jpeg",
         headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@router.get(
+    "/{report_id}/evidence/{evidence_id}/analysis",
+    response_model=Envelope[EvidenceAssessmentOut],
+    summary="Read a saved Gemini photo advisory (reviewer key required)",
+)
+def get_gemini_analysis(
+    report_id: int,
+    evidence_id: int,
+    x_reviewer_key: str | None = Header(default=None, alias="X-Reviewer-Key"),
+    service: GeminiAssessmentService = Depends(get_gemini_assessment_service),
+    reports: FireReportService = Depends(get_fire_report_service),
+) -> Envelope[EvidenceAssessmentOut]:
+    _require_reviewer(x_reviewer_key, reports)
+    try:
+        row = service.get(report_id=report_id, evidence_id=evidence_id)
+    except (EvidenceNotFound, GeminiAssessmentNotFound, SQLAlchemyError) as exc:
+        raise _analysis_error(exc) from exc
+    return Envelope(
+        generated_at=datetime.now(UTC),
+        is_demo=False,
+        data=EvidenceAssessmentOut.model_validate(row),
+    )
+
+
+@router.post(
+    "/{report_id}/evidence/{evidence_id}/analysis",
+    response_model=Envelope[EvidenceAssessmentOut],
+    summary="Create or explicitly re-run a Gemini photo advisory (reviewer key required)",
+)
+def analyze_evidence(
+    report_id: int,
+    evidence_id: int,
+    payload: GeminiAnalysisIn,
+    x_reviewer_key: str | None = Header(default=None, alias="X-Reviewer-Key"),
+    service: GeminiAssessmentService = Depends(get_gemini_assessment_service),
+    reports: FireReportService = Depends(get_fire_report_service),
+) -> Envelope[EvidenceAssessmentOut]:
+    _require_reviewer(x_reviewer_key, reports)
+    try:
+        row = service.analyze(
+            report_id=report_id,
+            evidence_id=evidence_id,
+            consent=payload.consent,
+            reanalyze=payload.reanalyze,
+        )
+    except (
+        EvidenceNotFound,
+        GeminiAnalysisDisabled,
+        GeminiAssessmentNotFound,
+        GeminiConsentRequired,
+        GeminiInvalidApiKey,
+        GeminiInvalidOutput,
+        GeminiProviderFailure,
+        GeminiProviderTimeout,
+        GeminiQuotaExceeded,
+        MediaUnavailable,
+        SQLAlchemyError,
+    ) as exc:
+        raise _analysis_error(exc) from exc
+    return Envelope(
+        generated_at=datetime.now(UTC),
+        is_demo=False,
+        data=EvidenceAssessmentOut.model_validate(row),
     )
 
 

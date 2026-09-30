@@ -13,8 +13,9 @@ from datetime import datetime
 from typing import Protocol
 
 from app.domain.environmental_observations import FireHotspot, TrafficObservation
-from app.domain.federation import FederationParticipant, FederationRun
 from app.domain.features import FeatureSnapshot
+from app.domain.federation import FederationParticipant, FederationRun
+from app.domain.gemini_assessment import EvidenceAssessmentRow, GeminiVisualAssessment
 from app.domain.incidents import (
     Incident,
     IncidentDelivery,
@@ -373,3 +374,20 @@ class PredictionPublicationRepository(Protocol):
     def list_result_cells(self, run_id: str) -> list[str]:
         """Every distinct cell in the run, without loading any result row."""
         ...
+
+
+class GeminiAssessmentRepository(Protocol):
+    def get_for_evidence(self, evidence_id: int) -> EvidenceAssessmentRow | None: ...
+
+    def save(
+        self,
+        *,
+        report_id: int,
+        evidence_id: int,
+        assessment: GeminiVisualAssessment,
+        model_id: str,
+        prompt_version: str,
+        schema_version: str,
+        consented_at: datetime,
+        generated_at: datetime,
+    ) -> EvidenceAssessmentRow: ...

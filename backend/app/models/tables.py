@@ -764,6 +764,35 @@ incident_delivery = Table(
     Index("ix_incident_delivery_role", "audience_role", "status", "simulated_at"),
 )
 
+# One current, versioned Gemini advisory per citizen-photo evidence row. The
+# image bytes remain in private MediaStore; only this validated JSON and its
+# minimal audit metadata are persisted in Postgres.
+evidence_visual_assessment = Table(
+    "evidence_visual_assessment",
+    metadata,
+    Column("id", BigInteger, primary_key=True),
+    Column(
+        "report_id",
+        BigInteger,
+        ForeignKey("fire_report.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "evidence_id",
+        BigInteger,
+        ForeignKey("report_evidence.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("assessment", JSONB, nullable=False),
+    Column("model_id", String(100), nullable=False),
+    Column("prompt_version", String(50), nullable=False),
+    Column("schema_version", String(50), nullable=False),
+    Column("consented_at", DateTime(timezone=True), nullable=False),
+    Column("generated_at", DateTime(timezone=True), nullable=False),
+    UniqueConstraint("evidence_id", name="uq_evidence_visual_assessment_evidence"),
+    Index("ix_evidence_visual_assessment_report", "report_id", "generated_at"),
+)
+
 # The two-partition federation demonstration persists participant counts and
 # model-update hashes only; the database contract makes raw-row exchange zero.
 federation_run = Table(

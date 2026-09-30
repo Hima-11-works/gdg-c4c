@@ -406,6 +406,16 @@ class Settings(BaseSettings):
     # full address; it is stored truncated for exactly that reason.
     reports_rate_limit_per_hour: int = Field(default=5, ge=1, le=1000)
 
+    # --- Gemini advisory for reviewer-facing citizen photos (F4) ----------
+    # Optional by design: no key disables only photo analysis and never stops
+    # the API from starting or manual evidence review from working.
+    gemini_api_key: SecretStr | None = None
+    gemini_model: str = Field(default="gemini-3.8-flash", min_length=1, max_length=100)
+    # Keep enough headroom under the Vercel function's 60-second maximum for
+    # database/storage work and response serialization.
+    gemini_request_timeout_seconds: int = Field(default=35, ge=1, le=45)
+    gemini_max_output_tokens: int = Field(default=512, ge=128, le=1024)
+
     # --- Candidate hotspot detection (app.services.hotspot_detection) ---
     # See docs/api/hotspots.md. The detector consumes an upstream, georeferenced
     # imagery index (its own product/version/ licence come with the artifact) and
