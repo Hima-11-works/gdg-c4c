@@ -96,9 +96,9 @@ class _IncidentsScreenState extends State<IncidentsScreen>
       List<Map<String, dynamic>> hotspotEvents;
       try {
         hotspotEvents = await widget.api.listHotspotEvents();
-      } on ApiException {
+      } catch (_) {
         // The incident queue remains available while the hotspot scanner is
-        // disabled or its optional shared store is not configured.
+        // disabled, unconfigured, or returns an unexpected shape.
         hotspotEvents = const [];
       }
       if (!mounted) return;
@@ -119,10 +119,12 @@ class _IncidentsScreenState extends State<IncidentsScreen>
         _loading = false;
       });
       if (newlyAssigned.isNotEmpty) _showAssignmentAlert(newlyAssigned);
-    } on ApiException catch (error) {
+    } catch (error) {
       if (!mounted) return;
       setState(() {
-        _error = error;
+        _error = error is ApiException
+            ? error
+            : ApiException.network(error.toString());
         _loading = false;
       });
     } finally {
@@ -296,7 +298,23 @@ class _IncidentsScreenState extends State<IncidentsScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Fire Dept Simulator'),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: Image.asset(
+                'assets/images/logo.png',
+                width: 28,
+                height: 28,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => const Icon(Icons.local_fire_department, color: Colors.deepOrange),
+              ),
+            ),
+            const SizedBox(width: 10),
+            const Text('Fire Dept Simulator'),
+          ],
+        ),
         actions: [
           IconButton(
             tooltip: 'Review published PM2.5 alerts',

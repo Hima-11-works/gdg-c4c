@@ -250,8 +250,18 @@ class IncidentApi {
   /// Live candidate events that a pollution-control responder can open for review.
   Future<List<Map<String, dynamic>>> listHotspotEvents() async {
     final response = await _send('GET', '/api/v1/hotspots/events');
-    return (response.data as List)
-        .map((row) => Map<String, dynamic>.from(row as Map))
+    final dynamic data = response.data;
+    final List rawList;
+    if (data is List) {
+      rawList = data;
+    } else if (data is Map && data['events'] is List) {
+      rawList = data['events'] as List;
+    } else {
+      rawList = const [];
+    }
+    return rawList
+        .whereType<Map>()
+        .map((row) => Map<String, dynamic>.from(row))
         .toList();
   }
 
