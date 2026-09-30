@@ -87,6 +87,61 @@ export function Legend() {
           </section>
         )}
 
+        {state.showActiveFires && (
+          <section>
+            <h3>Active fires (NASA FIRMS)</h3>
+            <div
+              className="legend-row"
+              title="Real near-real-time VIIRS satellite thermal detections (last 24h). Ingested from NASA FIRMS."
+            >
+              <span
+                className="swatch"
+                style={{
+                  background: '#FF2D55',
+                  border: '1.5px solid #FFD1E0',
+                  boxShadow: '0 0 6px rgba(255, 45, 85, 0.7)',
+                }}
+              />
+              Active thermal anomaly
+            </div>
+            <p className="muted legend-note">
+              Shows real NRT detections from GET /api/v1/fires. If no detections are recorded in the
+              window, no points appear.
+            </p>
+          </section>
+        )}
+
+        {state.showHotspotCandidates && (
+          <section>
+            <h3>Hotspot candidates</h3>
+            <div
+              className="legend-row"
+              title="FIRMS thermal anomaly triage candidate"
+            >
+              <span
+                className="swatch"
+                style={{ background: 'transparent', border: '2px solid #22D3EE' }}
+              />
+              Thermal candidate (FIRMS)
+            </div>
+            <div
+              className="legend-row"
+              title="Spatial PM2.5 outlier vs nearby neighbors (Resolution 3+)"
+            >
+              <span
+                className="swatch"
+                style={{ background: 'rgba(251, 191, 36, 0.2)', border: '2px solid #FBBF24' }}
+              />
+              Local PM2.5 outlier (Res 3+)
+            </div>
+            {state.lod.level < 3 && (
+              <p className="muted legend-note">
+                Zoom to Resolution 3 or closer to view local PM2.5 outlier rings.
+              </p>
+            )}
+          </section>
+        )}
+
         <section>
           <div className="legend-row">
             <span className="swatch" style={{ backgroundColor: BASEMAP.stateBorder }} />

@@ -608,6 +608,44 @@ body,
   cursor: not-allowed;
 }
 
+.layer-toggle-group-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.layer-toggle-row-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.layer-sub-hint {
+  font-size: 0.72rem;
+  color: #94a3b8;
+  padding-left: 1.45rem;
+  line-height: 1.25;
+}
+
+.btn-layer-aux {
+  background: rgba(34, 211, 238, 0.12);
+  border: 1px solid rgba(34, 211, 238, 0.35);
+  color: #38bdf8;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 500;
+  padding: 0.1rem 0.4rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-layer-aux:hover {
+  background: rgba(34, 211, 238, 0.25);
+  border-color: rgba(34, 211, 238, 0.6);
+  color: #e0f2fe;
+}
+
 /* Header: horizon (left), play/pause (vertically+horizontally centered),
    reset (right). The 1fr/auto/1fr grid keeps the play button centered
    regardless of how wide the horizon label is. */

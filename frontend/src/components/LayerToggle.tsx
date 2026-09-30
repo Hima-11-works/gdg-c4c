@@ -73,29 +73,52 @@ export function LayerToggle() {
             Live Satellite Imagery (VIIRS)
           </label>
 
-          <label
-            className="layer-toggle-option"
-            title="Real NASA FIRMS active thermal anomalies (VIIRS NRT, last 24h) - ingested by the backend and read from GET /api/v1/fires"
-          >
-            <input
-              type="checkbox"
-              checked={state.showActiveFires}
-              onChange={() => dispatch({ type: 'TOGGLE_ACTIVE_FIRES' })}
-            />
-            Active Fires (NASA FIRMS)
-          </label>
+          <div className="layer-toggle-group-item">
+            <label
+              className="layer-toggle-option"
+              title="Real NASA FIRMS active thermal anomalies (VIIRS NRT, last 24h) - ingested by the backend and read from GET /api/v1/fires"
+            >
+              <input
+                type="checkbox"
+                checked={state.showActiveFires}
+                onChange={() => dispatch({ type: 'TOGGLE_ACTIVE_FIRES' })}
+              />
+              Active Fires (NASA FIRMS)
+            </label>
+            <span className="layer-sub-hint">
+              Real NRT VIIRS detections. If empty, see illustrative hotspots below.
+            </span>
+          </div>
 
-          <label
-            className="layer-toggle-option"
-            title="Show FIRMS thermal detections and local PM2.5 outlier candidates. Local outliers appear from Resolution 3 and are not confirmed sources."
-          >
-            <input
-              type="checkbox"
-              checked={state.showHotspotCandidates}
-              onChange={() => dispatch({ type: 'TOGGLE_HOTSPOT_CANDIDATES' })}
-            />
-            Pollution hotspot candidates
-          </label>
+          <div className="layer-toggle-group-item">
+            <div className="layer-toggle-row-between">
+              <label
+                className="layer-toggle-option"
+                title="Show FIRMS thermal detections and local PM2.5 outlier candidates. Local outliers appear from Resolution 3 and are not confirmed sources."
+              >
+                <input
+                  type="checkbox"
+                  checked={state.showHotspotCandidates}
+                  onChange={() => dispatch({ type: 'TOGGLE_HOTSPOT_CANDIDATES' })}
+                />
+                Pollution hotspot candidates
+              </label>
+              <button
+                type="button"
+                className="btn-layer-aux"
+                onClick={() => {
+                  if (!state.showHotspotCandidates) dispatch({ type: 'TOGGLE_HOTSPOT_CANDIDATES' })
+                  if (!state.hotspotPanelOpen) dispatch({ type: 'TOGGLE_HOTSPOT_PANEL' })
+                }}
+                title="Open fire candidate evidence & triage dialog"
+              >
+                Evidence
+              </button>
+            </div>
+            <span className="layer-sub-hint">
+              Amber spatial anomaly rings require Resolution 3+ (zoom in).
+            </span>
+          </div>
 
           <label
             className="layer-toggle-option"
