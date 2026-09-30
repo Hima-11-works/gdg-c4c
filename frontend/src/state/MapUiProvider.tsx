@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useReducer } from 'react'
 import type { ReactNode } from 'react'
 import { MapUiContext } from './MapUiContext'
 import { initialMapUiState, mapUiReducer } from './mapUiReducer'
@@ -15,6 +15,10 @@ export function MapUiProvider({ children }: { children: ReactNode }) {
 
   // Every change writes the preference subset; persistence is best-effort and
   // never throws (see lib/persistedMapUi).
+  useLayoutEffect(() => {
+    document.documentElement.dataset.theme = state.theme
+  }, [state.theme])
+
   useEffect(() => {
     persistMapUi(state)
   }, [state])

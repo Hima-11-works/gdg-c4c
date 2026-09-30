@@ -1,5 +1,5 @@
-import { NO_DATA_COLOR, PDI_COLOR_SCALE, PM25_COLOR_SCALE } from '../lib/colorScales'
-import { BASEMAP, WIND } from '../lib/mapTheme'
+import { NO_DATA_COLORS, PDI_COLOR_SCALE, PM25_COLOR_SCALE } from '../lib/colorScales'
+import { BASEMAP_THEMES, WIND } from '../lib/mapTheme'
 import { DISTRICT_BOUNDARY_COLOR, HIGHWAY_CORE_COLOR, MAJOR_ROAD_COLOR } from '../lib/visualConfig'
 import { PDI_LABEL, PDI_TOOLTIP } from '../lib/format'
 import { useMapUi } from '../state/MapUiContext'
@@ -49,7 +49,7 @@ export function Legend() {
 
         <section>
           <div className="legend-row">
-            <span className="swatch" style={{ backgroundColor: NO_DATA_COLOR }} />
+            <span className="swatch" style={{ backgroundColor: NO_DATA_COLORS[state.theme] }} />
             No estimate
           </div>
           <div className="legend-row">
@@ -144,11 +144,11 @@ export function Legend() {
 
         <section>
           <div className="legend-row">
-            <span className="swatch" style={{ backgroundColor: BASEMAP.stateBorder }} />
+            <span className="swatch" style={{ backgroundColor: BASEMAP_THEMES[state.theme].stateBorder }} />
             State / UT boundary
           </div>
           <div className="legend-row">
-            <span className="swatch" style={{ backgroundColor: BASEMAP.intlBorder }} />
+            <span className="swatch" style={{ backgroundColor: BASEMAP_THEMES[state.theme].intlBorder }} />
             International boundary
           </div>
           {/* Only listed once the map is deep enough to draw them, so the key

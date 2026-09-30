@@ -11,6 +11,7 @@ import { lodForZoom, MAX_SEARCH_ZOOM, MAX_UNSCOPED_ZOOM } from '../lib/lod'
 import { scopeForPlace } from '../lib/scope'
 import type { Lod } from '../lib/lod'
 import type { MapScope } from '../lib/scope'
+import type { MapTheme } from '../lib/mapTheme'
 import type { LocationKind } from '../lib/locations'
 import type { BoundingBox } from '../lib/types'
 import type { FreightCorridorProperties } from '../lib/freightCorridors'
@@ -20,6 +21,7 @@ import type { FreightCorridorProperties } from '../lib/freightCorridors'
 export type MapViewMode = 'hex' | 'smooth'
 
 export interface MapUiState {
+  theme: MapTheme
   /** Forecast horizon in minutes. 0 = current conditions; in-between frames
    *  are interpolated from the selected publication's forecast anchors. */
   forecastMinutes: number
@@ -89,6 +91,7 @@ export interface MapUiState {
 }
 
 export type MapUiAction =
+  | { type: 'SET_THEME'; theme: MapTheme }
   | { type: 'SELECT_FORECAST'; minutes: number }
   | { type: 'SET_VIEW_MODE'; mode: MapViewMode }
   | { type: 'TOGGLE_CONTRAST' }
@@ -124,6 +127,7 @@ export type MapUiAction =
 // this matches lodForZoom's own country-tier default rather than
 // guessing a zoom before the map has told us its real one.
 export const initialMapUiState: MapUiState = {
+  theme: 'light',
   forecastMinutes: 0,
   viewMode: 'hex',
   contrast: false,
@@ -197,6 +201,8 @@ function closeFocusedCell(state: MapUiState, next: MapUiState): MapUiState {
 
 export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState {
   switch (action.type) {
+    case 'SET_THEME':
+      return { ...state, theme: action.theme }
     case 'SELECT_FORECAST':
       return { ...state, forecastMinutes: action.minutes }
     case 'SET_VIEW_MODE':

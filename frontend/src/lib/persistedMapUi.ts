@@ -20,6 +20,7 @@ const STORAGE_KEY = 'air-health:map-ui'
 type PersistedMapUi = Pick<
   MapUiState,
   | 'viewMode'
+  | 'theme'
   | 'contrast'
   | 'showPdi'
   | 'showFireHotspots'
@@ -78,6 +79,7 @@ export function readPersistedMapUi(): Partial<PersistedMapUi> {
   if (record.viewMode === 'hex' || record.viewMode === 'smooth') {
     restored.viewMode = record.viewMode
   }
+  if (record.theme === 'light' || record.theme === 'dark') restored.theme = record.theme
 
   return restored
 }
@@ -88,6 +90,7 @@ export function persistMapUi(state: MapUiState): void {
   try {
     const persisted: PersistedMapUi = {
       viewMode: state.viewMode,
+      theme: state.theme,
       contrast: state.contrast,
       showPdi: state.showPdi,
       showFireHotspots: state.showFireHotspots,

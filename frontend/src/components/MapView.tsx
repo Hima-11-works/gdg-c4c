@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   GeoJSONSource,
   ImageSource,
@@ -17,7 +17,7 @@ import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&ur
 // this the worker 404s and the map never renders. `?worker&url` makes Vite
 // bundle the worker (with its shared chunk) and hand back a real URL.
 setWorkerUrl(maplibreWorkerUrl)
-import { colorScaleExpression, PDI_COLOR_SCALE, PM25_COLOR_SCALE } from '../lib/colorScales'
+import { colorScaleExpression, NO_DATA_COLORS, PDI_COLOR_SCALE, PM25_COLOR_SCALE } from '../lib/colorScales'
 import {
   freightLinesFeatureCollection,
   freightNodesFeatureCollection,
@@ -62,7 +62,7 @@ import { INDIA_BBOX, lodBbox, MAX_SEARCH_ZOOM, MAX_UNSCOPED_ZOOM } from '../lib/
 import { scopeContains, scopeMask } from '../lib/scope'
 import { INDIA_OUTLINE_URL, STATE_BOUNDARIES_URL } from '../lib/stateBoundaries'
 import { DISTRICT_BOUNDARIES_URL, MAJOR_HIGHWAYS_URL, MAJOR_ROADS_URL } from '../lib/staticLayers'
-import { BASE_STYLE_URL, OVERLAY, WIND, BASEMAP, patchBasemapStyle } from '../lib/mapTheme'
+import { applyBasemapTheme, BASE_STYLE_URL, OVERLAY_THEMES, WIND, BASEMAP_THEMES, patchBasemapStyle } from '../lib/mapTheme'
 import {
   CELL_BORDER_COLOR,
   CELL_BORDER_WIDTH,
@@ -708,6 +708,8 @@ export function MapView({
   const { state, dispatch } = useMapUi()
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<MapLibreMap | null>(null)
+  const themeRef = useRef(state.theme)
+  useLayoutEffect(() => { themeRef.current = state.theme }, [state.theme])
   const [mapReady, setMapReady] = useState(false)
   const viewportCallbacksRef = useRef({ onViewportMoveStart, onViewportSettled })
   useEffect(() => {
@@ -803,6 +805,36 @@ export function MapView({
     emissionsRef.current = state.showIndustrialEmissions
   }, [state.scope, stateBoundaries, districtBoundaries, state.showIndustrialEmissions])
 
+  // Apply theme changes to the existing MapLibre style instead of rebuilding
+  // the map, so its overlays, viewport, and in-flight cell rendering survive.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+
+    const applyTheme = () => {
+      if (!map.isStyleLoaded()) return
+      applyBasemapTheme(map, state.theme)
+      const noData = NO_DATA_COLORS[state.theme]
+      for (const set of PM25_SETS) {
+        map.setPaintProperty(
+          LAYER_PM25_FILL[set],
+          'fill-color',
+          colorScaleExpression(PM25_COLOR_SCALE, 'value', noData),
+        )
+      }
+      map.setPaintProperty(
+        LAYER_PDI_FILL,
+        'fill-color',
+        colorScaleExpression(PDI_COLOR_SCALE, 'value', noData),
+      )
+      map.triggerRepaint()
+    }
+
+    if (map.isStyleLoaded()) applyTheme()
+    else map.once('style.load', applyTheme)
+    return () => { map.off('style.load', applyTheme) }
+  }, [state.theme])
+
   // Escape closes whatever is open on the map: the info popup and the cell
   // drawer. On window rather than the canvas so it works wherever focus is,
   // matching the search box, which already closes its own dropdown on Escape.
@@ -840,7 +872,7 @@ export function MapView({
       .then((r) => r.json())
       .then((style) => {
         if (cancelled) return
-        patchBasemapStyle(style)
+        patchBasemapStyle(style, themeRef.current)
 
         map = new MapLibreMap({
           container,
@@ -886,6 +918,9 @@ export function MapView({
         // if those tiles stall, the pollution grid stays empty until the user
         // moves the map and prompts another tile pass.
         map.once('style.load', () => {
+          const basemapPalette = BASEMAP_THEMES[themeRef.current]
+          const overlayPalette = OVERLAY_THEMES[themeRef.current]
+
           // India country base fill — dissolved from geoBoundaries ADM1. Added
           // first of all, *under* the satellite rasters: it is an opaque fill,
           // so anywhere above them it would hide the imagery over India (which
@@ -898,7 +933,7 @@ export function MapView({
             id: LAYER_INDIA_OUTLINE_FILL,
             type: 'fill',
             source: SOURCE_INDIA_OUTLINE,
-            paint: { 'fill-color': OVERLAY.indiaFill, 'fill-opacity': 1 },
+            paint: { 'fill-color': overlayPalette.indiaFill, 'fill-opacity': 1 },
           })
 
           // NASA GIBS True Color satellite imagery — the bottom raster, above
@@ -990,7 +1025,7 @@ export function MapView({
               type: 'fill',
               source: SOURCE_PM25[set],
               paint: {
-                'fill-color': colorScaleExpression(PM25_COLOR_SCALE, 'value'),
+                'fill-color': colorScaleExpression(PM25_COLOR_SCALE, 'value', NO_DATA_COLORS[themeRef.current]),
                 'fill-opacity': set === 'a' ? PM25_FILL_OPACITY : 0,
               },
             })
@@ -1071,7 +1106,7 @@ export function MapView({
             type: 'fill',
             source: SOURCE_PDI,
             paint: {
-              'fill-color': colorScaleExpression(PDI_COLOR_SCALE, 'value'),
+              'fill-color': colorScaleExpression(PDI_COLOR_SCALE, 'value', NO_DATA_COLORS[themeRef.current]),
               'fill-opacity': 0,
             },
           })
@@ -1145,7 +1180,7 @@ export function MapView({
             type: 'line',
             source: SOURCE_STATE_BOUNDARIES,
             paint: {
-              'line-color': BASEMAP.stateBorder,
+              'line-color': basemapPalette.stateBorder,
               'line-width': 1,
               'line-opacity': 0.7,
               'line-dasharray': [3, 2],
@@ -1158,7 +1193,7 @@ export function MapView({
             type: 'line',
             source: SOURCE_INDIA_OUTLINE,
             paint: {
-              'line-color': OVERLAY.indiaBorder,
+              'line-color': overlayPalette.indiaBorder,
               'line-width': 1.5,
               'line-opacity': 0.8,
             },
