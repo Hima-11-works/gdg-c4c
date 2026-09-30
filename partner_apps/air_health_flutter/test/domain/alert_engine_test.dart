@@ -18,13 +18,13 @@ void main() {
     );
   }
 
-  AirQualityReading makeReading(int aqi, CpcbCategory cat) {
+  AirQualityReading makeReading(int aqi, CpcbCategory cat, [DateTime? at]) {
     return AirQualityReading(
       aqiCpcb: aqi,
       pm25: aqi * 0.6,
       primaryPollutant: 'PM2.5',
       category: cat,
-      recordedAt: now,
+      recordedAt: at ?? now,
     );
   }
 
@@ -38,8 +38,8 @@ void main() {
     });
   }
 
-  DataFreshness makeFresh() =>
-      DataFreshness(retrievedAt: now, quality: DataQuality.full);
+  DataFreshness makeFresh([DateTime? at]) =>
+      DataFreshness(retrievedAt: at ?? now, quality: DataQuality.full);
 
   PollutionEvent makeEvent({
     String id = 'evt-1',
@@ -641,25 +641,27 @@ void main() {
 
     test('suppresses a non-urgent alert inside the window', () {
       // 23:00 is inside 22:00–07:00; Poor is only a warning.
+      final t = DateTime(2026, 9, 17, 23, 0);
       final result = engine.evaluate(
         profile: quietProfile(),
-        current: makeReading(250, CpcbCategory.poor),
+        current: makeReading(250, CpcbCategory.poor, t),
         forecast: const [],
         events: const [],
-        freshness: makeFresh(),
-        now: DateTime(2026, 9, 17, 23, 0),
+        freshness: makeFresh(t),
+        now: t,
       );
       expect(result.decisions, isEmpty);
     });
 
     test('lets urgent alerts through the window', () {
+      final t = DateTime(2026, 9, 17, 23, 0);
       final result = engine.evaluate(
         profile: quietProfile(),
-        current: makeReading(350, CpcbCategory.veryPoor),
+        current: makeReading(350, CpcbCategory.veryPoor, t),
         forecast: const [],
         events: const [],
-        freshness: makeFresh(),
-        now: DateTime(2026, 9, 17, 23, 0),
+        freshness: makeFresh(t),
+        now: t,
       );
       expect(result.decisions, isNotEmpty);
       expect(result.decisions.first.severity, AlertSeverity.urgent);
@@ -678,25 +680,27 @@ void main() {
     });
 
     test('suppressed alerts are not recorded, so they can fire later', () {
+      final t1 = DateTime(2026, 9, 17, 23, 0);
       final suppressed = engine.evaluate(
         profile: quietProfile(),
-        current: makeReading(250, CpcbCategory.poor),
+        current: makeReading(250, CpcbCategory.poor, t1),
         forecast: const [],
         events: const [],
-        freshness: makeFresh(),
-        now: DateTime(2026, 9, 17, 23, 0),
+        freshness: makeFresh(t1),
+        now: t1,
       );
       expect(suppressed.dedupState, isEmpty);
 
       // The same situation after the window closes now fires.
+      final t2 = DateTime(2026, 9, 18, 8, 0);
       final after = engine.evaluate(
         profile: quietProfile(),
-        current: makeReading(250, CpcbCategory.poor),
+        current: makeReading(250, CpcbCategory.poor, t2),
         forecast: const [],
         events: const [],
-        freshness: makeFresh(),
+        freshness: makeFresh(t2),
         priorAlerts: suppressed.dedupState,
-        now: DateTime(2026, 9, 18, 8, 0),
+        now: t2,
       );
       expect(after.decisions, isNotEmpty);
     });

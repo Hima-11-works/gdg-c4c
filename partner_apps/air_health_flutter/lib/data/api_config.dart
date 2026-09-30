@@ -9,21 +9,29 @@
 /// For Flutter, set these in `--dart-define`:
 /// ```
 /// flutter run --dart-define=POLLUTION_API_BASE_URL=http://localhost:8000
-/// ```
+import 'package:flutter/foundation.dart';
+
 class ApiConfig {
   const ApiConfig({
     required this.baseUrl,
     this.apiKey,
   });
 
-  /// Read from environment — throws if the base URL is missing.
+  /// Default production backend deployed on Vercel.
+  static const defaultProductionBaseUrl = 'https://air-health-api.vercel.app';
+
+  /// Read from environment — defaults to the deployed production backend in release mode,
+  /// or when POLLUTION_API_BASE_URL is explicitly provided.
   factory ApiConfig.fromEnvironment() {
-    const baseUrl = String.fromEnvironment('POLLUTION_API_BASE_URL');
+    const envUrl = String.fromEnvironment('POLLUTION_API_BASE_URL');
+    final baseUrl = envUrl.isNotEmpty
+        ? envUrl
+        : (kReleaseMode ? defaultProductionBaseUrl : '');
     const apiKey = String.fromEnvironment('POLLUTION_API_KEY');
     if (baseUrl.isEmpty) {
       throw StateError(
         'POLLUTION_API_BASE_URL not set. '
-        'Pass --dart-define=POLLUTION_API_BASE_URL=http://localhost:8000',
+        'Pass --dart-define=POLLUTION_API_BASE_URL=https://air-health-api.vercel.app',
       );
     }
     return ApiConfig(

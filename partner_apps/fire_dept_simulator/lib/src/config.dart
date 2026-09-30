@@ -40,7 +40,7 @@ class SimulatorConfig {
 
   static const defaultBaseUrl = String.fromEnvironment(
     'INCIDENT_API_BASE_URL',
-    defaultValue: 'http://localhost:8000',
+    defaultValue: 'https://air-health-api.vercel.app',
   );
 
   static const defaultApiKey = String.fromEnvironment(

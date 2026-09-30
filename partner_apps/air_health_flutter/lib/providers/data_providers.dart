@@ -40,8 +40,10 @@ final fireReportApiClientProvider = Provider<FireReportApiClient?>((ref) {
 final citizenReportReviewStatusProvider =
     FutureProvider.family<ReportReviewStatusDto?, int>((ref, reportId) async {
   final client = ref.watch(fireReportApiClientProvider);
-  if (client is! CitizenReportStatusApiClient) return null;
-  return client.getReviewStatus(reportId);
+  if (client is CitizenReportStatusApiClient) {
+    return (client as CitizenReportStatusApiClient).getReviewStatus(reportId);
+  }
+  return null;
 });
 
 /// Citizen PM2.5 submission client, or null until the API is configured.

@@ -259,7 +259,7 @@ void main() {
       when(() => store.readAll()).thenAnswer((_) async => stored);
       when(() => store.deleteAll()).thenAnswer((_) async {});
 
-      final result = await run([fp(250, const Duration(hours: 3))]);
+      final result = await run([fp(250, const Duration(hours: 3))], stored: stored);
 
       expect(result, isEmpty);
       verify(() => service.cancelAlarm(12)).called(1);
