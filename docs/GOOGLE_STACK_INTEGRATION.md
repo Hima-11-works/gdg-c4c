@@ -1,6 +1,6 @@
 # Neon Object Storage + Vercel + Gemini Implementation Plan
 
-**Goal:** finish a deployable, two-hour integration for Gemini-assisted review of citizen photos while preserving the existing India pollution map, API contracts, alert workflow, and fire-department simulator.
+**Goal:** finish a deployable, three-hour integration for Gemini-assisted review of citizen photos and satellite context per H3 cell while preserving the existing India pollution map, API contracts, alert workflow, and fire-department simulator.
 
 **Selected stack**
 
@@ -14,7 +14,7 @@
 
 **Important:** Neon provides PostgreSQL and Object Storage, not a host for the existing FastAPI application. Keep that API on Vercel. The frontend calls it; the API connects to Neon PostgreSQL, the private Neon Object Storage bucket, and Gemini. Keep database, object-storage, and Gemini credentials on the backend.
 
-**Two-hour assumption:** Neon and Vercel already work as documented in [GO_LIVE.md](GO_LIVE.md). This schedule covers configuration, the Gemini feature, deployment, and a focused verification pass. It does not include replacing the map, migrating databases, or building new notification infrastructure.
+**Three-hour assumption:** Neon and Vercel already work as documented in [GO_LIVE.md](GO_LIVE.md). This schedule covers configuration, the Gemini features, deployment, and a focused verification pass. It does not include replacing the map, migrating databases, training a pollution-estimation model, or building new notification infrastructure.
 
 ## Cost and privacy gates
 
@@ -24,7 +24,7 @@
 - Keep the Gemini key, Neon Object Storage credentials, database URLs, and reviewer key out of browser bundles, Flutter builds, logs, and source control.
 - Gemini is advisory only: it cannot confirm the pollution source, infer AQI or pollutant concentration from an image, approve reports, or dispatch responders.
 
-## Step-by-step plan (120 minutes)
+## Step-by-step plan (180 minutes)
 
 ### 1. Confirm access and current deployment — 0–10 minutes
 
@@ -97,7 +97,26 @@ Use the official Python SDK's image and structured-output support. [Google GenAI
 4. Keep human approval/rejection separate from the model output. The model cannot change evidence/report state.
 5. Show clear disabled, no-consent, timeout, quota, and provider-error states. Keep manual review available.
 
-### 6. Apply migrations and deploy through Vercel — 100–110 minutes
+### 6. Add Gemini-assisted satellite context per H3 cell — 100–155 minutes
+
+Treat the satellite pipeline as the source of measurements and Gemini as a visual-pattern interpreter and plain-language explainer. A satellite image or a Gemini vision response cannot by itself provide ground-level pollutant concentration or CPCB AQI.
+
+1. Reuse the existing Sentinel-5P UV Aerosol Index (UVAI), FIRMS fire detections, weather, and ground-monitor data. Add quality-controlled numeric ingestion for Sentinel-5P tropospheric NO₂ vertical column density, retaining its native `mol/m²` unit. Aggregate source pixels that actually overlap each H3 cell; record valid-pixel/area coverage, acquisition time, QA flags, and processing time. Do not turn coarse satellite pixels into falsely precise fine-resolution cell readings.
+2. If a quality-controlled source and time permit, add NASA MAIAC aerosol optical depth (AOD) as a separate, unitless column indicator. Keep it optional for this release. Neither AOD nor NO₂ column density is surface PM₂.₅. Do not calculate CPCB AQI from either. Satellite-derived surface PM₂.₅ requires a separately calibrated and monitor-validated model; if none exists, return “no reliable surface estimate.” [Sentinel-5P NO₂ product](https://developers.google.com/earth-engine/datasets/catalog/COPERNICUS_S5P_OFFL_L3_NO2) · [NASA MAIAC product guide](https://www.earthdata.nasa.gov/s3fs-public/2025-04/MCD19_User_Guide_V6.pdf)
+3. For each cell and observation window, assemble a backend-owned evidence bundle: satellite indicators with native units and QA/coverage, time-matched ground PM₂.₅ (clearly marked observed or validated estimate, with monitor distance), local weather (wind direction/speed and humidity; boundary-layer height only when a source supplies it), and nearby FIRMS detection count, distance, confidence, and fire radiative power when available. Do not present a nearby monitor's reading as a measurement taken inside the H3 cell. Missing, cloudy, stale, or low-coverage values are `unavailable`, never zero. Compare with a cell's historical baseline only when enough comparable, quality-controlled observations exist; label the result as an anomaly/screening signal, not AQI. Do not combine unlike satellite products into one pollution score without calibration and validation.
+4. Generate an optional cell-clipped thumbnail from the timestamped, backend-proxied satellite layer with its product name and visualization legend. Send that image and the compact evidence bundle to Gemini from the backend using `GEMINI_API_KEY`. Derive and validate the H3 geometry on the backend; do not trust client-supplied imagery, URLs, or measurements. Keep the existing secret-handling and reviewer/rate-limit controls.
+5. Use structured output for a short **Satellite interpretation** with fields such as `visual_pattern` (`plume_like`, `smoke_or_dust_like`, `no_clear_pattern`, `unclear`), `possible_event_type`, `supporting_evidence`, `limitations`, and `summary`. Prompt Gemini to describe visible patterns and evidence only; it must not invent pollutant values, AQI, source attribution, exact fire confirmation, health diagnosis, or emergency severity. Numeric measurements, units, times, coverage, and data provenance in the response come directly from validated backend records and cannot be changed by Gemini.
+6. Show the user, per H3 cell:
+   - Surface PM₂.₅ in `µg/m³` from a time-stamped monitor observation or a separately validated estimate; identify which it is and show source, age, and uncertainty. Show CPCB AQI only when the required pollutant data and averaging windows pass the official CPCB method; otherwise leave AQI unavailable.
+   - Separate satellite rows for NO₂ column density, UVAI, and (if enabled) AOD, with units, observation time, quality/coverage, and the explicit label **satellite indicator — not ground-level concentration**.
+   - A local anomaly/trend only when the baseline gate passes; nearby fire detections as corroborating thermal-anomaly evidence, never as proof of pollution or a confirmed fire; available wind/weather context; and an evidence coverage/quality indicator.
+   - Gemini's concise interpretation clearly marked **AI-assisted, uncertain, and advisory**. Do not let it trigger an authority alert or change report status automatically.
+7. Add an explicit user-triggered analysis action or cached cell-detail request. Cache by H3 cell, observation window, source-product versions, Gemini model, and prompt/schema version; do not call Gemini on every map pan, hover, or render. Return a clear unavailable state when imagery or valid numeric inputs are missing. Add a retention/expiry policy for generated interpretations.
+8. Test aggregation and H3 spatial coverage, QA/cloud/stale/no-data cases, native units and provenance, baseline eligibility, Gemini schema/timeout/quota failures, cache reuse, and the invariant that model output never replaces backend measurements. Use mocked Gemini responses; no live model call in automated tests.
+
+**Acceptance gate:** the cell view distinguishes measured surface air quality from satellite indicators; every number carries its source, unit, timestamp, and coverage/quality; Gemini cannot generate or overwrite numbers; and sparse/cloudy evidence stays unavailable instead of appearing clean. CPCB AQI remains based on its prescribed pollutant inputs and averaging periods: at least three pollutant measurements, including PM₂.₅ or PM₁₀, are needed, and the highest valid sub-index determines the AQI. [CPCB National AQI](https://cpcb.nic.in/displaypdf.php?id=bmF0aW9uYWwtYWlyLXF1YWxpdHktaW5kZXgvRklOQUwtUkVQT1JUX0FRSV8ucGRm) · [Gemini image understanding](https://ai.google.dev/gemini-api/docs/image-understanding) · [Gemini structured output](https://ai.google.dev/gemini-api/docs/structured-output)
+
+### 7. Apply migrations and deploy through Vercel — 155–165 minutes
 
 1. Set production `DATABASE_URL` to Neon's pooled connection string and retain the direct URL for the documented migration procedure.
 2. Apply the new Alembic migration once using the Neon direct connection.
@@ -105,7 +124,7 @@ Use the official Python SDK's image and structured-output support. [Google GenAI
 4. Redeploy the backend. Deploy the frontend Vercel project after its reviewer dialog changes.
 5. Keep `VITE_API_BASE_URL` pointed to the backend origin and preserve the existing exact-origin CORS allowlist. Vercel's current two-project deployment steps are in [GO_LIVE.md](GO_LIVE.md).
 
-### 7. Run a focused end-to-end check — 110–120 minutes
+### 8. Run a focused end-to-end check — 165–180 minutes
 
 - The Vercel-hosted map, search, cells, alerts, reports, and timeline still load from the production API.
 - A citizen photo uploads to private Neon Object Storage, is retrievable through the reviewer API, and is not publicly accessible.
@@ -113,6 +132,9 @@ Use the official Python SDK's image and structured-output support. [Google GenAI
 - An unrelated or ambiguous image produces an uncertain response, not a fabricated pollution claim.
 - Missing consent, reviewer key, Gemini key, Neon Object Storage object, or database access leaves manual review usable and reports a clear error.
 - A saved advisory reloads without another model call.
+- A cell detail shows sourced satellite indicators separately from observed or validated surface PM₂.₅/AQI; each shows units, acquisition time, and valid coverage.
+- An H3 cell with cloudy, stale, or insufficient satellite coverage shows unavailable data and does not receive a fabricated zero, AQI, or Gemini-generated concentration.
+- Gemini's visual interpretation is advisory only and cannot alter server-returned numeric measurements, approve a report, or dispatch responders.
 - Browser requests, Vite bundles, Flutter apps, and logs contain no Gemini or Neon Object Storage secret.
 - The Flutter simulator still reaches the existing API and can acknowledge/resolve incidents.
 
@@ -139,3 +161,8 @@ If any integration gate fails, preserve the existing deployment and leave the af
 - [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing)
 - [Google GenAI Python SDK](https://ai.google.dev/gemini-api/docs/libraries)
 - [Gemini image input and structured output](https://ai.google.dev/gemini-api/docs/image-understanding)
+- [Sentinel-5P tropospheric NO₂ product fields and units](https://developers.google.com/earth-engine/datasets/catalog/COPERNICUS_S5P_OFFL_L3_NO2)
+- [NASA MAIAC aerosol optical depth product guide](https://www.earthdata.nasa.gov/s3fs-public/2025-04/MCD19_User_Guide_V6.pdf)
+- [NASA FIRMS VIIRS fire-detection description and caveats](https://firms.modaps.eosdis.nasa.gov/content/descriptions/FIRMS_VIIRS_Firehotspots.html)
+- [ESA Sentinel-5P coverage and instrument facts](https://www.esa.int/Applications/Observing_the_Earth/Copernicus/Sentinel-5P/Facts_and_figures)
+- [CPCB National Air Quality Index method](https://cpcb.nic.in/displaypdf.php?id=bmF0aW9uYWwtYWlyLXF1YWxpdHktaW5kZXgvRklOQUwtUkVQT1JUX0FRSV8ucGRm)
