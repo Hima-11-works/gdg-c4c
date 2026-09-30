@@ -584,3 +584,104 @@ export interface FireReportSubmit {
   /** Idempotency id: a retry of the same submission must not stack reports. */
   client_report_id?: string
 }
+
+export interface SurfacePM25Context {
+  status: 'available' | 'unavailable' | 'stale'
+  value_ugm3: number | null
+  unit: string
+  is_estimate: boolean
+  source: string | null
+  station_id: string | null
+  station_distance_km: number | null
+  measured_at: string | null
+  uncertainty_ugm3: number | null
+  disclaimer: string
+}
+
+export interface SatelliteIndicatorContext {
+  name: string
+  status: 'available' | 'unavailable' | 'cloudy' | 'low_coverage' | 'stale'
+  value: number | null
+  unit: string
+  observed_at: string | null
+  qa_score: number | null
+  coverage_fraction: number | null
+  valid_pixels: number | null
+  source: string
+  product_version: string | null
+  disclaimer: string
+}
+
+export interface ThermalAnomalyContext {
+  detection_count: number
+  nearest_distance_km: number | null
+  max_frp_mw: number | null
+  confidence_class: string | null
+  satellite: string | null
+  observed_at: string | null
+  disclaimer: string
+}
+
+export interface WeatherContext {
+  wind_speed_ms: number | null
+  wind_direction_deg: number | null
+  humidity_pct: number | null
+  temperature_c: number | null
+  boundary_layer_height_m: number | null
+  observed_at: string | null
+}
+
+export interface BaselineAnomalyContext {
+  baseline_eligible: boolean
+  screening_signal: 'normal' | 'elevated' | 'high_anomaly' | 'insufficient_baseline'
+  deviation_sigma: number | null
+  note: string
+}
+
+export interface CPCBContext {
+  aqi: number | null
+  category: string | null
+  prominent_pollutant: string | null
+  status: 'available' | 'unavailable'
+  reason: string | null
+}
+
+export interface CellEvidenceBundle {
+  h3_cell: string
+  resolution: number
+  latitude: number
+  longitude: number
+  window_start: string
+  window_end: string
+  surface_pm25: SurfacePM25Context
+  cpcb_aqi: CPCBContext
+  satellite_no2: SatelliteIndicatorContext
+  satellite_uvai: SatelliteIndicatorContext
+  satellite_aod?: SatelliteIndicatorContext | null
+  thermal_anomalies: ThermalAnomalyContext
+  weather: WeatherContext
+  baseline_anomaly: BaselineAnomalyContext
+  data_provenance: Record<string, string>
+}
+
+export interface SatelliteInterpretation {
+  visual_pattern: 'plume_like' | 'smoke_or_dust_like' | 'no_clear_pattern' | 'unclear'
+  possible_event_type: string
+  supporting_evidence: string[]
+  limitations: string[]
+  summary: string
+  advisory_label: string
+}
+
+export interface CellSatelliteAnalysisOut {
+  evidence_bundle: CellEvidenceBundle
+  interpretation: SatelliteInterpretation | null
+  model_id: string | null
+  prompt_version: string | null
+  schema_version: string | null
+  cached: boolean
+  generated_at: string | null
+  expires_at: string | null
+  thumbnail_available: boolean
+}
+

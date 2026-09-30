@@ -37,6 +37,10 @@ UVAI_UNIT = "unitless UV aerosol index (340/380 nm)"
 UVAI_RAW_MIN = -1.0
 UVAI_RAW_MAX = 5.0
 QA_DATASET = "qa_value"
+NO2_PRODUCT_TYPE = "L2__NO2___"
+NO2_DATASET = "nitrogendioxide_tropospheric_column"
+NO2_UNIT = "mol/m²"
+NO2_MIN_QUALITY_DEFAULT = 0.50
 LICENSE = "Contains modified Copernicus Sentinel data, processed by ESA, CC BY-SA 3.0 IGO"
 _VERSION_RE = re.compile(r"_(\d{2})_(\d{2})_(\d{2})(?:_|\.nc$)")
 _QA_THRESHOLD_EPSILON = 1e-6
@@ -73,6 +77,33 @@ def build_catalog_filter(*, bbox: BoundingBox, since: datetime, until: datetime)
                 "att/OData.CSC.StringAttribute/Value eq 'L2__AER_AI')"
             ),
             "contains(Name, 'S5P_NRTI_L2__AER_AI_')",
+            "Online eq true",
+            f"ContentDate/Start ge {since.astimezone(UTC).isoformat().replace('+00:00', 'Z')}",
+            f"ContentDate/Start le {until.astimezone(UTC).isoformat().replace('+00:00', 'Z')}",
+            "OData.CSC.Intersects(area=geography'SRID=4326;POLYGON ((" + polygon + "))')",
+        )
+    )
+
+
+def build_no2_catalog_filter(*, bbox: BoundingBox, since: datetime, until: datetime) -> str:
+    """Build a bounded OData query for near-real-time Sentinel-5P NO2 swaths."""
+    if since.tzinfo is None or until.tzinfo is None:
+        raise ValueError("catalog search bounds must include a timezone")
+    polygon = (
+        f"{bbox.min_lon:.6f} {bbox.min_lat:.6f}, "
+        f"{bbox.max_lon:.6f} {bbox.min_lat:.6f}, "
+        f"{bbox.max_lon:.6f} {bbox.max_lat:.6f}, "
+        f"{bbox.min_lon:.6f} {bbox.max_lat:.6f}, "
+        f"{bbox.min_lon:.6f} {bbox.min_lat:.6f}"
+    )
+    return " and ".join(
+        (
+            "Collection/Name eq 'SENTINEL-5P'",
+            (
+                "Attributes/OData.CSC.StringAttribute/any(att:att/Name eq 'productType' and "
+                f"att/OData.CSC.StringAttribute/Value eq '{NO2_PRODUCT_TYPE}')"
+            ),
+            "contains(Name, 'S5P_NRTI_L2__NO2___')",
             "Online eq true",
             f"ContentDate/Start ge {since.astimezone(UTC).isoformat().replace('+00:00', 'Z')}",
             f"ContentDate/Start le {until.astimezone(UTC).isoformat().replace('+00:00', 'Z')}",
@@ -274,6 +305,130 @@ def parse_product(
             "aerosols such as smoke and dust; it is not PM2.5 and does not identify a source. "
             "Operational raw UVAI thresholds are recorded in scan config and require local "
             "validation against reviewed events."
+        ),
+    )
+
+
+def parse_no2_product(
+    path: Path | str,
+    *,
+    product_id: str,
+    product_name: str,
+    acquired_at: datetime,
+    available_at: datetime,
+    bbox: BoundingBox,
+    h3_resolution: int = 6,
+    min_quality: float = NO2_MIN_QUALITY_DEFAULT,
+    max_tiles: int = 20_000,
+) -> ImageryArtifact:
+    """Decode and aggregate one calibrated TROPOMI NO2 swath into georeferenced H3 cells.
+
+    Tropospheric NO2 vertical column density is retained in its native mol/m² unit.
+    QA-qualified pixels (qa_value > min_quality) overlapping each H3 cell are averaged,
+    recording valid pixel count and quality. It is NOT surface PM2.5 or CPCB AQI.
+    """
+    if not 0 <= h3_resolution <= 15:
+        raise ValueError("H3 resolution must be in [0, 15]")
+    if not 0 <= min_quality <= 1:
+        raise ValueError("minimum product quality must be in [0, 1]")
+    if acquired_at.tzinfo is None or available_at.tzinfo is None:
+        raise ValueError("satellite acquisition and availability times must include a timezone")
+    acquired_at = acquired_at.astimezone(UTC)
+    available_at = available_at.astimezone(UTC)
+
+    with h5py.File(path, "r") as handle:
+        product = handle.get("PRODUCT")
+        if not isinstance(product, h5py.Group):
+            raise ValueError("Sentinel-5P file has no /PRODUCT group")
+        required = ("latitude", "longitude", NO2_DATASET, QA_DATASET)
+        missing = [name for name in required if name not in product]
+        if missing:
+            raise ValueError(f"Sentinel-5P NO2 /PRODUCT is missing required variables: {missing}")
+        latitude = _read_scaled(product["latitude"])
+        longitude = _read_scaled(product["longitude"])
+        no2 = _read_scaled(product[NO2_DATASET])
+        quality = _read_scaled(product[QA_DATASET])
+        if not (latitude.shape == longitude.shape == no2.shape == quality.shape):
+            raise ValueError("Sentinel-5P geolocation, NO2 column, and QA shapes differ")
+        version = _product_version(handle, product_name)
+
+    valid = (
+        np.isfinite(latitude)
+        & np.isfinite(longitude)
+        & np.isfinite(no2)
+        & np.isfinite(quality)
+        & (quality > min_quality + _QA_THRESHOLD_EPSILON)
+        & (latitude >= bbox.min_lat)
+        & (latitude <= bbox.max_lat)
+        & (longitude >= bbox.min_lon)
+        & (longitude <= bbox.max_lon)
+    )
+    rows, columns = np.nonzero(valid)
+    aggregates: dict[str, list[float]] = {}
+    for row, column in zip(rows.tolist(), columns.tolist(), strict=True):
+        lat = float(latitude[row, column])
+        lon = float(longitude[row, column])
+        cell = h3.latlng_to_cell(lat, lon, h3_resolution)
+        aggregate = aggregates.setdefault(cell, [0.0, 0.0, 0.0])
+        aggregate[0] += float(no2[row, column])
+        aggregate[1] += float(quality[row, column])
+        aggregate[2] += 1.0
+    if len(aggregates) > max_tiles:
+        raise ValueError(
+            f"swath produced {len(aggregates)} H3 cells, above the {max_tiles} cell limit"
+        )
+
+    tiles = []
+    for cell, (no2_sum, quality_sum, count) in sorted(aggregates.items()):
+        raw_no2 = no2_sum / count
+        mean_quality = quality_sum / count
+        lat, lon = h3.cell_to_latlng(cell)
+        # Bounded indicator clamped to [0, 1] for indexing (e.g. 0 to 500 µmol/m² = 0.0005 mol/m²)
+        normalized_indicator = min(1.0, max(0.0, raw_no2 / 0.0005)) if raw_no2 > 0 else 0.0
+        tiles.append(
+            ImageryTile(
+                tile_id=f"s5p-no2:{product_id}:{cell}",
+                h3_cell=cell,
+                latitude=lat,
+                longitude=lon,
+                acquired_at=acquired_at,
+                index_value=normalized_indicator,
+                cloud_fraction=None,
+                raw_index_value=raw_no2,
+                raw_index_unit=NO2_UNIT,
+                quality_value=mean_quality,
+            )
+        )
+
+    excluded_quality = int(np.count_nonzero(
+        np.isfinite(latitude)
+        & np.isfinite(longitude)
+        & np.isfinite(no2)
+        & np.isfinite(quality)
+        & (quality <= min_quality + _QA_THRESHOLD_EPSILON)
+        & (latitude >= bbox.min_lat)
+        & (latitude <= bbox.max_lat)
+        & (longitude >= bbox.min_lon)
+        & (longitude <= bbox.max_lon)
+    ))
+    return ImageryArtifact(
+        artifact_id=f"cdse-s5p-no2:{product_id}",
+        source="Copernicus Data Space Ecosystem",
+        product="Sentinel-5P TROPOMI Level-2 Tropospheric NO2 NRTI",
+        product_version=version,
+        index_name=f"tropospheric_NO2_column_{NO2_UNIT}",
+        license=LICENSE,
+        h3_resolution=h3_resolution,
+        tiles=tuple(tiles),
+        acquired_at=acquired_at,
+        available_at=available_at,
+        synthetic=False,
+        notes=(
+            f"CDSE OData product {product_name}; {len(tiles)} H3 cells from "
+            f"{len(rows)} QA-qualified pixels (qa_value > {min_quality:g}); "
+            f"{excluded_quality} in-bounds pixels rejected by QA. Cell values are means in {NO2_UNIT}. "
+            "Satellite tropospheric NO2 column density is a column total and not ground-level "
+            "concentration or CPCB AQI."
         ),
     )
 

@@ -19,6 +19,7 @@ import { useMapUi } from '../state/MapUiContext'
 import type { CellDetailOut, FireReportWithStatus } from '../lib/types'
 import type { ActiveFire } from '../lib/activeFires'
 import { estimatePlumeDrift } from '../lib/transboundaryDrift'
+import { CellSatelliteContextPanel } from './CellSatelliteContextPanel'
 
 /** The most recent citizen report filed in this cell, from
  *  GET /api/v1/reports. Deliberately NOT framed as evidence behind any
@@ -635,6 +636,7 @@ export function CellDetailPanel({
 
       {resource.status === 'success' && (
         <>
+          <CellSatelliteContextPanel h3Cell={selectedCell} resolution={resolution} />
           <SatelliteFireEvidence h3Cell={selectedCell} resource={activeFires} />
           <CellDetailContent
             detail={resource.data}

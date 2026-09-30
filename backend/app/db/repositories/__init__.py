@@ -17,6 +17,9 @@ from app.db.repositories.ingestion_run import SqlIngestionRunRepository
 from app.db.repositories.model_version import SqlModelVersionRepository
 from app.db.repositories.prediction_publication import SqlPredictionPublicationRepository
 from app.db.repositories.report_evidence import EvidenceRepository as SqlEvidenceRepository
+from app.db.repositories.satellite_interpretation import (
+    CellSatelliteInterpretationRepository as SqlCellSatelliteInterpretationRepository,
+)
 from app.db.repositories.sensor_reading import SqlSensorReadingRepository
 from app.db.repositories.source_health import (
     SourceHealthRepository,
@@ -35,6 +38,7 @@ __all__ = [
     "SqlIncidentRepository",
     "SqlIncidentDeliveryRepository",
     "SqlGeminiAssessmentRepository",
+    "SqlCellSatelliteInterpretationRepository",
     "SqlEvidenceRepository",
     "SqlSourceHealthRepository",
     "SourceHealthRepository",

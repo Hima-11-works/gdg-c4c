@@ -15,6 +15,7 @@ import type {
   AlertOut,
   BoundingBox,
   CellDetailOut,
+  CellSatelliteAnalysisOut,
   Envelope,
   FireHotspotOut,
   FireReportOut,
@@ -514,3 +515,30 @@ export function fetchCellDetail(
     })
   })
 }
+
+export function fetchCellSatelliteContext(
+  h3Cell: string,
+  resolution?: number,
+  signal?: AbortSignal,
+): Promise<Envelope<CellSatelliteAnalysisOut>> {
+  return apiGet<Envelope<CellSatelliteAnalysisOut>>(
+    `/api/v1/cells/${encodeURIComponent(h3Cell)}/satellite-context${buildQuery({ resolution })}`,
+    signal,
+  )
+}
+
+export function triggerCellSatelliteAnalysis(
+  h3Cell: string,
+  reanalyze: boolean = false,
+  resolution?: number,
+): Promise<Envelope<CellSatelliteAnalysisOut>> {
+  return apiPost<Envelope<CellSatelliteAnalysisOut>>(
+    `/api/v1/cells/${encodeURIComponent(h3Cell)}/satellite-analysis${buildQuery({ resolution })}`,
+    { reanalyze },
+  )
+}
+
+export function cellSatelliteThumbnailUrl(h3Cell: string): string {
+  return `${API_BASE_URL}/api/v1/cells/${encodeURIComponent(h3Cell)}/satellite-thumbnail`
+}
+

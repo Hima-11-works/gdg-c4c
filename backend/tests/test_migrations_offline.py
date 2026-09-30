@@ -78,9 +78,36 @@ def _table_bodies(ddl: str) -> dict[str, set[str]]:
     for match in re.finditer(r"CREATE TABLE (\w+) \((.*?)\n\)", ddl, re.DOTALL):
         name, body = match.group(1), match.group(2)
         bodies[name] = {line.strip().rstrip(",") for line in body.splitlines() if line.strip()}
-    for match in re.finditer(r"ALTER TABLE (\w+) ADD (?:COLUMN )?(.+?);", ddl):
-        name, clause = match.group(1), match.group(2).strip()
-        bodies.setdefault(name, set()).add(clause)
+    for match in re.finditer(
+        r"ALTER TABLE (\w+) (?:(ADD (?:COLUMN )?(.+?))|(ALTER COLUMN (\w+) TYPE (.+?))|(DROP CONSTRAINT (?:IF EXISTS )?(\w+)));",
+        ddl,
+    ):
+        table = match.group(1)
+        if match.group(2):  # ADD
+            clause = match.group(3).strip()
+            clause = re.sub(r"^CONSTRAINT \w+ (FOREIGN KEY.*)", r"\1", clause)
+            bodies.setdefault(table, set()).add(clause)
+        elif match.group(4):  # ALTER COLUMN TYPE
+            col = match.group(5)
+            new_type = match.group(6).strip()
+            if table in bodies:
+                new_clauses = set()
+                for clause in bodies[table]:
+                    if clause.startswith(f"{col} "):
+                        parts = clause.split(maxsplit=2)
+                        rest = f" {parts[2]}" if len(parts) > 2 else ""
+                        new_clauses.add(f"{col} {new_type}{rest}")
+                    else:
+                        new_clauses.add(clause)
+                bodies[table] = new_clauses
+        elif match.group(7):  # DROP CONSTRAINT
+            cname = match.group(8).strip()
+            if table in bodies:
+                bodies[table] = {
+                    clause
+                    for clause in bodies[table]
+                    if not clause.startswith(f"CONSTRAINT {cname} ")
+                }
     return bodies
 
 

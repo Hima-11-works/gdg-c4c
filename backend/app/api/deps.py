@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings, get_settings
 from app.db.repositories import (
     SqlAlertRepository,
+    SqlCellSatelliteInterpretationRepository,
     SqlEvidenceRepository,
     SqlFederationRepository,
     SqlFireHotspotRepository,
@@ -36,6 +37,7 @@ from app.db.session import get_db
 from app.domain.incidents import IncidentActor
 from app.domain.types import BoundingBox
 from app.services.alerts import AlertService
+from app.services.cell_satellite import CellSatelliteService
 from app.services.cells import CellService
 from app.services.citizen_sensors import CitizenSensorSubmissionService
 from app.services.evidence import EvidenceService
@@ -229,3 +231,18 @@ def get_tile_service() -> TileService:
     """No session: the tile proxy reads settings and one upstream HTTP call,
     never the database."""
     return TileService(get_settings())
+
+
+def get_cell_satellite_service(
+    session: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> CellSatelliteService:
+    return CellSatelliteService(
+        settings=settings,
+        sensor_repo=SqlSensorReadingRepository(session),
+        weather_repo=SqlWeatherReadingRepository(session),
+        fire_repo=SqlFireHotspotRepository(session),
+        grid_repo=SqlGridStateRepository(session),
+        interpretation_repo=SqlCellSatelliteInterpretationRepository(session),
+    )
+

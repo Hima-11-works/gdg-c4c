@@ -436,7 +436,7 @@ fire_report = Table(
     # Whether the India geofence was checked and passed at submission. Recorded
     # rather than inferred, so a report accepted with the fence disabled is still
     # honest about it.
-    Column("india_geofence_verified", Boolean, nullable=False, server_default="false"),
+    Column("india_geofence_verified", Boolean, nullable=False, server_default=text("false")),
     Column("cluster_id", String(40), nullable=True),
     Column("corroborating_report_count", Integer, nullable=False, server_default="0"),
     # F2 progress, reported to the citizen. Deliberately not an input to
@@ -873,4 +873,32 @@ hotspot_event_projection = Table(
     Column("updated_at", DateTime(timezone=True), nullable=False),
     Column("payload", JSONB, nullable=False),
     Index("ix_hotspot_event_updated_at", "updated_at"),
+)
+
+# Cached Gemini-assisted satellite interpretations per H3 cell and observation window.
+# The interpretation is advisory and never overwrites server measurements.
+cell_satellite_interpretation = Table(
+    "cell_satellite_interpretation",
+    metadata,
+    Column("id", BigInteger, primary_key=True),
+    Column("h3_cell", String(H3_CELL_LENGTH), nullable=False),
+    Column("window_start", DateTime(timezone=True), nullable=False),
+    Column("window_end", DateTime(timezone=True), nullable=False),
+    Column("evidence_bundle", JSONB, nullable=False),
+    Column("interpretation", JSONB, nullable=False),
+    Column("model_id", String(100), nullable=False),
+    Column("prompt_version", String(50), nullable=False),
+    Column("schema_version", String(50), nullable=False),
+    Column("generated_at", DateTime(timezone=True), nullable=False),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    UniqueConstraint(
+        "h3_cell",
+        "window_start",
+        "window_end",
+        "model_id",
+        "prompt_version",
+        name="uq_cell_satellite_interpretation_cache",
+    ),
+    Index("ix_cell_satellite_interpretation_lookup", "h3_cell", "window_start", "window_end"),
+    Index("ix_cell_satellite_interpretation_expiry", "expires_at"),
 )
