@@ -1281,6 +1281,62 @@ body,
   padding: 0.2rem 0;
 }
 
+.cell-forecast-chart-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.55);
+}
+
+.cell-forecast-chart {
+  display: block;
+  width: 100%;
+  min-width: 420px;
+  height: auto;
+}
+
+.forecast-gridline {
+  stroke: rgba(148, 163, 184, 0.16);
+  stroke-dasharray: 3 5;
+}
+
+.forecast-axis {
+  stroke: rgba(203, 213, 225, 0.55);
+  stroke-width: 1.2;
+}
+
+.forecast-tick {
+  fill: #aab6c8;
+  font-size: 11px;
+}
+
+.forecast-axis-title {
+  fill: #cbd5e1;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.forecast-line {
+  fill: none;
+  stroke: #38bdf8;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.forecast-interval {
+  stroke: rgba(56, 189, 248, 0.45);
+  stroke-width: 5;
+  stroke-linecap: round;
+}
+
+.forecast-point {
+  fill: #e0f2fe;
+  stroke: #0284c7;
+  stroke-width: 2;
+}
+
 .pdi-factor-list {
   list-style: none;
   padding: 0;
@@ -3415,6 +3471,94 @@ body,
   color: #f1f5f9;
 }
 
+.cell-satellite-loading {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.cell-satellite-loading p {
+  margin: 0;
+}
+
+.cell-satellite-progress-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: #dbeafe;
+  font-size: 0.8rem;
+}
+
+.cell-satellite-progress-heading strong {
+  color: #7dd3fc;
+  font-variant-numeric: tabular-nums;
+}
+
+.cell-satellite-progress-track {
+  height: 0.45rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #273449;
+}
+
+.cell-satellite-progress-track > span {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #38bdf8, #34d399);
+  transform-origin: left center;
+  transition: transform 180ms ease-out;
+}
+
+.cell-satellite-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.cell-satellite-print-title {
+  display: none;
+}
+
+.btn-cell-print {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  min-height: 30px;
+  padding: 0.3rem 0.55rem;
+  color: #dbeafe;
+  background: #1e293b;
+  border: 1px solid #475569;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.btn-cell-print:hover {
+  border-color: #7dd3fc;
+  background: #26364b;
+}
+
+.btn-cell-print:focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: 2px;
+}
+
+.btn-cell-print svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .coverage-badge {
   font-size: 0.7rem;
   font-weight: 500;
@@ -3828,6 +3972,77 @@ body,
   padding: 0.25rem 0.55rem;
   cursor: pointer;
   transition: background 0.15s ease;
+}
+
+#cell-satellite-print-root {
+  display: none;
+}
+
+@media print {
+  @page {
+    margin: 12mm;
+  }
+
+  #root {
+    display: none !important;
+  }
+
+  body * {
+    visibility: hidden !important;
+  }
+
+  #cell-satellite-print-root,
+  #cell-satellite-print-root * {
+    visibility: visible !important;
+  }
+
+  #cell-satellite-print-root {
+    position: static !important;
+    display: block !important;
+    width: 100% !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    color: #111827 !important;
+    background: #fff !important;
+  }
+
+  #cell-satellite-print-root .cell-satellite-section {
+    display: flex !important;
+    width: 100% !important;
+    max-height: none !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    color: #111827 !important;
+    background: #fff !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
+
+  #cell-satellite-print-root .cell-satellite-section * {
+    color: #111827 !important;
+    background-color: transparent !important;
+    border-color: #cbd5e1 !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+
+  #cell-satellite-print-root .cell-satellite-print-title {
+    display: block !important;
+    margin: 0.4rem 0 0 !important;
+    font-size: 0.9rem !important;
+    font-weight: 600 !important;
+  }
+
+  #cell-satellite-print-root .cell-thumbnail-img {
+    max-width: 260px !important;
+    border: 1px solid #94a3b8 !important;
+  }
+
+  #cell-satellite-print-root button {
+    display: none !important;
+  }
 }
 
 .btn-gemini-rerun:hover:not(:disabled) {

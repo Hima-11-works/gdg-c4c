@@ -93,7 +93,11 @@ function lodParams(query: LodQuery): Record<string, string | number | undefined>
   }
 }
 
-async function apiGet<T>(path: string, signal?: AbortSignal): Promise<T> {
+async function apiGet<T>(
+  path: string,
+  signal?: AbortSignal,
+  onProgress?: (loaded: number, total: number) => void,
+): Promise<T> {
   let response: Response
   try {
     response = await fetch(`${API_BASE_URL}${path}`, { signal })
@@ -111,7 +115,36 @@ async function apiGet<T>(path: string, signal?: AbortSignal): Promise<T> {
     )
   }
 
-  return response.json() as Promise<T>
+  if (!onProgress || !response.body) return response.json() as Promise<T>
+
+  const reader = response.body.getReader()
+  const total = Number(response.headers.get('content-length')) || 0
+  const chunks: Uint8Array[] = []
+  let loaded = 0
+  onProgress(0, total)
+  try {
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+      chunks.push(value)
+      loaded += value.byteLength
+      onProgress(loaded, total)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+
+  const bytes = new Uint8Array(loaded)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes)) as T
+  } catch {
+    throw new ApiError(0, 'invalid_response', 'The backend returned invalid cell data.')
+  }
 }
 
 let cachedPublishedMeta: MetaV2Out | null = null
@@ -260,7 +293,10 @@ async function apiGetV2GridStream<T>(
   if (complete === null)
     throw new ApiError(0, 'incomplete_stream', 'The backend stream ended before all cells loaded.')
   const metadata = complete as GridStreamComplete<T>
-  onProgress?.(metadata.coverage?.requested_cells ?? data.length, metadata.coverage?.requested_cells ?? data.length)
+  onProgress?.(
+    metadata.coverage?.requested_cells ?? data.length,
+    metadata.coverage?.requested_cells ?? data.length,
+  )
   return {
     generated_at: metadata.generated_at,
     run_id: metadata.run_id,
@@ -520,10 +556,12 @@ export function fetchCellSatelliteContext(
   h3Cell: string,
   resolution?: number,
   signal?: AbortSignal,
+  onProgress?: (loaded: number, total: number) => void,
 ): Promise<Envelope<CellSatelliteAnalysisOut>> {
   return apiGet<Envelope<CellSatelliteAnalysisOut>>(
     `/api/v1/cells/${encodeURIComponent(h3Cell)}/satellite-context${buildQuery({ resolution })}`,
     signal,
+    onProgress,
   )
 }
 
@@ -539,6 +577,5 @@ export function triggerCellSatelliteAnalysis(
 }
 
 export function cellSatelliteThumbnailUrl(h3Cell: string): string {
-  return `${API_BASE_URL}/api/v1/cells/${encodeURIComponent(h3Cell)}/satellite-thumbnail`
+  return `${API_BASE_URL}/api/v1/cells/${encodeURIComponent(h3Cell)}/satellite-thumbnail?ramp=cpcb-pm25-v1`
 }
-

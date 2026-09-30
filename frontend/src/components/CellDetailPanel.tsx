@@ -160,6 +160,91 @@ function PriorityBadge({ h3Cell }: { h3Cell: string }) {
   )
 }
 
+function ForecastChart({ forecasts }: { forecasts: CellDetailOut['forecasts'] }) {
+  const points = [...forecasts].sort((a, b) => a.forecast_hours - b.forecast_hours)
+  const left = 58
+  const right = 526
+  const top = 18
+  const bottom = 202
+  const maxHour = Math.max(1, ...points.map((point) => point.forecast_hours))
+  const maxValue = Math.max(
+    50,
+    ...points.map((point) => Math.max(point.predicted_pm25, point.upper_pm25 ?? 0)),
+  )
+  const yMax = Math.ceil(maxValue / 50) * 50
+  const x = (hour: number) => left + (hour / maxHour) * (right - left)
+  const y = (value: number) => bottom - (value / yMax) * (bottom - top)
+  const line = points
+    .map(
+      (point, index) =>
+        `${index === 0 ? 'M' : 'L'} ${x(point.forecast_hours)} ${y(point.predicted_pm25)}`,
+    )
+    .join(' ')
+  const yTicks = [0, yMax / 4, yMax / 2, (yMax * 3) / 4, yMax]
+
+  return (
+    <div className="cell-forecast-chart-wrap">
+      <svg
+        className="cell-forecast-chart"
+        viewBox="0 0 560 250"
+        role="img"
+        aria-label={`PM2.5 forecast: ${points.map((point) => `plus ${point.forecast_hours} hours, ${formatNumber(point.predicted_pm25)} micrograms per cubic meter`).join('; ')}`}
+      >
+        <text
+          className="forecast-axis-title forecast-y-title"
+          x="14"
+          y="112"
+          transform="rotate(-90 14 112)"
+        >
+          PM2.5 (µg/m³)
+        </text>
+        {yTicks.map((tick) => (
+          <g key={tick}>
+            <line className="forecast-gridline" x1={left} x2={right} y1={y(tick)} y2={y(tick)} />
+            <text className="forecast-tick" x={left - 9} y={y(tick) + 4} textAnchor="end">
+              {formatNumber(tick, 0)}
+            </text>
+          </g>
+        ))}
+        <line className="forecast-axis" x1={left} x2={right} y1={bottom} y2={bottom} />
+        <path className="forecast-line" d={line} />
+        {points.map((point) => (
+          <g key={point.forecast_hours}>
+            {point.lower_pm25 != null && point.upper_pm25 != null && (
+              <line
+                className="forecast-interval"
+                x1={x(point.forecast_hours)}
+                x2={x(point.forecast_hours)}
+                y1={y(point.lower_pm25)}
+                y2={y(point.upper_pm25)}
+              />
+            )}
+            <circle
+              className="forecast-point"
+              cx={x(point.forecast_hours)}
+              cy={y(point.predicted_pm25)}
+              r="4"
+            >
+              <title>{`+${point.forecast_hours}hr · ${formatNumber(point.predicted_pm25)} µg/m³`}</title>
+            </circle>
+            <text
+              className="forecast-tick"
+              x={x(point.forecast_hours)}
+              y={bottom + 19}
+              textAnchor="middle"
+            >
+              +{point.forecast_hours}hr
+            </text>
+          </g>
+        ))}
+        <text className="forecast-axis-title" x={(left + right) / 2} y="242" textAnchor="middle">
+          Time from now
+        </text>
+      </svg>
+    </div>
+  )
+}
+
 function CellDetailContent({
   detail,
   isDemo,
@@ -317,27 +402,7 @@ function CellDetailContent({
       {detail.forecasts.length === 0 ? (
         <p>No forecast available for this cell yet.</p>
       ) : (
-        <ul className="cell-forecast-list">
-          {detail.forecasts.map((forecast) => (
-            <li key={forecast.forecast_hours}>
-              +{forecast.forecast_hours}h: {formatNumber(forecast.predicted_pm25)} µg/m³
-              {forecast.lower_pm25 != null && forecast.upper_pm25 != null && (
-                <span className="muted">
-                  {' '}
-                  (80% interval {formatNumber(forecast.lower_pm25)}–
-                  {formatNumber(forecast.upper_pm25)})
-                </span>
-              )}
-              <span className="muted">
-                {' '}
-                (
-                {forecast.metadata?.prediction_method ??
-                  `${Math.round(forecast.confidence * 100)}% feature coverage`}
-                )
-              </span>
-            </li>
-          ))}
-        </ul>
+        <ForecastChart forecasts={detail.forecasts} />
       )}
 
       <h3 title={PDI_TOOLTIP}>{PDI_LABEL} factors</h3>

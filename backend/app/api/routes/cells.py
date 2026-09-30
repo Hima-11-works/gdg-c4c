@@ -199,6 +199,7 @@ def get_cell_satellite_thumbnail(
         bundle = service.assemble_bundle(h3_cell)
         png_bytes = render_cell_thumbnail(
             h3_cell,
+            pm25_val=service.map_pm25_for_cell(h3_cell),
             no2_val=bundle.satellite_no2.value,
             uvai_val=bundle.satellite_uvai.value,
             firms_count=bundle.thermal_anomalies.detection_count,
@@ -211,6 +212,6 @@ def get_cell_satellite_thumbnail(
     return Response(
         content=png_bytes,
         media_type="image/png",
-        headers={"Cache-Control": "public, max-age=1800"},
+        headers={"Cache-Control": "public, max-age=300"},
     )
 

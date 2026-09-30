@@ -46,6 +46,33 @@ Mark your assessment as advisory only."""
 
 INTERPRETATION_TTL_HOURS = 6
 
+# Keep the satellite advisory thumbnail's selected H3 outline aligned with
+# the PM2.5 ramp used by the frontend map (CPCB bands). These stops mirror
+# frontend/src/lib/colorScales.ts:PM25_COLOR_SCALE.
+PM25_COLOR_STOPS = (
+    (0.0, (34, 197, 94)),
+    (31.0, (154, 222, 81)),
+    (61.0, (234, 179, 8)),
+    (91.0, (249, 115, 22)),
+    (121.0, (239, 68, 68)),
+    (251.0, (127, 29, 29)),
+)
+
+
+def _pm25_color(pm25_val: float | None) -> tuple[int, int, int]:
+    """Return map-matched PM2.5 RGB, or the map's neutral no-data color."""
+    if pm25_val is None or not math.isfinite(pm25_val):
+        return (72, 82, 96)  # frontend NO_DATA_COLOR (#485260)
+    value = max(0.0, pm25_val)
+    for (low, low_color), (high, high_color) in zip(PM25_COLOR_STOPS, PM25_COLOR_STOPS[1:]):
+        if value <= high:
+            fraction = max(0.0, (value - low) / (high - low))
+            return tuple(
+                round(start + (end - start) * fraction)
+                for start, end in zip(low_color, high_color)
+            )
+    return PM25_COLOR_STOPS[-1][1]
+
 
 class SatelliteAnalyzer(Protocol):
     def analyze(
@@ -118,6 +145,7 @@ class GeminiSatelliteVisionAnalyzer:
 def render_cell_thumbnail(
     h3_cell: str,
     *,
+    pm25_val: float | None = None,
     no2_val: float | None = None,
     uvai_val: float | None = None,
     firms_count: int = 0,
@@ -148,16 +176,11 @@ def render_cell_thumbnail(
         y = pad + int(((max_lat - lat) / lat_span) * draw_h)  # inverted y for latitude
         pixel_points.append((x, y))
 
-    # Determine visual color based on satellite layer intensity
-    if no2_val is not None and no2_val > 0.0001:  # elevated NO2
-        fill_color = (239, 68, 68, 90)  # red tint
-        outline_color = (248, 113, 113, 255)
-    elif uvai_val is not None and uvai_val > 1.5:  # aerosol absorption
-        fill_color = (245, 158, 11, 90)  # amber tint
-        outline_color = (251, 191, 36, 255)
-    else:
-        fill_color = (56, 189, 248, 60)  # sky blue tint
-        outline_color = (14, 165, 233, 255)
+    # The selected cell follows the same smooth PM2.5 ramp as the map, rather
+    # than defaulting to red based on unrelated satellite NO2/UVAI thresholds.
+    cell_color = _pm25_color(pm25_val)
+    fill_color = (*cell_color, 86)
+    outline_color = (*cell_color, 255)
 
     # Draw hex polygon
     if len(pixel_points) >= 3:
@@ -176,7 +199,7 @@ def render_cell_thumbnail(
 
     # Top product banner
     draw.rectangle([(0, 0), (width, 36)], fill=(30, 41, 59, 240))
-    title_text = "Sentinel-5P NO2 & UVAI Satellite Layer"
+    title_text = "Sentinel-5P | map PM2.5 cell overlay"
     draw.text((12, 10), title_text, fill=(241, 245, 249, 255))
 
     # Bottom legend and metadata bar
@@ -184,14 +207,16 @@ def render_cell_thumbnail(
     cell_info = f"H3: {h3_cell[:10]}... | Res {h3.get_resolution(h3_cell)}"
     draw.text((12, height - 26), cell_info, fill=(148, 163, 184, 255))
 
-    legend_label = "0.0 mol/m²"
-    draw.text((width - 150, height - 26), legend_label, fill=(148, 163, 184, 255))
-    # Gradient scale bar
-    for i in range(40):
-        color_r = int(56 + (239 - 56) * (i / 40))
-        color_g = int(189 - 120 * (i / 40))
-        color_b = int(248 - 180 * (i / 40))
-        draw.line([(width - 80 + i, height - 22), (width - 80 + i, height - 14)], fill=(color_r, color_g, color_b, 255))
+    draw.text((width - 132, height - 26), "PM2.5 ug/m3", fill=(226, 232, 240, 255))
+    # Draw a compact legend from the exact map color stops.
+    bar_start = width - 82
+    bar_width = 70
+    for i in range(bar_width):
+        color = _pm25_color((i / (bar_width - 1)) * 251)
+        draw.line(
+            [(bar_start + i, height - 23), (bar_start + i, height - 14)],
+            fill=(*color, 255),
+        )
 
     buf = io.BytesIO()
     image.save(buf, format="PNG")
@@ -356,6 +381,7 @@ class CellSatelliteService:
 
         thumbnail_bytes = render_cell_thumbnail(
             h3_cell,
+            pm25_val=self.map_pm25_for_cell(h3_cell),
             no2_val=no2_val,
             uvai_val=uvai_val,
             firms_count=firms_count,
@@ -395,6 +421,17 @@ class CellSatelliteService:
             expires_at=expires_at,
             thumbnail_available=True,
         )
+
+    def map_pm25_for_cell(self, h3_cell: str) -> float | None:
+        """Read this exact map cell's PM2.5 value for matching thumbnail color."""
+        if self._grid_repo is None or not hasattr(self._grid_repo, "latest_for_cell"):
+            return None
+        try:
+            grid = self._grid_repo.latest_for_cell(h3_cell)
+            return grid.pm25 if grid is not None else None
+        except Exception as exc:
+            logger.warning("Error fetching map PM2.5 for cell %s: %s", h3_cell, exc)
+            return None
 
     def _get_surface_pm25(
         self,

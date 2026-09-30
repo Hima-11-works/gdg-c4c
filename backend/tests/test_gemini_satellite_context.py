@@ -28,6 +28,7 @@ from app.domain.satellite_context import (
 from app.main import create_app
 from app.services.cell_satellite import (
     CellSatelliteService,
+    _pm25_color,
     render_cell_thumbnail,
 )
 from app.services.gemini_assessment import (
@@ -142,12 +143,21 @@ def test_evidence_bundle_contains_native_satellite_units_and_cpcb_gate() -> None
 def test_thumbnail_rendering_produces_valid_png() -> None:
     png = render_cell_thumbnail(
         DELHI_CELL,
+        pm25_val=100.0,
         no2_val=0.00015,
         uvai_val=1.8,
         firms_count=2,
     )
     assert isinstance(png, bytes)
     assert png.startswith(b"\x89PNG\r\n\x1a\n")  # PNG magic header
+
+
+def test_satellite_cell_color_uses_the_map_pm25_ramp() -> None:
+    assert _pm25_color(0) == (34, 197, 94)
+    assert _pm25_color(251) == (127, 29, 29)
+    assert _pm25_color(None) == (72, 82, 96)
+    assert _pm25_color(31) == (154, 222, 81)
+    assert _pm25_color(200) != _pm25_color(251)
 
 
 def test_gemini_analysis_caches_and_does_not_call_model_twice() -> None:

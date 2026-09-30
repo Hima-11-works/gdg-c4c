@@ -33,14 +33,44 @@ function cpcbBadgeClass(category: string | null): string {
 }
 
 export function CellSatelliteContextPanel({ h3Cell, resolution }: CellSatelliteContextPanelProps) {
+  const [loadProgress, setLoadProgress] = useState(4)
+  const [responseStarted, setResponseStarted] = useState(false)
   const { resource, refetch } = useApiResource<CellSatelliteAnalysisOut>(
-    () => fetchCellSatelliteContext(h3Cell, resolution),
+    (signal, onProgress) => fetchCellSatelliteContext(h3Cell, resolution, signal, onProgress),
     [h3Cell, resolution],
+    {
+      onProgress: (loaded, total) => {
+        if (loaded > 0) setResponseStarted(true)
+        if (loaded > 0 && total > 0) {
+          const transferProgress = Math.min(99, 90 + Math.round((loaded / total) * 9))
+          setLoadProgress((current) => Math.max(current, transferProgress))
+        }
+      },
+    },
   )
 
   const [analysisOverride, setAnalysisOverride] = useState<CellSatelliteAnalysisOut | null>(null)
   const [analyzing, setAnalyzing] = useState(false)
   const [analysisError, setAnalysisError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (resource.status !== 'loading') {
+      setLoadProgress(resource.status === 'success' ? 100 : 0)
+      setResponseStarted(false)
+      return
+    }
+
+    setLoadProgress(4)
+    setResponseStarted(false)
+    const timer = window.setInterval(() => {
+      setLoadProgress((current) =>
+        current >= 88
+          ? current
+          : Math.min(88, current + Math.max(1, Math.ceil((88 - current) * 0.08))),
+      )
+    }, 160)
+    return () => window.clearInterval(timer)
+  }, [resource.status, h3Cell, resolution])
 
   useEffect(() => {
     setAnalysisOverride(null)
@@ -63,11 +93,51 @@ export function CellSatelliteContextPanel({ h3Cell, resolution }: CellSatelliteC
     }
   }
 
+  const handlePrint = () => {
+    const source = document.querySelector<HTMLElement>('.cell-satellite-section')
+    if (!source) return
+
+    const printRoot = document.createElement('div')
+    printRoot.id = 'cell-satellite-print-root'
+    const report = source.cloneNode(true) as HTMLElement
+    report.querySelectorAll('button').forEach((button) => button.remove())
+    printRoot.append(report)
+    document.body.append(printRoot)
+
+    const previousTitle = document.title
+    document.title = `Air quality cell ${h3Cell}`
+    const cleanup = () => {
+      printRoot.remove()
+      document.title = previousTitle
+    }
+    window.addEventListener('afterprint', cleanup, { once: true })
+    window.requestAnimationFrame(() => window.print())
+  }
+
   if (resource.status === 'loading') {
     return (
       <section className="cell-satellite-section" aria-label="Satellite and air quality context">
         <h3>Satellite & Surface Air Quality</h3>
-        <p className="muted">Loading satellite and monitor observations…</p>
+        <div className="cell-satellite-loading" role="status" aria-live="polite">
+          <div className="cell-satellite-progress-heading">
+            <span>{responseStarted ? 'Receiving cell data' : 'Preparing cell analysis'}</span>
+            <strong>{loadProgress}%</strong>
+          </div>
+          <div
+            className="cell-satellite-progress-track"
+            role="progressbar"
+            aria-label="Satellite and surface data loading progress"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={loadProgress}
+          >
+            <span style={{ transform: `scaleX(${loadProgress / 100})` }} />
+          </div>
+          <p className="muted">
+            Progress is estimated during analysis and follows transferred bytes when the response
+            size is available.
+          </p>
+        </div>
       </section>
     )
   }
@@ -105,16 +175,35 @@ export function CellSatelliteContextPanel({ h3Cell, resolution }: CellSatelliteC
     <section className="cell-satellite-section" aria-label="Satellite and air quality context">
       <div className="cell-satellite-header">
         <h3>Satellite & Surface Air Quality</h3>
-        <span className="coverage-badge">
-          H3 Res {bundle.resolution} · {Math.round((no2.coverage_fraction ?? 1) * 100)}% coverage
-        </span>
+        <p className="cell-satellite-print-title">
+          H3 cell {h3Cell} · Resolution {bundle.resolution}
+        </p>
+        <div className="cell-satellite-actions">
+          <span className="coverage-badge">
+            H3 Res {bundle.resolution} · {Math.round((no2.coverage_fraction ?? 1) * 100)}% coverage
+          </span>
+          <button
+            type="button"
+            className="btn-cell-print"
+            onClick={handlePrint}
+            title="Print or save this cell report as PDF"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M7 8V3h10v5M7 17H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2M7 14h10v7H7z" />
+              <path d="M17 11h.01" />
+            </svg>
+            <span>Print / Save PDF</span>
+          </button>
+        </div>
       </div>
 
       {/* Surface PM2.5 vs Satellite Distinction */}
       <div className="surface-air-card">
         <div className="surface-air-title-row">
           <strong>Measured Surface Air Quality</strong>
-          <span className={`surface-kind-tag ${surface.is_estimate ? 'tag-estimate' : 'tag-observed'}`}>
+          <span
+            className={`surface-kind-tag ${surface.is_estimate ? 'tag-estimate' : 'tag-observed'}`}
+          >
             {surface.is_estimate ? 'Validated Surface Estimate' : 'Station Observation'}
           </span>
         </div>
@@ -130,7 +219,8 @@ export function CellSatelliteContextPanel({ h3Cell, resolution }: CellSatelliteC
                 )}
                 {surface.station_distance_km !== null && surface.station_distance_km > 0 && (
                   <span className="muted station-distance">
-                    {' '}· {formatNumber(surface.station_distance_km)} km from cell center
+                    {' '}
+                    · {formatNumber(surface.station_distance_km)} km from cell center
                   </span>
                 )}
               </>
@@ -189,17 +279,22 @@ export function CellSatelliteContextPanel({ h3Cell, resolution }: CellSatelliteC
                 {no2.status === 'available' && no2.value !== null ? (
                   <span>
                     {(no2.value * 1e6).toFixed(1)} µmol/m²{' '}
-                    <span className="muted">({no2.value.toExponential(2)} {no2.unit})</span>
+                    <span className="muted">
+                      ({no2.value.toExponential(2)} {no2.unit})
+                    </span>
                   </span>
                 ) : (
                   <span className="muted">{no2.status}</span>
                 )}
               </td>
-              <td>
-                {no2.qa_score !== null ? `${Math.round(no2.qa_score * 100)}% QA` : '—'}
-              </td>
+              <td>{no2.qa_score !== null ? `${Math.round(no2.qa_score * 100)}% QA` : '—'}</td>
               <td className="muted">
-                {no2.observed_at ? new Date(no2.observed_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}
+                {no2.observed_at
+                  ? new Date(no2.observed_at).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })
+                  : '—'}
               </td>
             </tr>
             <tr>
@@ -209,16 +304,21 @@ export function CellSatelliteContextPanel({ h3Cell, resolution }: CellSatelliteC
               </td>
               <td>
                 {uvai.status === 'available' && uvai.value !== null ? (
-                  <span>{formatNumber(uvai.value, 2)} <span className="muted">(index)</span></span>
+                  <span>
+                    {formatNumber(uvai.value, 2)} <span className="muted">(index)</span>
+                  </span>
                 ) : (
                   <span className="muted">{uvai.status}</span>
                 )}
               </td>
-              <td>
-                {uvai.qa_score !== null ? `${Math.round(uvai.qa_score * 100)}% QA` : '—'}
-              </td>
+              <td>{uvai.qa_score !== null ? `${Math.round(uvai.qa_score * 100)}% QA` : '—'}</td>
               <td className="muted">
-                {uvai.observed_at ? new Date(uvai.observed_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—'}
+                {uvai.observed_at
+                  ? new Date(uvai.observed_at).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })
+                  : '—'}
               </td>
             </tr>
           </tbody>
@@ -262,8 +362,10 @@ export function CellSatelliteContextPanel({ h3Cell, resolution }: CellSatelliteC
             {weather.temperature_c !== null || weather.wind_speed_ms !== null ? (
               <>
                 {weather.temperature_c !== null && `${formatNumber(weather.temperature_c, 1)}°C`}
-                {weather.wind_speed_ms !== null && ` · ${formatNumber(weather.wind_speed_ms, 1)} m/s`}
-                {weather.wind_direction_deg !== null && ` (${Math.round(weather.wind_direction_deg)}°)`}
+                {weather.wind_speed_ms !== null &&
+                  ` · ${formatNumber(weather.wind_speed_ms, 1)} m/s`}
+                {weather.wind_direction_deg !== null &&
+                  ` (${Math.round(weather.wind_direction_deg)}°)`}
                 {weather.humidity_pct !== null && ` · ${Math.round(weather.humidity_pct)}% RH`}
               </>
             ) : (
@@ -336,8 +438,8 @@ export function CellSatelliteContextPanel({ h3Cell, resolution }: CellSatelliteC
             <div className="gemini-meta-footer">
               <span className="muted">
                 {analysis.cached ? 'Loaded from cache' : 'Newly generated'} ·{' '}
-                {analysis.generated_at ? new Date(analysis.generated_at).toLocaleTimeString() : ''} · Model:{' '}
-                {analysis.model_id ?? 'Gemini'}
+                {analysis.generated_at ? new Date(analysis.generated_at).toLocaleTimeString() : ''}{' '}
+                · Model: {analysis.model_id ?? 'Gemini'}
               </span>
               <button
                 type="button"
@@ -352,7 +454,8 @@ export function CellSatelliteContextPanel({ h3Cell, resolution }: CellSatelliteC
         ) : (
           <div className="gemini-empty-action">
             <p className="muted">
-              Request an AI-assisted visual pattern interpretation of this cell’s satellite evidence.
+              Request an AI-assisted visual pattern interpretation of this cell’s satellite
+              evidence.
             </p>
             <button
               type="button"
