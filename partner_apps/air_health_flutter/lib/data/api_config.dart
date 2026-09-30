@@ -9,8 +9,7 @@
 /// For Flutter, set these in `--dart-define`:
 /// ```
 /// flutter run --dart-define=POLLUTION_API_BASE_URL=http://localhost:8000
-import 'package:flutter/foundation.dart';
-
+/// ```
 class ApiConfig {
   const ApiConfig({
     required this.baseUrl,
@@ -20,27 +19,18 @@ class ApiConfig {
   /// Default production backend deployed on Vercel.
   static const defaultProductionBaseUrl = 'https://air-health-api.vercel.app';
 
-  /// Read from environment — defaults to the deployed production backend in release mode,
-  /// or when POLLUTION_API_BASE_URL is explicitly provided.
+  /// Read from environment, defaulting to the deployed backend in every build mode.
+  /// Set `POLLUTION_API_BASE_URL` to use a local or staging API.
   factory ApiConfig.fromEnvironment() {
     const envUrl = String.fromEnvironment('POLLUTION_API_BASE_URL');
-    final baseUrl = envUrl.isNotEmpty
-        ? envUrl
-        : (kReleaseMode ? defaultProductionBaseUrl : '');
     const apiKey = String.fromEnvironment('POLLUTION_API_KEY');
-    if (baseUrl.isEmpty) {
-      throw StateError(
-        'POLLUTION_API_BASE_URL not set. '
-        'Pass --dart-define=POLLUTION_API_BASE_URL=https://air-health-api.vercel.app',
-      );
-    }
     return ApiConfig(
-      baseUrl: baseUrl,
+      baseUrl: envUrl.isNotEmpty ? envUrl : defaultProductionBaseUrl,
       apiKey: apiKey.isEmpty ? null : apiKey,
     );
   }
 
-  /// Safe factory — returns null if env vars are missing.
+  /// Safe factory used by providers that permit a missing or invalid config.
   static ApiConfig? tryFromEnvironment() {
     try {
       return ApiConfig.fromEnvironment();

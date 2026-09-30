@@ -39,6 +39,35 @@ export function LayerToggle() {
           ))}
         </div>
 
+        <section className="appearance-control" aria-label="Appearance">
+          <span className="appearance-label">Appearance</span>
+          <div className="appearance-options" role="group" aria-label="Map theme">
+            <button
+              type="button"
+              className={`appearance-option ${state.theme === 'light' ? 'active' : ''}`}
+              aria-pressed={state.theme === 'light'}
+              onClick={() => dispatch({ type: 'SET_THEME', theme: 'light' })}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="4" />
+                <path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42" />
+              </svg>
+              Light
+            </button>
+            <button
+              type="button"
+              className={`appearance-option ${state.theme === 'dark' ? 'active' : ''}`}
+              aria-pressed={state.theme === 'dark'}
+              onClick={() => dispatch({ type: 'SET_THEME', theme: 'dark' })}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M20.2 15.4A8.5 8.5 0 0 1 8.6 3.8 8.7 8.7 0 1 0 20.2 15.4Z" />
+              </svg>
+              Dark
+            </button>
+          </div>
+        </section>
+
         <label
           className="layer-toggle-option"
           title="Draw a line on the boundary between PM2.5 ranges - hex edges in the hex view, iso-lines across the smooth field in the smooth view"

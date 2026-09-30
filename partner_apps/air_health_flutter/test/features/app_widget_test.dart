@@ -31,6 +31,9 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          gridApiClientProvider.overrideWithValue(null),
+          fireReportApiClientProvider.overrideWithValue(null),
+          citizenSensorApiClientProvider.overrideWithValue(null),
           onboardingDoneProvider.overrideWith((ref) async => true),
           onboardingCompleteProvider.overrideWith((ref) async => true),
           currentLocationProvider.overrideWith((ref) async => testLocation),
@@ -52,6 +55,9 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          gridApiClientProvider.overrideWithValue(null),
+          fireReportApiClientProvider.overrideWithValue(null),
+          citizenSensorApiClientProvider.overrideWithValue(null),
           onboardingDoneProvider.overrideWith((ref) async => true),
           onboardingCompleteProvider.overrideWith((ref) async => true),
           currentLocationProvider.overrideWith((ref) async => testLocation),
@@ -67,12 +73,13 @@ void main() {
 
   testWidgets('the report-a-fire FAB is hidden without a backend',
       (tester) async {
-    // Tests run without POLLUTION_API_BASE_URL, and an explicit null
-    // override makes the intent explicit: no backend -> no entry point.
+    // The null override keeps this test offline and verifies the no-backend state.
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          gridApiClientProvider.overrideWithValue(null),
           fireReportApiClientProvider.overrideWithValue(null),
+          citizenSensorApiClientProvider.overrideWithValue(null),
           onboardingDoneProvider.overrideWith((ref) async => true),
           onboardingCompleteProvider.overrideWith((ref) async => true),
           currentLocationProvider.overrideWith((ref) async => testLocation),
@@ -91,6 +98,8 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          gridApiClientProvider.overrideWithValue(null),
+          citizenSensorApiClientProvider.overrideWithValue(null),
           fireReportApiClientProvider.overrideWithValue(
             _RecordingFireReportApiClient(),
           ),

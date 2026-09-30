@@ -1,113 +1,126 @@
-// Centralized dark-mode map theme. Every visual constant that a future
-// theme swap might touch lives here — basemap palette, overlay palette,
-// layer paint properties, wind-arrow styling. MapView imports these;
-// nothing else in the app should hardcode map colors.
+// Centralized map palettes. Pollution severity colors are shared between themes.
 
+import type { Map as MapLibreMap } from 'maplibre-gl'
 import type { StyleSpecification } from '@maplibre/maplibre-gl-style-spec'
 
-// ---------------------------------------------------------------------------
-// Basemap palette — monochrome dark, never competes with pollution overlays.
-// ---------------------------------------------------------------------------
+export type MapTheme = 'light' | 'dark'
 
-export const BASEMAP = {
-  background: '#0e1117',     // near-black — ocean / world fill
-  land: '#1a1d23',           // dark charcoal — all land masses
-  india: '#22262e',          // slightly lighter dark gray — India territory
-  stateBorder: '#3a3f4a',    // subtle medium-gray — state/UT boundaries
-  intlBorder: '#4a5060',     // slightly stronger — international boundaries
-  label: '#9ca3af',          // light gray — country/city labels
-  labelHalo: '#0e1117',      // matches background — label readability halo
-  coastline: '#2a2e36',      // subdued — coastline line
+export const BASEMAP_THEMES = {
+  light: {
+    background: '#dce8ef',
+    land: '#f1f3f4',
+    india: '#e8f0fe',
+    stateBorder: '#c7d2d9',
+    intlBorder: '#aebdc7',
+    label: '#5f6368',
+    labelHalo: '#f8f9fa',
+    coastline: '#c4d2da',
+  },
+  dark: {
+    background: '#202124',
+    land: '#303134',
+    india: '#292f38',
+    stateBorder: '#5f6368',
+    intlBorder: '#80868b',
+    label: '#bdc1c6',
+    labelHalo: '#202124',
+    coastline: '#3c4043',
+  },
 } as const
 
-// ---------------------------------------------------------------------------
-// Data overlay palette — pollution is the primary colored layer.
-// ---------------------------------------------------------------------------
-
-export const OVERLAY = {
-  indiaFill: '#22262e',      // matches BASEMAP.india — fills India territory
-  indiaBorder: '#4a5060',    // solid outer border of India
-  noData: '#2a2e36',         // dark — cells with no estimate
-  cellOutline: '#00000030',  // faint — hex cell borders
+export const OVERLAY_THEMES = {
+  light: {
+    indiaFill: BASEMAP_THEMES.light.india,
+    indiaBorder: '#9bb9e8',
+    noData: '#e8eaed',
+    cellOutline: '#5f636822',
+  },
+  dark: {
+    indiaFill: BASEMAP_THEMES.dark.india,
+    indiaBorder: '#8ab4f8',
+    noData: '#485260',
+    cellOutline: '#ffffff26',
+  },
 } as const
 
-// ---------------------------------------------------------------------------
-// Wind currents — subdued neutral, never dominant over the pollution colors.
-// ---------------------------------------------------------------------------
+// Existing named exports remain the light defaults for consumers that only
+// need a static legend or default paint value.
+export const BASEMAP = BASEMAP_THEMES.light
+export const OVERLAY = OVERLAY_THEMES.light
 
 export const WIND = {
-  arrowColor: '#9ca3af',     // light gray — the static streak line
-  arrowStroke: '#0e1117',    // near-black outline for contrast
-  pulse: '#e5e7eb',          // the bright pulse travelling along the streak
+  arrowColor: '#9ca3af',
+  arrowStroke: '#f8f9fa',
+  pulse: '#1a73e8',
 } as const
-
-// ---------------------------------------------------------------------------
-// Style URL — the demotiles style is fetched, then patched to a dark
-// monochrome palette by patchBasemapStyle(). We load the real style JSON
-// (with its proven vector source + glyph config) and rewrite its colors
-// rather than authoring an inline style object, because MapLibre's runtime
-// can reject a hand-built StyleSpecification that's subtly incomplete.
-// ---------------------------------------------------------------------------
 
 export const BASE_STYLE_URL = 'https://demotiles.maplibre.org/style.json'
 
-/** Takes a fetched demotiles StyleSpecification and rewrites every layer's
- *  paint/layout to a dark monochrome palette. Returns the mutated object
- *  (same reference — mutates in place). */
-export function patchBasemapStyle(style: StyleSpecification): StyleSpecification {
+/** Applies the selected palette to the fetched basemap before MapLibre starts. */
+export function patchBasemapStyle(
+  style: StyleSpecification,
+  theme: MapTheme = 'light',
+): StyleSpecification {
+  const palette = BASEMAP_THEMES[theme]
   for (const layer of style.layers ?? []) {
-    const id = layer.id
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const layout = layer.layout as Record<string, any> | undefined
+    const layout = layer.layout as Record<string, unknown> | undefined
 
-    if (id === 'background') {
-      layer.paint = { 'background-color': BASEMAP.background } as never
+    if (layer.id === 'background') {
+      layer.paint = { 'background-color': palette.background } as never
     }
-
-    if (id === 'countries-fill') {
-      layer.paint = { 'fill-color': BASEMAP.land } as never
+    if (layer.id === 'countries-fill') {
+      layer.paint = { 'fill-color': palette.land } as never
     }
-
-    if (id === 'coastline') {
+    if (layer.id === 'coastline') {
       layer.paint = {
-        'line-color': BASEMAP.coastline,
+        'line-color': palette.coastline,
         'line-width': ['interpolate', ['linear'], ['zoom'], 0, 1, 6, 3, 14, 6],
         'line-blur': 0.5,
       } as never
-      if (layout) {
-        layout['line-cap'] = 'round'
-        layout['line-join'] = 'round'
-      }
+      if (layout) { layout['line-cap'] = 'round'; layout['line-join'] = 'round' }
     }
-
-    if (id === 'countries-boundary') {
+    if (layer.id === 'countries-boundary') {
       layer.paint = {
-        'line-color': BASEMAP.intlBorder,
+        'line-color': palette.intlBorder,
         'line-width': ['interpolate', ['linear'], ['zoom'], 1, 0.5, 6, 1.5, 14, 4],
         'line-opacity': ['interpolate', ['linear'], ['zoom'], 3, 0.3, 6, 0.8],
       } as never
-      if (layout) {
-        layout['line-cap'] = 'round'
-        layout['line-join'] = 'round'
-      }
+      if (layout) { layout['line-cap'] = 'round'; layout['line-join'] = 'round' }
     }
-
-    if (id === 'countries-label') {
+    if (layer.id === 'countries-label') {
       layer.minzoom = 2
       layer.paint = {
-        'text-color': BASEMAP.label,
-        'text-halo-color': BASEMAP.labelHalo,
+        'text-color': palette.label,
+        'text-halo-color': palette.labelHalo,
         'text-halo-width': 1.2,
         'text-halo-blur': 0.5,
       } as never
     }
+    if (layer.id === 'crimea-fill' && layout) layout.visibility = 'none'
+  }
+  return style
+}
 
-    // Remove the crimea overlay fill — it would show as a bright purple
-    // patch on the dark map.
-    if (id === 'crimea-fill' && layout) {
-      layout.visibility = 'none'
+/** Recolors existing style layers in place; overlays, sources and camera stay intact. */
+export function applyBasemapTheme(map: MapLibreMap, theme: MapTheme): void {
+  const palette = BASEMAP_THEMES[theme]
+  const overlay = OVERLAY_THEMES[theme]
+
+  for (const layer of map.getStyle().layers ?? []) {
+    if (layer.id === 'background') map.setPaintProperty(layer.id, 'background-color', palette.background)
+    if (layer.id === 'countries-fill') map.setPaintProperty(layer.id, 'fill-color', palette.land)
+    if (layer.id === 'coastline') map.setPaintProperty(layer.id, 'line-color', palette.coastline)
+    if (layer.id === 'countries-boundary') map.setPaintProperty(layer.id, 'line-color', palette.intlBorder)
+    if (layer.id === 'countries-label') {
+      map.setPaintProperty(layer.id, 'text-color', palette.label)
+      map.setPaintProperty(layer.id, 'text-halo-color', palette.labelHalo)
     }
   }
 
-  return style
+  const setLayerColor = (id: string, property: 'fill-color' | 'line-color', color: string) => {
+    if (map.getLayer(id)) map.setPaintProperty(id, property, color)
+  }
+  setLayerColor('state-boundaries-line', 'line-color', palette.stateBorder)
+  setLayerColor('india-outline-fill', 'fill-color', overlay.indiaFill)
+  setLayerColor('india-outline-line', 'line-color', overlay.indiaBorder)
 }

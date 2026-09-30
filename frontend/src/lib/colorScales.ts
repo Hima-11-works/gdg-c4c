@@ -42,10 +42,10 @@ export const PDI_COLOR_SCALE: ColorStop[] = [
   { value: 100, color: '#dc2626', label: 'High pressure (100)' },
 ]
 
-/** Color used for a cell whose value is null (no estimate yet) — distinct
- * from every ramp and bright enough to keep fine-resolution cell geometry
- * visible on the dark basemap without implying a pollution value. */
-export const NO_DATA_COLOR = '#485260'
+/** Theme-aware neutral fill for cells with no estimate; distinct from every
+ * pollution band without implying a measured value. */
+export const NO_DATA_COLORS = { light: '#e8eaed', dark: '#485260' } as const
+export const NO_DATA_COLOR = NO_DATA_COLORS.light
 
 /** Builds a MapLibre `interpolate` expression from a color scale, with a
  * `case` wrapper so a null `value` (no estimate for that cell) renders as
@@ -62,12 +62,13 @@ export const NO_DATA_COLOR = '#485260'
 export function colorScaleExpression(
   scale: ColorStop[],
   property: string,
+  noDataColor: string = NO_DATA_COLOR,
 ): ExpressionSpecification {
   const stops = scale.flatMap((stop) => [stop.value, stop.color])
   return [
     'case',
     ['==', ['get', property], null],
-    NO_DATA_COLOR,
+    noDataColor,
     ['interpolate', ['linear'], ['get', property], ...stops],
   ] as unknown as ExpressionSpecification
 }

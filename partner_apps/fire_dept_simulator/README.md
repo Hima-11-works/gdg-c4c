@@ -69,7 +69,7 @@ registry to enforce role and jurisdiction. Set the app's role to
 ```bash
 cd partner_apps/fire_dept_simulator
 
-# Point it at a backend that serves the incident API, and give it the key.
+# Optional: point it at a local backend and provide the write key.
 flutter run \
   --dart-define=INCIDENT_API_BASE_URL=http://localhost:8000 \
   --dart-define=SIMULATOR_API_KEY=your-local-secret \
@@ -77,8 +77,10 @@ flutter run \
   --dart-define=SIMULATOR_ROLE=fire_department
 ```
 
-- An **Android emulator** reaches the host's localhost at `10.0.2.2`, so use
-  `--dart-define=INCIDENT_API_BASE_URL=http://10.0.2.2:8000`.
+Without `INCIDENT_API_BASE_URL`, the simulator uses
+`https://air-health-api.vercel.app`. An **Android emulator** reaches the host's
+localhost at `10.0.2.2`, so use
+`--dart-define=INCIDENT_API_BASE_URL=http://10.0.2.2:8000`.
 - Both values are also editable in the app's **Settings**, held in memory (see
   below). A **Test connection** button there distinguishes "cannot reach the
   backend" from "the backend answered and refused".
