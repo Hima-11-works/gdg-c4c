@@ -2939,6 +2939,91 @@ body,
   list-style: none;
   margin-left: -1.1rem;
 }
+.hotspot-event-detail,
+.hotspot-review-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.hotspot-event-detail {
+  padding: 0.65rem;
+  border: 1px solid var(--maps-border, #343b48);
+  border-radius: 8px;
+  background: var(--maps-surface, #0c121b);
+  color: var(--maps-text, #e5e7eb);
+}
+.hotspot-event-evidence {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+  padding-left: 1rem;
+}
+.hotspot-event-evidence li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  overflow-wrap: anywhere;
+}
+.hotspot-review-form {
+  padding-top: 0.55rem;
+  border-top: 1px solid var(--maps-border, #343b48);
+}
+.hotspot-review-form label {
+  display: grid;
+  gap: 0.25rem;
+  color: var(--maps-text, #cbd5e1);
+  font-size: 0.72rem;
+}
+.hotspot-review-form input {
+  width: 100%;
+  min-height: 2.3rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--maps-border, #3a3f4a);
+  border-radius: 6px;
+  background: var(--maps-surface, #12141a);
+  color: var(--maps-text, #e5e7eb);
+  font: inherit;
+}
+.hotspot-review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.hotspot-review-actions button,
+.hotspot-focus-button {
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--maps-border, #3a3f4a);
+  border-radius: 6px;
+  background: var(--maps-surface, #161920);
+  color: var(--maps-text, #e5e7eb);
+  font: inherit;
+  cursor: pointer;
+}
+.hotspot-review-actions button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.hotspot-review-actions .hotspot-dismiss-button {
+  border-color: #7f1d1d;
+  color: #fecaca;
+}
+.hotspot-review-notice {
+  color: #137333;
+  font-weight: 600;
+}
+.hotspot-diagnostics {
+  border-top: 1px solid var(--maps-border, #343b48);
+  padding-top: 0.5rem;
+}
+.hotspot-diagnostics summary {
+  cursor: pointer;
+  color: var(--maps-text, #cbd5e1);
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+.hotspot-diagnostics[open] > :not(summary) {
+  margin-top: 0.55rem;
+}
 .hotspot-row {
   width: 100%;
   display: flex;
@@ -4441,6 +4526,8 @@ body,
 
   .hotspot-panel-container { background: rgba(32, 33, 36, 0.42); }
   .hotspot-panel-header { border-color: #e8eaed; }
+  .hotspot-review-actions .hotspot-dismiss-button { border-color: #f6aea9; background: #fce8e6; color: #b3261e; }
+  .hotspot-review-notice { color: #137333; }
   .gemini-disclaimer { color: #174ea6; background: #e8f0fe; border-color: #d2e3fc; border-radius: 8px; }
   .gemini-error-banner { color: #b3261e; background: #fce8e6; border-color: #f6aea9; }
   .btn-gemini-action { border-radius: 999px; background: var(--maps-blue); box-shadow: none; }
@@ -4644,6 +4731,8 @@ body,
   :root[data-theme="dark"] .corridor-section-header h3 { color: var(--maps-text); }
   :root[data-theme="dark"] .federated-tab-bar,
   :root[data-theme="dark"] .hotspot-panel-header { border-color: #3c4043; }
+  :root[data-theme="dark"] .hotspot-review-actions .hotspot-dismiss-button { border-color: #8c1d18; background: #3c1f1f; color: #f28b82; }
+  :root[data-theme="dark"] .hotspot-review-notice { color: #81c995; }
   :root[data-theme="dark"] .federated-weights-card,
   :root[data-theme="dark"] .federated-node-card,
   :root[data-theme="dark"] .federated-node-metrics,

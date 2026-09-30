@@ -499,7 +499,7 @@ export function MapPage() {
         </Suspense>
       ) : null}
       {state.hotspotPanelOpen && (
-        <Suspense fallback={<FeatureLoading label="Loading fire evidence…" />}>
+        <Suspense fallback={<FeatureLoading label="Loading hotspot triage…" />}>
           <HotspotEvidencePanel
             resource={activeFires.resource}
             localHotspots={localHotspots}

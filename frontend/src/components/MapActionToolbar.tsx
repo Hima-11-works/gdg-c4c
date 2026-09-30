@@ -15,8 +15,8 @@ export function MapActionToolbar({
 }: MapActionToolbarProps) {
   const { state, dispatch } = useMapUi()
   const evidenceLabel = state.hotspotPanelOpen
-    ? 'Hide fire candidate evidence'
-    : 'Show fire candidate evidence'
+    ? 'Hide potential hotspot triage'
+    : 'Show potential hotspot triage'
 
   return (
     <div

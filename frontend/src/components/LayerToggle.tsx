@@ -139,9 +139,9 @@ export function LayerToggle() {
                   if (!state.showHotspotCandidates) dispatch({ type: 'TOGGLE_HOTSPOT_CANDIDATES' })
                   if (!state.hotspotPanelOpen) dispatch({ type: 'TOGGLE_HOTSPOT_PANEL' })
                 }}
-                title="Open fire candidate evidence & triage dialog"
+                title="Open the potential hotspot triage queue"
               >
-                Evidence
+                Triage
               </button>
             </div>
             <span className="layer-sub-hint">

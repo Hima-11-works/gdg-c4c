@@ -380,9 +380,11 @@ supporting signals that might have "explained" either cell created nothing.
 - **No live FIRMS/station adapter.** `fire_signal_from_hotspot` maps the stored
   FIRMS rows, but no pipeline stage calls it yet, and no station repository is read
   here.
-- **No review path, no notification, no alerting.** A candidate is recorded with
-  `pending_human_review` and nothing else happens to it. There is no UI, no
-  reviewer queue, and no integration with the incident workflow.
+- **Review is human-controlled; delivery is not automated.** The map's hotspot
+  triage panel lets an authenticated pollution-control responder confirm or
+  dismiss persisted live events. Authored synthetic events cannot be reviewed.
+  This records a decision only: it does not notify an authority, dispatch a
+  responder, or automatically create an incident.
 - **No attribution and no enforcement.** Nothing here identifies an industrial
   source, and nothing consumes a candidate as one.
 - **The thresholds are triage choices.** They are documented as such and are not

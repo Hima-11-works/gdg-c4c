@@ -48,6 +48,7 @@ export const API_BASE_URL: string = (
 
 interface ErrorResponseBody {
   error?: { code?: string; message?: string }
+  detail?: string
 }
 
 /** Thrown by every function in this module on a non-2xx response or a
@@ -394,6 +395,39 @@ async function apiPost<T>(path: string, payload: unknown): Promise<T> {
   }
 
   return response.json() as Promise<T>
+}
+
+/** Review a persisted hotspot event as an authenticated pollution-control actor. */
+export function reviewHotspotEvent(
+  eventId: string,
+  reviewState: 'confirmed' | 'dismissed',
+  credentials: { simulatorKey: string; actorId: string },
+): Promise<Envelope<HotspotEventsOut['events'][number]>> {
+  const path = `/api/v1/hotspots/events/${encodeURIComponent(eventId)}/review`
+  return fetch(`${API_BASE_URL}${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Simulator-Key': credentials.simulatorKey,
+      'X-Actor-Id': credentials.actorId,
+    },
+    body: JSON.stringify({ review_state: reviewState }),
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as ErrorResponseBody | null
+        throw new ApiError(
+          response.status,
+          body?.error?.code ?? 'http_error',
+          body?.error?.message ?? body?.detail ?? `Review failed with status ${response.status}`,
+        )
+      }
+      return response.json() as Promise<Envelope<HotspotEventsOut['events'][number]>>
+    })
+    .catch((error: unknown) => {
+      if (error instanceof ApiError) throw error
+      throw new ApiError(0, 'network_error', 'Could not reach the backend. Is it running?')
+    })
 }
 
 export function fetchGridCurrent(
