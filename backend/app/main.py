@@ -50,6 +50,8 @@ def create_app() -> FastAPI:
     # F2: citizen photo evidence. Mounted on the same /reports prefix as the F1
     # lifecycle, so a photo is always addressed through the report it belongs to.
     app.include_router(evidence_router)
+    # Also support /api/v1/reports/{id}/evidence for v1 API client consistency
+    app.include_router(evidence_router, prefix="/api/v1")
 
     return app
 

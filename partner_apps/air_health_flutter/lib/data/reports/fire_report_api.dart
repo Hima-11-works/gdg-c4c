@@ -207,13 +207,50 @@ class DioFireReportApiClient
     required Uint8List bytes,
     required String filename,
   }) async {
-    final response = await _dio.post<Map<String, dynamic>>(
-      '$_apiPrefix/reports/$reportId/evidence',
-      data: FormData.fromMap({
-        'photo': MultipartFile.fromBytes(bytes, filename: filename),
-        'consent': 'true',
-      }),
-    );
+    final cleanFilename = filename.trim().isNotEmpty ? filename.trim() : 'citizen-photo.jpg';
+    final lower = cleanFilename.toLowerCase();
+    final String safeFilename;
+    final String contentType;
+    if (lower.endsWith('.png')) {
+      safeFilename = cleanFilename;
+      contentType = 'image/png';
+    } else if (lower.endsWith('.webp')) {
+      safeFilename = cleanFilename;
+      contentType = 'image/webp';
+    } else if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
+      safeFilename = cleanFilename;
+      contentType = 'image/jpeg';
+    } else {
+      safeFilename = '$cleanFilename.jpg';
+      contentType = 'image/jpeg';
+    }
+
+    FormData buildFormData() => FormData.fromMap({
+          'photo': MultipartFile.fromBytes(
+            bytes,
+            filename: safeFilename,
+            contentType: DioMediaType.parse(contentType),
+          ),
+          'consent': 'true',
+        });
+
+    Response<Map<String, dynamic>> response;
+    try {
+      response = await _dio.post<Map<String, dynamic>>(
+        '/reports/$reportId/evidence',
+        data: buildFormData(),
+      );
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404) {
+        response = await _dio.post<Map<String, dynamic>>(
+          '$_apiPrefix/reports/$reportId/evidence',
+          data: buildFormData(),
+        );
+      } else {
+        rethrow;
+      }
+    }
+
     if (response.data == null || response.data!['data'] is! Map<String, dynamic>) {
       throw const FormatException('The server returned an invalid photo receipt.');
     }
