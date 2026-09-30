@@ -316,7 +316,9 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
                 onChanged: _submitting
                     ? null
                     : (value) => setState(() => _photoConsent = value ?? false),
-                title: const Text('I consent to storing this photo with my report.'),
+                title: const Text(
+                  'I consent to storing this photo with my report, and agree that an authorized reviewer may send the sanitized image to Gemini for visual analysis.',
+                ),
                 controlAffinity: ListTileControlAffinity.leading,
               ),
             ],

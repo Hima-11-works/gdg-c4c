@@ -28,6 +28,34 @@ export interface EvidenceOut {
   byte_count: number
 }
 
+export type GeminiPossibleEventType =
+  | 'smoke'
+  | 'fire'
+  | 'industrial plume'
+  | 'other'
+  | 'unclear'
+
+export interface GeminiVisualAssessment {
+  visible_observations: string[]
+  possible_event_type: GeminiPossibleEventType
+  visual_support: string[]
+  missing_information: string[]
+  uncertainty: number
+  reviewer_summary: string
+}
+
+export interface EvidenceAssessmentOut {
+  id: number
+  report_id: number
+  evidence_id: number
+  assessment: GeminiVisualAssessment
+  model_id: string
+  prompt_version: string
+  schema_version: string
+  consented_at: string
+  generated_at: string
+}
+
 export class EvidenceError extends Error {
   readonly code: string
   readonly status: number
@@ -189,6 +217,80 @@ export async function setEvidenceReviewState(
     )
   }
   const payload = (await response.json()) as Envelope<EvidenceOut>
+  return payload.data
+}
+
+/** Fetch a saved Gemini photo assessment if one exists for this evidence.
+ *  Returns null if no assessment has been run yet (HTTP 404). */
+export async function fetchEvidenceAssessment(
+  reportId: number,
+  evidenceId: number,
+  reviewerKey: string,
+  signal?: AbortSignal,
+): Promise<EvidenceAssessmentOut | null> {
+  const response = await fetch(
+    `${API_BASE_URL}/reports/${reportId}/evidence/${evidenceId}/analysis`,
+    {
+      headers: {
+        'X-Reviewer-Key': reviewerKey,
+      },
+      cache: 'no-store',
+      signal,
+    },
+  )
+  if (response.status === 404) {
+    return null
+  }
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    throw new EvidenceError(
+      body?.error?.message ?? `Could not load AI assessment (HTTP ${response.status}).`,
+      body?.error?.code ?? 'gemini_fetch_failed',
+      response.status,
+    )
+  }
+  const payload = (await response.json()) as Envelope<EvidenceAssessmentOut>
+  return payload.data
+}
+
+export interface AnalyzeOptions {
+  consent: boolean
+  reanalyze?: boolean
+  signal?: AbortSignal
+}
+
+/** Request Gemini multimodal visual assessment of the sanitized photo derivative.
+ *  Advisory only; never changes evidence or report review state. */
+export async function analyzeEvidenceWithGemini(
+  reportId: number,
+  evidenceId: number,
+  reviewerKey: string,
+  options: AnalyzeOptions,
+): Promise<EvidenceAssessmentOut> {
+  const response = await fetch(
+    `${API_BASE_URL}/reports/${reportId}/evidence/${evidenceId}/analysis`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Reviewer-Key': reviewerKey,
+      },
+      body: JSON.stringify({
+        consent: options.consent,
+        reanalyze: options.reanalyze ?? false,
+      }),
+      signal: options.signal,
+    },
+  )
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    throw new EvidenceError(
+      body?.error?.message ?? `Gemini analysis could not be completed (HTTP ${response.status}).`,
+      body?.error?.code ?? 'gemini_analysis_failed',
+      response.status,
+    )
+  }
+  const payload = (await response.json()) as Envelope<EvidenceAssessmentOut>
   return payload.data
 }
 

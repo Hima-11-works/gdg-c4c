@@ -407,7 +407,8 @@ export function ReportFireForm({
           />
           <span>
             I took this photo and agree to it being reviewed. Location data
-            embedded in the picture is removed before anyone sees it, and the
+            embedded in the picture is removed before anyone sees it, an authorized
+            reviewer may send the sanitized image to Gemini for visual analysis, and the
             photo is deleted after the review window closes.
           </span>
         </label>
