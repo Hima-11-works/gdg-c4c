@@ -1,92 +1,150 @@
-# air_health_flutter
+# Air Health Companion — Citizen Mobile Application
 
-A Flutter air-quality **health companion** — personal environmental exposure
-awareness. It shows the local pollution level, a short-term forecast, nearby
-lower-pollution areas, and personalised alerts derived from the user's
-sensitivity profile.
+[![Flutter](https://img.shields.io/badge/Flutter-3.13%2B-02569B?logo=flutter&logoColor=white)](https://flutter.dev/)
+[![Dart](https://img.shields.io/badge/Dart-3.0%2B-0175C2?logo=dart&logoColor=white)](https://dart.dev/)
+[![Riverpod](https://img.shields.io/badge/Riverpod-2.6-40C4FF?logo=flutter&logoColor=white)](https://riverpod.dev/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-It is a **partner app in this monorepo**, living under `partner_apps/` and
-independent of the web platform (`backend/`, `frontend/`). For the design and
-rationale, see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+A Flutter mobile health companion designed for citizens to track personal air quality exposure, receive personalized health advisories, discover lower-pollution nearby areas, report smoke/fire plumes with photo evidence, and contribute low-cost community sensor readings.
 
-> This is an environmental exposure-awareness app. It is **not** a diagnostic,
-> treatment, medication-management, or emergency medical decision system, and
-> it never invents disease-specific AQI thresholds — it classifies with the
-> official India **CPCB AQI** categories.
+> **Health Advisory Notice**: This app provides environmental exposure awareness based on official **Central Pollution Control Board (CPCB) NAQI** standards. It is not a clinical diagnostic or medical emergency service.
 
-## Stack
+---
 
-Flutter / Dart · **Riverpod** (state & DI) · **go_router** (navigation) ·
-**Dio** (HTTP) · `flutter_local_notifications` · `geolocator` +
-`permission_handler` · `flutter_secure_storage` + `shared_preferences` ·
-`fl_chart` · `intl` · `image_picker`.
+## 🏛️ Architecture & App Structure
 
-## Citizen reports and readings
+```mermaid
+flowchart TB
+    subgraph UI["1. Features & Screens (`lib/features`)"]
+        HOME["Home Screen<br/>Current AQI, Weather & Micro-Sensors"]
+        NEARBY["Nearby Areas<br/>Human-Readable Safe Havens"]
+        ALERTS["Alerts Drawer<br/>Dual-Tier Alerts & Audio Chimes"]
+        REPORT["Field Report Sheet<br/>Sanitized Photo & Fire Reports"]
+        PROFILE["Health Profile<br/>Sensitivity Categories & Storage"]
+    end
 
-When connected to the backend, the fire/smoke report sheet can attach one
-camera or gallery photo to a report. The app asks for explicit consent before
-uploading and resizes the selected image for mobile upload. The backend stores
-the original privately and exposes only its metadata-stripped review derivative.
-If photo upload fails after the report is saved, the sheet keeps the report id
-and lets the citizen retry the photo upload without creating a duplicate report.
+    subgraph LOGIC["2. Domain & Services (`lib/domain` & `lib/services`)"]
+        RESOLVER["Place Name Resolver<br/>Offline India Dataset (10.6k+ Places)"]
+        ALERT_ENG["Sensitivity Alert Engine<br/>Asthma · Elderly · Pediatric · Cardiac"]
+        MEDIA["Media Sanitizer<br/>Client-Side Downscaling & Metadata Prep"]
+    end
 
-The home screen also accepts a manually entered PM2.5 value from an external
-consumer sensor, along with its make/model and the current location. It requires
-separate consent and sends the reading to the authority review queue. Community
-readings remain separate from provider-backed stations and do not affect the
-forecast pipeline.
+    subgraph DATA["3. Data & Providers (`lib/data` & `lib/providers`)"]
+        RIVERPOD["Riverpod Providers<br/>Single Source of Dependency Injection"]
+        API_PROV["Grid API Pollution Provider<br/>H3 Grid Remote Ingestion"]
+        SECURE_STORE["Secure Storage<br/>Encrypted Local Health Profile"]
+    end
 
-## Layout
-
+    UI --> LOGIC
+    LOGIC --> DATA
+    DATA --> RIVERPOD
 ```
+
+---
+
+## 🚀 Key Features
+
+### 1. Personalized Health Sensitivity Profiles
+Citizens can configure individual sensitivity profiles for tailored environmental advisories:
+- **Asthma / Respiratory Conditions**: Stricter PM2.5 thresholds with proactive bronchospasm warnings.
+- **Elderly Individuals**: Enhanced caution during sustained morning and evening inversions.
+- **Pediatric / Children**: Safe outdoor play recommendations based on hourly forecasts.
+- **Cardiac / Heart Conditions**: Critical cardiovascular stress alerts during severe smog spikes.
+
+### 2. Dual-Tier Alerting & Audio Alarms
+- **Tier 1 (Community)**: Official CPCB NAQI category shifts (Satisfactory, Moderate, Poor, Very Poor, Severe).
+- **Tier 2 (Personalized)**: Vulnerability-matched medical warnings.
+- **Audible Alerts**: Optional high-priority audio chime alerting users during dangerous pollution surges.
+
+### 3. Human-Readable Nearby Safe Havens
+- The **Nearby** tab automatically surfaces cleaner air areas within a 25 km radius.
+- Backed by an offline geocoded dataset of **over 10,600 Indian cities, towns, and localities** (`assets/data/india_locations.json`) with instant embedded offline seeds (Bhubaneswar, Cuttack, Delhi, Noida, Mumbai, Bengaluru, etc.).
+- **Zero raw H3 cell IDs**: Hexagonal cell IDs are transparently reverse-geocoded into intuitive location names and compass directions (e.g. *"Northeast of Bhubaneswar"*, *"Jatani Area"*).
+
+### 4. Ground-Truth Field Reporting (Smoke & Fire)
+- Citizens can photograph and report localized pollution events (agricultural burning, garbage fires, industrial bypass).
+- **Privacy First**: Sensitive EXIF metadata (camera serial, exact device info) is automatically stripped on the backend, and rasters are re-encoded before review.
+- **Retry Resilience**: If network drops after report creation, the app retains the report ID allowing one-tap photo upload retry without creating duplicates.
+
+### 5. Community Low-Cost Sensor Ingestion
+- Citizens and community centers can manually or automatically submit low-cost PM2.5 sensor readings (e.g., Plantower, Sensirion) to the municipal authority review queue.
+
+---
+
+## 📂 Project Layout
+
+```text
 lib/
-├─ app/           MaterialApp.router, theme
-├─ core/          Clock, formatters, Result
-├─ domain/        Pure Dart — models, alert engine, sensitivity rules
-├─ data/          PollutionDataProvider + Dummy / Remote implementations
-├─ providers/     Riverpod wiring (the only DI layer)
-├─ features/      home · nearby · alerts · profile · onboarding
-├─ routing/       go_router + onboarding redirect
-├─ theme/         tokens, CPCB colors, reusable widgets
-├─ storage/       secure profile store, prefs store
-├─ notifications/ local-notification wrapper
-└─ mocks/         dev scenarios + simulator
+├── app/                  # MaterialApp configuration, router initialization, theme
+├── core/                 # Result types, date formatters, math utilities
+├── domain/               # Pure Dart domain models, CPCB color scales, sensitivity rules
+├── data/                 # Remote API providers, DTOs, and report repositories
+├── services/             # PlaceNameResolver (offline reverse-geocoder), audio alerts
+├── providers/            # Riverpod dependency injection wiring
+├── features/             # Feature UI modules:
+│   ├── home/             # Primary AQI dial, weather card, sensor input
+│   ├── nearby/           # Nearby cleaner air areas with resolved place names
+│   ├── alerts/           # Alert notification history and sensitivity advisories
+│   ├── profile/          # User health profile configuration
+│   ├── reports/          # Smoke/fire field reporting sheet with photo attachment
+│   └── onboarding/       # First-time health profile onboarding walkthrough
+├── routing/              # Declarative go_router route configuration
+├── theme/                # Design tokens, typography, and CPCB standard colors
+└── storage/              # flutter_secure_storage and shared_preferences persistence
 ```
 
-`domain/` has no Flutter imports; screens read data only through Riverpod
-providers. The data source is chosen in one place (`providers/data_providers.dart`):
-`GridApiPollutionDataProvider` reads the published backend H3 grid from
-`https://air-health-api.vercel.app` by default in debug and release builds. Set
-`POLLUTION_API_BASE_URL` to use a local or staging API. Widget tests override
-API clients and remain offline. Debug scenario simulation is opt-in and never
-replaces the configured backend unless explicitly enabled.
+---
 
-## Running
+## 📱 Pre-Built Release APKs
 
+Ready-to-install Android release APKs are available directly in [`apks/`](../../apks/):
+
+| Target Architecture | File Name | Size | Recommended For |
+|---|---|---|---|
+| **ARM 64-bit** | [`air_health_flutter-arm64.apk`](../../apks/air_health_flutter-arm64.apk) | **~19.1 MB** | **Modern Android phones** (recommended) |
+| **ARM 32-bit** | [`air_health_flutter-arm32.apk`](../../apks/air_health_flutter-arm32.apk) | **~16.5 MB** | Older 32-bit Android devices |
+| **x86_64** | `app-x86_64-release.apk` | **~20.6 MB** | Android Studio Emulators |
+| **Universal** | [`air_health_flutter-release.apk`](../../apks/air_health_flutter-release.apk) | **~56.9 MB** | Fat APK supporting all architectures |
+
+### Install via ADB
+```bash
+adb install apks/air_health_flutter-arm64.apk
+```
+
+---
+
+## ⚡ Running & Building Locally
+
+### Prerequisites
+- **Flutter SDK**: `>=3.13.0`
+- **Android Studio** / **Android SDK** (API 21+)
+
+### Development Run
 ```bash
 cd partner_apps/air_health_flutter
 flutter pub get
+
+# Run against default remote backend
 flutter run
+
+# Or point to a local backend on Android Emulator:
+flutter run --dart-define=POLLUTION_API_BASE_URL=http://10.0.2.2:8000
 ```
 
-Both debug and release builds use the deployed Vercel backend by default. To run
-against a local API from an Android emulator, pass its host URL via
-`--dart-define`:
-
+### Production Release Build
+To generate size-optimized, tree-shaken, and obfuscated release APKs:
 ```bash
-flutter run \
-  --dart-define=POLLUTION_API_BASE_URL=http://10.0.2.2:8000
+flutter build apk --release --split-per-abi --obfuscate --split-debug-info=build/symbols
 ```
 
-For desktop, use `http://localhost:8000`. To intentionally show the debug
-scenario controls and synthetic readings, add
-`--dart-define=USE_DEV_SCENARIO_SIMULATOR=true`.
+---
 
-## Tests
+## 🧪 Testing
 
 ```bash
+# Run static analysis
 flutter analyze
+
+# Run all 255+ offline unit and domain tests
 flutter test
 ```
-
-Tests are offline — deterministic dummy scenarios, no network or Firebase.

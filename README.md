@@ -41,6 +41,7 @@ Built for Google's **Code for Communities (GDG C4C)** Hackathon.
 ## 📑 Contents
 
 - [System Architecture](#system-architecture)
+- [Subsystem Documentation](#-subsystem-documentation)
 - [Key Platform Pillars](#key-platform-pillars)
 - [Granular Spatial Grid & Map](#granular-spatial-grid--map)
 - [Environmental Data Sources](#environmental-data-sources)
@@ -54,6 +55,19 @@ Built for Google's **Code for Communities (GDG C4C)** Hackathon.
 - [Development & Testing](#development--testing)
 - [Limits & Operational Roadmap](#limits--operational-roadmap)
 - [Repository Guide](#repository-guide)
+
+---
+
+## 📚 Subsystem Documentation
+
+For in-depth component-level guides, architectural deep-dives, and setup instructions, refer to the dedicated READMEs:
+
+| Subsystem | Stack | Description | Dedicated Guide |
+|---|---|---|:---:|
+| 🖥️ **Web Dashboard** | React 19 · TypeScript · MapLibre GL · Tailwind | Dynamic H3 multi-resolution spatial explorer, corridor routing, and hotspot inspection | [**Frontend Guide**](frontend/README.md) |
+| ⚙️ **Backend Core & Pipeline** | FastAPI · PostgreSQL/PostGIS · Uber H3 · Python 3.11+ | Spatial nowcasting, advection-dispersion forecasting, satellite fusion, and REST API | [**Backend Guide**](backend/README.md) |
+| 📱 **Air Health Citizen App** | Flutter · Riverpod · Clean Architecture | Personal exposure tracking, sensitivity health profiles, offline reverse-geocoding, and reports | [**Air Health App Guide**](partner_apps/air_health_flutter/README.md) |
+| 🚒 **Fire Dept Simulator** | Flutter · Zero-External-Pub · Native `dart:io` | Operational dispatch console for emergency responders and pollution control boards | [**Fire Dept Console Guide**](partner_apps/fire_dept_simulator/README.md) |
 
 ---
 
@@ -148,6 +162,7 @@ Citizens are equipped with the **`air_health_flutter`** mobile app:
 - **Personalized Health Profiles**: Tailored health advisories based on sensitivity profiles (**Asthma**, **Elderly**, **Pediatric/Children**, **Cardiac/Heart Conditions**).
 - **Dual-Tier Alerting**: Real-time CPCB NAQI community notifications paired with individualized medical vulnerability alerts.
 - **Audio Sound Alerts**: Optional audible chime alert engine for critical spikes.
+- **Human-Readable Nearby Safe Havens**: Replaces raw truncated H3 hexagonal IDs with human-readable location names and compass bearings backed by an offline geocoded dataset of **over 10,600 Indian localities and cities** (`assets/data/india_locations.json`) with instant embedded offline seeds.
 - **Ground-Truth Field Reporting**: Citizens can capture smoke and fire incidents. The app automatically sanitizes uploads by **stripping sensitive EXIF metadata** before transmission.
 - **Low-Cost Sensor Submissions**: Citizens and community organizations can pipe micro-sensor PM2.5 data directly into the regional grid for authority review.
 - **Offline Resilience**: Local report history and profile persistence backed by secure on-device storage.
@@ -157,6 +172,7 @@ When alert thresholds are breached or citizen reports are corroborated:
 - Incidents are automatically instantiated with geographic coordinates, H3 cell indices, and priority levels.
 - The **`fire_dept_simulator`** Flutter operational console allows municipal authorities and fire departments to receive dispatch requests, view attached evidence photos, and track real-time status transitions:
   `REPORTED` ➔ `ACKNOWLEDGED` ➔ `EN ROUTE` ➔ `ON SCENE` ➔ `RESOLVED`
+- **Zero-Dependency Native Architecture**: Built completely on Dart's native standard library (`dart:io`) with zero third-party pub dependencies, dedicated emergency response branding, and built-in live connection diagnostics.
 - Audit events are appended immutably to trace who acted, when, and from which jurisdiction.
 
 ### 5. 🤝 Federated Climate Intelligence Across States & Cities
@@ -456,6 +472,7 @@ See [`docs/GO_LIVE.md`](docs/GO_LIVE.md) for the pre-deployment checklist and op
 │   ├── air_health_flutter-*.apk # Citizen health companion release builds
 │   └── fire_dept_simulator-*.apk # Authority incident console release builds
 ├── backend/                    # FastAPI service, SQLAlchemy/PostGIS models, pipeline
+│   │                           # 📖 See backend/README.md for dedicated guide
 │   ├── alembic/                # Database migrations for PostgreSQL + PostGIS schema
 │   ├── app/
 │   │   ├── api/                # REST endpoints (grid v2, alerts, hotspots, corridors, etc.)
@@ -466,11 +483,14 @@ See [`docs/GO_LIVE.md`](docs/GO_LIVE.md) for the pre-deployment checklist and op
 │   │   └── federation_*        # Federated learning client and aggregator modules
 │   └── tests/                  # Unit, regression, and architecture contract tests
 ├── frontend/                   # React 19 web application (MapLibre, Tailwind, H3 layers)
+│   │                           # 📖 See frontend/README.md for dedicated guide
 │   ├── src/components/         # Map view, corridor panel, hotspot panel, timeline, alerts
 │   └── src/lib/                # Level of Detail (LOD) calculations, color scales, API hooks
 ├── partner_apps/               # Flutter cross-platform mobile apps
 │   ├── air_health_flutter/     # Citizen health companion & field reporting app
+│   │                           # 📖 See partner_apps/air_health_flutter/README.md
 │   └── fire_dept_simulator/    # Authority incident response & dispatch console
+│                               # 📖 See partner_apps/fire_dept_simulator/README.md
 ├── docs/                       # Architecture specifications and API contracts
 │   ├── api/                    # OpenAPI contracts (hotspots, corridors, federation, etc.)
 │   ├── architecture.md         # In-depth architectural blueprint

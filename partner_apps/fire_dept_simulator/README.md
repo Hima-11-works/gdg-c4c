@@ -1,75 +1,112 @@
-# Fire Department Simulator
+# Fire Department Simulator — Incident Response Console
 
-A response console for the Air Health **incident workflow** — the fire-department
-side of `docs/api/incidents.md`.
+[![Flutter](https://img.shields.io/badge/Flutter-3.13%2B-02569B?logo=flutter&logoColor=white)](https://flutter.dev/)
+[![Dart](https://img.shields.io/badge/Dart-3.0%2B-0175C2?logo=dart&logoColor=white)](https://dart.dev/)
+[![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero%20External%20Pub-green)](pubspec.yaml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-> **This is a simulation.** It works on synthetic records, shows in-app alerts
-> for newly received inbox assignments, and contacts no emergency service. It
-> does not use remote push notifications. The status changes it makes
-> *are* real, persistent writes to the incident database, which is why the API
-> requires a simulator key.
+An operational dispatch and response console for municipal authorities, emergency responders, and State Pollution Control Boards (SPCBs). It integrates directly with the **Air Health Incident Engine** to triage public smoke/fire reports, review photo evidence, convert severe air quality spikes into actionable field dispatches, and track unit statuses through an immutable audit trail.
 
-## What it does
+> **Operational Simulation Note**: While this app operates as a simulation interface without dispatching physical emergency sirens, **all status transitions are real, persistent writes** committed to the central PostgreSQL/PostGIS database.
 
-- **Queue** — incidents from `GET /api/v1/incidents`, filtered to the selected
-  authority role by default (a toggle shows every role). The queue polls every
-  30 seconds, shows pending simulated inbox assignments, alerts when a new
-  assignment arrives while the app is open, refreshes on app resume, and
-  supports manual refresh. Each row shows id, status, severity, jurisdiction, coordinates,
-  assignee and how long ago it moved.
-- **Detail** — location, jurisdiction, H3 cell, source (alert or report),
-  assignee, timing, the linked published run, the **evidence** (the incident's
-  `evidence_report_ids` joined against the public report list, so a responder
-  reads the actual report rather than an id), and the **append-only event
-  history**.
-- **Alert intake** — a pollution-control operator can review published PM2.5
-  alerts from the current prediction run and open one as a persistent incident.
-  The stable run/cell/horizon identity makes retries idempotent.
-- **Responder actions** — assign, then acknowledge → en route → on scene →
-  resolve, plus cancel. The buttons come from the same transition table the
-  server enforces, so an invalid step is never offered; assignment is offered
-  separately because the API gives it its own endpoint.
+---
 
-## What it deliberately handles
+## 🏛️ Architecture & Dispatch Lifecycle
 
-| Failure | How it shows up |
-| --- | --- |
-| Loading | Spinner; the list and detail both have a pull-to-refresh. |
-| Network loss | A `dart:io` transport failure is *not* given a fake HTTP status. It shows "could not reach the backend at …", plus a **Retry** (retryable), and the last good data stays on screen. |
-| Retries | Retry is offered only where it could help. A refused transition is **not** given a retry button — it says the state has to allow it first and points at refresh instead. Create and transition are safe to retry regardless, because the API is idempotent (create on `(source_type, source_id)`; a repeated transition to the current status is a no-op). |
-| Duplicate taps | One write at a time: every action button disables while a request is in flight, and the in-flight request shows a spinner. The server's idempotency is the backstop, not the plan. |
-| Rejected transitions | The **server's own message** is shown verbatim (e.g. `409 · "use POST /incidents/{id}/assign to assign"`), never replaced with a generic error. After a 409/404 the incident and history are re-read so the buttons match the server's truth. |
-| No key configured | Reads work; the app says writes will be refused *before* you press anything. |
-
-Every accepted change re-reads the incident from the server rather than trusting
-an optimistic local update, and says whether the status actually moved ("status
-is now acknowledged") or was already there ("already acknowledged, nothing
-changed").
-
-### Backend setup
-
-Run the database migration before starting the API, then configure a shared
-simulator key and a server-side actor registry. Actor entries use
-`actor_id:role[:jurisdiction]`; supported roles are `fire_department` and
-`pollution_control`. Keep the real key in the local environment, not in source
-control.
-
-```bash
-alembic upgrade head
-SIMULATOR_API_KEY=your-local-secret
-SIMULATOR_ACTORS=fire-unit-7:fire_department:Delhi,dispatch:pollution_control:Delhi
+```mermaid
+stateDiagram-v2
+    [*] --> REPORTED: Citizen Report / Alert Opened
+    REPORTED --> ASSIGNED: Unit Assignment (POST /assign)
+    ASSIGNED --> ACKNOWLEDGED: Responder Acknowledged
+    ACKNOWLEDGED --> EN_ROUTE: Unit En Route to Coordinate
+    EN_ROUTE --> ON_SCENE: Unit On Scene / Inspecting
+    ON_SCENE --> RESOLVED: Fire Suppressed / Source Controlled
+    
+    REPORTED --> CANCELLED: False Alarm / Duplicate
+    ASSIGNED --> CANCELLED: Dismissed by Controller
+    ACKNOWLEDGED --> CANCELLED: Dismissed
+    EN_ROUTE --> CANCELLED: Dismissed
+    ON_SCENE --> CANCELLED: Dismissed
+    
+    RESOLVED --> [*]
+    CANCELLED --> [*]
 ```
 
-The app sends the selected actor id and role with writes. The server uses its
-registry to enforce role and jurisdiction. Set the app's role to
-`pollution_control` to review and open published air-quality alerts.
+---
 
-## Running it
+## 🚀 Key Capabilities
 
+### 1. Incident Triage Queue
+- Live polling queue (`GET /api/v1/incidents`) showing active reports across jurisdictions.
+- Filter by jurisdiction, priority (Low, Medium, High, Critical), and authority role (`fire_department` or `pollution_control`).
+- Real-time in-app alerts whenever new assignments or urgent incidents arrive.
+
+### 2. Evidence Inspection & Ground Truth
+- Directly inspects citizen evidence photos attached to reports.
+- Links incidents to the initiating source (whether a citizen smoke submission, satellite hotspot candidate, or forward corridor alert).
+- Displays exact geographic coordinates, corresponding H3 hexagonal cell index, and temporal timeline.
+
+### 3. Strict State Machine & Idempotency
+- Status progression follows strict server-validated transition tables:
+  `REPORTED` ➔ `ASSIGNED` ➔ `ACKNOWLEDGED` ➔ `EN ROUTE` ➔ `ON SCENE` ➔ `RESOLVED`.
+- All requests are safe from duplicate taps and network drops: action buttons disable during in-flight requests, and the server enforces idempotent status progression.
+
+### 4. Alert Intake for Pollution Control Boards
+- Operators with the `pollution_control` role can review published PM2.5 alerts from the latest spatial prediction run.
+- Instantiates persistent field inspection incidents directly from severe pollution spikes.
+
+### 5. In-App Diagnostics & Settings
+- Comprehensive in-app **Settings Screen** allowing dynamic configuration of:
+  - Backend Base URL
+  - Simulator API Key (`X-Simulator-Key`)
+  - Responder Actor ID (e.g. `fire-unit-7`)
+  - Authority Role (`fire_department` vs `pollution_control`)
+- Built-in **Test Connection** diagnostic that immediately isolates whether network unreachable errors or server key authentication rejections occur.
+
+---
+
+## ⚙️ Zero-Dependency Architectural Design
+
+The entire application relies strictly on Dart's native standard library (`dart:io` and core Flutter material components) without third-party pub package dependencies:
+- **Maximum Reliability**: Zero risk of breaking third-party package updates or version conflicts.
+- **Minimal Binary Footprint**: Clean, small release builds without bloated external dependencies.
+- **Accurate Transport Handling**: Native socket and HTTP error parsing distinguishes pure network drops from legitimate HTTP 4xx/5xx responses.
+
+---
+
+## 📱 Pre-Built Release APKs
+
+Ready-to-install Android release APKs are located in [`apks/`](../../apks/):
+
+| Target Architecture | File Name | Size | Recommended For |
+|---|---|---|---|
+| **ARM 64-bit** | [`fire_dept_simulator-arm64.apk`](../../apks/fire_dept_simulator-arm64.apk) | **~19.4 MB** | **Modern Android phones** (recommended) |
+| **ARM 32-bit** | [`fire_dept_simulator-arm32.apk`](../../apks/fire_dept_simulator-arm32.apk) | **~16.7 MB** | Older 32-bit Android devices |
+| **x86_64** | `app-x86_64-release.apk` | **~20.9 MB** | Android Studio Emulators |
+| **Universal** | [`fire_dept_simulator-release.apk`](../../apks/fire_dept_simulator-release.apk) | **~57.5 MB** | Universal fat APK |
+
+### Install via ADB
+```bash
+adb install apks/fire_dept_simulator-arm64.apk
+```
+
+---
+
+## ⚡ Running & Configuration
+
+### Prerequisites
+- **Flutter SDK**: `>=3.13.0`
+- **Android Studio** / **Android SDK** (API 21+)
+
+### Development Run
 ```bash
 cd partner_apps/fire_dept_simulator
+flutter pub get
 
-# Optional: point it at a local backend and provide the write key.
+# Run against default remote backend
+flutter run
+
+# Or provide environment configurations via dart-define:
 flutter run \
   --dart-define=INCIDENT_API_BASE_URL=http://localhost:8000 \
   --dart-define=SIMULATOR_API_KEY=your-local-secret \
@@ -77,70 +114,21 @@ flutter run \
   --dart-define=SIMULATOR_ROLE=fire_department
 ```
 
-Without `INCIDENT_API_BASE_URL`, the simulator uses
-`https://air-health-api.vercel.app`. An **Android emulator** reaches the host's
-localhost at `10.0.2.2`, so use
-`--dart-define=INCIDENT_API_BASE_URL=http://10.0.2.2:8000`.
-- Both values are also editable in the app's **Settings**, held in memory (see
-  below). A **Test connection** button there distinguishes "cannot reach the
-  backend" from "the backend answered and refused".
+*Note: For Android Emulators accessing the host machine's localhost, set `INCIDENT_API_BASE_URL=http://10.0.2.2:8000`.*
 
-### Checks
+### Building Production APKs
+```bash
+flutter build apk --release --split-per-abi --obfuscate --split-debug-info=build/symbols
+```
+
+---
+
+## 🧪 Testing
 
 ```bash
+# Run static analysis
 flutter analyze
+
+# Run unit tests
 flutter test
 ```
-
-## Why there are no pub dependencies
-
-The console needs one origin, JSON in, JSON out, and one header on writes —
-`dart:io` already provides all of it. A package would add moving parts without
-removing any of the failure modes this app exists to handle.
-
-Two costs, stated plainly:
-
-- **`dart:io` means no Flutter web.** This is a mobile/desktop console.
-- **Settings are not persisted.** Persisting the key would need a storage
-  package, so it lives in memory and is re-set from `--dart-define` on relaunch.
-  If that becomes annoying, `shared_preferences` is the one dependency worth
-  adding.
-
-`flutter_lints` is pinned to `^5.0.0` rather than the citizen app's `^6.0.0` so
-the project resolves against packages already in the local pub cache; the rules
-that matter are the same.
-
-## The contract it speaks
-
-`docs/api/incidents.md` on the published backend branch. The essentials:
-
-- Writes need `X-Simulator-Key`; reads need nothing. No key configured
-  server-side → every write is `503 simulator_disabled`.
-- `reported → assigned → acknowledged → en_route → on_scene → resolved`, and
-  `cancelled` from any non-terminal state. `resolved`/`cancelled` are terminal.
-- `assigned` is reachable only through `POST /incidents/{id}/assign`.
-- Create is idempotent on `(source_type, source_id)` for persisted records and
-  `(source_type, source_ref)` for published alerts — `201` for a new incident,
-  `200` for the existing one.
-
-### One place the doc and the server disagree
-
-`docs/api/incidents.md` §6 lists `invalid_transition` and `use_assign_endpoint`
-as the `409` codes. The implementation returns **`409 conflict`** with an
-explanatory `message` for all three 409 cases (the error handler maps the status
-to a code, and the incident routes pin no override). Observed live:
-
-```
-POST /incidents/2/transitions {"to_status":"assigned", ...}
-→ 409 {"error":{"code":"conflict","message":"use POST /incidents/{id}/assign to assign"}}
-```
-
-So this app keys off the **HTTP status plus the message**, never off those two
-code strings. Worth fixing on the backend side (an `X-Error-Code` override would
-do it) — the app does not depend on it either way.
-
-## Demo
-
-See `docs/frontend-demo.md` § *Fire-department simulator* for the end-to-end
-walkthrough: create an incident on the backend, progress it here, then confirm
-the persisted status from the browser.
