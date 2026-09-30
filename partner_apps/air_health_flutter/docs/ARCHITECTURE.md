@@ -124,10 +124,11 @@ in scenario definitions):
 ## Backend integration
 
 `GridApiPollutionDataProvider` (`lib/data/providers/`) is the app-side
-adapter for the platform's grid API. It is selected automatically when
-`POLLUTION_API_BASE_URL` is set, with the dummy provider as the fallback
-otherwise; debug builds override the selected source with the scenario
-simulator only when `USE_DEV_SCENARIO_SIMULATOR=true` is passed. The API
+adapter for the platform's grid API. It uses `https://air-health-api.vercel.app`
+by default in all build modes; `POLLUTION_API_BASE_URL` can point it at a local
+or staging API. Offline tests override the API client and use the dummy provider.
+Debug builds override the selected source with the scenario simulator only when
+`USE_DEV_SCENARIO_SIMULATOR=true` is passed. The API
 is unauthenticated and the adapter maps:
 
 - `/api/v2/meta` once (cached for 5 minutes) → the published `run_id` every

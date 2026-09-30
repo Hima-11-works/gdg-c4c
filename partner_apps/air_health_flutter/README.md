@@ -55,10 +55,11 @@ lib/
 
 `domain/` has no Flutter imports; screens read data only through Riverpod
 providers. The data source is chosen in one place (`providers/data_providers.dart`):
-`GridApiPollutionDataProvider` reads the published backend H3 grid when
-`POLLUTION_API_BASE_URL` is configured. Without it, the app uses deterministic
-demo data. Debug scenario simulation is opt-in and never replaces a configured
-backend unless explicitly enabled.
+`GridApiPollutionDataProvider` reads the published backend H3 grid from
+`https://air-health-api.vercel.app` by default in debug and release builds. Set
+`POLLUTION_API_BASE_URL` to use a local or staging API. Widget tests override
+API clients and remain offline. Debug scenario simulation is opt-in and never
+replaces the configured backend unless explicitly enabled.
 
 ## Running
 
@@ -68,7 +69,8 @@ flutter pub get
 flutter run
 ```
 
-To run against the local API from an Android emulator, pass its host URL via
+Both debug and release builds use the deployed Vercel backend by default. To run
+against a local API from an Android emulator, pass its host URL via
 `--dart-define`:
 
 ```bash

@@ -13,7 +13,7 @@ import '../data/reports/fire_report_api.dart';
 export '../data/reports/citizen_sensor_api.dart';
 export '../data/reports/fire_report_api.dart';
 
-/// Grid API client, or null when `POLLUTION_API_BASE_URL` is not set.
+/// Grid API client; defaults to the deployed Vercel backend in every build mode.
 ///
 /// The grid API is unauthenticated, so only the base URL is required:
 /// ```
@@ -25,11 +25,10 @@ final gridApiClientProvider = Provider<GridApiClient?>((ref) {
   return DioGridApiClient(dio: createPollutionDio(config));
 });
 
-/// Fire-report API client, or null when the backend isn't configured.
+/// Fire-report API client; the deployed Vercel backend is used by default.
 ///
-/// Null (dummy mode) means the "report a fire" flow is unavailable - there
-/// is nowhere to send it - so the UI hides it entirely rather than showing
-/// a button that can only fail.
+/// A null override (used by offline tests) means the "report a fire" flow is
+/// unavailable — there is nowhere to send it — so the UI hides the entry point.
 final fireReportApiClientProvider = Provider<FireReportApiClient?>((ref) {
   final config = ApiConfig.tryFromEnvironment();
   if (config == null) return null;
@@ -46,7 +45,7 @@ final citizenReportReviewStatusProvider =
   return null;
 });
 
-/// Citizen PM2.5 submission client, or null until the API is configured.
+/// Citizen PM2.5 submission client; defaults to the deployed Vercel backend.
 final citizenSensorApiClientProvider = Provider<CitizenSensorApiClient?>((ref) {
   final config = ApiConfig.tryFromEnvironment();
   if (config == null) return null;
@@ -55,9 +54,10 @@ final citizenSensorApiClientProvider = Provider<CitizenSensorApiClient?>((ref) {
 
 /// The single binding point for [PollutionDataProvider].
 ///
-/// With `POLLUTION_API_BASE_URL` set, the app talks to the real grid API
-/// through [GridApiPollutionDataProvider]; otherwise it falls back to the
-/// deterministic dummy data so the app runs with no backend. Debug scenario
+/// The app talks to the deployed Vercel grid API by default through
+/// [GridApiPollutionDataProvider]. Set `POLLUTION_API_BASE_URL` to target a
+/// local or staging backend. A null client override falls back to deterministic
+/// dummy data, which keeps offline tests isolated. Debug scenario
 /// simulation only replaces the selected source when explicitly enabled with
 /// `USE_DEV_SCENARIO_SIMULATOR=true`.
 ///
