@@ -57,7 +57,9 @@ class _DevSimulatorPanelState extends ConsumerState<DevSimulatorPanel> {
 
   @override
   Widget build(BuildContext context) {
-    if (!kDebugMode) return const SizedBox.shrink();
+    if (!kDebugMode || !devScenarioSimulatorEnabled) {
+      return const SizedBox.shrink();
+    }
 
     final scenario = ref.watch(simulatorScenarioProvider);
     final offset = ref.watch(simulatorTimeOffsetProvider);

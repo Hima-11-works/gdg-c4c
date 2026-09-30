@@ -95,7 +95,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   autocorrect: false,
                   decoration: const InputDecoration(
                     labelText: 'Incident API base URL',
-                    helperText: 'An Android emulator reaches the host at http://10.0.2.2:8001',
+                    helperText: 'An Android emulator reaches the host at http://10.0.2.2:8000',
                     border: OutlineInputBorder(),
                   ),
                 ),

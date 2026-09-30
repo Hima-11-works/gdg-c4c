@@ -23,7 +23,12 @@ final locationPermissionProvider =
 /// without location permission.
 final currentLocationProvider = FutureProvider<LocationPoint>((ref) async {
   final service = ref.read(locationServiceProvider);
-  final result = await service.requestAndLocate();
+  late final LocationResult result;
+  try {
+    result = await service.locateIfPermitted();
+  } catch (_) {
+    return LocationService.fallbackLocation;
+  }
 
   return switch (result) {
     LocationSuccess(:final location) => location,

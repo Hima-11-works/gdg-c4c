@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/data_providers.dart';
 import '../../providers/location_providers.dart';
+import '../../providers/alert_providers.dart';
+import '../../services/location_service.dart';
 
 /// Captures one manual PM2.5 reading from an external consumer sensor.
 class CitizenSensorSheet extends ConsumerStatefulWidget {
@@ -32,8 +34,20 @@ class _CitizenSensorSheetState extends ConsumerState<CitizenSensorSheet> {
   }
 
   Future<void> _refreshLocation() async {
-    ref.invalidate(currentLocationProvider);
-    await ref.read(currentLocationProvider.future);
+    late final LocationResult result;
+    try {
+      result = await ref.read(locationServiceProvider).requestAndLocate();
+    } catch (_) {
+      if (mounted) _message('Could not check location permission. Please try again.');
+      return;
+    }
+    if (result is LocationSuccess) {
+      try {
+        await ref.read(alertCoordinatorProvider).refreshAndEvaluate();
+      } catch (_) {}
+    } else if (mounted) {
+      _message('Location could not be refreshed. Enable location permission and try again.');
+    }
   }
 
   Future<void> _submit() async {
@@ -54,6 +68,10 @@ class _CitizenSensorSheetState extends ConsumerState<CitizenSensorSheet> {
       return;
     }
     final location = ref.read(resolvedLocationProvider);
+    if (location.isFallback) {
+      _message('Your device location is unavailable. Enable location and refresh before sharing this reading.');
+      return;
+    }
     _submissionId ??= 'flutter-sensor-${DateTime.now().microsecondsSinceEpoch}';
     _measuredAt ??= DateTime.now().toUtc();
     _pendingValue ??= value;
@@ -135,7 +153,9 @@ class _CitizenSensorSheetState extends ConsumerState<CitizenSensorSheet> {
             ListTile(
               contentPadding: EdgeInsets.zero,
               leading: const Icon(Icons.location_on_outlined),
-              title: Text(location.label ?? 'Current location'),
+              title: Text(location.isFallback
+                  ? 'Fallback · ${location.label ?? "Bhubaneswar"}'
+                  : (location.label ?? 'Current location')),
               subtitle: Text(
                 '${location.latitude.toStringAsFixed(4)}, ${location.longitude.toStringAsFixed(4)}',
               ),

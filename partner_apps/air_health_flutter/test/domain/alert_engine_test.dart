@@ -109,6 +109,29 @@ void main() {
   // ── Standard profile ────────────────────────────────────────────────
 
   group('AlertEngine — standard profile', () {
+    test('stale readings never notify or mutate dedup state', () {
+      final prior = [
+        DedupEntry(
+          key: 'current_poor',
+          lastAlertedAt: now.subtract(const Duration(hours: 2)),
+        ),
+      ];
+      final result = engine.evaluate(
+        profile: makeProfile(),
+        current: makeReading(250, CpcbCategory.poor),
+        forecast: makeForecast([350]),
+        events: [makeEvent()],
+        freshness: DataFreshness(
+          retrievedAt: now.subtract(const Duration(hours: 3)),
+          quality: DataQuality.full,
+        ),
+        priorAlerts: prior,
+        now: now,
+      );
+      expect(result.decisions, isEmpty);
+      expect(result.dedupState, prior);
+    });
+
     test('no alert when AQI is Good', () {
       final result = engine.evaluate(
         profile: makeProfile(),

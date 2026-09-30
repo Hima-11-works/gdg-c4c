@@ -7,14 +7,14 @@ import 'dev_scenario_simulator.dart';
 
 /// Dev-only provider overrides.
 ///
-/// When [kDebugMode] is true, the simulator's [DummyPollutionDataProvider]
-/// replaces the standard [pollutionDataProvider] and the alert dedup
-/// state can be reset via [alertDedupResetProvider].
+/// In debug builds with [devScenarioSimulatorEnabled], the simulator's
+/// [DummyPollutionDataProvider] replaces [pollutionDataProvider] and the alert
+/// dedup state can be reset via [alertDedupResetProvider].
 ///
 /// In release builds, these overrides are empty — the standard
 /// providers are used unchanged.
 List<Override> get devProviderOverrides {
-  if (!kDebugMode) return const [];
+  if (!kDebugMode || !devScenarioSimulatorEnabled) return const [];
 
   return [
     // Override the data provider to use the simulator's time-shifted one.

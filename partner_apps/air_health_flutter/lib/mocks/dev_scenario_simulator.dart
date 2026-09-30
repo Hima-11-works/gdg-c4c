@@ -4,6 +4,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/providers/dummy_pollution_data_provider.dart';
 import '../data/providers/scenario_data.dart';
 
+/// Synthetic scenario mode is explicit opt-in, so a configured live backend
+/// is not silently replaced during an ordinary debug run.
+const devScenarioSimulatorEnabled = bool.fromEnvironment(
+  'USE_DEV_SCENARIO_SIMULATOR',
+  defaultValue: false,
+);
+
 /// Time offset for the scenario simulator — how far "now" has advanced
 /// from the initial anchor.
 final simulatorTimeOffsetProvider =
@@ -20,7 +27,7 @@ final simulatorPlayingProvider = StateProvider<bool>((ref) => false);
 /// moving [simulatorNowProvider] (the offset), NOT by moving this anchor —
 /// moving the anchor would just relabel the same curve.
 final simulatorAnchorProvider = Provider<DateTime>((ref) {
-  return DateTime(2026, 9, 17, 10, 0);
+  return DateTime.now();
 });
 
 /// The simulated "now" — fixed anchor + the time offset.

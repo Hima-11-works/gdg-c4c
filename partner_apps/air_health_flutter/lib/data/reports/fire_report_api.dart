@@ -21,6 +21,60 @@ abstract interface class CitizenPhotoApiClient {
   });
 }
 
+/// Optional v2 review-status API, kept separate from basic report submission
+/// so existing fakes and clients need not implement it.
+abstract interface class CitizenReportStatusApiClient {
+  Future<ReportReviewStatusDto> getReviewStatus(int reportId);
+}
+
+/// Moderation lifecycle fields visible to the reporting citizen.
+class ReportReviewStatusDto {
+  const ReportReviewStatusDto({
+    required this.id,
+    required this.status,
+    required this.statusMeaning,
+    required this.affectsAirQualityModel,
+    this.lastStatusChangeAt,
+    this.expiresAt,
+    this.evidenceCount = 0,
+    this.evidenceExpected = false,
+  });
+
+  final int id;
+  final String status;
+  final String statusMeaning;
+  final bool affectsAirQualityModel;
+  final DateTime? lastStatusChangeAt;
+  final DateTime? expiresAt;
+  final int evidenceCount;
+  final bool evidenceExpected;
+
+  factory ReportReviewStatusDto.fromJson(Map<String, dynamic> json) =>
+      ReportReviewStatusDto(
+        id: (json['id'] as num).toInt(),
+        status: json['status'] as String,
+        statusMeaning: json['status_meaning'] as String,
+        affectsAirQualityModel: json['affects_air_quality_model'] as bool,
+        lastStatusChangeAt: json['last_status_change_at'] == null
+            ? null
+            : DateTime.parse(json['last_status_change_at'] as String),
+        expiresAt: json['expires_at'] == null
+            ? null
+            : DateTime.parse(json['expires_at'] as String),
+        evidenceCount: (json['evidence_count'] as num?)?.toInt() ?? 0,
+        evidenceExpected: json['evidence_expected'] as bool? ?? false,
+      );
+
+  String get displayStatus => switch (status) {
+        'submitted' => 'Received · awaiting review',
+        'under_review' => 'Under review',
+        'corroborated' => 'Accepted',
+        'rejected' => 'Not accepted',
+        'expired' => 'Expired',
+        _ => 'Status: $status',
+      };
+}
+
 /// `{generated_at, is_demo, data}` — every grid API response.
 class ReportEnvelope<T> {
   const ReportEnvelope({
@@ -99,7 +153,10 @@ abstract class FireReportApiClient {
 /// (the same instance base the grid client uses); this class adds the
 /// `/api/v1` prefix.
 class DioFireReportApiClient
-    implements FireReportApiClient, CitizenPhotoApiClient {
+    implements
+        FireReportApiClient,
+        CitizenPhotoApiClient,
+        CitizenReportStatusApiClient {
   DioFireReportApiClient({required Dio dio}) : _dio = dio;
 
   final Dio _dio;
@@ -132,6 +189,16 @@ class DioFireReportApiClient
           .map((e) => FireReportDto.fromJson(e as Map<String, dynamic>).toDomain())
           .toList(),
     ).data;
+  }
+
+  @override
+  Future<ReportReviewStatusDto> getReviewStatus(int reportId) async {
+    final json = await _get('/api/v2/reports/$reportId');
+    final data = json['data'];
+    if (data is! Map<String, dynamic>) {
+      throw const FormatException('The server returned an invalid report status.');
+    }
+    return ReportReviewStatusDto.fromJson(data);
   }
 
   @override

@@ -40,6 +40,8 @@ class ProfileScreen extends ConsumerWidget {
         data: (profile) {
           final prefs = profile?.preferences ?? const UserAlertPreferences();
           final location = ref.watch(resolvedLocationProvider);
+          final notificationPermission =
+              ref.watch(notificationPermissionProvider);
           final exactAsync = ref.watch(exactAlarmsProvider);
           final upcomingAsync = ref.watch(upcomingAlarmsProvider);
           // The exact-alarm row only exists on Android; iOS delivers local
@@ -54,7 +56,9 @@ class ProfileScreen extends ConsumerWidget {
               _SettingsTile(
                 icon: Icons.location_on_outlined,
                 title: 'Current location',
-                subtitle: location.label ?? 'Current position',
+                subtitle: location.isFallback
+                    ? 'Fallback · ${location.label ?? "Bhubaneswar"}'
+                    : (location.label ?? 'Current position'),
                 onTap: () => _manageLocationPermission(context, ref),
               ),
               _SettingsTile(
@@ -78,7 +82,13 @@ class ProfileScreen extends ConsumerWidget {
               _SettingsTile(
                 icon: Icons.notifications_active_outlined,
                 title: 'Notification permission',
-                subtitle: 'Manage system notification access',
+                subtitle: notificationPermission.when(
+                  data: (granted) => granted
+                      ? 'Granted — on-device alerts can appear'
+                      : 'Not granted — alerts stay in the app only',
+                  error: (_, _) => 'Could not check system permission',
+                  loading: () => 'Checking system permission…',
+                ),
                 onTap: () => _manageNotificationPermission(context, ref),
               ),
               _TimeRangeTile(
@@ -499,7 +509,15 @@ class ProfileScreen extends ConsumerWidget {
     WidgetRef ref,
   ) async {
     final service = ref.read(locationServiceProvider);
-    final status = await service.checkPermission();
+    late final LocationPermissionStatus status;
+    try {
+      status = await service.checkPermission();
+    } catch (_) {
+      if (context.mounted) {
+        _showMessage(context, 'Could not check location permission. Try again.');
+      }
+      return;
+    }
     if (!context.mounted) return;
 
     if (status == LocationPermissionStatus.permanentlyDenied) {
@@ -511,7 +529,10 @@ class ProfileScreen extends ConsumerWidget {
       return;
     }
     if (status == LocationPermissionStatus.granted) {
-      _showMessage(context, 'Location permission is already granted');
+      try {
+        await ref.read(alertCoordinatorProvider).refreshAndEvaluate();
+      } catch (_) {}
+      if (context.mounted) _showMessage(context, 'Location refreshed');
       return;
     }
 
@@ -519,8 +540,10 @@ class ProfileScreen extends ConsumerWidget {
     final result = await service.requestAndLocate();
     if (!context.mounted) return;
     if (result is LocationSuccess) {
-      ref.invalidate(currentLocationProvider);
-      _showMessage(context, 'Location enabled');
+      try {
+        await ref.read(alertCoordinatorProvider).refreshAndEvaluate();
+      } catch (_) {}
+      if (context.mounted) _showMessage(context, 'Location enabled and air-quality alerts refreshed');
     } else if (result is LocationPermanentlyDenied) {
       _showMessage(context, 'Location is blocked — enable it in system settings');
     } else {
@@ -536,6 +559,12 @@ class ProfileScreen extends ConsumerWidget {
   ) async {
     final result =
         await ref.read(notificationServiceProvider).requestPermissions();
+    if (!context.mounted) return;
+    ref.invalidate(notificationPermissionProvider);
+    ref.invalidate(upcomingAlarmsProvider);
+    try {
+      await ref.read(alertCoordinatorProvider).refreshAndEvaluate();
+    } catch (_) {}
     if (!context.mounted) return;
     _showMessage(
       context,

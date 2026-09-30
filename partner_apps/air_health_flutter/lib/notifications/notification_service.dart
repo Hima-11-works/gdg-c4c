@@ -226,6 +226,17 @@ class NotificationService {
     return NotificationPermissionResult.denied;
   }
 
+  /// Whether the operating system currently allows notification delivery.
+  /// A denied permission is a normal user choice, not an app error.
+  Future<bool> canDeliverNotifications() async {
+    try {
+      final status = await Permission.notification.status;
+      return status.isGranted || status.isProvisional || status.isLimited;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Show a local notification.
   ///
   /// [id] is used for deduplication — same id replaces the previous
@@ -243,6 +254,7 @@ class NotificationService {
     String? payload,
     bool urgent = false,
   }) async {
+    if (!await canDeliverNotifications()) return;
     final channel = urgent ? _urgentChannel : _alertsChannel;
     final androidDetails = AndroidNotificationDetails(
       channel.id,

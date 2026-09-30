@@ -43,6 +43,7 @@ class AlertNotificationDispatcher {
     UserHealthContext healthContext = UserHealthContext.none,
     DiseaseSeverity? diseaseSeverity,
   }) async {
+    if (!await _notificationService.canDeliverNotifications()) return 0;
     int count = 0;
     final seenKeys = <String>{};
     bool shouldTriggerSound = false;

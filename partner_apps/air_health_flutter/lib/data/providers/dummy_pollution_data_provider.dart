@@ -61,6 +61,13 @@ class DummyPollutionDataProvider implements PollutionDataProvider {
 
   @override
   Future<DataFreshness> getDataFreshness() async {
-    return _data.freshness;
+    return DataFreshness(
+      retrievedAt: _data.freshness.retrievedAt,
+      quality: _data.freshness.quality,
+      nextRefreshEta: _data.freshness.nextRefreshEta,
+      isDemo: true,
+      mode: 'demo',
+      runId: _data.freshness.runId,
+    );
   }
 }

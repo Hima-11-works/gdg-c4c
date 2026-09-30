@@ -215,6 +215,8 @@ void main() {
         store: store,
       );
       when(() => service.cancelAlarm(any())).thenAnswer((_) async {});
+      when(() => service.canDeliverNotifications())
+          .thenAnswer((_) async => true);
       when(() => store.writeAll(any())).thenAnswer((_) async {});
       when(() => service.scheduleAlarm(
             id: any(named: 'id'),
@@ -240,6 +242,37 @@ void main() {
         now: now,
       );
     }
+
+    test('cancels stored alarms when OS notification permission is denied', () async {
+      final stored = [
+        ScheduledAlarm(
+          id: 12,
+          key: 'old_alarm',
+          fireAt: now.add(const Duration(hours: 2)),
+          severity: AlertSeverity.warning,
+          categoryLabel: 'Poor',
+          predictedAqi: 250,
+        ),
+      ];
+      when(() => service.canDeliverNotifications())
+          .thenAnswer((_) async => false);
+      when(() => store.readAll()).thenAnswer((_) async => stored);
+      when(() => store.deleteAll()).thenAnswer((_) async {});
+
+      final result = await run([fp(250, const Duration(hours: 3))]);
+
+      expect(result, isEmpty);
+      verify(() => service.cancelAlarm(12)).called(1);
+      verify(() => store.deleteAll()).called(1);
+      verifyNever(() => service.scheduleAlarm(
+            id: any(named: 'id'),
+            fireAt: any(named: 'fireAt'),
+            title: any(named: 'title'),
+            body: any(named: 'body'),
+            payload: any(named: 'payload'),
+            urgent: any(named: 'urgent'),
+          ));
+    });
 
     test('schedules a new alarm and persists it', () async {
       final result = await run([fp(250, const Duration(hours: 3))]);

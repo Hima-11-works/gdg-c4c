@@ -36,6 +36,14 @@ final fireReportApiClientProvider = Provider<FireReportApiClient?>((ref) {
   return DioFireReportApiClient(dio: createPollutionDio(config));
 });
 
+/// Current backend review lifecycle for a locally submitted citizen report.
+final citizenReportReviewStatusProvider =
+    FutureProvider.family<ReportReviewStatusDto?, int>((ref, reportId) async {
+  final client = ref.watch(fireReportApiClientProvider);
+  if (client is! CitizenReportStatusApiClient) return null;
+  return client.getReviewStatus(reportId);
+});
+
 /// Citizen PM2.5 submission client, or null until the API is configured.
 final citizenSensorApiClientProvider = Provider<CitizenSensorApiClient?>((ref) {
   final config = ApiConfig.tryFromEnvironment();
@@ -47,8 +55,9 @@ final citizenSensorApiClientProvider = Provider<CitizenSensorApiClient?>((ref) {
 ///
 /// With `POLLUTION_API_BASE_URL` set, the app talks to the real grid API
 /// through [GridApiPollutionDataProvider]; otherwise it falls back to the
-/// deterministic dummy data so the app runs with no backend. In debug builds
-/// `devProviderOverrides` swaps in the scenario simulator regardless.
+/// deterministic dummy data so the app runs with no backend. Debug scenario
+/// simulation only replaces the selected source when explicitly enabled with
+/// `USE_DEV_SCENARIO_SIMULATOR=true`.
 ///
 /// Nothing else in the app changes between the two.
 final pollutionDataProvider = Provider<PollutionDataProvider>((ref) {

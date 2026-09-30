@@ -126,7 +126,8 @@ in scenario definitions):
 `GridApiPollutionDataProvider` (`lib/data/providers/`) is the app-side
 adapter for the platform's grid API. It is selected automatically when
 `POLLUTION_API_BASE_URL` is set, with the dummy provider as the fallback
-otherwise; debug builds override both with the scenario simulator. The API
+otherwise; debug builds override the selected source with the scenario
+simulator only when `USE_DEV_SCENARIO_SIMULATOR=true` is passed. The API
 is unauthenticated and the adapter maps:
 
 - `/api/v2/meta` once (cached for 5 minutes) → the published `run_id` every

@@ -1,5 +1,9 @@
 /// How fresh the environmental data is.
 class DataFreshness {
+  /// Data older than this is treated as stale even if the publisher did not
+  /// explicitly mark its snapshot stale.
+  static const staleAfter = Duration(hours: 2);
+
   const DataFreshness({
     required this.retrievedAt,
     required this.quality,
@@ -17,6 +21,9 @@ class DataFreshness {
   final String? runId;
 
   bool get isStale => quality == DataQuality.stale;
+
+  bool isStaleAt(DateTime now) =>
+      isStale || now.difference(retrievedAt).abs() > staleAfter;
 
   /// How old the data is right now.
   Duration get age => DateTime.now().difference(retrievedAt);

@@ -55,8 +55,10 @@ lib/
 
 `domain/` has no Flutter imports; screens read data only through Riverpod
 providers. The data source is chosen in one place (`providers/data_providers.dart`):
-`DummyPollutionDataProvider` (8 deterministic scenarios) is active today;
-`RemotePollutionDataProvider` is a Dio skeleton awaiting a real API contract.
+`GridApiPollutionDataProvider` reads the published backend H3 grid when
+`POLLUTION_API_BASE_URL` is configured. Without it, the app uses deterministic
+demo data. Debug scenario simulation is opt-in and never replaces a configured
+backend unless explicitly enabled.
 
 ## Running
 
@@ -66,14 +68,17 @@ flutter pub get
 flutter run
 ```
 
-To point the (skeleton) remote provider at a real API, pass details via
-`--dart-define` (no keys or URLs are hardcoded):
+To run against the local API from an Android emulator, pass its host URL via
+`--dart-define`:
 
 ```bash
 flutter run \
-  --dart-define=POLLUTION_API_BASE_URL=https://... \
-  --dart-define=POLLUTION_API_KEY=...
+  --dart-define=POLLUTION_API_BASE_URL=http://10.0.2.2:8000
 ```
+
+For desktop, use `http://localhost:8000`. To intentionally show the debug
+scenario controls and synthetic readings, add
+`--dart-define=USE_DEV_SCENARIO_SIMULATOR=true`.
 
 ## Tests
 

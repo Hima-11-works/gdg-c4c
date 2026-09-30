@@ -14,6 +14,8 @@ void main() {
 
   setUp(() {
     mockNotif = MockNotificationService();
+    when(() => mockNotif.canDeliverNotifications())
+        .thenAnswer((_) async => true);
     messageService = const AlertMessageService();
     dispatcher = AlertNotificationDispatcher(
       notificationService: mockNotif,
@@ -40,6 +42,25 @@ void main() {
   }
 
   group('AlertNotificationDispatcher', () {
+    test('does not dispatch when OS notification permission is denied', () async {
+      when(() => mockNotif.canDeliverNotifications())
+          .thenAnswer((_) async => false);
+
+      final count = await dispatcher.dispatch(
+        decisions: [makeDecision()],
+        sensitivity: AlertSensitivity.standard,
+      );
+
+      expect(count, 0);
+      verifyNever(() => mockNotif.show(
+            id: any(named: 'id'),
+            title: any(named: 'title'),
+            body: any(named: 'body'),
+            payload: any(named: 'payload'),
+            urgent: any(named: 'urgent'),
+          ));
+    });
+
     test('dispatches notification for each decision', () async {
       when(() => mockNotif.show(
             id: any(named: 'id'),

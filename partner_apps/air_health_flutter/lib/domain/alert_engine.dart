@@ -47,6 +47,11 @@ class AlertEngine {
       return AlertEngineResult(decisions: const [], dedupState: priorAlerts);
     }
     final effectiveNow = now ?? DateTime.now();
+    // Never notify from stale location data. Preserve prior dedup state so a
+    // later fresh reading can trigger normally.
+    if (freshness.isStaleAt(effectiveNow)) {
+      return AlertEngineResult(decisions: const [], dedupState: priorAlerts);
+    }
     final rules = SensitivityRules.forProfile(profile);
 
     // 1. Generate all candidate decisions.

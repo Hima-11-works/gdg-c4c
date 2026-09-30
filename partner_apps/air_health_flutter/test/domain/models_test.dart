@@ -18,6 +18,24 @@ void main() {
       expect(fresh.isStale, isFalse);
       expect(stale.isStale, isTrue);
     });
+
+    test('timestamps older than two hours are effectively stale', () {
+      expect(fresh.isStaleAt(now), isFalse);
+      expect(
+        DataFreshness(
+          retrievedAt: now.subtract(const Duration(hours: 3)),
+          quality: DataQuality.full,
+        ).isStaleAt(now),
+        isTrue,
+      );
+      expect(
+        DataFreshness(
+          retrievedAt: now.add(const Duration(hours: 3)),
+          quality: DataQuality.full,
+        ).isStaleAt(now),
+        isTrue,
+      );
+    });
   });
 
   group('PollutionEvent', () {

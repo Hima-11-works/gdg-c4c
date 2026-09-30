@@ -74,10 +74,7 @@ class ForecastAlarmScheduler {
       return const [];
     }
     // Never alarm off stale data — a stale forecast is not a prediction.
-    if (freshness.quality == DataQuality.stale) return const [];
-    if (now.difference(freshness.retrievedAt).abs() > const Duration(hours: 2)) {
-      return const [];
-    }
+    if (freshness.isStaleAt(now)) return const [];
 
     final candidates = <ScheduledAlarm>[];
     for (final point in forecast) {
@@ -121,6 +118,10 @@ class ForecastAlarmScheduler {
     DateTime? now,
   }) async {
     final effectiveNow = now ?? DateTime.now();
+    if (!await _notificationService.canDeliverNotifications()) {
+      await cancelAll();
+      return const [];
+    }
     final desired = desiredAlarms(
       forecast: forecast,
       rules: rules,

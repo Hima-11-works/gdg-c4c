@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -6,8 +7,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../domain/models/fire_report.dart';
+import '../../providers/alert_providers.dart';
 import '../../providers/data_providers.dart';
 import '../../providers/location_providers.dart';
+import '../../services/location_service.dart';
 import '../../storage/citizen_reports_store.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
@@ -26,6 +29,7 @@ class ReportFireSheet extends ConsumerStatefulWidget {
 }
 
 class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
+  static const _maxPhotoBytes = 4 * 1024 * 1024;
   FireKind _kind = FireKind.other;
   int _smokeIntensity = 3;
   double _durationHours = FireDurationOption.justStarted.hours;
@@ -42,7 +46,9 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
   void initState() {
     super.initState();
     final location = ref.read(resolvedLocationProvider);
-    _regionController.text = location.label ?? 'Lucknow (LKO)';
+    if (!location.isFallback && location.label != null) {
+      _regionController.text = location.label!;
+    }
   }
 
   @override
@@ -58,11 +64,27 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
       'flutter-${DateTime.now().microsecondsSinceEpoch}';
 
   Future<void> _refreshLocation() async {
-    ref.invalidate(currentLocationProvider);
-    // Kick the GPS now so the row below reflects it as soon as it resolves.
-    final loc = await ref.read(currentLocationProvider.future);
-    if (loc.label != null && _regionController.text.isEmpty) {
-      _regionController.text = loc.label!;
+    late final LocationResult result;
+    try {
+      result = await ref.read(locationServiceProvider).requestAndLocate();
+    } catch (_) {
+      _showMessage('Could not check location permission. Please try again.');
+      return;
+    }
+    if (!mounted) return;
+    if (result is LocationSuccess) {
+      if (result.location.label != null) {
+        _regionController.text = result.location.label!;
+      }
+      try {
+        await ref.read(alertCoordinatorProvider).refreshAndEvaluate();
+      } catch (_) {}
+    } else {
+      _showMessage(switch (result) {
+        LocationDenied() => 'Location permission was denied. Enable it in Settings to report your actual location.',
+        LocationPermanentlyDenied() => 'Location is blocked. Enable it in system settings to report your actual location.',
+        _ => 'Could not get your current location. Please try again.',
+      });
     }
   }
 
@@ -75,9 +97,13 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
     }
 
     final location = ref.read(resolvedLocationProvider);
+    if (location.isFallback) {
+      _showMessage('Your device location is unavailable. Enable location and refresh before submitting a hotspot report.');
+      return;
+    }
     final regionText = _regionController.text.trim().isNotEmpty
         ? _regionController.text.trim()
-        : (location.label ?? 'Lucknow (LKO)');
+        : (location.label ?? 'Nearby area');
 
     FireReportDraft? draft;
     if (_submittedReport == null) {
@@ -161,7 +187,22 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
         maxHeight: 2048,
       );
       if (photo == null || !mounted) return;
+      if (await photo.length() > _maxPhotoBytes) {
+        _showMessage('Choose an image no larger than 4 MB.');
+        return;
+      }
       final bytes = await photo.readAsBytes();
+      if (bytes.isEmpty) {
+        _showMessage('The selected image is empty. Choose another photo.');
+        return;
+      }
+      final codec = await ui.instantiateImageCodec(bytes);
+      try {
+        final frame = await codec.getNextFrame();
+        frame.image.dispose();
+      } finally {
+        codec.dispose();
+      }
       if (!mounted) return;
       setState(() {
         _photoBytes = bytes;
@@ -216,7 +257,9 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
             _SectionLabel('Where is it happening?'),
             const SizedBox(height: AppSpacing.xs),
             _LocationRow(
-              label: location.label,
+              label: location.isFallback
+                  ? 'Fallback · ${location.label ?? "Bhubaneswar"}'
+                  : location.label,
               latitude: location.latitude,
               longitude: location.longitude,
               onRefresh: _refreshLocation,

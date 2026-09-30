@@ -6,6 +6,7 @@ import '../../core/formatters.dart';
 import '../../domain/models/models.dart';
 import '../../features/reports/citizen_sensor_sheet.dart';
 import '../../features/reports/report_fire_sheet.dart';
+import '../../providers/alert_providers.dart';
 import '../../providers/data_providers.dart';
 import '../../providers/home_providers.dart';
 import '../../providers/profile_providers.dart';
@@ -88,10 +89,16 @@ class HomeScreen extends ConsumerWidget {
           return RefreshIndicator(
             onRefresh: () async {
               HapticFeedback.mediumImpact();
-              ref.invalidate(currentAirQualityProvider);
-              ref.invalidate(forecastProvider);
-              ref.invalidate(pollutionEventsProvider);
-              ref.invalidate(dataFreshnessProvider);
+              try {
+                await ref.read(alertCoordinatorProvider).refreshAndEvaluate();
+              } catch (_) {
+                // The home providers still refresh and show their own error
+                // states when the alert engine cannot evaluate this snapshot.
+                ref.invalidate(currentAirQualityProvider);
+                ref.invalidate(forecastProvider);
+                ref.invalidate(pollutionEventsProvider);
+                ref.invalidate(dataFreshnessProvider);
+              }
             },
             child: ListView(
               padding: const EdgeInsets.only(bottom: AppSpacing.xxxxl),
@@ -107,7 +114,9 @@ class HomeScreen extends ConsumerWidget {
                           size: 16, color: AppColors.onSurfaceMuted),
                       const SizedBox(width: AppSpacing.sm),
                       Text(
-                        location.label ?? 'Current location',
+                        location.isFallback
+                            ? 'Fallback location · ${location.label ?? "Bhubaneswar"}'
+                            : (location.label ?? 'Current location'),
                         style: AppTypography.bodyMedium.copyWith(
                           color: cs.onSurfaceVariant,
                         ),
@@ -352,7 +361,8 @@ class _FreshnessBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final quality = freshness.quality;
+    final isStale = freshness.isStaleAt(DateTime.now());
+    final quality = isStale ? DataQuality.stale : freshness.quality;
     final color = switch (quality) {
       DataQuality.full => cs.onSurfaceVariant,
       DataQuality.partial => AppColors.warning,
@@ -365,14 +375,15 @@ class _FreshnessBanner extends StatelessWidget {
       DataQuality.forecastUnavailable => Icons.info_outline,
       DataQuality.stale => Icons.warning_amber_outlined,
     };
-    final demo = freshness.mode == 'demo' ||
-        (freshness.mode == null && freshness.isDemo);
+    final demo = freshness.isDemo || freshness.mode == 'demo';
     final modeLabel = demo
-        ? 'Demo simulation'
+        ? 'DEMO SIM'
         : freshness.mode == 'mixed'
-            ? 'Mixed observed and modeled inputs'
-            : '';
-    final prefix = modeLabel.isEmpty ? '' : '$modeLabel · ';
+            ? 'MIXED DATA'
+            : freshness.mode == 'live'
+                ? 'LIVE DATA'
+                : 'DATA MODE UNKNOWN';
+    final prefix = '${isStale ? "STALE · " : ""}$modeLabel · ';
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
@@ -395,13 +406,13 @@ class _FreshnessBanner extends StatelessWidget {
 
 // ── Citizen Report card ───────────────────────────────────────────────
 
-class _CitizenReportCard extends StatelessWidget {
+class _CitizenReportCard extends ConsumerWidget {
   const _CitizenReportCard({required this.report});
 
   final FireReport report;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final cs = Theme.of(context).colorScheme;
 
     return AppCard(
@@ -462,6 +473,8 @@ class _CitizenReportCard extends StatelessWidget {
                   '${report.region ?? "Current region"} · ${Formatters.relativeDuration(DateTime.now().difference(report.reportedAt))} ago',
                   style: AppTypography.bodySmall.copyWith(color: cs.onSurfaceVariant),
                 ),
+                const SizedBox(height: AppSpacing.sm),
+                _ReportReviewStatus(reportId: report.id),
                 if (report.notes != null && report.notes!.isNotEmpty) ...[
                   const SizedBox(height: AppSpacing.xs),
                   Text(
@@ -476,6 +489,95 @@ class _CitizenReportCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _ReportReviewStatus extends ConsumerWidget {
+  const _ReportReviewStatus({required this.reportId});
+
+  final int reportId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final status = ref.watch(citizenReportReviewStatusProvider(reportId));
+    return status.when(
+      loading: () => const Row(
+        children: [
+          SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          SizedBox(width: AppSpacing.sm),
+          Text('Checking review status…'),
+        ],
+      ),
+      error: (_, _) => Row(
+        children: [
+          Expanded(
+            child: Text(
+              'Review status unavailable · check your connection',
+              style: AppTypography.bodySmall.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Retry status check',
+            visualDensity: VisualDensity.compact,
+            onPressed: () => ref.invalidate(
+              citizenReportReviewStatusProvider(reportId),
+            ),
+            icon: const Icon(Icons.refresh, size: 18),
+          ),
+        ],
+      ),
+      data: (value) {
+        if (value == null) {
+          return const Text('Review status is not available from this server.');
+        }
+        final color = switch (value.status) {
+          'corroborated' => AppColors.aqiGood,
+          'rejected' || 'expired' => AppColors.error,
+          'under_review' => AppColors.info,
+          _ => AppColors.warning,
+        };
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: StatusChip(
+                    label: value.displayStatus,
+                    color: color,
+                    icon: value.status == 'corroborated'
+                        ? Icons.verified_outlined
+                        : value.status == 'rejected'
+                            ? Icons.cancel_outlined
+                            : Icons.hourglass_top,
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Refresh review status',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () => ref.invalidate(
+                    citizenReportReviewStatusProvider(reportId),
+                  ),
+                  icon: const Icon(Icons.refresh, size: 18),
+                ),
+              ],
+            ),
+            Text(
+              '${value.statusMeaning} ${value.affectsAirQualityModel ? "This report contributes to air-quality modeling." : "This report is not currently used in the air-quality model."}',
+              style: AppTypography.bodySmall.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }

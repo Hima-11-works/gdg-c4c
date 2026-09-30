@@ -70,6 +70,18 @@ class AlertHistoryNotifier extends AsyncNotifier<List<AlertRecord>> {
     state = AsyncData(updated);
   }
 
+  /// Mark unresolved alerts from the previous device location as resolved.
+  void resolveAllActive() {
+    final existing = state.valueOrNull ?? [];
+    final now = DateTime.now();
+    final updated = existing
+        .map((record) => record.isResolved
+            ? record
+            : record.copyWith(resolvedAt: now))
+        .toList();
+    state = AsyncData(updated);
+  }
+
   /// Prune records older than 24h that are resolved.
   void prune() {
     final existing = state.valueOrNull ?? [];

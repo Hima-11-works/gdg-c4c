@@ -6,7 +6,7 @@
 /// the Flutter SDK. The cost is that a restart forgets an edited key, which is
 /// why the build-time values exist.
 ///
-///   flutter run --dart-define=INCIDENT_API_BASE_URL=http://10.0.2.2:8001 \
+///   flutter run --dart-define=INCIDENT_API_BASE_URL=http://10.0.2.2:8000 \
 ///               --dart-define=SIMULATOR_API_KEY=sim-local-dev-key
 ///
 /// (`10.0.2.2` is how an Android emulator reaches the host's localhost.)
@@ -40,7 +40,7 @@ class SimulatorConfig {
 
   static const defaultBaseUrl = String.fromEnvironment(
     'INCIDENT_API_BASE_URL',
-    defaultValue: 'http://localhost:8001',
+    defaultValue: 'http://localhost:8000',
   );
 
   static const defaultApiKey = String.fromEnvironment(

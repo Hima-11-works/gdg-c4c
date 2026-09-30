@@ -49,16 +49,24 @@ const testLocation = LocationPoint(
   label: 'Bhubaneswar',
 );
 
+const fallbackTestLocation = LocationPoint(
+  latitude: 20.2961,
+  longitude: 85.8245,
+  label: 'Bhubaneswar',
+  isFallback: true,
+);
+
 Future<void> pumpSheet(
   WidgetTester tester, [
   FireReportApiClient? client,
+  LocationPoint location = testLocation,
 ]) async {
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
         fireReportApiClientProvider.overrideWithValue(client),
-        currentLocationProvider.overrideWith((ref) async => testLocation),
-        resolvedLocationProvider.overrideWithValue(testLocation),
+        currentLocationProvider.overrideWith((ref) async => location),
+        resolvedLocationProvider.overrideWithValue(location),
       ],
       child: const MaterialApp(
         home: Scaffold(body: ReportFireSheet()),
@@ -129,6 +137,22 @@ void main() {
       find.text('Submit report'),
       findsOneWidget,
       reason: 'the button re-enables so the user can retry',
+    );
+  });
+
+  testWidgets('does not submit using the fallback demo location',
+      (tester) async {
+    final client = _RecordingFireReportApiClient();
+    await pumpSheet(tester, client, fallbackTestLocation);
+
+    await tester.ensureVisible(find.text('Submit report'));
+    await tester.tap(find.text('Submit report'));
+    await tester.pumpAndSettle();
+
+    expect(client.submitted, isEmpty);
+    expect(
+      find.textContaining('device location is unavailable'),
+      findsOneWidget,
     );
   });
 }

@@ -156,6 +156,9 @@ void main() {
         soundService: mockSound,
       );
 
+      when(() => mockNotif.canDeliverNotifications())
+          .thenAnswer((_) async => true);
+
       when(() => mockNotif.show(
             id: any(named: 'id'),
             title: any(named: 'title'),

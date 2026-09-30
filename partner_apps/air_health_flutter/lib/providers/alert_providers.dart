@@ -10,6 +10,7 @@ import '../notifications/scheduled_alarm.dart';
 import '../storage/forecast_alarm_store.dart';
 import 'alert_history_provider.dart';
 import 'home_providers.dart';
+import 'location_providers.dart';
 import 'profile_providers.dart';
 
 import '../services/alert_sound_service.dart';
@@ -17,6 +18,12 @@ import '../services/alert_sound_service.dart';
 /// NotificationService instance.
 final notificationServiceProvider = Provider<NotificationService>((ref) {
   return NotificationService();
+});
+
+/// Current OS notification permission, shown in Settings and refreshed after
+/// the user changes the system grant.
+final notificationPermissionProvider = FutureProvider<bool>((ref) {
+  return ref.read(notificationServiceProvider).canDeliverNotifications();
 });
 
 /// AlertSoundService instance.
@@ -77,6 +84,12 @@ final alertDedupStateProvider = StateProvider<List<DedupEntry>>((ref) {
   return const [];
 });
 
+/// Last real device position used for alert evaluation. A meaningful move
+/// starts a new location-scoped dedup window.
+final alertEvaluationLocationProvider = StateProvider<LocationPoint?>((ref) {
+  return null;
+});
+
 /// Orchestrates one refresh + alert-evaluation cycle.
 ///
 /// This replaces the previous side-effecting `alertEvaluationProvider`: a
@@ -95,6 +108,7 @@ class AlertCoordinator {
     // Force fresh reads so a periodic tick actually pulls new data. Riverpod
     // keeps the previous value visible during the refresh, so screens don't
     // flash a loading state.
+    _ref.invalidate(currentLocationProvider);
     _ref.invalidate(currentAirQualityProvider);
     _ref.invalidate(forecastProvider);
     _ref.invalidate(pollutionEventsProvider);
@@ -110,10 +124,41 @@ class AlertCoordinator {
       return null;
     }
 
-    final current = await _ref.read(currentAirQualityProvider.future);
-    final forecast = await _ref.read(forecastProvider.future);
-    final events = await _ref.read(pollutionEventsProvider.future);
-    final freshness = await _ref.read(dataFreshnessProvider.future);
+    final location = await _ref.read(currentLocationProvider.future);
+    if (location.isFallback) {
+      // A city demo fallback is not the user's position. Do not deliver a
+      // location-specific AQI alert or leave an old forecast alarm active.
+      if (_ref.read(alertEvaluationLocationProvider) != null) {
+        _resetLocationScopedAlerts();
+      }
+      _ref.read(alertEvaluationLocationProvider.notifier).state = null;
+      await _ref.read(forecastAlarmSchedulerProvider).cancelAll();
+      return null;
+    }
+    final previousLocation = _ref.read(alertEvaluationLocationProvider);
+    if (previousLocation != null &&
+        previousLocation.distanceTo(location) >= 0.5) {
+      _resetLocationScopedAlerts();
+    }
+    _ref.read(alertEvaluationLocationProvider.notifier).state = location;
+
+    late final AirQualityReading current;
+    late final List<ForecastPoint> forecast;
+    late final List<PollutionEvent> events;
+    late final DataFreshness freshness;
+    try {
+      current = await _ref.read(currentAirQualityProvider.future);
+      forecast = await _ref.read(forecastProvider.future);
+      events = await _ref.read(pollutionEventsProvider.future);
+      freshness = await _ref.read(dataFreshnessProvider.future);
+    } catch (_) {
+      // Do not leave a previously scheduled alarm to fire against a failed
+      // or unavailable refresh. Screens surface the underlying data error.
+      try {
+        await _ref.read(forecastAlarmSchedulerProvider).cancelAll();
+      } catch (_) {}
+      return null;
+    }
 
     // Build the sensitivity profile for the engine, carrying the user's
     // persisted alert preferences (master switch, quiet hours, severity floor,
@@ -138,17 +183,23 @@ class AlertCoordinator {
       priorAlerts: priorAlerts,
     );
 
-    // Persist dedup state for the next run.
-    _ref.read(alertDedupStateProvider.notifier).state = result.dedupState;
-
     if (result.decisions.isNotEmpty) {
       // Dispatch notifications (lock-screen-safe messages only).
-      await _ref.read(alertNotificationDispatcherProvider).dispatch(
+      final delivered = await _ref
+          .read(alertNotificationDispatcherProvider)
+          .dispatch(
             decisions: result.decisions,
             sensitivity: profile.sensitivity,
             healthContext: profile.healthContext,
             diseaseSeverity: profile.diseaseSeverity,
           );
+
+      // Keep a decision eligible while OS notifications are denied. The alert
+      // history remains visible in-app, and granting permission later can
+      // deliver the still-relevant warning rather than losing it to dedup.
+      if (delivered > 0) {
+        _ref.read(alertDedupStateProvider.notifier).state = result.dedupState;
+      }
 
       // Record for the Alerts screen, and resolve any recovery decisions.
       final history = _ref.read(alertHistoryProvider.notifier);
@@ -158,6 +209,8 @@ class AlertCoordinator {
           history.resolveByKey(decision.dedupKey);
         }
       }
+    } else {
+      _ref.read(alertDedupStateProvider.notifier).state = result.dedupState;
     }
 
     // Drop stale resolved/old records regardless of new decisions.
@@ -180,6 +233,11 @@ class AlertCoordinator {
     }
 
     return result;
+  }
+
+  void _resetLocationScopedAlerts() {
+    _ref.read(alertDedupStateProvider.notifier).state = const [];
+    _ref.read(alertHistoryProvider.notifier).resolveAllActive();
   }
 }
 

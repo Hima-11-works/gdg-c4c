@@ -41,6 +41,7 @@ class LocationService {
     latitude: 20.2961,
     longitude: 85.8245,
     label: 'Bhubaneswar',
+    isFallback: true,
   );
 
   /// Request location permission and return the current position.
@@ -71,7 +72,26 @@ class LocationService {
       return const LocationPermanentlyDenied();
     }
 
-    // Permission granted — get position.
+    return _readCurrentPosition();
+  }
+
+  /// Get a fresh device location only when permission is already granted.
+  /// Periodic/resume refreshes use this so they never reopen an OS prompt.
+  Future<LocationResult> locateIfPermitted() async {
+    final permission = await checkPermission();
+    if (permission == LocationPermissionStatus.serviceDisabled) {
+      return const LocationUnavailable();
+    }
+    if (permission == LocationPermissionStatus.permanentlyDenied) {
+      return const LocationPermanentlyDenied();
+    }
+    if (permission == LocationPermissionStatus.denied) {
+      return const LocationDenied();
+    }
+    return _readCurrentPosition();
+  }
+
+  Future<LocationResult> _readCurrentPosition() async {
     try {
       final position = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(

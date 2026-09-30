@@ -8,11 +8,15 @@ class LocationPoint {
     required this.latitude,
     required this.longitude,
     this.label,
+    this.isFallback = false,
   });
 
   final double latitude;
   final double longitude;
   final String? label;
+
+  /// True when this is the demo fallback and not the device's actual position.
+  final bool isFallback;
 
   /// Distance in kilometres to another point (Haversine).
   double distanceTo(LocationPoint other) {
@@ -35,10 +39,11 @@ class LocationPoint {
       other is LocationPoint &&
           latitude == other.latitude &&
           longitude == other.longitude &&
-          label == other.label;
+          label == other.label &&
+          isFallback == other.isFallback;
 
   @override
-  int get hashCode => Object.hash(latitude, longitude, label);
+  int get hashCode => Object.hash(latitude, longitude, label, isFallback);
 
   @override
   String toString() =>

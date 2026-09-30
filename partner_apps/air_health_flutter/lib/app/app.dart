@@ -28,7 +28,7 @@ const alertRefreshInterval = Duration(minutes: 15);
 /// Also owns the app-wide refresh/alert cadence: it refreshes the data used by
 /// the alert engine on [alertRefreshInterval], on app resume, and once at
 /// startup, so alerts fire without the user having to pull-to-refresh.
-/// In debug mode, overlays the dev scenario simulator panel.
+/// The dev scenario simulator panel is available only when explicitly enabled.
 /// The entire tree is wrapped in a dark Container so the empty space
 /// on left/right of the 430px mobile frame matches the dark theme.
 class AirHealthApp extends ConsumerStatefulWidget {
