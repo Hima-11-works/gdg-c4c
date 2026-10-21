@@ -192,6 +192,7 @@ def _alert_candidates_stmt(
     run_id: str,
     threshold_pm25: float,
     *,
+    h3_cell: str | None = None,
     limit: int | None = None,
     offset: int = 0,
 ) -> Select:
@@ -220,11 +221,13 @@ def _alert_candidates_stmt(
             forecast.c.horizon_hours > 0,
             forecast.c.predicted_pm25 >= threshold_pm25,
         )
-        .order_by(
-            forecast.c.predicted_pm25.desc(),
-            forecast.c.horizon_hours,
-            forecast.c.h3_cell,
-        )
+    )
+    if h3_cell is not None:
+        stmt = stmt.where(forecast.c.h3_cell == h3_cell)
+    stmt = stmt.order_by(
+        forecast.c.predicted_pm25.desc(),
+        forecast.c.horizon_hours,
+        forecast.c.h3_cell,
     )
     if limit is not None:
         stmt = stmt.limit(limit)
@@ -303,11 +306,18 @@ class SqlPredictionPublicationRepository:
         run_id: str,
         *,
         threshold_pm25: float,
+        h3_cell: str | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[AlertCandidate]:
         rows = self._session.execute(
-            _alert_candidates_stmt(run_id, threshold_pm25, limit=limit, offset=offset)
+            _alert_candidates_stmt(
+                run_id,
+                threshold_pm25,
+                h3_cell=h3_cell,
+                limit=limit,
+                offset=offset,
+            )
         ).all()
         return [
             AlertCandidate(

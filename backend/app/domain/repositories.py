@@ -358,6 +358,7 @@ class PredictionPublicationRepository(Protocol):
         run_id: str,
         *,
         threshold_pm25: float,
+        h3_cell: str | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[AlertCandidate]:

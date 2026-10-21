@@ -214,10 +214,11 @@ def test_alert_statements() -> None:
 
     alert_page_sql = _sql(
         prediction_publication_repo._alert_candidates_stmt(
-            "published-run", 91.0, limit=100, offset=200
+            "published-run", 91.0, h3_cell=CELL, limit=100, offset=200
         )
     )
     assert "ORDER BY forecast_prediction.predicted_pm25 DESC" in alert_page_sql
+    assert f"forecast_prediction.h3_cell = '{CELL}'" in alert_page_sql
     assert "LIMIT 100 OFFSET 200" in alert_page_sql
 
 

@@ -210,7 +210,10 @@ class GridApiPollutionDataProvider implements PollutionDataProvider {
     LocationPoint location,
   ) async {
     final snapshot = await _nearestCell(location);
-    final alerts = await _client.alerts(runId: snapshot.runId);
+    final alerts = await _client.alerts(
+      runId: snapshot.runId,
+      h3Cell: snapshot.h3Cell,
+    );
     _recordEnvelope(alerts);
 
     return alerts.data
@@ -236,11 +239,13 @@ class GridApiPollutionDataProvider implements PollutionDataProvider {
   @override
   Future<DataFreshness> getDataFreshness() async {
     if (_lastGeneratedAt == null) {
-      // No location argument, and we haven't fetched anything yet — the
-      // alerts endpoint is the cheapest way to obtain a `generated_at`.
+      // No location argument, and we haven't fetched anything yet. The
+      // publication metadata already carries freshness and provenance.
       final publication = await _client.latestPublication();
-      final envelope = await _client.alerts(runId: publication.runId);
-      _recordEnvelope(envelope);
+      _lastGeneratedAt = publication.generatedAt;
+      _lastIsDemo = publication.isDemo;
+      _lastMode = publication.mode;
+      _lastRunId = publication.runId;
     }
     return DataFreshness(
       retrievedAt: _lastGeneratedAt!,

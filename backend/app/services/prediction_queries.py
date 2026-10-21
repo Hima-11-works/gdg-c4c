@@ -223,13 +223,19 @@ class PredictionQueryService:
         run: PredictionRun,
         *,
         threshold_pm25: float,
+        h3_cell: str | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[AlertCandidate]:
-        """Fetch qualifying alerts, optionally as a page, without loading a run."""
+        """Fetch qualifying alerts for an optional cell and page without loading a run."""
         if run.run_id.startswith(DEMO_FALLBACK_PREFIX):
             rows = self.results(
-                run, cells=self.target_cells(run, self.native_resolution)
+                run,
+                cells=(
+                    [h3_cell]
+                    if h3_cell is not None
+                    else self.target_cells(run, self.native_resolution)
+                ),
             )
             current_by_cell = {
                 row.h3_cell: row for row in rows if row.horizon_hours == 0
@@ -259,6 +265,7 @@ class PredictionQueryService:
         return self._repository.list_alert_candidates(
             run.run_id,
             threshold_pm25=threshold_pm25,
+            h3_cell=h3_cell,
             limit=limit,
             offset=offset,
         )

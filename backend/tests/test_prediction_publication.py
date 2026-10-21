@@ -5,7 +5,9 @@ from types import SimpleNamespace
 
 import h3
 import pytest
+from fastapi.testclient import TestClient
 
+from app.api.deps import get_prediction_query_service
 from app.domain.features import (
     CellFeatureVector,
     DataMode,
@@ -15,6 +17,7 @@ from app.domain.features import (
     InputKind,
 )
 from app.domain.prediction import AlertCandidate, PredictionResult, PredictionRun
+from app.main import create_app
 from app.services.prediction_publication import (
     PredictionPublicationService,
     assert_live_snapshots_available,
@@ -28,6 +31,7 @@ class MemoryPublicationRepository:
         self.result_values = list(results or [])
         self.published = 0
         self.result_queries = []
+        self.alert_queries = []
 
     def publish(self, run, results):
         self.run_value = run
@@ -61,8 +65,13 @@ class MemoryPublicationRepository:
             {item.h3_cell for item in self.result_values if item.run_id == run_id}
         )
 
-    def list_alert_candidates(self, run_id, *, threshold_pm25, limit=None, offset=0):
+    def list_alert_candidates(
+        self, run_id, *, threshold_pm25, h3_cell=None, limit=None, offset=0
+    ):
+        self.alert_queries.append(h3_cell)
         rows = [item for item in self.result_values if item.run_id == run_id]
+        if h3_cell is not None:
+            rows = [item for item in rows if item.h3_cell == h3_cell]
         current = {item.h3_cell: item for item in rows if item.horizon_hours == 0}
         candidates = [
             AlertCandidate(
@@ -519,9 +528,33 @@ def test_alert_candidates_are_thresholded_and_include_current_context():
     )
     assert queries.alert_candidates(run, threshold_pm25=60, limit=1, offset=2) == []
 
+    [cell_candidate] = queries.alert_candidates(
+        run, threshold_pm25=60, h3_cell=cell
+    )
+
     assert highest.predicted_pm25 == 110
     assert candidate.h3_cell == cell
     assert candidate.horizon_hours == 1
     assert candidate.predicted_pm25 == 75
     assert candidate.current_pm25 == 18
     assert candidate.confidence == pytest.approx(0.8)
+    assert cell_candidate.h3_cell == cell
+    assert cell_candidate.predicted_pm25 == 75
+    assert repository.alert_queries[-1] == cell
+
+    app = create_app()
+    app.dependency_overrides[get_prediction_query_service] = lambda: queries
+    api = TestClient(app)
+    response = api.get(
+        "/api/v2/alerts",
+        params={"run_id": run.run_id, "h3_cell": cell},
+    )
+    assert response.status_code == 200
+    assert [item["h3_cell"] for item in response.json()["data"]] == [cell]
+    assert repository.alert_queries[-1] == cell
+
+    invalid_cell_response = api.get(
+        "/api/v2/alerts",
+        params={"run_id": run.run_id, "h3_cell": "zzzzzzzzzzzzzzz"},
+    )
+    assert invalid_cell_response.status_code == 422
