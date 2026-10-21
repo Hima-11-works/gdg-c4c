@@ -177,8 +177,8 @@ class FactRow extends StatelessWidget {
 /// The evidence behind an incident: the citizen reports its ids point at, plus
 /// the published run it is associated with.
 ///
-/// Ids are shown as well as the joined rows, because an id is what the incident
-/// actually stores — the report text is a convenience the console looks up.
+/// Ids are shown as well as the persisted rows, because an id is what the
+/// incident actually stores — the report text is a convenience lookup.
 class EvidenceList extends StatelessWidget {
   const EvidenceList({
     super.key,
@@ -189,12 +189,12 @@ class EvidenceList extends StatelessWidget {
 
   final Incident incident;
 
-  /// Reports to join against, keyed by id. Built by the caller from the public
-  /// reports list; empty when that list could not be loaded.
+  /// Persisted reports keyed by id. A missing row remains visible as an
+  /// unresolved evidence reference instead of being treated as no evidence.
   final Map<int, CitizenReport> reportsById;
 
-  /// Why the report list is missing, when it is. Shown rather than swallowed,
-  /// so a blank card never reads as "this report had no detail".
+  /// Why one or more report lookups failed. Shown rather than swallowed, so a
+  /// blank card never reads as "this report had no detail".
   final String? reportsError;
 
   @override
@@ -265,8 +265,8 @@ class EvidenceList extends StatelessWidget {
                     Padding(
                       padding: const EdgeInsets.only(top: 4),
                       child: Text(
-                        'Not in the current reports list (it may have expired, or been '
-                        'filed against a different backend).',
+                        'Could not load this persisted report by ID. The incident still '
+                        'retains its evidence reference.',
                         style: theme.textTheme.bodySmall
                             ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                       ),

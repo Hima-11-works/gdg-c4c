@@ -58,20 +58,37 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
       _loadError = null;
     });
     try {
-      // Three reads: the incident, its append-only history, and the public
-      // report list used to expand the evidence ids. The report list is a
-      // convenience — if it fails the incident still renders.
+      // Incident evidence stores durable report ids. Resolve those ids through
+      // the persisted detail endpoint, not the age-limited active map feed.
       final incident = await widget.api.getIncident(widget.incidentId);
       final history = await widget.api.history(widget.incidentId);
 
-      Map<int, CitizenReport> reportsById = const {};
-      String? reportsError;
-      try {
-        final reports = await widget.api.listReports();
-        reportsById = {for (final report in reports) report.id: report};
-      } on ApiException catch (error) {
-        reportsError = error.message;
+      final reportsById = <int, CitizenReport>{};
+      final reportErrors = <String>[];
+      final reportIds = incident.evidenceReportIds.toSet().toList(growable: false);
+      const reportLookupConcurrency = 5;
+      for (var start = 0; start < reportIds.length; start += reportLookupConcurrency) {
+        final batch = reportIds.skip(start).take(reportLookupConcurrency);
+        final results = await Future.wait<MapEntry<int, CitizenReport?>>(
+          batch.map((id) async {
+            try {
+              return MapEntry<int, CitizenReport?>(
+                id,
+                await widget.api.getReport(id),
+              );
+            } catch (error) {
+              final message = error is ApiException ? error.message : error.toString();
+              reportErrors.add('Report #$id: $message');
+              return MapEntry<int, CitizenReport?>(id, null);
+            }
+          }),
+        );
+        for (final result in results) {
+          final report = result.value;
+          if (report != null) reportsById[result.key] = report;
+        }
       }
+      final reportsError = reportErrors.isEmpty ? null : reportErrors.join(' · ');
 
       if (!mounted) return;
       setState(() {

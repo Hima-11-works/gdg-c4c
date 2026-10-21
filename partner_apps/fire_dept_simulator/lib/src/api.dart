@@ -245,6 +245,13 @@ class IncidentApi {
         .toList();
   }
 
+  /// Loads a persisted report directly by id, including reports outside the
+  /// active feed's age window.
+  Future<CitizenReport> getReport(int id) async {
+    final response = await _send('GET', '/api/v1/reports/$id');
+    return CitizenReport.fromJson(response.data as Map<String, dynamic>);
+  }
+
   /// Current run's PM2.5 alerts, which the operator can select to open a
   /// persistent response incident. Alert ids are stable across retries.
   Future<List<PublishedAlert>> listPublishedAlerts() async {

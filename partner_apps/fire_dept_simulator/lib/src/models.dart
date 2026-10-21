@@ -351,9 +351,9 @@ class IncidentEvent {
 
 /// A citizen fire report, used as the evidence behind an incident.
 ///
-/// Incidents carry `evidence_report_ids`; the reports themselves live at
-/// `GET /api/v1/reports`. The console joins the two so a responder sees what
-/// was actually reported, not just an id.
+/// Incidents carry `evidence_report_ids`; the console resolves each id through
+/// `GET /api/v1/reports/{id}` so older persisted evidence stays readable after
+/// it leaves the active report feed.
 class CitizenReport {
   const CitizenReport({
     required this.id,
