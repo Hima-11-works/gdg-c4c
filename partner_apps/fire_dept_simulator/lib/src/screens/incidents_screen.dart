@@ -42,6 +42,8 @@ class _IncidentsScreenState extends State<IncidentsScreen>
   bool _hasMoreIncidents = true;
   ApiException? _error;
   bool _requestInFlight = false;
+  bool _reloadQueued = false;
+  int _queryGeneration = 0;
   bool _dispatching = false;
   Timer? _refreshTimer;
   final ScrollController _scrollController = ScrollController();
@@ -68,6 +70,8 @@ class _IncidentsScreenState extends State<IncidentsScreen>
   void didUpdateWidget(covariant IncidentsScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.api != widget.api ||
+        oldWidget.config.baseUrl != widget.config.baseUrl ||
+        oldWidget.config.apiKey != widget.config.apiKey ||
         oldWidget.config.role != widget.config.role ||
         oldWidget.config.actorId != widget.config.actorId) {
       _seenDeliveryIds.clear();
@@ -91,6 +95,7 @@ class _IncidentsScreenState extends State<IncidentsScreen>
   }
 
   void _resetQueueSnapshot() {
+    _queryGeneration++;
     _incidents = const [];
     _hotspotEvents = const [];
     _error = null;
@@ -112,9 +117,16 @@ class _IncidentsScreenState extends State<IncidentsScreen>
   }
 
   Future<void> _load({bool append = false}) async {
-    if (_requestInFlight) return;
+    if (_requestInFlight) {
+      _reloadQueued = true;
+      return;
+    }
     _requestInFlight = true;
+    final generation = _queryGeneration;
     final api = widget.api;
+    final baseUrl = widget.config.baseUrl;
+    final apiKey = widget.config.apiKey;
+    final actorId = widget.config.actorId;
     final role = widget.config.role;
     final roleOnly = _roleOnly;
     final archiveOnly = _archiveOnly;
@@ -155,6 +167,19 @@ class _IncidentsScreenState extends State<IncidentsScreen>
         hotspotEvents = const [];
       }
       if (!mounted) return;
+      if (!_isCurrentQuery(
+        generation: generation,
+        api: api,
+        baseUrl: baseUrl,
+        apiKey: apiKey,
+        actorId: actorId,
+        role: role,
+        roleOnly: roleOnly,
+        archiveOnly: archiveOnly,
+      )) {
+        _reloadQueued = true;
+        return;
+      }
 
       final newlyAssigned = _hasInboxSnapshot
           ? inbox
@@ -179,6 +204,19 @@ class _IncidentsScreenState extends State<IncidentsScreen>
       if (newlyAssigned.isNotEmpty) _showAssignmentAlert(newlyAssigned);
     } catch (error) {
       if (!mounted) return;
+      if (!_isCurrentQuery(
+        generation: generation,
+        api: api,
+        baseUrl: baseUrl,
+        apiKey: apiKey,
+        actorId: actorId,
+        role: role,
+        roleOnly: roleOnly,
+        archiveOnly: archiveOnly,
+      )) {
+        _reloadQueued = true;
+        return;
+      }
       setState(() {
         _error = error is ApiException
             ? error
@@ -188,8 +226,31 @@ class _IncidentsScreenState extends State<IncidentsScreen>
       });
     } finally {
       _requestInFlight = false;
+      if (_reloadQueued && mounted) {
+        _reloadQueued = false;
+        unawaited(_load());
+      }
     }
   }
+
+  bool _isCurrentQuery({
+    required int generation,
+    required IncidentApi api,
+    required String baseUrl,
+    required String apiKey,
+    required String actorId,
+    required ResponderRole role,
+    required bool roleOnly,
+    required bool archiveOnly,
+  }) =>
+      generation == _queryGeneration &&
+      identical(widget.api, api) &&
+      widget.config.baseUrl == baseUrl &&
+      widget.config.apiKey == apiKey &&
+      widget.config.actorId == actorId &&
+      widget.config.role == role &&
+      _roleOnly == roleOnly &&
+      _archiveOnly == archiveOnly;
 
   void _showAssignmentAlert(List<IncidentInboxItem> items) {
     if (!mounted) return;
