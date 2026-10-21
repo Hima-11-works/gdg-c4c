@@ -221,7 +221,7 @@ curl -X POST localhost:8000/api/v1/incidents/5/transitions \
 
 | Route | Returns |
 | --- | --- |
-| `GET /api/v1/incidents?status=&role=` | Incident list; filters are the incident's own fields. |
+| `GET /api/v1/incidents?status=&role=&archive=false&limit=50&offset=0` | Paged incident list. By default it contains active work; `archive=true` selects resolved/cancelled incidents. An explicit `status` selects that status. `limit` is capped at 100. |
 | `GET /api/v1/incidents/{id}` | One incident. |
 | `GET /api/v1/incidents/{id}/history` | Append-only event list, oldest first. |
 | `GET /api/v1/incidents/{id}/deliveries` | Simulated delivery records, oldest first. |

@@ -273,9 +273,21 @@ def transition_incident(
 def list_incidents(
     status_filter: IncidentStatus | None = Query(default=None, alias="status"),
     role: ResponderRole | None = Query(default=None),
+    archive: bool = Query(
+        default=False,
+        description="List resolved/cancelled incidents instead of active work.",
+    ),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     service: IncidentService = Depends(get_incident_service),
 ) -> Envelope[list[IncidentOut]]:
-    incidents = service.list(status=status_filter, role=role)
+    incidents = service.list(
+        status=status_filter,
+        role=role,
+        archived_only=archive,
+        limit=limit,
+        offset=offset,
+    )
     return Envelope(
         generated_at=datetime.now(UTC),
         is_demo=False,

@@ -17,6 +17,7 @@ from app.db.repositories import feature_snapshot as feature_repo
 from app.db.repositories import fire_report as fire_report_repo
 from app.db.repositories import forecast as forecast_repo
 from app.db.repositories import grid_state as grid_state_repo
+from app.db.repositories import incident as incident_repo
 from app.db.repositories import ingestion_run as run_repo
 from app.db.repositories import model_version as model_version_repo
 from app.db.repositories import prediction_publication as prediction_publication_repo
@@ -220,6 +221,25 @@ def test_alert_statements() -> None:
     assert "ORDER BY forecast_prediction.predicted_pm25 DESC" in alert_page_sql
     assert f"forecast_prediction.h3_cell = '{CELL}'" in alert_page_sql
     assert "LIMIT 100 OFFSET 200" in alert_page_sql
+
+
+def test_incident_list_defaults_to_active_and_supports_archive_pages() -> None:
+    active_sql = _sql(
+        incident_repo._list_stmt(None, None, limit=50, offset=0)
+    )
+    archive_sql = _sql(
+        incident_repo._list_stmt(
+            None, None, archived_only=True, limit=50, offset=100
+        )
+    )
+
+    assert (
+        "incident.status IN ('reported', 'assigned', 'acknowledged', 'en_route', 'on_scene')"
+        in active_sql
+    )
+    assert "LIMIT 50" in active_sql
+    assert "incident.status IN ('resolved', 'cancelled')" in archive_sql
+    assert "LIMIT 50 OFFSET 100" in archive_sql
 
 
 def test_fire_report_statements() -> None:

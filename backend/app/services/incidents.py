@@ -634,8 +634,17 @@ class IncidentService:
         *,
         status: IncidentStatus | None = None,
         role: ResponderRole | None = None,
+        archived_only: bool = False,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[Incident]:
-        return self._incidents.list(status=status, role=role)
+        return self._incidents.list(
+            status=status,
+            role=role,
+            archived_only=archived_only,
+            limit=limit,
+            offset=offset,
+        )
 
     def history(self, incident_id: int) -> list[IncidentEvent]:
         self._require(incident_id)

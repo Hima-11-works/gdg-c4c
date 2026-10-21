@@ -235,6 +235,9 @@ class IncidentRepository(Protocol):
     def list(
         self, *, status: IncidentStatus | None = None,
         role: ResponderRole | None = None,
+        archived_only: bool = False,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[Incident]: ...
     def history(self, incident_id: int) -> list[IncidentEvent]: ...
 

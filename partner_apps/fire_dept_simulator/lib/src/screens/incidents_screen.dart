@@ -30,15 +30,21 @@ class IncidentsScreen extends StatefulWidget {
 
 class _IncidentsScreenState extends State<IncidentsScreen>
     with WidgetsBindingObserver {
+  static const _incidentPageSize = IncidentApi.incidentPageSize;
+
   List<Incident> _incidents = const [];
   List<Map<String, dynamic>> _hotspotEvents = const [];
   String? _openingHotspotId;
   int _pendingAssignments = 0;
   bool _loading = true;
+  bool _loadingMore = false;
+  bool _hasLoadedSnapshot = false;
+  bool _hasMoreIncidents = true;
   ApiException? _error;
   bool _requestInFlight = false;
   bool _dispatching = false;
   Timer? _refreshTimer;
+  final ScrollController _scrollController = ScrollController();
   final Set<int> _seenDeliveryIds = {};
   bool _hasInboxSnapshot = false;
 
@@ -46,13 +52,16 @@ class _IncidentsScreenState extends State<IncidentsScreen>
   /// department, and the API refuses a role that does not own an incident, so
   /// showing pollution-control work as actionable would be misleading.
   bool _roleOnly = true;
+  bool _archiveOnly = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _load();
-    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) => _load());
+    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (!_archiveOnly) _load();
+    });
   }
 
   @override
@@ -63,6 +72,7 @@ class _IncidentsScreenState extends State<IncidentsScreen>
         oldWidget.config.actorId != widget.config.actorId) {
       _seenDeliveryIds.clear();
       _hasInboxSnapshot = false;
+      _resetQueueSnapshot();
       _load();
     }
   }
@@ -75,27 +85,70 @@ class _IncidentsScreenState extends State<IncidentsScreen>
   @override
   void dispose() {
     _refreshTimer?.cancel();
+    _scrollController.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
-  Future<void> _load() async {
+  void _resetQueueSnapshot() {
+    _incidents = const [];
+    _hotspotEvents = const [];
+    _error = null;
+    _loading = true;
+    _loadingMore = false;
+    _hasLoadedSnapshot = false;
+    _hasMoreIncidents = true;
+    _pendingAssignments = 0;
+  }
+
+  void _changeQueueFilter({bool? roleOnly, bool? archiveOnly}) {
+    setState(() {
+      if (roleOnly != null) _roleOnly = roleOnly;
+      if (archiveOnly != null) _archiveOnly = archiveOnly;
+      _resetQueueSnapshot();
+    });
+    if (_scrollController.hasClients) _scrollController.jumpTo(0);
+    _load();
+  }
+
+  Future<void> _load({bool append = false}) async {
     if (_requestInFlight) return;
     _requestInFlight = true;
+    final api = widget.api;
+    final role = widget.config.role;
+    final roleOnly = _roleOnly;
+    final archiveOnly = _archiveOnly;
+    final pageCount = append || !_hasLoadedSnapshot || _incidents.isEmpty
+        ? 1
+        : (_incidents.length + _incidentPageSize - 1) ~/ _incidentPageSize;
+    final offsets = append
+        ? [_incidents.length]
+        : List<int>.generate(pageCount, (index) => index * _incidentPageSize);
     setState(() {
-      _loading = true;
+      if (!_hasLoadedSnapshot) _loading = true;
       _error = null;
+      _loadingMore = append;
     });
     try {
       final results = await Future.wait([
-        widget.api.listIncidents(role: _roleOnly ? widget.config.role : null),
-        widget.api.listInbox(widget.config.role),
+        Future.wait(
+          offsets.map(
+            (offset) => api.listIncidents(
+              role: roleOnly ? role : null,
+              archive: archiveOnly,
+              limit: _incidentPageSize,
+              offset: offset,
+            ),
+          ),
+        ),
+        api.listInbox(role),
       ]);
-      final incidents = results[0] as List<Incident>;
+      final pages = results[0] as List<List<Incident>>;
+      final fetchedIncidents = pages.expand((page) => page).toList(growable: false);
       final inbox = results[1] as List<IncidentInboxItem>;
       List<Map<String, dynamic>> hotspotEvents;
       try {
-        hotspotEvents = await widget.api.listHotspotEvents();
+        hotspotEvents = await api.listHotspotEvents();
       } catch (_) {
         // The incident queue remains available while the hotspot scanner is
         // disabled, unconfigured, or returns an unexpected shape.
@@ -113,10 +166,15 @@ class _IncidentsScreenState extends State<IncidentsScreen>
       _hasInboxSnapshot = true;
 
       setState(() {
-        _incidents = incidents;
+        _incidents = append
+            ? [..._incidents, ...fetchedIncidents]
+            : fetchedIncidents;
+        _hasMoreIncidents = pages.last.length == _incidentPageSize;
         _hotspotEvents = hotspotEvents;
         _pendingAssignments = inbox.length;
         _loading = false;
+        _loadingMore = false;
+        _hasLoadedSnapshot = true;
       });
       if (newlyAssigned.isNotEmpty) _showAssignmentAlert(newlyAssigned);
     } catch (error) {
@@ -126,6 +184,7 @@ class _IncidentsScreenState extends State<IncidentsScreen>
             ? error
             : ApiException.network(error.toString());
         _loading = false;
+        _loadingMore = false;
       });
     } finally {
       _requestInFlight = false;
@@ -355,16 +414,26 @@ class _IncidentsScreenState extends State<IncidentsScreen>
               children: [
                 Expanded(
                   child: Text(
-                    _roleOnly ? '${roleLabel(widget.config.role)} incidents' : 'All authority incidents',
+                    '${_archiveOnly ? 'Archived' : 'Active'} · '
+                    '${_roleOnly ? roleLabel(widget.config.role) : 'All authority'} incidents',
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                 ),
                 Switch(
                   value: _roleOnly,
-                  onChanged: (value) {
-                    setState(() => _roleOnly = value);
-                    _load();
-                  },
+                  onChanged: (value) => _changeQueueFilter(roleOnly: value),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+            child: Row(
+              children: [
+                const Expanded(child: Text('Show resolved and cancelled incidents')),
+                Switch(
+                  value: _archiveOnly,
+                  onChanged: (value) => _changeQueueFilter(archiveOnly: value),
                 ),
               ],
             ),
@@ -393,7 +462,7 @@ class _IncidentsScreenState extends State<IncidentsScreen>
     }
 
     final error = _error;
-    if (error != null) {
+    if (error != null && !_hasLoadedSnapshot) {
       return ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -413,10 +482,12 @@ class _IncidentsScreenState extends State<IncidentsScreen>
           !_incidents.any((incident) => incident.sourceRef == eventId);
     }).toList(growable: false);
 
-    if (_incidents.isEmpty && openHotspots.isEmpty) {
+    if (_incidents.isEmpty && openHotspots.isEmpty && error == null) {
       return RefreshIndicator(
         onRefresh: _load,
         child: ListView(
+          controller: _scrollController,
+          physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.all(24),
           children: [
             const SizedBox(height: 40),
@@ -443,102 +514,167 @@ class _IncidentsScreenState extends State<IncidentsScreen>
 
     return RefreshIndicator(
       onRefresh: _load,
-      child: ListView(
+      child: ListView.builder(
+        controller: _scrollController,
+        physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
-        children: [
-          if (openHotspots.isNotEmpty) ...[
-            Padding(
-              padding: const EdgeInsets.fromLTRB(4, 8, 4, 4),
-              child: Text('Satellite hotspots awaiting authority review',
-                  style: Theme.of(context).textTheme.titleMedium),
-            ),
-            for (final hotspot in openHotspots)
-              Card(
-                child: ListTile(
-                  leading: const Icon(Icons.satellite_alt_outlined),
-                  title: Text('Potential hotspot · ${hotspot['confidence_band'] ?? 'unrated'} triage'),
-                  subtitle: Text(
-                    '${(hotspot['region'] as String?) ?? 'India'} · '
-                    '${((hotspot['footprint_cells'] as List?) ?? const []).length} cell(s) · '
-                    '${hotspot['event_id']}',
-                  ),
-                  trailing: widget.config.role == ResponderRole.pollutionControl
-                      ? Wrap(
-                          spacing: 4,
-                          children: [
-                            if (hotspot['status'] == 'potential') ...[
-                              TextButton(
-                                onPressed: _openingHotspotId == hotspot['event_id']
-                                    ? null
-                                    : () => _reviewHotspot(hotspot, 'dismissed'),
-                                child: const Text('Dismiss'),
-                              ),
-                              FilledButton(
-                                onPressed: _openingHotspotId == hotspot['event_id']
-                                    ? null
-                                    : () => _reviewHotspot(hotspot, 'confirmed'),
-                                child: Text(_openingHotspotId == hotspot['event_id'] ? 'Saving…' : 'Confirm'),
-                              ),
-                            ] else
-                              FilledButton(
-                                onPressed: _openingHotspotId == hotspot['event_id']
-                                    ? null
-                                    : () => _openHotspot(hotspot),
-                                child: Text(_openingHotspotId == hotspot['event_id'] ? 'Opening…' : 'Open incident'),
-                              ),
-                          ],
-                        )
-                      : const Icon(Icons.lock_outline),
+        itemCount: (error == null ? 0 : 1) +
+            (openHotspots.isEmpty ? 0 : openHotspots.length + 1) +
+            _incidents.length +
+            (_hasMoreIncidents ? 1 : 0),
+        itemBuilder: (context, index) {
+          var itemIndex = index;
+          if (error != null) {
+            if (itemIndex == 0) return _refreshErrorCard(error);
+            itemIndex--;
+          }
+          if (openHotspots.isNotEmpty) {
+            if (itemIndex == 0) {
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(4, 8, 4, 4),
+                child: Text(
+                  'Satellite hotspots awaiting authority review',
+                  style: Theme.of(context).textTheme.titleMedium,
                 ),
-              ),
-          ],
-          for (final incident in _incidents)
-            Card(
-            child: ListTile(
-              onTap: () => _open(incident),
-              title: Row(
-                children: [
-                  Text('#${incident.id}', style: Theme.of(context).textTheme.titleMedium),
-                  const SizedBox(width: 10),
-                  StatusChip(status: incident.status),
-                ],
-              ),
-              subtitle: Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        SeverityChip(severity: incident.severity),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            incident.jurisdiction ?? 'No jurisdiction recorded',
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(formatCoordinates(incident.latitude, incident.longitude)),
-                    Text(
-                      '${incident.assignee == null ? 'Unassigned' : 'Assigned to ${incident.assignee}'}'
-                      ' · updated ${relativeTime(incident.updatedAt)}'
-                      '${incident.isFireDepartment ? '' : ' · ${roleLabel(incident.responderRole)}'}',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: Theme.of(context).colorScheme.onSurfaceVariant,
-                          ),
-                    ),
-                  ],
-                ),
-              ),
-              trailing: const Icon(Icons.chevron_right),
-              isThreeLine: true,
-            ),
-          ),
-        ],
+              );
+            }
+            itemIndex--;
+            if (itemIndex < openHotspots.length) {
+              return _hotspotCard(openHotspots[itemIndex]);
+            }
+            itemIndex -= openHotspots.length;
+          }
+          if (itemIndex < _incidents.length) {
+            return _incidentCard(_incidents[itemIndex]);
+          }
+          return _loadMoreCard();
+        },
       ),
     );
   }
+
+  Widget _refreshErrorCard(ApiException error) => Card(
+        child: ListTile(
+          leading: const Icon(Icons.cloud_off_outlined),
+          title: const Text('Refresh failed; showing the last loaded queue.'),
+          subtitle: Text(error.message),
+          trailing: IconButton(
+            tooltip: 'Retry refresh',
+            onPressed: _load,
+            icon: const Icon(Icons.refresh),
+          ),
+        ),
+      );
+
+  Widget _hotspotCard(Map<String, dynamic> hotspot) => Card(
+        child: ListTile(
+          leading: const Icon(Icons.satellite_alt_outlined),
+          title: Text(
+            'Potential hotspot · ${hotspot['confidence_band'] ?? 'unrated'} triage',
+          ),
+          subtitle: Text(
+            '${(hotspot['region'] as String?) ?? 'India'} · '
+            '${((hotspot['footprint_cells'] as List?) ?? const []).length} cell(s) · '
+            '${hotspot['event_id']}',
+          ),
+          trailing: widget.config.role == ResponderRole.pollutionControl
+              ? Wrap(
+                  spacing: 4,
+                  children: [
+                    if (hotspot['status'] == 'potential') ...[
+                      TextButton(
+                        onPressed: _openingHotspotId == hotspot['event_id']
+                            ? null
+                            : () => _reviewHotspot(hotspot, 'dismissed'),
+                        child: const Text('Dismiss'),
+                      ),
+                      FilledButton(
+                        onPressed: _openingHotspotId == hotspot['event_id']
+                            ? null
+                            : () => _reviewHotspot(hotspot, 'confirmed'),
+                        child: Text(
+                          _openingHotspotId == hotspot['event_id']
+                              ? 'Saving…'
+                              : 'Confirm',
+                        ),
+                      ),
+                    ] else
+                      FilledButton(
+                        onPressed: _openingHotspotId == hotspot['event_id']
+                            ? null
+                            : () => _openHotspot(hotspot),
+                        child: Text(
+                          _openingHotspotId == hotspot['event_id']
+                              ? 'Opening…'
+                              : 'Open incident',
+                        ),
+                      ),
+                  ],
+                )
+              : const Icon(Icons.lock_outline),
+        ),
+      );
+
+  Widget _incidentCard(Incident incident) => Card(
+        key: ValueKey<int>(incident.id),
+        child: ListTile(
+          onTap: () => _open(incident),
+          title: Row(
+            children: [
+              Text('#${incident.id}', style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(width: 10),
+              StatusChip(status: incident.status),
+            ],
+          ),
+          subtitle: Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    SeverityChip(severity: incident.severity),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        incident.jurisdiction ?? 'No jurisdiction recorded',
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(formatCoordinates(incident.latitude, incident.longitude)),
+                Text(
+                  '${incident.assignee == null ? 'Unassigned' : 'Assigned to ${incident.assignee}'}'
+                  ' · updated ${relativeTime(incident.updatedAt)}'
+                  '${incident.isFireDepartment ? '' : ' · ${roleLabel(incident.responderRole)}'}',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                ),
+              ],
+            ),
+          ),
+          trailing: const Icon(Icons.chevron_right),
+          isThreeLine: true,
+        ),
+      );
+
+  Widget _loadMoreCard() => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        child: Center(
+          child: TextButton.icon(
+            onPressed: _loadingMore ? null : () => _load(append: true),
+            icon: _loadingMore
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.expand_more),
+            label: Text(_loadingMore ? 'Loading…' : 'Load more incidents'),
+          ),
+        ),
+      );
 }
