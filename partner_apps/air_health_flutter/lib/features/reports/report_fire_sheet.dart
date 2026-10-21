@@ -132,8 +132,19 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
     try {
       FireReport report;
       if (client != null) {
-        report = _submittedReport ?? await client.submitReport(draft!);
-        _submittedReport ??= report;
+        final receipt = _submittedReport ?? await client.submitReport(draft!);
+        _submittedReport ??= receipt;
+        report = receipt.copyWith(
+          region: regionText,
+          photoBytes: _photoBytes,
+          photoFilename: _photoFilename,
+          clearPhoto: _photoBytes == null,
+          photoUploadPending: _photoBytes != null,
+        );
+        // Persist the successful server receipt before uploading optional
+        // evidence. The report can then be retried or have its photo removed
+        // after this sheet closes or the app restarts.
+        await ref.read(citizenReportsProvider.notifier).addReport(report);
         if (_photoBytes != null) {
           if (client is! CitizenPhotoApiClient) {
             throw StateError('Photo upload is unavailable for this API client.');
@@ -143,6 +154,8 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
             bytes: _photoBytes!,
             filename: _photoFilename ?? 'citizen-photo.jpg',
           );
+          report = report.copyWith(photoUploadPending: false);
+          await ref.read(citizenReportsProvider.notifier).addReport(report);
         }
       } else {
         // Standalone on-device report when remote API is not configured
@@ -161,10 +174,8 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
           notes: _notesController.text.isEmpty ? null : _notesController.text,
           clientReportId: _clientReportId,
         );
+        await ref.read(citizenReportsProvider.notifier).addReport(report);
       }
-
-      // Record to local citizen reports store
-      await ref.read(citizenReportsProvider.notifier).addReport(report);
 
       if (!mounted) return;
       Navigator.of(context).pop(report);

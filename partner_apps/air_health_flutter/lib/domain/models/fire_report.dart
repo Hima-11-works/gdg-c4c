@@ -180,6 +180,7 @@ class FireReport {
     this.region,
     this.photoBytes,
     this.photoFilename,
+    this.photoUploadPending = false,
     this.notes,
     this.clientReportId,
   });
@@ -197,10 +198,38 @@ class FireReport {
   final String? region;
   final Uint8List? photoBytes;
   final String? photoFilename;
+  /// Whether the locally retained photo still needs to be attached to the
+  /// already-created server report.
+  final bool photoUploadPending;
   final String? notes;
   final String? clientReportId;
 
   bool get hasPhoto => photoBytes != null && photoBytes!.isNotEmpty;
+
+  FireReport copyWith({
+    String? region,
+    Uint8List? photoBytes,
+    String? photoFilename,
+    bool clearPhoto = false,
+    bool? photoUploadPending,
+  }) =>
+      FireReport(
+        id: id,
+        h3Cell: h3Cell,
+        latitude: latitude,
+        longitude: longitude,
+        kind: kind,
+        smokeIntensity: smokeIntensity,
+        durationHours: durationHours,
+        reportedAt: reportedAt,
+        region: region ?? this.region,
+        photoBytes: clearPhoto ? null : (photoBytes ?? this.photoBytes),
+        photoFilename:
+            clearPhoto ? null : (photoFilename ?? this.photoFilename),
+        photoUploadPending: photoUploadPending ?? this.photoUploadPending,
+        notes: notes,
+        clientReportId: clientReportId,
+      );
 
   @override
   bool operator ==(Object other) =>
@@ -215,6 +244,7 @@ class FireReport {
           durationHours == other.durationHours &&
           reportedAt == other.reportedAt &&
           region == other.region &&
+          photoUploadPending == other.photoUploadPending &&
           notes == other.notes &&
           clientReportId == other.clientReportId;
 
@@ -229,6 +259,7 @@ class FireReport {
         durationHours,
         reportedAt,
         region,
+        photoUploadPending,
         notes,
         clientReportId,
       );
