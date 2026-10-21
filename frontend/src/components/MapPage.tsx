@@ -406,7 +406,10 @@ export function MapPage() {
           pendingError={!isNow && frame.isStale ? frame.error : undefined}
           resource={activeBaseLayer.resource}
           meta={publishedMeta.resource}
-          onRetry={activeBaseLayer.refetch}
+          onRetry={() => {
+            activeBaseLayer.refetch()
+            publishedMeta.refetch()
+          }}
           warming={warming}
           interpolated={!isNow && isInterpolated}
         />
