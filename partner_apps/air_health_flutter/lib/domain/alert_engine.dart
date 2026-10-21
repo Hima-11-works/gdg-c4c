@@ -47,6 +47,11 @@ class AlertEngine {
       return AlertEngineResult(decisions: const [], dedupState: priorAlerts);
     }
     final effectiveNow = now ?? DateTime.now();
+    // Demo and synthetic publications are illustrative. They may be shown in
+    // the app, but must never be presented as a real device-local warning.
+    if (freshness.isDemo || freshness.mode == 'demo') {
+      return AlertEngineResult(decisions: const [], dedupState: priorAlerts);
+    }
     // Never notify from stale location data. Preserve prior dedup state so a
     // later fresh reading can trigger normally.
     if (freshness.isStaleAt(effectiveNow)) {

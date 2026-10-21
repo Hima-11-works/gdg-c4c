@@ -73,6 +73,9 @@ class ForecastAlarmScheduler {
     if (!preferences.alertsEnabled || !preferences.forecastAlarmsEnabled) {
       return const [];
     }
+    // Synthetic runs are useful for previews, but are not predictions for a
+    // real device location and must not ring as OS alarms.
+    if (freshness.isDemo || freshness.mode == 'demo') return const [];
     // Never alarm off stale data — a stale forecast is not a prediction.
     if (freshness.isStaleAt(now)) return const [];
 

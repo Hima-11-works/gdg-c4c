@@ -109,6 +109,29 @@ void main() {
   // ── Standard profile ────────────────────────────────────────────────
 
   group('AlertEngine — standard profile', () {
+    test('synthetic readings never notify or mutate dedup state', () {
+      final prior = [
+        DedupEntry(key: 'current_poor', lastAlertedAt: now),
+      ];
+      final result = engine.evaluate(
+        profile: makeProfile(),
+        current: makeReading(250, CpcbCategory.poor),
+        forecast: makeForecast([350]),
+        events: [makeEvent()],
+        freshness: DataFreshness(
+          retrievedAt: now,
+          quality: DataQuality.full,
+          isDemo: true,
+          mode: 'demo',
+        ),
+        priorAlerts: prior,
+        now: now,
+      );
+
+      expect(result.decisions, isEmpty);
+      expect(result.dedupState, prior);
+    });
+
     test('stale readings never notify or mutate dedup state', () {
       final prior = [
         DedupEntry(

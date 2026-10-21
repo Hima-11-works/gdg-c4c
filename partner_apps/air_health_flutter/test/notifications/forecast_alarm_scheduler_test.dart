@@ -42,6 +42,23 @@ void main() {
   });
 
   group('desiredAlarms (pure selection)', () {
+    test('does not schedule alarms from synthetic publications', () {
+      final desired = ForecastAlarmScheduler.desiredAlarms(
+        forecast: [fp(250, const Duration(hours: 3))],
+        rules: standardRules,
+        preferences: const UserAlertPreferences(),
+        freshness: DataFreshness(
+          retrievedAt: now,
+          quality: DataQuality.full,
+          isDemo: true,
+          mode: 'demo',
+        ),
+        now: now,
+      );
+
+      expect(desired, isEmpty);
+    });
+
     test('schedules the nearest qualifying crossing', () {
       final desired = ForecastAlarmScheduler.desiredAlarms(
         forecast: [
