@@ -74,18 +74,32 @@ void main() {
         now: now,
       );
 
-      expect(desired, hasLength(2));
+      expect(desired, hasLength(1));
       // alarmLead defaults to zero: the alarm rings at the crossing itself.
       expect(desired.first.fireAt, now.add(const Duration(hours: 3)));
       expect(desired.first.key,
           ForecastAlarmScheduler.keyFor(CpcbCategory.poor, now.add(const Duration(hours: 3))));
       expect(desired.first.severity, AlertSeverity.warning);
-      expect(desired.last.fireAt, now.add(const Duration(hours: 4)));
-      // Sorted oldest first.
-      expect(
-        desired.first.fireAt.isBefore(desired.last.fireAt),
-        isTrue,
+    });
+
+    test('schedules threshold entry and escalation, not each episode point', () {
+      final desired = ForecastAlarmScheduler.desiredAlarms(
+        forecast: [
+          fp(180, const Duration(hours: 1)),
+          fp(250, const Duration(hours: 2)),
+          fp(260, const Duration(hours: 2, minutes: 15)),
+          fp(350, const Duration(hours: 3)),
+          fp(360, const Duration(hours: 3, minutes: 15)),
+        ],
+        rules: standardRules,
+        preferences: const UserAlertPreferences(),
+        freshness: fresh(now),
+        now: now,
       );
+
+      expect(desired, hasLength(2));
+      expect(desired.first.categoryLabel, CpcbCategory.poor.label);
+      expect(desired.last.categoryLabel, CpcbCategory.veryPoor.label);
     });
 
     test('skips low-confidence crossings', () {
@@ -184,9 +198,9 @@ void main() {
       final desired = ForecastAlarmScheduler.desiredAlarms(
         forecast: [
           fp(250, const Duration(hours: 3)),
-          fp(260, const Duration(hours: 4)),
-          fp(270, const Duration(hours: 5)),
-          fp(280, const Duration(hours: 5, minutes: 30)),
+          fp(350, const Duration(hours: 4)),
+          fp(450, const Duration(hours: 5)),
+          fp(500, const Duration(hours: 5, minutes: 30)),
         ],
         rules: standardRules,
         preferences: const UserAlertPreferences(),
@@ -306,6 +320,64 @@ void main() {
             urgent: any(named: 'urgent'),
           )).called(1);
       verify(() => store.writeAll(any())).called(1);
+    });
+
+    test('keeps episode dedup across refreshes and resets after a forecast dip',
+        () async {
+      var persisted = <ScheduledAlarm>[];
+      when(() => store.readAll())
+          .thenAnswer((_) async => List<ScheduledAlarm>.of(persisted));
+      when(() => store.writeAll(any())).thenAnswer((invocation) async {
+        persisted = List<ScheduledAlarm>.of(
+          invocation.positionalArguments.first as List<ScheduledAlarm>,
+        );
+      });
+
+      ForecastPoint at(int aqi, DateTime time) => ForecastPoint(
+            at: time,
+            aqiCpcb: aqi,
+            confidence: 0.9,
+          );
+
+      final initial = await scheduler.reconcile(
+        forecast: [
+          fp(250, const Duration(minutes: 15)),
+          fp(260, const Duration(minutes: 30)),
+        ],
+        rules: standardRules,
+        preferences: const UserAlertPreferences(),
+        freshness: fresh(now),
+        now: now,
+      );
+      expect(initial, hasLength(1));
+      expect(persisted, hasLength(1));
+
+      final nextRefresh = now.add(const Duration(minutes: 20));
+      final sustained = await scheduler.reconcile(
+        forecast: [
+          at(260, nextRefresh.add(const Duration(minutes: 15))),
+          at(270, nextRefresh.add(const Duration(minutes: 30))),
+        ],
+        rules: standardRules,
+        preferences: const UserAlertPreferences(),
+        freshness: fresh(nextRefresh),
+        now: nextRefresh,
+      );
+      expect(sustained, isEmpty);
+      expect(persisted, hasLength(1), reason: 'expired alarm remains an episode marker');
+
+      final afterDip = await scheduler.reconcile(
+        forecast: [
+          at(180, nextRefresh.add(const Duration(minutes: 15))),
+          at(250, nextRefresh.add(const Duration(minutes: 30))),
+        ],
+        rules: standardRules,
+        preferences: const UserAlertPreferences(),
+        freshness: fresh(nextRefresh),
+        now: nextRefresh,
+      );
+      expect(afterDip, hasLength(1));
+      expect(afterDip.single.fireAt, nextRefresh.add(const Duration(minutes: 30)));
     });
 
     test('serializes cancellation after an in-flight reconciliation', () async {

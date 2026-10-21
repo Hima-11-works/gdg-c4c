@@ -76,7 +76,11 @@ final exactAlarmsProvider = FutureProvider<bool>((ref) {
 /// "Upcoming alarms" row. Read directly from the metadata store — the OS
 /// holds the alarms themselves, this is what *we* remember scheduling.
 final upcomingAlarmsProvider = FutureProvider<List<ScheduledAlarm>>((ref) {
-  return ref.read(forecastAlarmStoreProvider).readAll();
+  return ref.read(forecastAlarmStoreProvider).readAll().then(
+        (alarms) => alarms
+            .where((alarm) => alarm.fireAt.isAfter(DateTime.now()))
+            .toList(growable: false),
+      );
 });
 
 /// Dedup state for the alert engine — persisted across evaluations.
