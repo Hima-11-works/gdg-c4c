@@ -76,8 +76,8 @@ class ProfileScreen extends ConsumerWidget {
                 subtitle: 'Receive alerts when air quality changes',
                 value: prefs.alertsEnabled,
                 onChanged: (v) => ref
-                    .read(userProfileProvider.notifier)
-                    .updateFields(preferences: prefs.copyWith(alertsEnabled: v)),
+                    .read(alertCoordinatorProvider)
+                    .updateAlertPreferences(prefs.copyWith(alertsEnabled: v)),
               ),
               _SettingsTile(
                 icon: Icons.notifications_active_outlined,
@@ -109,25 +109,9 @@ class ProfileScreen extends ConsumerWidget {
                 value: prefs.forecastAlarmsEnabled,
                 onChanged: (v) async {
                   HapticFeedback.selectionClick();
-                  await ref
-                      .read(userProfileProvider.notifier)
-                      .updateFields(
-                        preferences: prefs.copyWith(forecastAlarmsEnabled: v),
+                  await ref.read(alertCoordinatorProvider).updateAlertPreferences(
+                        prefs.copyWith(forecastAlarmsEnabled: v),
                       );
-                  if (!v) {
-                    // Stop pending OS alarms immediately, so none can ring
-                    // before the next evaluation cycle.
-                    await ref
-                        .read(forecastAlarmSchedulerProvider)
-                        .cancelAll();
-                  } else {
-                    // Reconcile now, so the next alarm is registered without
-                    // waiting for the refresh cadence.
-                    await ref
-                        .read(alertCoordinatorProvider)
-                        .refreshAndEvaluate();
-                  }
-                  ref.invalidate(upcomingAlarmsProvider);
                 },
               ),
               _SettingsTile(

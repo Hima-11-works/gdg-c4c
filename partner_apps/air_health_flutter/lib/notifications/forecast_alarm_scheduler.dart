@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import '../domain/alert_engine.dart';
 import '../domain/models/models.dart';
 import '../storage/forecast_alarm_store.dart';
@@ -25,6 +27,19 @@ class ForecastAlarmScheduler {
 
   final NotificationService _notificationService;
   final ForecastAlarmStore _store;
+  Future<void> _operationQueue = Future<void>.value();
+
+  Future<T> _serialize<T>(Future<T> Function() operation) {
+    final result = Completer<T>();
+    _operationQueue = _operationQueue.then((_) async {
+      try {
+        result.complete(await operation());
+      } catch (error, stackTrace) {
+        result.completeError(error, stackTrace);
+      }
+    });
+    return result.future;
+  }
 
   /// Forecast look-ahead beyond which no alarm is scheduled. The grid API's
   /// own forecast horizon is capped at 6 hours, so nothing beyond that is
@@ -119,10 +134,25 @@ class ForecastAlarmScheduler {
     required UserAlertPreferences preferences,
     required DataFreshness freshness,
     DateTime? now,
+  }) =>
+      _serialize(() => _reconcile(
+            forecast: forecast,
+            rules: rules,
+            preferences: preferences,
+            freshness: freshness,
+            now: now,
+          ));
+
+  Future<List<ScheduledAlarm>> _reconcile({
+    required List<ForecastPoint> forecast,
+    required SensitivityRules rules,
+    required UserAlertPreferences preferences,
+    required DataFreshness freshness,
+    DateTime? now,
   }) async {
     final effectiveNow = now ?? DateTime.now();
     if (!await _notificationService.canDeliverNotifications()) {
-      await cancelAll();
+      await _cancelAll();
       return const [];
     }
     final desired = desiredAlarms(
@@ -180,7 +210,9 @@ class ForecastAlarmScheduler {
 
   /// Cancel every scheduled alarm (used by "Reset app" and the alarm toggle
   /// turning off).
-  Future<void> cancelAll() async {
+  Future<void> cancelAll() => _serialize(_cancelAll);
+
+  Future<void> _cancelAll() async {
     for (final alarm in await _store.readAll()) {
       await _notificationService.cancelAlarm(alarm.id);
     }

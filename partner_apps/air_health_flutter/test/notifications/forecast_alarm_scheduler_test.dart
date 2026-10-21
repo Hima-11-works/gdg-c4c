@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:air_health_flutter/domain/models/models.dart';
@@ -304,6 +306,38 @@ void main() {
             urgent: any(named: 'urgent'),
           )).called(1);
       verify(() => store.writeAll(any())).called(1);
+    });
+
+    test('serializes cancellation after an in-flight reconciliation', () async {
+      final schedulingStarted = Completer<void>();
+      final finishScheduling = Completer<void>();
+      when(() => store.readAll()).thenAnswer((_) async => const []);
+      when(() => store.deleteAll()).thenAnswer((_) async {});
+      when(() => service.scheduleAlarm(
+            id: any(named: 'id'),
+            fireAt: any(named: 'fireAt'),
+            title: any(named: 'title'),
+            body: any(named: 'body'),
+            payload: any(named: 'payload'),
+            urgent: any(named: 'urgent'),
+          )).thenAnswer((_) async {
+            schedulingStarted.complete();
+            await finishScheduling.future;
+          });
+
+      final reconciliation = run([fp(250, const Duration(hours: 3))]);
+      await schedulingStarted.future;
+      final cancellation = scheduler.cancelAll();
+
+      verifyNever(() => store.deleteAll());
+      finishScheduling.complete();
+      await reconciliation;
+      await cancellation;
+
+      verifyInOrder([
+        () => store.writeAll(any()),
+        () => store.deleteAll(),
+      ]);
     });
 
     test('an unchanged alarm is kept without re-registering it', () async {
