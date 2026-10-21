@@ -18,6 +18,7 @@ export type AsyncResource<T> =
       runId?: string
       mode?: DataMode
       generatedAt?: string
+      refreshError?: string
     }
   | { status: 'error'; message: string }
 

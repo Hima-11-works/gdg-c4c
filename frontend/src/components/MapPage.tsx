@@ -10,6 +10,7 @@ import { useApiResource } from '../hooks/useApiResource'
 import {
   ensureForecastFrame,
   cancelForecastRequests,
+  forecastFrameLabel,
   useForecastFrame,
   useForecastProgress,
   useForecastWarming,
@@ -205,7 +206,8 @@ export function MapPage() {
       runId: frame.runId,
       mode: frame.mode,
       generatedAt: frame.generatedAt,
-      message: frame.message,
+      message: frame.error ?? frame.message,
+      refreshError: frame.error,
     } as AsyncResource<ForecastOut[]>,
     refetch: () => ensureForecastFrame(forecastMinutes, queryKey, query, publishedRunId),
   }
@@ -224,7 +226,8 @@ export function MapPage() {
     runId: overviewForecastFrame.runId,
     mode: overviewForecastFrame.mode,
     generatedAt: overviewForecastFrame.generatedAt,
-    message: overviewForecastFrame.message,
+    message: overviewForecastFrame.error ?? overviewForecastFrame.message,
+    refreshError: overviewForecastFrame.error,
   } as AsyncResource<ForecastOut[]>
   const parentForecastKey = `${lodKey(parentQuery)}:${publishedRunId ?? 'pending'}:${supportedHours.join(',')}`
   const parentForecastFrame = useForecastFrame(
@@ -246,7 +249,8 @@ export function MapPage() {
     runId: parentForecastFrame.runId,
     mode: parentForecastFrame.mode,
     generatedAt: parentForecastFrame.generatedAt,
-    message: parentForecastFrame.message,
+    message: parentForecastFrame.error ?? parentForecastFrame.message,
+    refreshError: parentForecastFrame.error,
   } as AsyncResource<ForecastOut[]>
 
   // Abort frame and warm-up requests for both viewport-bound queries when
@@ -391,12 +395,15 @@ export function MapPage() {
     (!isNow && forecastProgress !== null && !forecastProgress.complete)
   const activeLabel = isNow
     ? 'current conditions'
-    : `the +${forecastMinutes >= 60 ? `${Math.floor(forecastMinutes / 60)}h ` : ''}${forecastMinutes % 60 ? `${forecastMinutes % 60}m ` : ''}forecast`.trim()
+    : forecastFrameLabel(frame.displayedMinutes ?? forecastMinutes)
+  const requestedLabel = isNow ? activeLabel : forecastFrameLabel(forecastMinutes)
   return (
     <main className="map-page" aria-label="India air quality map">
       <div className="banner-stack">
         <DataModeBanner
           label={activeLabel}
+          pendingLabel={!isNow && frame.isStale ? requestedLabel : undefined}
+          pendingError={!isNow && frame.isStale ? frame.error : undefined}
           resource={activeBaseLayer.resource}
           meta={publishedMeta.resource}
           onRetry={activeBaseLayer.refetch}

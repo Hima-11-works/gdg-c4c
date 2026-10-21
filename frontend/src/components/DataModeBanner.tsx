@@ -3,6 +3,8 @@ import type { MetaV2Out } from '../lib/types'
 
 interface DataModeBannerProps {
   label: string
+  pendingLabel?: string
+  pendingError?: string
   resource: AsyncResource<unknown[]>
   meta: AsyncResource<MetaV2Out>
   onRetry: () => void
@@ -13,6 +15,8 @@ interface DataModeBannerProps {
 /** A single, compact mode badge with full provenance and fetch status on hover. */
 export function DataModeBanner({
   label,
+  pendingLabel,
+  pendingError,
   resource,
   meta,
   onRetry,
@@ -37,6 +41,13 @@ export function DataModeBanner({
           : 'CHECKING DATA'
 
   const details: string[] = []
+  if (pendingLabel) {
+    details.push(
+      pendingError
+        ? `Could not load ${pendingLabel}; showing ${label}`
+        : `Loading ${pendingLabel}; showing ${label}`,
+    )
+  }
   if (metadata?.is_fallback) {
     details.push(
       `Illustrative fallback data, not a published run${metadata.fallback_reason ? `: ${metadata.fallback_reason}` : ''}`,
@@ -76,6 +87,13 @@ export function DataModeBanner({
     >
       {warming && <span className="spinner" aria-hidden="true" />}
       <span>{modeLabel}</span>
+      {pendingLabel && (
+        <span className="banner-mode-refresh">
+          {pendingError
+            ? `Showing ${label}; ${pendingLabel} unavailable`
+            : `Showing ${label}; loading ${pendingLabel}`}
+        </span>
+      )}
       {isError && (
         <button
           type="button"

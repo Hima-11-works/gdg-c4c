@@ -15,15 +15,27 @@ import type { DataMode, Envelope, ForecastOut } from './types'
 
 export interface FrameState {
   status: 'loading' | 'success' | 'error'
+  /** Requested timeline position; `displayedMinutes` identifies the data. */
+  requestedMinutes: number
+  displayedMinutes?: number
+  isStale: boolean
+  isLoading: boolean
+  error?: string
   /** The requested frame's data, or the most recently loaded frame's data
-   * while the requested one is still loading (stale-while-revalidate).
-   * Undefined only on first load or after a failure with no prior data. */
+   * while the requested one is loading or has failed. */
   data: ForecastOut[] | undefined
   isDemo: boolean
   runId?: string
   mode?: DataMode
   generatedAt?: string
   message?: string
+}
+
+export function forecastFrameLabel(minutes: number): string {
+  if (minutes <= 0) return 'current conditions'
+  const hours = Math.floor(minutes / 60)
+  const remainder = minutes % 60
+  return `+${hours > 0 ? `${hours}h` : ''}${remainder > 0 ? `${remainder}m` : ''} forecast`
 }
 
 export interface GridCellProgress {
@@ -163,6 +175,7 @@ export function ensureForecastFrame(
       notify()
     })
   inFlight.set(key, request)
+  notify()
   return request.promise
 }
 
@@ -317,9 +330,13 @@ export function prefetchUpcoming(
   }
 }
 
-function stateFromEnvelope(envelope: Envelope<ForecastOut[]>): FrameState {
+function stateFromEnvelope(envelope: Envelope<ForecastOut[]>, minutes: number): FrameState {
   return {
     status: 'success',
+    requestedMinutes: minutes,
+    displayedMinutes: minutes,
+    isStale: false,
+    isLoading: false,
     data: envelope.data,
     isDemo: envelope.is_demo,
     runId: envelope.run_id,
@@ -352,7 +369,14 @@ export function useForecastFrame(
   // it across publication ids or spatial query keys.
   const [latest, setLatest] = useState<{ queryKey: string; frame: FrameState }>(() => ({
     queryKey,
-    frame: { status: 'loading', data: undefined, isDemo: false },
+    frame: {
+      status: 'loading',
+      requestedMinutes: minutes,
+      isStale: false,
+      isLoading: true,
+      data: undefined,
+      isDemo: false,
+    },
   }))
 
   useEffect(() => {
@@ -360,7 +384,7 @@ export function useForecastFrame(
     const key = cacheKey(minutes, queryKey)
     const cached = readCachedFrame(key)
     if (cached) {
-      setLatest({ queryKey, frame: stateFromEnvelope(cached) })
+      setLatest({ queryKey, frame: stateFromEnvelope(cached, minutes) })
       return
     }
     // Not cached: keep showing whatever was last loaded (stale-while-
@@ -375,20 +399,72 @@ export function useForecastFrame(
       const key = cacheKey(minutes, queryKey)
       const cached = readCachedFrame(key)
       if (cached) {
-        setLatest({ queryKey, frame: stateFromEnvelope(cached) })
+        setLatest({ queryKey, frame: stateFromEnvelope(cached, minutes) })
+      } else if (inFlight.has(key)) {
+        setLatest((previous) =>
+          previous.queryKey === queryKey && previous.frame.data
+            ? {
+                queryKey,
+                frame: {
+                  ...previous.frame,
+                  requestedMinutes: minutes,
+                  isStale: previous.frame.displayedMinutes !== minutes,
+                  isLoading: true,
+                  error: undefined,
+                },
+              }
+            : {
+                queryKey,
+                frame: {
+                  status: 'loading',
+                  requestedMinutes: minutes,
+                  isStale: false,
+                  isLoading: true,
+                  data: undefined,
+                  isDemo: false,
+                },
+              },
+        )
       } else if (!inFlight.has(key) && failed.has(key)) {
-        // A fetch failed with no prior data for this frame.
         setLatest((previous) => {
+          if (
+            previous.queryKey === queryKey &&
+            previous.frame.data &&
+            previous.frame.displayedMinutes === minutes
+          ) {
+            return {
+              queryKey,
+              frame: {
+                ...previous.frame,
+                requestedMinutes: minutes,
+                isStale: false,
+                isLoading: false,
+                error: undefined,
+              },
+            }
+          }
           if (previous.queryKey === queryKey && previous.frame.data) {
-            return previous // keep stale data while remaining within one pinned view
+            return {
+              queryKey,
+              frame: {
+                ...previous.frame,
+                requestedMinutes: minutes,
+                isStale: previous.frame.displayedMinutes !== minutes,
+                isLoading: false,
+                error: `Could not load ${forecastFrameLabel(minutes)}.`,
+              },
+            }
           }
           return {
             queryKey,
             frame: {
               status: 'error',
+              requestedMinutes: minutes,
+              isStale: false,
+              isLoading: false,
               data: undefined,
               isDemo: false,
-              message: 'Could not load forecast frame',
+              error: `Could not load ${forecastFrameLabel(minutes)}.`,
             },
           }
         })
@@ -400,7 +476,51 @@ export function useForecastFrame(
     }
   }, [minutes, queryKey, enabled])
 
-  return latest.queryKey === queryKey
-    ? latest.frame
-    : { status: 'loading', data: undefined, isDemo: false }
+  const requestedFrame = readCachedFrame(cacheKey(minutes, queryKey))
+  if (requestedFrame) return stateFromEnvelope(requestedFrame, minutes)
+
+  if (latest.queryKey !== queryKey) {
+    return {
+      status: 'loading',
+      requestedMinutes: minutes,
+      isStale: false,
+      isLoading: true,
+      data: undefined,
+      isDemo: false,
+    }
+  }
+
+  if (latest.frame.displayedMinutes === minutes && !latest.frame.error) {
+    return { ...latest.frame, requestedMinutes: minutes, isStale: false, isLoading: false }
+  }
+
+  const requestFailed = failed.has(cacheKey(minutes, queryKey))
+  if (latest.frame.data) {
+    return {
+      ...latest.frame,
+      requestedMinutes: minutes,
+      isStale: latest.frame.displayedMinutes !== minutes,
+      isLoading: enabled && !requestFailed,
+      error: requestFailed ? `Could not load ${forecastFrameLabel(minutes)}.` : undefined,
+    }
+  }
+  if (requestFailed) {
+    return {
+      status: 'error',
+      requestedMinutes: minutes,
+      isStale: false,
+      isLoading: false,
+      data: undefined,
+      isDemo: false,
+      error: `Could not load ${forecastFrameLabel(minutes)}.`,
+    }
+  }
+  return {
+    status: 'loading',
+    requestedMinutes: minutes,
+    isStale: false,
+    isLoading: enabled,
+    data: undefined,
+    isDemo: false,
+  }
 }
