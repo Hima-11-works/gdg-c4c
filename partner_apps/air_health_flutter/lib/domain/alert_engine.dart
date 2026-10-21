@@ -200,6 +200,7 @@ class AlertEngine {
       if (point.category.index >= rules.forecastCategory.index &&
           point.confidence >= rules.minForecastConfidence) {
         final lead = point.at.difference(now);
+        if (lead <= Duration.zero) continue;
         if (lead > rules.leadTimePreference) continue;
 
         return [
@@ -235,8 +236,10 @@ class AlertEngine {
     UserSensitivityProfile? profile,
   }) {
     if (forecast.isEmpty) return const [];
-    final earlyPoints =
-        forecast.where((f) => f.at.difference(now).inHours <= 3).toList();
+    final earlyPoints = forecast.where((point) {
+      final lead = point.at.difference(now);
+      return lead > Duration.zero && lead <= const Duration(hours: 3);
+    }).toList();
     if (earlyPoints.isEmpty) return const [];
 
     final maxRise = earlyPoints
@@ -284,6 +287,7 @@ class AlertEngine {
     final decisions = <AlertDecision>[];
     for (final event in events) {
       final lead = event.expectedArrivalAt.difference(now);
+      if (lead <= Duration.zero) continue;
       if (lead > rules.approachingEventLeadTime) continue;
 
       decisions.add(AlertDecision(

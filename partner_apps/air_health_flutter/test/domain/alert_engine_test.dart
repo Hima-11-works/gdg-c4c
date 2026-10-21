@@ -220,6 +220,50 @@ void main() {
       expect(forecastAlerts.first.predictedAqi, greaterThanOrEqualTo(200));
     });
 
+    test('expired forecast points and events cannot produce future warnings', () {
+      final result = engine.evaluate(
+        profile: makeProfile(),
+        current: makeReading(60, CpcbCategory.satisfactory),
+        forecast: [
+          ForecastPoint(
+            at: now.subtract(const Duration(minutes: 15)),
+            aqiCpcb: 500,
+            confidence: 0.95,
+          ),
+          ForecastPoint(
+            at: now.add(const Duration(hours: 1)),
+            aqiCpcb: 250,
+            confidence: 0.9,
+          ),
+          ForecastPoint(
+            at: now.add(const Duration(hours: 2)),
+            aqiCpcb: 270,
+            confidence: 0.9,
+          ),
+        ],
+        events: [makeEvent(arrival: const Duration(minutes: -15))],
+        freshness: makeFresh(),
+        now: now,
+      );
+
+      final forecastAlert = result.decisions.firstWhere(
+        (decision) => decision.trigger == AlertTrigger.forecastThreshold,
+      );
+      final rapidRiseAlert = result.decisions.firstWhere(
+        (decision) => decision.trigger == AlertTrigger.rapidRise,
+      );
+      expect(forecastAlert.predictedAqi, 250);
+      expect(forecastAlert.predictedTime!.isAfter(now), isTrue);
+      expect(rapidRiseAlert.predictedAqi, 270);
+      expect(rapidRiseAlert.predictedTime!.isAfter(now), isTrue);
+      expect(
+        result.decisions.where(
+          (decision) => decision.trigger == AlertTrigger.approachingPollution,
+        ),
+        isEmpty,
+      );
+    });
+
     test('no forecast alert when confidence too low', () {
       final result = engine.evaluate(
         profile: makeProfile(),
