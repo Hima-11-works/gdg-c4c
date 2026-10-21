@@ -117,19 +117,23 @@ export function buildSmoothFieldGrid(
   const midLat = (bbox.maxLat + bbox.minLat) / 2
   const kmPerLonDeg = Math.max(111.32 * Math.cos((midLat * Math.PI) / 180), 1)
 
-  // Compact kernel: w = (1 - d²/R²)² for d < R, cheap and smooth. R is 2.5σ,
-  // so a bucket of size R plus its 8 neighbours covers every contributing cell.
+  // Compact kernel: w = (1 - d²/R²)² for d < R, cheap and smooth. R is 2.5σ.
+  // Use separate latitude and longitude bucket widths because longitude
+  // degrees cover fewer kilometres away from the equator. With each bucket
+  // width matching the distance metric below, the 8 neighbours cover every
+  // contributing cell.
   const radius = Math.max(sigmaKm * 2.5, 1e-3)
   const radius2 = radius * radius
-  const bucketDeg = Math.max(radius / 111.32, 1e-6)
-  const cols = Math.max(1, Math.ceil(lonSpan / bucketDeg))
-  const rows = Math.max(1, Math.ceil(latSpan / bucketDeg))
+  const bucketLatDeg = Math.max(radius / 111.32, 1e-6)
+  const bucketLonDeg = Math.max(radius / kmPerLonDeg, 1e-6)
+  const cols = Math.max(1, Math.ceil(lonSpan / bucketLonDeg))
+  const rows = Math.max(1, Math.ceil(latSpan / bucketLatDeg))
   const buckets = new Map<number, FieldPoint[]>()
   const bucketIndex = (row: number, col: number) => row * cols + col
   const clampCol = (lon: number) =>
-    Math.min(cols - 1, Math.max(0, Math.floor((lon - bbox.minLon) / bucketDeg)))
+    Math.min(cols - 1, Math.max(0, Math.floor((lon - bbox.minLon) / bucketLonDeg)))
   const clampRow = (lat: number) =>
-    Math.min(rows - 1, Math.max(0, Math.floor((lat - bbox.minLat) / bucketDeg)))
+    Math.min(rows - 1, Math.max(0, Math.floor((lat - bbox.minLat) / bucketLatDeg)))
   for (const point of points) {
     const index = bucketIndex(clampRow(point.latitude), clampCol(point.longitude))
     const list = buckets.get(index)
