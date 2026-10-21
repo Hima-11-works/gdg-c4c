@@ -194,6 +194,75 @@ void main() {
           now.add(const Duration(hours: 3)).subtract(const Duration(minutes: 30)));
     });
 
+    test('skips a non-urgent alarm whose firing time is in quiet hours', () {
+      final alarmNow = DateTime(2026, 9, 21, 20);
+      final desired = ForecastAlarmScheduler.desiredAlarms(
+        forecast: [
+          ForecastPoint(
+            at: DateTime(2026, 9, 21, 23),
+            aqiCpcb: 250,
+            confidence: 0.9,
+          ),
+        ],
+        rules: standardRules,
+        preferences: UserAlertPreferences(
+          quietHoursStart: DateTime(2020, 1, 1, 22),
+          quietHoursEnd: DateTime(2020, 1, 1, 7),
+        ),
+        freshness: fresh(alarmNow),
+        now: alarmNow,
+      );
+
+      expect(desired, isEmpty);
+    });
+
+    test('allows urgent alarms during quiet hours', () {
+      final alarmNow = DateTime(2026, 9, 21, 20);
+      final desired = ForecastAlarmScheduler.desiredAlarms(
+        forecast: [
+          ForecastPoint(
+            at: DateTime(2026, 9, 21, 23),
+            aqiCpcb: 450,
+            confidence: 0.9,
+          ),
+        ],
+        rules: standardRules,
+        preferences: UserAlertPreferences(
+          quietHoursStart: DateTime(2020, 1, 1, 22),
+          quietHoursEnd: DateTime(2020, 1, 1, 7),
+        ),
+        freshness: fresh(alarmNow),
+        now: alarmNow,
+      );
+
+      expect(desired, hasLength(1));
+      expect(desired.single.severity, AlertSeverity.urgent);
+    });
+
+    test('checks quiet hours at fire time after applying alarm lead', () {
+      final alarmNow = DateTime(2026, 9, 21, 20);
+      final desired = ForecastAlarmScheduler.desiredAlarms(
+        forecast: [
+          ForecastPoint(
+            at: DateTime(2026, 9, 21, 23),
+            aqiCpcb: 250,
+            confidence: 0.9,
+          ),
+        ],
+        rules: standardRules,
+        preferences: UserAlertPreferences(
+          quietHoursStart: DateTime(2020, 1, 1, 22),
+          quietHoursEnd: DateTime(2020, 1, 1, 7),
+          alarmLead: const Duration(hours: 2),
+        ),
+        freshness: fresh(alarmNow),
+        now: alarmNow,
+      );
+
+      expect(desired, hasLength(1));
+      expect(desired.single.fireAt, DateTime(2026, 9, 21, 21));
+    });
+
     test('keeps at most the nearest three alarms', () {
       final desired = ForecastAlarmScheduler.desiredAlarms(
         forecast: [

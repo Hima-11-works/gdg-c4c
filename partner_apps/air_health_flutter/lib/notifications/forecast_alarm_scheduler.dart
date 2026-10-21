@@ -144,6 +144,12 @@ class ForecastAlarmScheduler {
 
       final fireAt = point.at.subtract(preferences.alarmLead);
       if (fireAt.isBefore(now.add(minLeadTime))) continue;
+      // Match the in-app engine's urgent-alert exception, but evaluate the
+      // actual local time the OS will ring rather than the forecast time.
+      if (severity != AlertSeverity.urgent &&
+          preferences.isWithinQuietHours(fireAt.toLocal())) {
+        continue;
+      }
 
       candidates.add(ScheduledAlarm(
         id: idFor(keyFor(point.category, point.at)),
