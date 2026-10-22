@@ -5,21 +5,27 @@ from datetime import UTC, datetime, timedelta
 import h3
 
 from app.domain.features import CellStaticFeatures, WeatherFeature
-from app.domain.types import PM25, SensorReading
+from app.domain.types import Coordinate, PM25, SensorReading
 from app.services.features import FeatureBuilder, feature_snapshot_to_dict
 
 NOW = datetime(2025, 1, 15, 12, tzinfo=UTC)
 CELL = h3.latlng_to_cell(28.6139, 77.2090, 8)
 
 
-def _weather(*, rain: float = 0.0, valid_at: datetime = NOW) -> WeatherFeature:
+def _weather(
+    *,
+    cell: str = CELL,
+    rain: float = 0.0,
+    valid_at: datetime = NOW,
+    wind_speed: float = 2.0,
+) -> WeatherFeature:
     return WeatherFeature(
-        h3_cell=CELL,
+        h3_cell=cell,
         issued_at=NOW,
         valid_at=valid_at,
         wind_u_ms=2.0,
         wind_v_ms=0.0,
-        wind_speed_ms=2.0,
+        wind_speed_ms=wind_speed,
         wind_direction_deg=270.0,
         precipitation_mm=rain,
         boundary_layer_height_m=450.0,
@@ -157,6 +163,52 @@ def test_zero_rain_is_observed_but_missing_weather_stays_null() -> None:
     assert "weather" not in observed.quality.missing_fields
     assert missing.vector.rain_1h_mm is None
     assert "weather" in missing.quality.missing_fields
+
+
+def test_weather_fallback_selects_nearest_spatial_sample() -> None:
+    neighbors = [cell for cell in h3.grid_disk(CELL, 2) if cell != CELL]
+    target = Coordinate(*h3.cell_to_latlng(CELL))
+    ordered = sorted(
+        neighbors,
+        key=lambda cell: target.distance_km(Coordinate(*h3.cell_to_latlng(cell))),
+    )
+    nearest, farther = ordered[:2]
+
+    snapshot = FeatureBuilder().build(
+        cells=[CELL],
+        issued_at=NOW,
+        valid_at=NOW,
+        weather_features=[
+            _weather(cell=farther, wind_speed=9.0),
+            _weather(cell=nearest, wind_speed=1.0),
+        ],
+    )[0]
+
+    assert snapshot.vector.wind_speed_ms == 1.0
+
+
+def test_exact_weather_cell_matches_skip_spatial_distance_search(monkeypatch) -> None:
+    cells = list(h3.grid_disk(CELL, 2))
+    distance_calls = 0
+
+    def counted_distance(self: Coordinate, other: Coordinate) -> float:
+        nonlocal distance_calls
+        distance_calls += 1
+        return 0.0
+
+    monkeypatch.setattr(Coordinate, "distance_km", counted_distance)
+    snapshots = FeatureBuilder().build(
+        cells=cells,
+        issued_at=NOW,
+        valid_at=NOW,
+        weather_features=[
+            _weather(cell=cell, wind_speed=float(index))
+            for index, cell in enumerate(cells)
+        ],
+    )
+
+    assert len(snapshots) == len(cells)
+    assert distance_calls == 0
 
 
 def test_calendar_and_static_features_are_derived_without_zero_fabrication() -> None:

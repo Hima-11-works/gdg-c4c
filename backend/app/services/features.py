@@ -9,8 +9,10 @@ here are feature transforms, not causal pollution coefficients.
 from __future__ import annotations
 
 import math
+from collections import defaultdict
 from dataclasses import fields
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
 from typing import Any, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
@@ -61,6 +63,65 @@ def _angular_distance(first: float, second: float) -> float:
 
 def _vector_dict(vector: CellFeatureVector) -> dict[str, float | None]:
     return {field.name: getattr(vector, field.name) for field in fields(vector)}
+
+
+_EARTH_RADIUS_KM = 6371.0088
+_SPATIAL_BUCKETS_TO_SEARCH = (-1, 0, 1)
+
+
+@lru_cache(maxsize=32768)
+def _weather_cell_location(
+    h3_cell: str,
+) -> tuple[Coordinate, tuple[float, float, float]]:
+    latitude, longitude = cell_center(h3_cell)
+    point = Coordinate(latitude, longitude)
+    lat_radians = math.radians(latitude)
+    lon_radians = math.radians(longitude)
+    xyz = (
+        _EARTH_RADIUS_KM * math.cos(lat_radians) * math.cos(lon_radians),
+        _EARTH_RADIUS_KM * math.cos(lat_radians) * math.sin(lon_radians),
+        _EARTH_RADIUS_KM * math.sin(lat_radians),
+    )
+    return point, xyz
+
+
+def _spatial_bucket(
+    xyz: tuple[float, float, float], bucket_size_km: float
+) -> tuple[int, int, int]:
+    return tuple(math.floor(coordinate / bucket_size_km) for coordinate in xyz)
+
+
+class _WeatherFeatureIndex:
+    """Exact cell/time lookups plus a bounded 3D spatial fallback."""
+
+    def __init__(
+        self,
+        weather: Sequence[WeatherFeature],
+        *,
+        max_distance_km: float,
+    ) -> None:
+        self.bucket_size_km = max_distance_km
+        by_cell_time: dict[tuple[str, datetime], list[WeatherFeature]] = defaultdict(list)
+        buckets_by_time: dict[
+            datetime,
+            dict[
+                tuple[int, int, int],
+                list[tuple[int, WeatherFeature, Coordinate]],
+            ],
+        ] = defaultdict(lambda: defaultdict(list))
+        for order, sample in enumerate(weather):
+            by_cell_time[(sample.h3_cell, sample.valid_at)].append(sample)
+            point, xyz = _weather_cell_location(sample.h3_cell)
+            bucket = _spatial_bucket(xyz, self.bucket_size_km)
+            buckets_by_time[sample.valid_at][bucket].append((order, sample, point))
+        self.by_cell_time = {
+            key: tuple(samples) for key, samples in by_cell_time.items()
+        }
+        self.buckets_by_time = {
+            valid_at: {key: tuple(samples) for key, samples in buckets.items()}
+            for valid_at, buckets in buckets_by_time.items()
+        }
+        self.valid_times = tuple(sorted(self.buckets_by_time))
 
 
 def _quality_dict(quality: FeatureQuality) -> dict[str, Any]:
@@ -208,7 +269,9 @@ class FeatureBuilder:
         for readings in readings_by_cell.values():
             readings.sort(key=lambda reading: reading.measured_at)
         static_by_cell = {features.h3_cell: features for features in static_features}
-        weather = tuple(weather_features or ())
+        weather_index = _WeatherFeatureIndex(
+            weather_features or (), max_distance_km=self.max_weather_distance_km
+        )
         output = []
         for cell in cells:
             output.append(
@@ -218,7 +281,7 @@ class FeatureBuilder:
                     valid_at=valid_at,
                     horizon_hours=horizon_hours,
                     readings=readings_by_cell.get(cell, ()),
-                    weather=weather,
+                    weather=weather_index,
                     static=static_by_cell.get(cell),
                     traffic=traffic_observations,
                     fires=fire_detections,
@@ -235,7 +298,7 @@ class FeatureBuilder:
         valid_at: datetime,
         horizon_hours: float,
         readings: Sequence[SensorReading],
-        weather: Sequence[WeatherFeature],
+        weather: _WeatherFeatureIndex,
         static: CellStaticFeatures | None,
         traffic: Sequence[Mapping[str, Any]] | None,
         fires: Sequence[Mapping[str, Any]] | None,
@@ -394,24 +457,52 @@ class FeatureBuilder:
         cell: str,
         issued_at: datetime,
         valid_at: datetime,
-        weather: Sequence[WeatherFeature],
+        weather: _WeatherFeatureIndex,
     ) -> tuple[WeatherFeature | None, tuple[WeatherFeature, ...]]:
-        target = Coordinate(*cell_center(cell))
-        candidates = [
-            sample
-            for sample in weather
-            if sample.issued_at <= issued_at and sample.valid_at <= valid_at
-        ]
+        target, target_xyz = _weather_cell_location(cell)
+        target_bucket = _spatial_bucket(target_xyz, weather.bucket_size_km)
         by_time: dict[datetime, WeatherFeature] = {}
-        by_distance: dict[datetime, float] = {}
-        for sample in candidates:
-            distance = target.distance_km(Coordinate(*cell_center(sample.h3_cell)))
-            if distance > self.max_weather_distance_km:
+        for sample_valid_at in weather.valid_times:
+            if sample_valid_at > valid_at:
                 continue
-            previous_distance = by_distance.get(sample.valid_at)
-            if previous_distance is None or distance < previous_distance:
-                by_time[sample.valid_at] = sample
-                by_distance[sample.valid_at] = distance
+            exact = next(
+                (
+                    sample
+                    for sample in weather.by_cell_time.get((cell, sample_valid_at), ())
+                    if sample.issued_at <= issued_at
+                ),
+                None,
+            )
+            if exact is not None:
+                # A same-cell reading is the nearest possible sample for this
+                # valid time, so avoid scanning spatial candidates.
+                by_time[sample_valid_at] = exact
+                continue
+
+            buckets = weather.buckets_by_time[sample_valid_at]
+            nearest: tuple[float, int, WeatherFeature] | None = None
+            for dx in _SPATIAL_BUCKETS_TO_SEARCH:
+                for dy in _SPATIAL_BUCKETS_TO_SEARCH:
+                    for dz in _SPATIAL_BUCKETS_TO_SEARCH:
+                        bucket = (
+                            target_bucket[0] + dx,
+                            target_bucket[1] + dy,
+                            target_bucket[2] + dz,
+                        )
+                        for order, sample, point in buckets.get(bucket, ()):
+                            if sample.issued_at > issued_at:
+                                continue
+                            distance = target.distance_km(point)
+                            if distance > self.max_weather_distance_km:
+                                continue
+                            if (
+                                nearest is None
+                                or distance < nearest[0]
+                                or (distance == nearest[0] and order < nearest[1])
+                            ):
+                                nearest = (distance, order, sample)
+            if nearest is not None:
+                by_time[sample_valid_at] = nearest[2]
         series = tuple(by_time[key] for key in sorted(by_time))
         return (series[-1] if series else None), series
 
