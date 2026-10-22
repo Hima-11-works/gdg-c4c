@@ -256,7 +256,7 @@ class PredictionQueryService:
                     valid_at=row.valid_at,
                     predicted_pm25=row.predicted_pm25,
                     current_pm25=current.predicted_pm25 if current else None,
-                    confidence=row.quality.coverage_fraction,
+                    confidence=row.confidence,
                     synthetic=row.synthetic,
                 ))
             candidates.sort(
@@ -622,6 +622,9 @@ class PredictionQueryService:
                     predicted_pm25=predicted,
                     lower_pm25=None,
                     upper_pm25=None,
+                    confidence=_interpolate_number(
+                        lower.confidence, upper.confidence, ratio
+                    ),
                     prediction_method="interpolated-between-published-anchors",
                     model_version=(
                         lower.model_version
@@ -706,6 +709,7 @@ class PredictionQueryService:
                     value = current.pm25
                     valid_at = run.generated_at
                     method = "synthetic-demo-field"
+                    confidence = current.confidence
                 else:
                     if horizon not in {1.0, 2.0, 3.0, 4.0, 5.0, 6.0}:
                         continue
@@ -714,6 +718,7 @@ class PredictionQueryService:
                     value = forecast.predicted_pm25
                     valid_at = forecast.forecast_time
                     method = "synthetic-demo-forecast"
+                    confidence = forecast.confidence
                 output.append(
                     PredictionResult(
                         run_id=run.run_id,
@@ -723,9 +728,10 @@ class PredictionQueryService:
                         baseline_pm25=baseline,
                         predicted_pm25=value,
                         pdi=current.pdi if horizon == 0 else None,
-                    pdi_factors=(
-                        demo_data.generate_pdi_factors(cell) if horizon == 0 else None
-                    ),
+                        pdi_factors=(
+                            demo_data.generate_pdi_factors(cell) if horizon == 0 else None
+                        ),
+                        confidence=confidence,
                         prediction_method=method,
                         feature_schema_version=FEATURE_SCHEMA_VERSION,
                         input_kind=InputKind.SYNTHETIC,
@@ -778,7 +784,7 @@ class PredictionQueryService:
             ) is not None
         }
         confidence = _weighted_mean(
-            [(row.quality.coverage_fraction, area_by_row[row.h3_cell]) for row in supported]
+            [(row.confidence, area_by_row[row.h3_cell]) for row in supported]
         ) or 0.0
         vector = _aggregate_vector(rows, area_by_row)
         pop_known = [row for row in rows if row.feature_vector.get("population_count") is not None]

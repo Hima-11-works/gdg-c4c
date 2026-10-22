@@ -59,6 +59,7 @@ class PredictionResult:
     upper_pm25: float | None = None
     pdi: float | None = None
     pdi_factors: Mapping[str, float] | None = None
+    confidence: float | None = None
     prediction_method: str = "persistence-baseline"
     model_version: str | None = None
     feature_schema_version: str = FEATURE_SCHEMA_VERSION
@@ -91,6 +92,10 @@ class PredictionResult:
                 _require_finite(value, f"pdi_factors[{name!r}]")
                 if not 0 <= value <= 1:
                     raise ValueError(f"pdi_factors[{name!r}] must be within [0, 1]: {value}")
+        if self.confidence is not None:
+            _require_finite(self.confidence, "confidence")
+            if not 0 <= self.confidence <= 1:
+                raise ValueError("confidence must be within [0, 1]")
         for name, value in self.feature_vector.items():
             if not name.strip():
                 raise ValueError("feature vector names must not be empty")

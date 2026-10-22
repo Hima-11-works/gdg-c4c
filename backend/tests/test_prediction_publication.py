@@ -81,7 +81,7 @@ class MemoryPublicationRepository:
                 predicted_pm25=item.predicted_pm25,
                 current_pm25=(current[item.h3_cell].predicted_pm25
                               if item.h3_cell in current else None),
-                confidence=item.quality.coverage_fraction,
+                confidence=item.confidence,
                 synthetic=item.synthetic,
             )
             for item in rows
@@ -143,6 +143,10 @@ def test_publication_carries_baseline_and_rejects_synthetic_live_inputs():
         generated_at=now,
         snapshots=[current, forecast],
         baseline_by_cell_horizon={(forecast.h3_cell, 1.0): 25.0},
+        confidence_by_cell_horizon={
+            (current.h3_cell, 0.0): 0.91,
+            (forecast.h3_cell, 1.0): 0.74,
+        },
     )
     assert run.mode is DataMode.DEMO
     assert repository.published == 1
@@ -150,6 +154,8 @@ def test_publication_carries_baseline_and_rejects_synthetic_live_inputs():
     assert rows[1].predicted_pm25 == 25.0
     assert rows[1].prediction_method == "deterministic-dispersion-baseline"
     assert rows[1].synthetic is True
+    assert rows[0].confidence == 0.91
+    assert rows[1].confidence == 0.74
 
 
 def test_modeled_current_snapshot_keeps_interpolated_value_and_provenance():
@@ -224,10 +230,12 @@ def test_publication_keeps_pdi_score_and_factor_explanation():
         snapshots=[_snapshot(cell, 0, now, refs=[station_ref, modeled_ref])],
         pdi_by_cell={cell: 67.0},
         pdi_factors_by_cell={cell: {"pm25": 0.5, "fire_pressure": 0.25}},
+        confidence_by_cell_horizon={(cell, 0.0): 0.73},
     )
 
     assert rows[0].pdi == 67.0
     assert rows[0].pdi_factors == {"pm25": 0.5, "fire_pressure": 0.25}
+    assert rows[0].confidence == 0.73
 
 
 def test_demo_fallback_run_id_resolves_on_a_fresh_service():
@@ -353,6 +361,7 @@ def test_h3_parent_aggregation_keeps_partial_coverage_and_separate_exposure():
             prediction_method="observed-current",
             input_kind=InputKind.OBSERVED,
             pdi_factors={"pm25": 0.2 if cell == child_cells[0] else 0.8},
+            confidence=0.9 if cell == child_cells[0] else 0.3,
             feature_vector={"population_count": population},
             dataset_refs=(population_ref,),
         )
@@ -382,6 +391,7 @@ def test_h3_parent_aggregation_keeps_partial_coverage_and_separate_exposure():
     assert view.exposure.covered_population == 400.0
     assert view.exposure.unknown_population == 0
     assert view.pdi_factors == {"pm25": pytest.approx(0.5)}
+    assert view.confidence == pytest.approx(0.6)
 
 
 def test_published_run_is_not_upscaled_to_finer_display_resolution():
@@ -584,6 +594,7 @@ def test_alert_candidates_are_thresholded_and_include_current_context():
             prediction_method="residual-ridge",
             input_kind=InputKind.MODELED,
             quality=FeatureQuality(coverage_fraction=0.8),
+            confidence=0.62,
         ),
         PredictionResult(
             run_id=run.run_id,
@@ -625,7 +636,7 @@ def test_alert_candidates_are_thresholded_and_include_current_context():
     assert candidate.horizon_hours == 1
     assert candidate.predicted_pm25 == 75
     assert candidate.current_pm25 == 18
-    assert candidate.confidence == pytest.approx(0.8)
+    assert candidate.confidence == pytest.approx(0.62)
     assert cell_candidate.h3_cell == cell
     assert cell_candidate.predicted_pm25 == 75
     assert repository.alert_queries[-1] == cell

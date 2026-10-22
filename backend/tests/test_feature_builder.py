@@ -176,6 +176,22 @@ def test_calendar_and_static_features_are_derived_without_zero_fabrication() -> 
     assert payload["vector"]["population_count"] == 0.0
 
 
+def test_missing_optional_static_features_do_not_zero_core_coverage() -> None:
+    snapshot = FeatureBuilder().build(
+        cells=[CELL],
+        issued_at=NOW,
+        valid_at=NOW,
+        sensor_readings=[_reading(24.0, NOW)],
+        weather_features=[_weather()],
+    )[0]
+
+    assert snapshot.quality.observed_station_count == 1
+    assert snapshot.quality.coverage_fraction == 1.0
+    assert {"population", "roads", "land_cover"}.issubset(
+        snapshot.quality.missing_fields
+    )
+
+
 def test_future_weather_is_allowed_only_when_issued_before_the_cutoff() -> None:
     future_valid = NOW + timedelta(hours=3)
     snapshot = FeatureBuilder().build(

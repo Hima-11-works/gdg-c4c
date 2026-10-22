@@ -113,6 +113,7 @@ class PredictionPublicationService:
         baseline_by_cell_horizon: Mapping[tuple[str, float], float] | None = None,
         pdi_by_cell: Mapping[str, float] | None = None,
         pdi_factors_by_cell: Mapping[str, Mapping[str, float]] | None = None,
+        confidence_by_cell_horizon: Mapping[tuple[str, float], float] | None = None,
         scenario_id: str | None = None,
     ) -> tuple[PredictionRun, list[PredictionResult]]:
         if not snapshots:
@@ -127,6 +128,7 @@ class PredictionPublicationService:
         baseline_by_cell_horizon = baseline_by_cell_horizon or {}
         pdi_by_cell = pdi_by_cell or {}
         pdi_factors_by_cell = pdi_factors_by_cell or {}
+        confidence_by_cell_horizon = confidence_by_cell_horizon or {}
         available_models: dict[float, tuple[ModelVersion, dict] | None] = {}
         horizons = sorted({item.horizon_hours for item in snapshots if item.horizon_hours > 0})
         for horizon in horizons:
@@ -194,6 +196,9 @@ class PredictionPublicationService:
                         pdi_factors_by_cell.get(snapshot.h3_cell)
                         if horizon == 0
                         else None
+                    ),
+                    confidence=confidence_by_cell_horizon.get(
+                        (snapshot.h3_cell, horizon)
                     ),
                     prediction_method=method,
                     model_version=model_version.model_id if model_version else None,

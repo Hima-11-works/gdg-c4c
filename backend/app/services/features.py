@@ -358,11 +358,14 @@ class FeatureBuilder:
             fire_age_hours_min=fire_values["age"],
             traffic_congestion_ratio=traffic_value,
         )
-        core_available = [latest is not None, current_weather is not None, static is not None]
-        if traffic is not None:
-            core_available.append(traffic_value is not None)
-        static_coverage = static.coverage_fraction if static else 0.0
-        coverage = static_coverage * sum(core_available) / len(core_available)
+        # Coverage is the availability of the two core dynamic inputs. Static
+        # demographics, roads, land cover, and traffic are optional model
+        # features; their absence remains explicit in `missing_fields` and
+        # does not erase sensor support or the separate model confidence.
+        core_available = [latest is not None, current_weather is not None]
+        coverage = sum(core_available) / len(core_available)
+        if static is not None and static.coverage_fraction < 1.0:
+            warnings.add("static_features_partial")
         refs = list(dataset_refs)
         if static:
             refs.extend(static.dataset_refs)

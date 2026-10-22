@@ -162,6 +162,7 @@ prediction_result = Table(
     Column("upper_pm25", Float, nullable=True),
     Column("pdi", Float, nullable=True),
     Column("pdi_factors", JSONB, nullable=True),
+    Column("confidence", Float, nullable=True),
     Column("prediction_method", String(80), nullable=False),
     Column("model_version", String(180), nullable=True),
     Column("feature_schema_version", String(60), nullable=False),
@@ -177,6 +178,10 @@ prediction_result = Table(
     CheckConstraint("upper_pm25 IS NULL OR upper_pm25 >= 0", name="ck_prediction_result_upper_pm25"),
     CheckConstraint("lower_pm25 IS NULL OR upper_pm25 IS NULL OR lower_pm25 <= upper_pm25", name="ck_prediction_result_interval_order"),
     CheckConstraint("input_kind IN ('observed', 'modeled', 'synthetic', 'derived')", name="ck_prediction_result_input_kind"),
+    CheckConstraint(
+        "confidence IS NULL OR confidence BETWEEN 0 AND 1",
+        name="ck_prediction_result_confidence",
+    ),
     Index("ix_prediction_result_run_valid", "run_id", "valid_at"),
     Index("ix_prediction_result_cell_valid", "h3_cell", "valid_at"),
 )

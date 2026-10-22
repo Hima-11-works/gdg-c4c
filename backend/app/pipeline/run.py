@@ -401,6 +401,16 @@ def _publish_inner(
             for state in current_states
             if state.pdi_factors is not None
         },
+        confidence_by_cell_horizon={
+            **{
+                (state.h3_cell, 0.0): state.confidence
+                for state in current_states
+            },
+            **{
+                (forecast.h3_cell, forecast.forecast_hours): forecast.confidence
+                for forecast in forecasts
+            },
+        },
     )
 
     # Distinct cells, not snapshots: the coarse count includes one snapshot per

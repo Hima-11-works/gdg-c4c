@@ -136,7 +136,7 @@ class PublishedAlertService:
             None,
         )
         severity = classify_published_alert(predicted)
-        confidence = result.quality.coverage_fraction
+        confidence = result.confidence
         return PublishedAlert(
             identity=identity,
             severity=severity,
