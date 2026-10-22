@@ -30,16 +30,23 @@ def _point_km_north(km: float) -> Coordinate:
     return Coordinate(CELL_LAT + km / _KM_PER_DEGREE_LAT, CELL_LON)
 
 
-def _sensor(external_sensor_id: str, point: Coordinate, value: float) -> SensorReading:
+def _sensor(
+    external_sensor_id: str,
+    point: Coordinate,
+    value: float,
+    *,
+    measured_at: datetime = TIMESTAMP,
+    source: str = "openaq",
+) -> SensorReading:
     return SensorReading(
-        source="openaq",
+        source=source,
         external_sensor_id=external_sensor_id,
         latitude=point.latitude,
         longitude=point.longitude,
         pollutant=PM25,
         value=value,
         unit="ug/m3",
-        measured_at=TIMESTAMP,
+        measured_at=measured_at,
     )
 
 
@@ -91,6 +98,64 @@ def test_no_sensors_gives_every_cell_null_pollution_and_zero_confidence() -> Non
 
 def test_fewer_than_min_sensors_within_range_gives_null_not_fabricated() -> None:
     sensors = [_sensor("a", _point_km_north(2.0), 10.0), _sensor("b", _point_km_north(3.0), 20.0)]
+
+    [result] = _idw(max_distance_km=20.0, min_sensors=3).estimate(
+        [CELL], sensors, timestamp=TIMESTAMP
+    )
+
+    assert result.pm25 is None
+    assert result.confidence == 0.0
+
+
+def test_multiple_readings_from_one_station_do_not_satisfy_station_minimum() -> None:
+    sensors = [
+        _sensor(
+            "same-station",
+            _point_km_north(2.0),
+            value,
+            measured_at=TIMESTAMP.replace(hour=hour),
+        )
+        for hour, value in ((9, 10.0), (10, 100.0), (11, 280.0))
+    ]
+
+    [result] = _idw(max_distance_km=20.0, min_sensors=3).estimate(
+        [CELL], sensors, timestamp=TIMESTAMP
+    )
+
+    assert result.pm25 is None
+    assert result.confidence == 0.0
+
+
+def test_estimator_uses_latest_pre_issue_reading_per_station() -> None:
+    sensors = []
+    for index, distance in enumerate((2.0, 3.0, 4.0)):
+        station = f"station-{index}"
+        point = _point_km_north(distance)
+        sensors.extend(
+            [
+                _sensor(station, point, 10.0, measured_at=TIMESTAMP.replace(hour=9)),
+                _sensor(station, point, 100.0, measured_at=TIMESTAMP.replace(hour=11)),
+            ]
+        )
+
+    [result] = _idw(max_distance_km=20.0, min_sensors=3).estimate(
+        [CELL], sensors, timestamp=TIMESTAMP
+    )
+
+    assert result.pm25 == pytest.approx(100.0)
+    assert result.confidence > 0.0
+
+
+def test_future_sensor_readings_are_excluded_from_estimation() -> None:
+    sensors = [
+        _sensor(
+            f"station-{index}",
+            _point_km_north(index + 1.0),
+            42.0,
+            measured_at=TIMESTAMP.replace(hour=13),
+        )
+        for index in range(3)
+    ]
 
     [result] = _idw(max_distance_km=20.0, min_sensors=3).estimate(
         [CELL], sensors, timestamp=TIMESTAMP
