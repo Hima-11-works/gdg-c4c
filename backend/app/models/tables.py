@@ -250,6 +250,7 @@ weather_reading = Table(
     metadata,
     Column("id", BigInteger, primary_key=True),
     Column("h3_cell", String(H3_CELL_LENGTH), nullable=False),
+    Column("source", String(50), nullable=False, server_default="open-meteo"),
     Column("latitude", Float, nullable=False),
     Column("longitude", Float, nullable=False),
     Column(
@@ -277,7 +278,9 @@ weather_reading = Table(
     CheckConstraint(
         "humidity IS NULL OR humidity BETWEEN 0 AND 100", name="ck_weather_reading_humidity"
     ),
-    UniqueConstraint("h3_cell", "measured_at", name="uq_weather_reading_cell_time"),
+    UniqueConstraint(
+        "source", "h3_cell", "measured_at", name="uq_weather_reading_source_cell_time"
+    ),
     Index("ix_weather_reading_measured_at", "measured_at"),
     Index("ix_weather_reading_h3_cell", "h3_cell"),
 )

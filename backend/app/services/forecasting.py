@@ -56,14 +56,21 @@ class ForecastingService:
         self._weather_repository = weather_repository
         self._forecast_repository = forecast_repository
 
-    def run(self, *, generated_at: datetime, hours: Sequence[float] = (1, 3, 6), step_minutes: float = 60) -> ForecastingResult:
+    def run(
+        self,
+        *,
+        generated_at: datetime,
+        hours: Sequence[float] = (1, 3, 6),
+        step_minutes: float = 60,
+        weather_source: str | None = None,
+    ) -> ForecastingResult:
         current_state = self._grid_repository.latest()
         if not current_state:
             message = "No current GridState rows to forecast from — run estimation/ingestion first."
             logger.warning(message)
             return ForecastingResult(errors=[message])
 
-        weather = self._weather_repository.list_latest()
+        weather = self._weather_repository.list_latest(source=weather_source)
 
         try:
             result = self._model.forecast(current_state, weather, hours, generated_at=generated_at, step_minutes=step_minutes)

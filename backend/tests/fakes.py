@@ -46,11 +46,19 @@ class FakeSensorReadingRepository:
         self.readings.append(reading)
         return reading
 
-    def list_since(self, since: datetime, *, pollutant: str | None = None) -> list[SensorReading]:
+    def list_since(
+        self,
+        since: datetime,
+        *,
+        pollutant: str | None = None,
+        source: str | None = None,
+    ) -> list[SensorReading]:
         return [
             r
             for r in self.readings
-            if r.measured_at >= since and (pollutant is None or r.pollutant == pollutant)
+            if r.measured_at >= since
+            and (pollutant is None or r.pollutant == pollutant)
+            and (source is None or r.source == source)
         ]
 
     def list_latest(self) -> list[SensorReading]:
@@ -60,10 +68,10 @@ class FakeSensorReadingRepository:
 class FakeWeatherReadingRepository:
     def __init__(self) -> None:
         self.readings: list[WeatherReading] = []
-        self._seen_keys: set[tuple[str, datetime]] = set()
+        self._seen_keys: set[tuple[str, str, datetime]] = set()
 
     def add(self, reading: WeatherReading) -> WeatherReading:
-        key = (reading.h3_cell, reading.measured_at)
+        key = (reading.source, reading.h3_cell, reading.measured_at)
         if key in self._seen_keys:
             raise DuplicateReadingError(str(key))
         self._seen_keys.add(key)
@@ -77,12 +85,17 @@ class FakeWeatherReadingRepository:
         matches = [r for r in self.readings if r.h3_cell == h3_cell]
         return max(matches, key=lambda r: r.measured_at) if matches else None
 
-    def list_latest(self) -> list[WeatherReading]:
-        return list(self.readings)
+    def list_latest(self, *, source: str | None = None) -> list[WeatherReading]:
+        readings = self.readings
+        if source is not None:
+            readings = [reading for reading in readings if reading.source == source]
+        return list(readings)
 
-    def list_latest_in_cells(self, cells: list[str]) -> list[WeatherReading]:
+    def list_latest_in_cells(
+        self, cells: list[str], *, source: str | None = None
+    ) -> list[WeatherReading]:
         cell_set = set(cells)
-        return [r for r in self.list_latest() if r.h3_cell in cell_set]
+        return [r for r in self.list_latest(source=source) if r.h3_cell in cell_set]
 
 
 class FakeGridStateRepository:

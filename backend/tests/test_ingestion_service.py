@@ -146,6 +146,19 @@ async def test_weather_run_fans_one_sample_out_to_every_fine_cell() -> None:
     )
 
 
+async def test_weather_run_records_the_selected_data_mode_source() -> None:
+    repository = FakeWeatherReadingRepository()
+    service = WeatherIngestionService(
+        FakeWeatherProvider(default_sample=_sample()), repository, source="demo"
+    )
+
+    result = await service.run(BBOX)
+
+    assert result.succeeded is True
+    assert repository.readings
+    assert {reading.source for reading in repository.readings} == {"demo"}
+
+
 async def test_weather_run_skips_representative_point_with_no_sample() -> None:
     provider = FakeWeatherProvider(default_sample=None)  # every point comes back empty
     repository = FakeWeatherReadingRepository()

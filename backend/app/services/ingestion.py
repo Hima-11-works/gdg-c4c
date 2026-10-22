@@ -126,9 +126,16 @@ class WeatherIngestionService:
     not a separate cache.
     """
 
-    def __init__(self, provider: WeatherProvider, repository: WeatherReadingRepository) -> None:
+    def __init__(
+        self,
+        provider: WeatherProvider,
+        repository: WeatherReadingRepository,
+        *,
+        source: str = "open-meteo",
+    ) -> None:
         self._provider = provider
         self._repository = repository
+        self._source = source
 
     async def run(self, bbox: BoundingBox) -> IngestionResult:
         settings = get_settings()
@@ -190,6 +197,7 @@ class WeatherIngestionService:
                         precipitation=sample.precipitation,
                         boundary_layer_height=sample.boundary_layer_height,
                         measured_at=sample.measured_at,
+                        source=self._source,
                     )
                 )
 

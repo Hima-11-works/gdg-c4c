@@ -207,9 +207,12 @@ class WeatherReading:
     temperature: float | None = None
     humidity: float | None = None
     id: int | None = None
+    source: str = "open-meteo"
 
     def __post_init__(self) -> None:
         _require_utc(self.measured_at, "measured_at")
+        if not self.source.strip():
+            raise ValueError("source must not be empty")
         _require_valid_weather_values(self.wind_speed, self.wind_direction, self.precipitation)
         _require_valid_weather_extras(self.temperature, self.humidity)
 

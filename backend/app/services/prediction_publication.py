@@ -77,6 +77,11 @@ def assert_live_snapshots_available(mode: DataMode, snapshots: list[FeatureSnaps
         item.horizon_hours == 0
         and item.vector.current_pm25 is not None
         and item.quality.observed_station_count > 0
+        and any(
+            ref.kind is InputKind.OBSERVED
+            and ref.dataset_id in {"openaq-pm25-v3", "openaq-national-pm25"}
+            for ref in item.dataset_refs
+        )
         for item in snapshots
     )
     if not has_observed_current:

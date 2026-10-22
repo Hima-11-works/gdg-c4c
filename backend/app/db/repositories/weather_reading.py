@@ -20,6 +20,7 @@ from app.models.tables import weather_reading as weather_reading_table
 _COLUMNS = (
     weather_reading_table.c.id,
     weather_reading_table.c.h3_cell,
+    weather_reading_table.c.source,
     weather_reading_table.c.latitude,
     weather_reading_table.c.longitude,
     weather_reading_table.c.wind_speed,
@@ -40,6 +41,7 @@ def _row_to_domain(row: Row) -> WeatherReading:
     return WeatherReading(
         id=row.id,
         h3_cell=row.h3_cell,
+        source=row.source,
         latitude=row.latitude,
         longitude=row.longitude,
         wind_speed=row.wind_speed,
@@ -57,6 +59,7 @@ def _insert_stmt(reading: WeatherReading) -> Insert:
         weather_reading_table.insert()
         .values(
             h3_cell=reading.h3_cell,
+            source=reading.source,
             latitude=reading.latitude,
             longitude=reading.longitude,
             geom=_to_point(reading.latitude, reading.longitude),
@@ -80,27 +83,33 @@ def _list_since_stmt(since: datetime) -> Select:
     )
 
 
-def _latest_for_cell_stmt(h3_cell: str) -> Select:
-    return (
+def _latest_for_cell_stmt(h3_cell: str, source: str | None = None) -> Select:
+    stmt = (
         select(*_COLUMNS)
         .where(weather_reading_table.c.h3_cell == h3_cell)
-        .order_by(weather_reading_table.c.measured_at.desc())
-        .limit(1)
     )
+    if source is not None:
+        stmt = stmt.where(weather_reading_table.c.source == source)
+    return stmt.order_by(weather_reading_table.c.measured_at.desc()).limit(1)
 
 
-def _list_latest_stmt() -> Select:
+def _list_latest_stmt(source: str | None = None) -> Select:
+    stmt = select(*_COLUMNS)
+    if source is not None:
+        stmt = stmt.where(weather_reading_table.c.source == source)
     return (
-        select(*_COLUMNS)
+        stmt
         .distinct(weather_reading_table.c.h3_cell)
         .order_by(weather_reading_table.c.h3_cell, weather_reading_table.c.measured_at.desc())
     )
 
 
-def _list_latest_in_cells_stmt(cells: list[str]) -> Select:
+def _list_latest_in_cells_stmt(cells: list[str], source: str | None = None) -> Select:
+    stmt = select(*_COLUMNS).where(weather_reading_table.c.h3_cell.in_(cells))
+    if source is not None:
+        stmt = stmt.where(weather_reading_table.c.source == source)
     return (
-        select(*_COLUMNS)
-        .where(weather_reading_table.c.h3_cell.in_(cells))
+        stmt
         .distinct(weather_reading_table.c.h3_cell)
         .order_by(weather_reading_table.c.h3_cell, weather_reading_table.c.measured_at.desc())
     )
@@ -134,12 +143,14 @@ class SqlWeatherReadingRepository:
         row = self._session.execute(_latest_for_cell_stmt(h3_cell)).first()
         return _row_to_domain(row) if row else None
 
-    def list_latest(self) -> list[WeatherReading]:
-        rows = self._session.execute(_list_latest_stmt()).all()
+    def list_latest(self, *, source: str | None = None) -> list[WeatherReading]:
+        rows = self._session.execute(_list_latest_stmt(source)).all()
         return [_row_to_domain(row) for row in rows]
 
-    def list_latest_in_cells(self, cells: list[str]) -> list[WeatherReading]:
+    def list_latest_in_cells(
+        self, cells: list[str], *, source: str | None = None
+    ) -> list[WeatherReading]:
         if not cells:
             return []
-        rows = self._session.execute(_list_latest_in_cells_stmt(cells)).all()
+        rows = self._session.execute(_list_latest_in_cells_stmt(cells, source)).all()
         return [_row_to_domain(row) for row in rows]

@@ -79,6 +79,8 @@ def test_sensor_reading_statements() -> None:
     select_sql = _sql(sensor_reading_repo._list_since_stmt(NOW, "pm25"))
     assert "FROM sensor_reading" in select_sql
     assert "sensor_reading.pollutant" in select_sql
+    source_sql = _sql(sensor_reading_repo._list_since_stmt(NOW, "pm25", "openaq"))
+    assert "sensor_reading.source =" in source_sql
 
     latest_sql = _sql(sensor_reading_repo._list_latest_stmt())
     assert "DISTINCT ON" in latest_sql
@@ -112,6 +114,11 @@ def test_weather_reading_statements() -> None:
     in_cells_sql = _sql(weather_reading_repo._list_latest_in_cells_stmt([CELL, other_cell]))
     assert "DISTINCT ON" in in_cells_sql
     assert "weather_reading.h3_cell IN" in in_cells_sql
+
+    live_weather_sql = _sql(
+        weather_reading_repo._list_latest_in_cells_stmt([CELL, other_cell], "open-meteo")
+    )
+    assert "weather_reading.source =" in live_weather_sql
 
 
 def test_grid_state_statements() -> None:

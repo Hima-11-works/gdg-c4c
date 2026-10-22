@@ -275,7 +275,8 @@ def _build_live_overview(
     grouped: dict[str, list[SensorReading]] = {}
     for reading in sensor_readings:
         if (
-            reading.pollutant.lower() not in {"pm25", "pm2.5"}
+            reading.source != "openaq"
+            or reading.pollutant.lower() not in {"pm25", "pm2.5"}
             or reading.measured_at > issued_at
             or reading.measured_at < cutoff
             or not india.is_inside_india(reading.latitude, reading.longitude)

@@ -57,7 +57,7 @@ class SensorReadingRepository(Protocol):
         ...
 
     def list_since(
-        self, since: datetime, *, pollutant: str | None = None
+        self, since: datetime, *, pollutant: str | None = None, source: str | None = None
     ) -> list[SensorReading]: ...
 
     def list_latest(self) -> list[SensorReading]:
@@ -74,11 +74,13 @@ class WeatherReadingRepository(Protocol):
 
     def latest_for_cell(self, h3_cell: str) -> WeatherReading | None: ...
 
-    def list_latest(self) -> list[WeatherReading]:
+    def list_latest(self, *, source: str | None = None) -> list[WeatherReading]:
         """The most recent reading for every cell that has one."""
         ...
 
-    def list_latest_in_cells(self, cells: list[str]) -> list[WeatherReading]:
+    def list_latest_in_cells(
+        self, cells: list[str], *, source: str | None = None
+    ) -> list[WeatherReading]:
         """Same as list_latest, restricted to these specific H3 cells —
         a cell with no reading is simply absent, never fabricated. Used
         for resolution/viewport-scoped API reads; see

@@ -84,6 +84,7 @@ class GridComputationService:
         *,
         timestamp: datetime,
         sensor_max_age: timedelta,
+        allowed_sensor_sources: set[str] | None = None,
         # Loose upper bound for the repository query. The *real* "active"
         # semantics (max age, decay) live in the fire gradient model, which
         # discards aged-out reports itself - the query window is an
@@ -97,9 +98,20 @@ class GridComputationService:
             logger.error(message)
             return GridComputationResult(errors=[message])
 
-        sensor_readings = self._sensor_repository.list_since(
-            timestamp - sensor_max_age, pollutant=PM25
+        source_filter = (
+            next(iter(allowed_sensor_sources))
+            if allowed_sensor_sources is not None and len(allowed_sensor_sources) == 1
+            else None
         )
+        sensor_readings = self._sensor_repository.list_since(
+            timestamp - sensor_max_age, pollutant=PM25, source=source_filter
+        )
+        if allowed_sensor_sources is not None:
+            sensor_readings = [
+                reading
+                for reading in sensor_readings
+                if reading.source in allowed_sensor_sources
+            ]
 
         try:
             estimates = self._estimator.estimate(grid, sensor_readings, timestamp=timestamp)

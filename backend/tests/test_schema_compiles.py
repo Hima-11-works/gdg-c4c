@@ -45,6 +45,10 @@ def test_sensor_reading_has_geography_column_and_gist_index() -> None:
 def test_weather_reading_boundary_layer_height_is_nullable() -> None:
     assert weather_reading.c.boundary_layer_height.nullable is True
     assert weather_reading.c.wind_speed.nullable is False
+    assert weather_reading.c.source.nullable is False
+    assert "uq_weather_reading_source_cell_time" in {
+        constraint.name for constraint in weather_reading.constraints
+    }
 
 
 def test_grid_state_primary_key_is_cell_and_timestamp() -> None:

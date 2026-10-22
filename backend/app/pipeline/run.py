@@ -145,7 +145,9 @@ def _weather_features(
             boundary_layer_height_m=reading.boundary_layer_height,
             temperature_c=reading.temperature,
             relative_humidity_pct=reading.humidity,
-            input_kind=InputKind.OBSERVED,
+            input_kind=(
+                InputKind.SYNTHETIC if reading.source == "demo" else InputKind.OBSERVED
+            ),
         )
         for reading in readings
     ]
@@ -242,10 +244,19 @@ def _publish_inner(
         )
 
     cells = [state.h3_cell for state in current_states]
-    sensors = SqlSensorReadingRepository(session).list_since(
-        timestamp - timedelta(hours=settings.ingest_max_reading_age_hours)
+    expected_source = "demo" if settings.demo_mode else "openaq"
+    weather_source = "demo" if settings.demo_mode else "open-meteo"
+    sensors = [
+        reading
+        for reading in SqlSensorReadingRepository(session).list_since(
+            timestamp - timedelta(hours=settings.ingest_max_reading_age_hours),
+            source=expected_source,
+        )
+        if reading.source == expected_source
+    ]
+    weather = SqlWeatherReadingRepository(session).list_latest_in_cells(
+        cells, source=weather_source
     )
-    weather = SqlWeatherReadingRepository(session).list_latest_in_cells(cells)
     fire_detections, fire_dataset_refs = _fire_feature_inputs(
         session,
         settings,
@@ -264,6 +275,33 @@ def _publish_inner(
         attribution="Computed from current sensor readings and qualified citizen fire reports",
         license="Project-generated model output",
     )
+    source_refs: list[DatasetRef] = []
+    if sensors:
+        source_refs.append(
+            DatasetRef(
+                dataset_id=("demo-pm25-v1" if settings.demo_mode else "openaq-pm25-v3"),
+                source=("Air Health demo generator" if settings.demo_mode else "OpenAQ API v3"),
+                product="PM2.5 station readings",
+                version=("1" if settings.demo_mode else "v3"),
+                kind=(InputKind.SYNTHETIC if settings.demo_mode else InputKind.OBSERVED),
+                region=DEFAULT_REGION,
+                attribution=("Air Health demo data" if settings.demo_mode else "OpenAQ and upstream measurement providers"),
+                license=("Project-generated synthetic data" if settings.demo_mode else "upstream provider terms; OpenAQ terms apply"),
+            )
+        )
+    if weather:
+        source_refs.append(
+            DatasetRef(
+                dataset_id=("demo-weather-v1" if settings.demo_mode else "open-meteo-weather-v1"),
+                source=("Air Health demo generator" if settings.demo_mode else "Open-Meteo"),
+                product="weather observations",
+                version=("1" if settings.demo_mode else "provider-current"),
+                kind=(InputKind.SYNTHETIC if settings.demo_mode else InputKind.OBSERVED),
+                region=DEFAULT_REGION,
+                attribution=("Air Health demo data" if settings.demo_mode else "Open-Meteo"),
+                license=("Project-generated synthetic data" if settings.demo_mode else "CC BY 4.0"),
+            )
+        )
 
     snapshots = FeatureBuilder(resolution=settings.h3_resolution).build(
         cells=cells,
@@ -272,7 +310,7 @@ def _publish_inner(
         sensor_readings=sensors,
         weather_features=_weather_features(weather, fallback_time=timestamp),
         fire_detections=fire_detections,
-        dataset_refs=(*fire_dataset_refs, grid_dataset_ref),
+        dataset_refs=(*fire_dataset_refs, *source_refs, grid_dataset_ref),
     )
     # The grid computation is the authoritative current product. FeatureBuilder
     # still supplies station-only lag features, while this replacement carries
@@ -902,9 +940,11 @@ async def _ingest_weather(
 ) -> StageOutcome:
     async with httpx.AsyncClient(timeout=settings.open_meteo_timeout_seconds) as client:
         provider = build_weather_provider(settings, client)
-        result = await WeatherIngestionService(provider, SqlWeatherReadingRepository(session)).run(
-            bbox
-        )
+        result = await WeatherIngestionService(
+            provider,
+            SqlWeatherReadingRepository(session),
+            source="demo" if settings.demo_mode else "open-meteo",
+        ).run(bbox)
 
     if not result.succeeded:
         message = f"Open-Meteo ingestion failed: {'; '.join(result.errors)}"
@@ -1045,6 +1085,7 @@ def _compute_grid(
         bbox,
         timestamp=timestamp,
         sensor_max_age=timedelta(hours=settings.ingest_max_reading_age_hours),
+        allowed_sensor_sources={"demo" if settings.demo_mode else "openaq"},
     )
 
     if not result.succeeded:
@@ -1085,6 +1126,7 @@ def _forecast(
         generated_at=timestamp,
         hours=list(FORECAST_HORIZONS_HOURS),
         step_minutes=15,
+        weather_source="demo" if settings.demo_mode else "open-meteo",
     )
 
     if not result.succeeded:

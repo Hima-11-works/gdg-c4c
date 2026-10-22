@@ -165,6 +165,16 @@ def test_modeled_current_snapshot_keeps_interpolated_value_and_provenance():
         attribution="Computed from current station readings",
         license="Project-generated model output",
     )
+    station_ref = DatasetRef(
+        dataset_id="openaq-pm25-v3",
+        source="OpenAQ API v3",
+        product="PM2.5 station readings",
+        version="v3",
+        kind=InputKind.OBSERVED,
+        region="india",
+        attribution="OpenAQ",
+        license="upstream provider terms",
+    )
     repository = MemoryPublicationRepository()
     _run, rows = PredictionPublicationService(repository).publish(
         run_id="live-nowcast",
@@ -172,7 +182,7 @@ def test_modeled_current_snapshot_keeps_interpolated_value_and_provenance():
         region="india",
         mode=DataMode.LIVE,
         generated_at=now,
-        snapshots=[_snapshot(cell, 0, now, pm25=42.0, refs=[ref])],
+        snapshots=[_snapshot(cell, 0, now, pm25=42.0, refs=[ref, station_ref])],
     )
 
     assert rows[0].predicted_pm25 == 42.0
@@ -207,6 +217,14 @@ def test_live_publication_fails_when_observed_current_input_is_unavailable():
         vector=snapshot.vector,
         quality=FeatureQuality(coverage_fraction=0.0, observed_station_count=0),
     )
+
+    with pytest.raises(ValueError, match="live publication unavailable"):
+        assert_live_snapshots_available(DataMode.LIVE, [snapshot])
+
+
+def test_live_publication_requires_explicit_openaq_provenance():
+    now = datetime(2026, 9, 22, tzinfo=UTC)
+    snapshot = _snapshot("8861892e0dfffff", 0, now, pm25=42.0)
 
     with pytest.raises(ValueError, match="live publication unavailable"):
         assert_live_snapshots_available(DataMode.LIVE, [snapshot])
