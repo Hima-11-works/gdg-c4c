@@ -161,6 +161,7 @@ prediction_result = Table(
     Column("lower_pm25", Float, nullable=True),
     Column("upper_pm25", Float, nullable=True),
     Column("pdi", Float, nullable=True),
+    Column("pdi_factors", JSONB, nullable=True),
     Column("prediction_method", String(80), nullable=False),
     Column("model_version", String(180), nullable=True),
     Column("feature_schema_version", String(60), nullable=False),

@@ -72,6 +72,7 @@ class PredictionCellView:
     lower_pm25: float | None
     upper_pm25: float | None
     pdi: float | None
+    pdi_factors: Mapping[str, float] | None
     confidence: float
     spatial_coverage_fraction: float
     supported_native_cells: int
@@ -722,6 +723,9 @@ class PredictionQueryService:
                         baseline_pm25=baseline,
                         predicted_pm25=value,
                         pdi=current.pdi if horizon == 0 else None,
+                    pdi_factors=(
+                        demo_data.generate_pdi_factors(cell) if horizon == 0 else None
+                    ),
                         prediction_method=method,
                         feature_schema_version=FEATURE_SCHEMA_VERSION,
                         input_kind=InputKind.SYNTHETIC,
@@ -755,6 +759,24 @@ class PredictionQueryService:
             [(row.baseline_pm25, area_by_row[row.h3_cell]) for row in rows]
         )
         pdi = _weighted_mean([(row.pdi, area_by_row[row.h3_cell]) for row in rows])
+        factor_names = {
+            name for row in rows if row.pdi_factors for name in row.pdi_factors
+        }
+        pdi_factors = {
+            name: value
+            for name in factor_names
+            if (
+                value := _weighted_mean(
+                    [
+                        (
+                            row.pdi_factors.get(name) if row.pdi_factors else None,
+                            area_by_row[row.h3_cell],
+                        )
+                        for row in rows
+                    ]
+                )
+            ) is not None
+        }
         confidence = _weighted_mean(
             [(row.quality.coverage_fraction, area_by_row[row.h3_cell]) for row in supported]
         ) or 0.0
@@ -850,6 +872,7 @@ class PredictionQueryService:
             lower_pm25=native_interval.lower_pm25 if native_interval is not None else None,
             upper_pm25=native_interval.upper_pm25 if native_interval is not None else None,
             pdi=pdi,
+            pdi_factors=pdi_factors or None,
             confidence=confidence,
             spatial_coverage_fraction=spatial_coverage,
             supported_native_cells=len(supported),

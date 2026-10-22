@@ -478,7 +478,7 @@ def get_cell_v2(
         weather=_weather(run, current_view),
         static_features=_static_features(current_view),
         exposure=_exposure(current_view.exposure),
-        pdi_factors=None,
+        pdi_factors=current_view.pdi_factors,
     )
     return V2Envelope(
         generated_at=run.generated_at,

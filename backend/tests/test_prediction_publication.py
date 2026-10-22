@@ -190,6 +190,46 @@ def test_modeled_current_snapshot_keeps_interpolated_value_and_provenance():
     assert rows[0].prediction_method == "modeled-current-nowcast"
 
 
+def test_publication_keeps_pdi_score_and_factor_explanation():
+    now = datetime(2026, 9, 22, tzinfo=UTC)
+    cell = "8861892e0dfffff"
+    station_ref = DatasetRef(
+        dataset_id="openaq-pm25-v3",
+        source="OpenAQ API v3",
+        product="PM2.5 station readings",
+        version="v3",
+        kind=InputKind.OBSERVED,
+        region="india",
+        attribution="OpenAQ",
+        license="upstream provider terms",
+    )
+    modeled_ref = DatasetRef(
+        dataset_id="idw-grid-nowcast-v1",
+        source="Air Health grid computation",
+        product="current interpolated PM2.5 grid",
+        version="1",
+        kind=InputKind.MODELED,
+        region="india",
+        attribution="Air Health",
+        license="Project-generated model output",
+    )
+    repository = MemoryPublicationRepository()
+
+    _run, rows = PredictionPublicationService(repository).publish(
+        run_id="pdi-run",
+        feature_run_id="pdi-features",
+        region="india",
+        mode=DataMode.LIVE,
+        generated_at=now,
+        snapshots=[_snapshot(cell, 0, now, refs=[station_ref, modeled_ref])],
+        pdi_by_cell={cell: 67.0},
+        pdi_factors_by_cell={cell: {"pm25": 0.5, "fire_pressure": 0.25}},
+    )
+
+    assert rows[0].pdi == 67.0
+    assert rows[0].pdi_factors == {"pm25": 0.5, "fire_pressure": 0.25}
+
+
 def test_demo_fallback_run_id_resolves_on_a_fresh_service():
     repository = MemoryPublicationRepository()
     service = PredictionQueryService(repository, native_resolution=8, region="india")
@@ -312,6 +352,7 @@ def test_h3_parent_aggregation_keeps_partial_coverage_and_separate_exposure():
             predicted_pm25=value,
             prediction_method="observed-current",
             input_kind=InputKind.OBSERVED,
+            pdi_factors={"pm25": 0.2 if cell == child_cells[0] else 0.8},
             feature_vector={"population_count": population},
             dataset_refs=(population_ref,),
         )
@@ -340,6 +381,7 @@ def test_h3_parent_aggregation_keeps_partial_coverage_and_separate_exposure():
     assert view.exposure.residents_above_threshold == 300.0
     assert view.exposure.covered_population == 400.0
     assert view.exposure.unknown_population == 0
+    assert view.pdi_factors == {"pm25": pytest.approx(0.5)}
 
 
 def test_published_run_is_not_upscaled_to_finer_display_resolution():

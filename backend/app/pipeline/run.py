@@ -391,6 +391,16 @@ def _publish_inner(
         generated_at=timestamp,
         snapshots=all_snapshots,
         baseline_by_cell_horizon=baseline_by_cell_horizon,
+        pdi_by_cell={
+            state.h3_cell: state.pdi
+            for state in current_states
+            if state.pdi is not None
+        },
+        pdi_factors_by_cell={
+            state.h3_cell: state.pdi_factors
+            for state in current_states
+            if state.pdi_factors is not None
+        },
     )
 
     # Distinct cells, not snapshots: the coarse count includes one snapshot per
