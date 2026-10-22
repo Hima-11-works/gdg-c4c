@@ -196,6 +196,8 @@ class WeatherIngestionService:
                         wind_direction=sample.wind_direction,
                         precipitation=sample.precipitation,
                         boundary_layer_height=sample.boundary_layer_height,
+                        temperature=sample.temperature,
+                        humidity=sample.humidity,
                         measured_at=sample.measured_at,
                         source=self._source,
                     )
