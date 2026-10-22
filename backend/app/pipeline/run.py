@@ -536,7 +536,7 @@ async def _ingest_sensors(
             dataset_id="openaq",
             called=True,
             failed=True,
-            item_count=0,
+            item_count=result.fetched,
             error_summary="; ".join(result.errors)[:500],
         )
         return StageOutcome("sensor_ingestion", False, message)
@@ -546,7 +546,7 @@ async def _ingest_sensors(
         dataset_id="openaq",
         called=True,
         failed=False,
-        item_count=result.saved,
+        item_count=result.fetched,
     )
     return StageOutcome(
         "sensor_ingestion",
@@ -608,7 +608,7 @@ async def _ingest_national_overview_sensors(
             dataset_id=dataset_id,
             called=True,
             failed=True,
-            item_count=0,
+            item_count=result.fetched,
             error_summary=message[:500],
         )
         return StageOutcome(dataset_id, False, f"failed: {message}")
@@ -618,7 +618,7 @@ async def _ingest_national_overview_sensors(
         dataset_id=dataset_id,
         called=True,
         failed=False,
-        item_count=result.saved,
+        item_count=result.fetched,
     )
     return StageOutcome(
         dataset_id,
@@ -988,7 +988,7 @@ async def _ingest_weather(
             dataset_id="open-meteo",
             called=True,
             failed=True,
-            item_count=0,
+            item_count=result.fetched,
             error_summary="; ".join(result.errors)[:500],
         )
         return StageOutcome("weather_ingestion", False, message)
@@ -998,7 +998,7 @@ async def _ingest_weather(
         dataset_id="open-meteo",
         called=True,
         failed=False,
-        item_count=result.saved,
+        item_count=result.fetched,
     )
     return StageOutcome(
         "weather_ingestion",

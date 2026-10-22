@@ -27,10 +27,13 @@ from app.pipeline.run import (
     _expand_bbox,
     _fire_feature_inputs,
     _ingest_fires,
+    _ingest_national_overview_sensors,
     _ingest_sensors,
+    _ingest_weather,
     _scan_live_satellite_hotspots,
     run_pipeline,
 )
+from app.services.ingestion import IngestionResult
 
 GENERATED_AT = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 BBOX = BoundingBox(min_lat=37.6, min_lon=-122.6, max_lat=37.9, max_lon=-122.1)
@@ -170,6 +173,70 @@ async def test_ingest_sensors_without_an_api_key_is_a_clear_failure_not_a_crash(
     # distinction survives as the word itself.
     assert call["status"] == "missing"
     assert call["error_summary"] == "not configured"
+
+
+async def test_duplicate_only_ingestion_remains_present_in_source_health(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records: list[dict[str, object]] = []
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class _DuplicateOnlyIngestion:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def run(self, *_args, **_kwargs) -> IngestionResult:
+            return IngestionResult(fetched=3, saved=0, skipped_duplicates=3)
+
+    class _RecordingHealthRepo:
+        def __init__(self, _session):
+            pass
+
+        def record(self, **kwargs):
+            records.append(kwargs)
+
+    settings = _settings(
+        demo_mode=False,
+        openaq_api_key="test-key",
+        national_overview_resolution=6,
+    )
+    monkeypatch.setattr("app.pipeline.run.httpx.AsyncClient", lambda **_kwargs: _Client())
+    monkeypatch.setattr(
+        "app.db.repositories.source_health.SqlSourceHealthRepository",
+        _RecordingHealthRepo,
+    )
+    monkeypatch.setattr(
+        "app.pipeline.run.SensorIngestionService", _DuplicateOnlyIngestion
+    )
+    monkeypatch.setattr(
+        "app.pipeline.run.WeatherIngestionService", _DuplicateOnlyIngestion
+    )
+    monkeypatch.setattr("app.pipeline.run.SqlSensorReadingRepository", lambda _session: object())
+    monkeypatch.setattr("app.pipeline.run.SqlWeatherReadingRepository", lambda _session: object())
+    monkeypatch.setattr("app.pipeline.run.build_pollution_provider", lambda *_args: object())
+    monkeypatch.setattr("app.pipeline.run.build_weather_provider", lambda *_args: object())
+    monkeypatch.setattr(
+        "app.pipeline.run.OpenAQNationalOverviewProvider", lambda **_kwargs: object()
+    )
+
+    outcomes = [
+        await _ingest_sensors(None, settings, BBOX, GENERATED_AT, "run-test"),
+        await _ingest_national_overview_sensors(None, settings, GENERATED_AT, "run-test"),
+        await _ingest_weather(None, settings, BBOX, "run-test"),
+    ]
+
+    assert all(outcome.succeeded for outcome in outcomes)
+    health_by_dataset = {record["dataset_id"]: record for record in records}
+    assert set(health_by_dataset) == {"openaq", "openaq-national-overview", "open-meteo"}
+    assert all(record["status"] == "present" for record in health_by_dataset.values())
+    assert all(record["item_count"] == 3 for record in health_by_dataset.values())
+    assert all("saved=0" in outcome.summary for outcome in outcomes)
 
 
 async def test_ingest_fires_without_a_key_keeps_the_baseline_available(
