@@ -68,7 +68,7 @@ from app.db.repositories import (
 from app.db.session import get_session_factory
 from app.domain.features import DataMode, DatasetRef, FeatureSnapshot, InputKind, WeatherFeature
 from app.domain.prediction import DEFAULT_REGION
-from app.domain.types import BoundingBox, Forecast, WeatherReading
+from app.domain.types import BoundingBox, Forecast, GridState, WeatherReading
 from app.ingestion.demo_reports import demo_fire_reports
 from app.ingestion.factory import build_pollution_provider, build_weather_provider
 from app.ingestion.firms import FirmsProvider
@@ -157,6 +157,7 @@ def _publish(
     pipeline_run_id: str,
     timestamp: datetime,
     forecasts: list[Forecast],
+    current_states: list[GridState],
     *,
     fire_feed_available: bool = False,
     fire_dataset_id: str | None = None,
@@ -178,6 +179,7 @@ def _publish(
             pipeline_run_id,
             timestamp,
             forecasts,
+            current_states,
             fire_feed_available=fire_feed_available,
             fire_dataset_id=fire_dataset_id,
         )
@@ -227,19 +229,19 @@ def _publish_inner(
     pipeline_run_id: str,
     timestamp: datetime,
     forecasts: list[Forecast],
+    current_states: list[GridState],
     *,
     fire_feed_available: bool = False,
     fire_dataset_id: str | None = None,
 ) -> StageOutcome:
-    states = SqlGridStateRepository(session).latest()
-    if not states:
+    if not current_states:
         # Not a crash: with no grid there is genuinely nothing to publish, and
         # saying so beats publishing an empty run that looks successful.
         return StageOutcome(
             "publication", False, "no grid state available, nothing to publish"
         )
 
-    cells = [state.h3_cell for state in states]
+    cells = [state.h3_cell for state in current_states]
     sensors = SqlSensorReadingRepository(session).list_since(
         timestamp - timedelta(hours=settings.ingest_max_reading_age_hours)
     )
@@ -252,6 +254,16 @@ def _publish_inner(
         feed_available=fire_feed_available,
         dataset_id=fire_dataset_id,
     )
+    grid_dataset_ref = DatasetRef(
+        dataset_id="idw-grid-nowcast-v1",
+        source="Air Health grid computation",
+        product="current interpolated PM2.5 grid",
+        version="1",
+        kind=InputKind.MODELED,
+        region=DEFAULT_REGION,
+        attribution="Computed from current sensor readings and qualified citizen fire reports",
+        license="Project-generated model output",
+    )
 
     snapshots = FeatureBuilder(resolution=settings.h3_resolution).build(
         cells=cells,
@@ -260,8 +272,23 @@ def _publish_inner(
         sensor_readings=sensors,
         weather_features=_weather_features(weather, fallback_time=timestamp),
         fire_detections=fire_detections,
-        dataset_refs=fire_dataset_refs,
+        dataset_refs=(*fire_dataset_refs, grid_dataset_ref),
     )
+    # The grid computation is the authoritative current product. FeatureBuilder
+    # still supplies station-only lag features, while this replacement carries
+    # its interpolated and citizen-report-adjusted PM2.5 into horizon zero.
+    state_by_cell = {state.h3_cell: state for state in current_states}
+    snapshots = [
+        replace(
+            snapshot,
+            vector=replace(
+                snapshot.vector,
+                current_pm25=state_by_cell[snapshot.h3_cell].pm25,
+            ),
+        )
+        for snapshot in snapshots
+        if snapshot.h3_cell in state_by_cell
+    ]
     if not snapshots:
         return StageOutcome(
             "publication", False, "feature builder produced no snapshots, nothing published"
@@ -983,7 +1010,7 @@ def _seed_fire_reports(session: Session, settings: Settings, timestamp: datetime
 
 def _compute_grid(
     session: Session, settings: Settings, bbox: BoundingBox, timestamp: datetime
-) -> StageOutcome:
+) -> tuple[StageOutcome, list[GridState]]:
     estimator = IDWPollutionEstimator(
         max_distance_km=settings.idw_max_distance_km, min_sensors=settings.idw_min_sensors
     )
@@ -1023,11 +1050,14 @@ def _compute_grid(
     if not result.succeeded:
         message = f"Grid computation failed: {'; '.join(result.errors)}"
         logger.error(message)
-        return StageOutcome("grid_computation", False, message)
-    return StageOutcome(
-        "grid_computation",
-        True,
-        f"cells={result.cells} sensors_used={result.sensors_used} saved={result.cells_saved}",
+        return StageOutcome("grid_computation", False, message), []
+    return (
+        StageOutcome(
+            "grid_computation",
+            True,
+            f"cells={result.cells} sensors_used={result.sensors_used} saved={result.cells_saved}",
+        ),
+        result.states,
     )
 
 
@@ -1142,6 +1172,9 @@ async def run_pipeline(bbox: BoundingBox, *, timestamp: datetime) -> PipelineRep
         issue_timestamp = (
             max(timestamp, datetime.now(UTC)) if fire_feed_available else timestamp
         )
+        grid_outcome, current_states = _compute_grid(
+            session, settings, bbox, issue_timestamp
+        )
         stages = [
             sensor_outcome,
             national_sensor_outcome,
@@ -1149,7 +1182,7 @@ async def run_pipeline(bbox: BoundingBox, *, timestamp: datetime) -> PipelineRep
             fire_outcome,
             satellite_hotspot_outcome,
             _seed_fire_reports(session, settings, issue_timestamp),
-            _compute_grid(session, settings, bbox, issue_timestamp),
+            grid_outcome,
         ]
         forecast_outcome, forecasts = _forecast(session, settings, issue_timestamp)
         stages.append(forecast_outcome)
@@ -1163,6 +1196,7 @@ async def run_pipeline(bbox: BoundingBox, *, timestamp: datetime) -> PipelineRep
             pipeline_run_id,
             issue_timestamp,
             forecasts,
+            current_states,
             fire_feed_available=fire_feed_available,
             fire_dataset_id=fire_dataset_id,
         )

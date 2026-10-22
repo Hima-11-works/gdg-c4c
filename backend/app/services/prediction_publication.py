@@ -55,9 +55,11 @@ def _input_kind(mode: DataMode, refs: tuple[DatasetRef, ...], horizon: float) ->
     kinds = {ref.kind for ref in refs}
     if mode is DataMode.DEMO or InputKind.SYNTHETIC in kinds:
         return InputKind.SYNTHETIC
+    if InputKind.MODELED in kinds:
+        return InputKind.MODELED
     if horizon == 0 and InputKind.OBSERVED in kinds:
         return InputKind.OBSERVED
-    if InputKind.MODELED in kinds or horizon > 0:
+    if horizon > 0:
         return InputKind.MODELED
     return InputKind.DERIVED
 
@@ -146,7 +148,13 @@ class PredictionPublicationService:
             value = baseline
             lower = upper = None
             model_version = None
-            method = "observed-current" if horizon == 0 else "persistence-baseline"
+            method = (
+                "modeled-current-nowcast"
+                if horizon == 0 and InputKind.MODELED in {ref.kind for ref in snapshot.dataset_refs}
+                else "observed-current"
+                if horizon == 0
+                else "persistence-baseline"
+            )
             selected = available_models.get(horizon) if horizon > 0 else None
             has_synthetic_input = any(ref.kind is InputKind.SYNTHETIC for ref in snapshot.dataset_refs)
             if mode is not DataMode.DEMO and has_synthetic_input:

@@ -267,16 +267,6 @@ async def test_live_mode_seeds_nothing_and_reports_it(monkeypatch) -> None:
 # --- publication ----------------------------------------------------------
 
 
-class _ExplodingGridRepo:
-    """Fails the way a real one does when the database is unreachable."""
-
-    def __init__(self, session: object = None) -> None:
-        pass
-
-    def latest(self) -> list[object]:
-        raise RuntimeError("connection reset by peer")
-
-
 def test_publication_failure_is_a_failed_stage_not_a_crash(monkeypatch) -> None:
     """A publication failure must not throw away the rest of the run.
 
@@ -289,16 +279,24 @@ def test_publication_failure_is_a_failed_stage_not_a_crash(monkeypatch) -> None:
     from app.core.config import Settings
     from app.pipeline.run import _publish
 
-    monkeypatch.setattr("app.pipeline.run.SqlGridStateRepository", _ExplodingGridRepo)
+    def fail_publication(*args, **kwargs):
+        raise RuntimeError("publication storage unavailable")
+
+    monkeypatch.setattr("app.pipeline.run._publish_inner", fail_publication)
 
     outcome = _publish(
-        _UnusedSession(), Settings(demo_mode=True), "run-x", NOW, forecasts=[]
+        _UnusedSession(),
+        Settings(demo_mode=True),
+        "run-x",
+        NOW,
+        forecasts=[],
+        current_states=[],
     )
 
     assert outcome.name == "publication"
     assert outcome.succeeded is False
     # The reason has to reach the operator, not just flip a boolean.
-    assert "connection reset by peer" in outcome.summary
+    assert "publication storage unavailable" in outcome.summary
     assert "run-x" in outcome.summary
 
 

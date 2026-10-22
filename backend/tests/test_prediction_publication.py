@@ -152,6 +152,34 @@ def test_publication_carries_baseline_and_rejects_synthetic_live_inputs():
     assert rows[1].synthetic is True
 
 
+def test_modeled_current_snapshot_keeps_interpolated_value_and_provenance():
+    now = datetime(2026, 9, 22, tzinfo=UTC)
+    cell = "8861892e0dfffff"
+    ref = DatasetRef(
+        dataset_id="idw-grid-nowcast-v1",
+        source="Air Health grid computation",
+        product="current interpolated PM2.5 grid",
+        version="1",
+        kind=InputKind.MODELED,
+        region="india",
+        attribution="Computed from current station readings",
+        license="Project-generated model output",
+    )
+    repository = MemoryPublicationRepository()
+    _run, rows = PredictionPublicationService(repository).publish(
+        run_id="live-nowcast",
+        feature_run_id="features-nowcast",
+        region="india",
+        mode=DataMode.LIVE,
+        generated_at=now,
+        snapshots=[_snapshot(cell, 0, now, pm25=42.0, refs=[ref])],
+    )
+
+    assert rows[0].predicted_pm25 == 42.0
+    assert rows[0].input_kind is InputKind.MODELED
+    assert rows[0].prediction_method == "modeled-current-nowcast"
+
+
 def test_demo_fallback_run_id_resolves_on_a_fresh_service():
     repository = MemoryPublicationRepository()
     service = PredictionQueryService(repository, native_resolution=8, region="india")
