@@ -107,10 +107,20 @@ def _list_latest_stmt(source: str | None = None) -> Select:
     )
 
 
-def _list_latest_in_cells_stmt(cells: list[str], source: str | None = None) -> Select:
+def _list_latest_in_cells_stmt(
+    cells: list[str],
+    source: str | None = None,
+    *,
+    since: datetime | None = None,
+    through: datetime | None = None,
+) -> Select:
     stmt = select(*_COLUMNS).where(weather_reading_table.c.h3_cell.in_(cells))
     if source is not None:
         stmt = stmt.where(weather_reading_table.c.source == source)
+    if since is not None:
+        stmt = stmt.where(weather_reading_table.c.measured_at >= since)
+    if through is not None:
+        stmt = stmt.where(weather_reading_table.c.measured_at <= through)
     return (
         stmt
         .distinct(weather_reading_table.c.h3_cell)
@@ -197,9 +207,16 @@ class SqlWeatherReadingRepository:
         return [_row_to_domain(row) for row in rows]
 
     def list_latest_in_cells(
-        self, cells: list[str], *, source: str | None = None
+        self,
+        cells: list[str],
+        *,
+        source: str | None = None,
+        since: datetime | None = None,
+        through: datetime | None = None,
     ) -> list[WeatherReading]:
         if not cells:
             return []
-        rows = self._session.execute(_list_latest_in_cells_stmt(cells, source)).all()
+        rows = self._session.execute(
+            _list_latest_in_cells_stmt(cells, source, since=since, through=through)
+        ).all()
         return [_row_to_domain(row) for row in rows]

@@ -22,18 +22,14 @@ app.ingestion.factory. FIRMS is skipped in demo mode so live satellite data
 cannot be mixed into synthetic runs; its features are marked unavailable.
 
 Failure handling: a failed EXTERNAL data source (OpenAQ, Open-Meteo, or FIRMS) is
-reported as a clear per-stage failure but does NOT abort the run. Every
-downstream stage already has a well-defined, tested behavior for
-missing/stale/absent upstream data — IDWPollutionEstimator's min_sensors
-threshold (null pollution rather than a fabricated estimate),
-DeterministicH3DispersionModel's missing-weather handling (decay-only,
-not fabricated wind), ForecastingService's "no current GridState" check —
-never fabricating a value and never crashing, so continuing with
-whatever is already persisted is the correct, most useful behavior for
-those two stages specifically. A failure that leaves nothing trustworthy
-for ANY stage to work with (the database itself unreachable) is not
-caught here: it raises and aborts the whole run, since no stage below
-can produce a meaningful result without one.
+reported as a clear per-stage failure but does NOT abort the run. The grid
+stage accepts only selected-source sensor readings in the run's freshness
+window. Forecasting also limits weather to the current grid cells and freshness
+window. Original measurement times remain attached. Missing weather is handled
+as decay-only with an explicit degraded-coverage summary. A failed current-grid or forecast
+stage stops publication and alerts, preserving the last good published run.
+A failure that leaves no trustworthy stage able to proceed (the database itself
+unreachable) is not caught here: it raises and aborts the whole run.
 """
 
 from __future__ import annotations
@@ -68,7 +64,7 @@ from app.db.repositories import (
 from app.db.session import get_session_factory
 from app.domain.features import DataMode, DatasetRef, FeatureSnapshot, InputKind, WeatherFeature
 from app.domain.prediction import DEFAULT_REGION
-from app.domain.types import BoundingBox, Forecast, GridState, WeatherReading
+from app.domain.types import BoundingBox, Forecast, GridState, SensorReading, WeatherReading
 from app.ingestion.demo_reports import demo_fire_reports
 from app.ingestion.factory import build_pollution_provider, build_weather_provider
 from app.ingestion.firms import FirmsProvider
@@ -160,6 +156,8 @@ def _publish(
     timestamp: datetime,
     forecasts: list[Forecast],
     current_states: list[GridState],
+    sensor_readings: list[SensorReading],
+    weather_readings: list[WeatherReading],
     *,
     fire_feed_available: bool = False,
     fire_dataset_id: str | None = None,
@@ -182,6 +180,8 @@ def _publish(
             timestamp,
             forecasts,
             current_states,
+            sensor_readings,
+            weather_readings,
             fire_feed_available=fire_feed_available,
             fire_dataset_id=fire_dataset_id,
         )
@@ -232,6 +232,8 @@ def _publish_inner(
     timestamp: datetime,
     forecasts: list[Forecast],
     current_states: list[GridState],
+    sensor_readings: list[SensorReading],
+    weather_readings: list[WeatherReading],
     *,
     fire_feed_available: bool = False,
     fire_dataset_id: str | None = None,
@@ -242,21 +244,29 @@ def _publish_inner(
         return StageOutcome(
             "publication", False, "no grid state available, nothing to publish"
         )
+    if any(state.timestamp != timestamp for state in current_states):
+        return StageOutcome(
+            "publication", False, "grid state timestamps do not match this run"
+        )
 
     cells = [state.h3_cell for state in current_states]
-    expected_source = "demo" if settings.demo_mode else "openaq"
-    weather_source = "demo" if settings.demo_mode else "open-meteo"
+    cell_set = set(cells)
+    since = timestamp - timedelta(hours=settings.ingest_max_reading_age_hours)
+    expected_sensor_source = "demo" if settings.demo_mode else "openaq"
+    expected_weather_source = "demo" if settings.demo_mode else "open-meteo"
     sensors = [
         reading
-        for reading in SqlSensorReadingRepository(session).list_since(
-            timestamp - timedelta(hours=settings.ingest_max_reading_age_hours),
-            source=expected_source,
-        )
-        if reading.source == expected_source
+        for reading in sensor_readings
+        if reading.source == expected_sensor_source
+        and since <= reading.measured_at <= timestamp
     ]
-    weather = SqlWeatherReadingRepository(session).list_latest_in_cells(
-        cells, source=weather_source
-    )
+    weather = [
+        reading
+        for reading in weather_readings
+        if reading.source == expected_weather_source
+        and reading.h3_cell in cell_set
+        and since <= reading.measured_at <= timestamp
+    ]
     fire_detections, fire_dataset_refs = _fire_feature_inputs(
         session,
         settings,
@@ -303,7 +313,10 @@ def _publish_inner(
             )
         )
 
-    snapshots = FeatureBuilder(resolution=settings.h3_resolution).build(
+    snapshots = FeatureBuilder(
+        resolution=settings.h3_resolution,
+        max_observation_age_hours=settings.ingest_max_reading_age_hours,
+    ).build(
         cells=cells,
         issued_at=timestamp,
         valid_at=timestamp,
@@ -1070,7 +1083,7 @@ def _seed_fire_reports(session: Session, settings: Settings, timestamp: datetime
 
 def _compute_grid(
     session: Session, settings: Settings, bbox: BoundingBox, timestamp: datetime
-) -> tuple[StageOutcome, list[GridState]]:
+) -> tuple[StageOutcome, list[GridState], list[SensorReading]]:
     estimator = IDWPollutionEstimator(
         max_distance_km=settings.idw_max_distance_km, min_sensors=settings.idw_min_sensors
     )
@@ -1111,20 +1124,51 @@ def _compute_grid(
     if not result.succeeded:
         message = f"Grid computation failed: {'; '.join(result.errors)}"
         logger.error(message)
-        return StageOutcome("grid_computation", False, message), []
+        return StageOutcome("grid_computation", False, message), [], []
+    missing_pm25_cells = sum(state.pm25 is None for state in result.states)
+    oldest_sensor_age = (
+        max((timestamp - reading.measured_at for reading in result.sensor_readings), default=None)
+    )
+    sensor_age_summary = (
+        "none"
+        if oldest_sensor_age is None
+        else f"{oldest_sensor_age.total_seconds() / 60:.1f}m"
+    )
+    sensor_status = (
+        "degraded"
+        if not result.sensor_readings or missing_pm25_cells
+        else "available"
+    )
     return (
         StageOutcome(
             "grid_computation",
             True,
-            f"cells={result.cells} sensors_used={result.sensors_used} saved={result.cells_saved}",
+            f"cells={result.cells} sensors_used={result.sensors_used} saved={result.cells_saved} "
+            f"sensor_status={sensor_status} "
+            f"sensor_oldest_age={sensor_age_summary} "
+            f"pm25_missing_cells={missing_pm25_cells}",
         ),
         result.states,
+        result.sensor_readings,
     )
 
 
 def _forecast(
-    session: Session, settings: Settings, timestamp: datetime
-) -> tuple[StageOutcome, list[Forecast]]:
+    session: Session,
+    settings: Settings,
+    timestamp: datetime,
+    current_states: list[GridState],
+) -> tuple[StageOutcome, list[Forecast], list[WeatherReading]]:
+    if not current_states or any(state.timestamp != timestamp for state in current_states):
+        return (
+            StageOutcome(
+                "forecasting",
+                False,
+                "skipped: current grid states are absent or belong to another run",
+            ),
+            [],
+            [],
+        )
     model = DeterministicH3DispersionModel(
         decay_rate_per_hour=settings.dispersion_decay_rate_per_hour,
         wet_removal_rate_per_hour=settings.dispersion_wet_removal_rate_per_hour,
@@ -1135,6 +1179,13 @@ def _forecast(
         wind_cone_half_angle_deg=settings.dispersion_wind_cone_half_angle_deg,
         confidence_decay_per_hour=settings.dispersion_confidence_decay_per_hour,
         missing_weather_confidence_penalty=settings.dispersion_missing_weather_confidence_penalty,
+    )
+    cells = [state.h3_cell for state in current_states]
+    weather_readings = SqlWeatherReadingRepository(session).list_latest_in_cells(
+        cells,
+        source="demo" if settings.demo_mode else "open-meteo",
+        since=timestamp - timedelta(hours=settings.ingest_max_reading_age_hours),
+        through=timestamp,
     )
     service = ForecastingService(
         model,
@@ -1147,20 +1198,35 @@ def _forecast(
         hours=list(FORECAST_HORIZONS_HOURS),
         step_minutes=15,
         weather_source="demo" if settings.demo_mode else "open-meteo",
+        current_states=current_states,
+        weather_readings=weather_readings,
     )
 
     if not result.succeeded:
         message = f"Forecasting failed: {'; '.join(result.errors)}"
         logger.error(message)
-        return StageOutcome("forecasting", False, message), []
+        return StageOutcome("forecasting", False, message), [], weather_readings
+    weather_cells = {reading.h3_cell for reading in weather_readings}
+    missing_weather_cells = len(set(cells) - weather_cells)
+    oldest_weather_age = max(
+        (timestamp - reading.measured_at for reading in weather_readings), default=None
+    )
+    weather_age_summary = (
+        "none"
+        if oldest_weather_age is None
+        else f"{oldest_weather_age.total_seconds() / 60:.1f}m"
+    )
+    weather_status = "degraded" if missing_weather_cells else "available"
     return (
         StageOutcome(
             "forecasting",
             True,
             f"cells={result.cells} generated={result.forecasts_generated} "
-            f"saved={result.forecasts_saved}",
+            f"saved={result.forecasts_saved} weather_missing_cells={missing_weather_cells} "
+            f"weather_status={weather_status} weather_oldest_age={weather_age_summary}",
         ),
         result.forecasts,
+        weather_readings,
     )
 
 
@@ -1168,14 +1234,10 @@ def _generate_alerts(
     session: Session,
     settings: Settings,
     timestamp: datetime,
+    current_states: list[GridState],
     forecasts: list[Forecast],
     pipeline_run_id: str,
 ) -> StageOutcome:
-    # Read fresh rather than reusing GridComputationResult.states: this
-    # way alerts always evaluate the same "current state" forecasting
-    # just used, whether it came from this run's grid computation or
-    # (if that stage failed) whatever was already persisted.
-    current_state = SqlGridStateRepository(session).latest()
     service = AlertGenerationService(
         SqlAlertRepository(session),
         warning_threshold_ugm3=settings.alert_warning_threshold_ugm3,
@@ -1186,7 +1248,7 @@ def _generate_alerts(
         active_lookback=timedelta(hours=settings.alert_active_lookback_hours),
     )
     result = service.run(
-        current_state, forecasts, generated_at=timestamp, run_id=pipeline_run_id
+        current_states, forecasts, generated_at=timestamp, run_id=pipeline_run_id
     )
 
     if not result.succeeded:
@@ -1234,7 +1296,7 @@ async def run_pipeline(bbox: BoundingBox, *, timestamp: datetime) -> PipelineRep
         issue_timestamp = (
             max(timestamp, datetime.now(UTC)) if fire_feed_available else timestamp
         )
-        grid_outcome, current_states = _compute_grid(
+        grid_outcome, current_states, sensor_readings = _compute_grid(
             session, settings, bbox, issue_timestamp
         )
         stages = [
@@ -1246,27 +1308,63 @@ async def run_pipeline(bbox: BoundingBox, *, timestamp: datetime) -> PipelineRep
             _seed_fire_reports(session, settings, issue_timestamp),
             grid_outcome,
         ]
-        forecast_outcome, forecasts = _forecast(session, settings, issue_timestamp)
+        if grid_outcome.succeeded and current_states:
+            forecast_outcome, forecasts, weather_readings = _forecast(
+                session, settings, issue_timestamp, current_states
+            )
+        else:
+            skip_reason = (
+                "current grid computation failed"
+                if not grid_outcome.succeeded
+                else "current grid computation returned no cells"
+            )
+            forecast_outcome = StageOutcome(
+                "forecasting",
+                False,
+                f"skipped: {skip_reason}; persisted grid state was not reused",
+            )
+            forecasts = []
+            weather_readings = []
         stages.append(forecast_outcome)
-        # Publish before generating alerts: alert.run_id is a foreign key to
-        # prediction_run.id, and publication commits that parent row together
-        # with this run's results. If publication fails, skip alert persistence
-        # instead of triggering a second error on the aborted transaction.
-        publication_outcome = _publish(
-            session,
-            settings,
-            pipeline_run_id,
-            issue_timestamp,
-            forecasts,
-            current_states,
-            fire_feed_available=fire_feed_available,
-            fire_dataset_id=fire_dataset_id,
-        )
+
+        if not grid_outcome.succeeded or not current_states:
+            publication_outcome = StageOutcome(
+                "publication",
+                False,
+                "skipped: no successful current grid; last published run was preserved",
+            )
+        elif not forecast_outcome.succeeded:
+            publication_outcome = StageOutcome(
+                "publication",
+                False,
+                "skipped: current forecast failed; last published run was preserved",
+            )
+        else:
+            # Publish before generating alerts: alert.run_id is a foreign key
+            # to prediction_run.id, and publication commits that parent row
+            # together with this run's results.
+            publication_outcome = _publish(
+                session,
+                settings,
+                pipeline_run_id,
+                issue_timestamp,
+                forecasts,
+                current_states,
+                sensor_readings,
+                weather_readings,
+                fire_feed_available=fire_feed_available,
+                fire_dataset_id=fire_dataset_id,
+            )
         stages.append(publication_outcome)
         if publication_outcome.succeeded:
             stages.append(
                 _generate_alerts(
-                    session, settings, issue_timestamp, forecasts, pipeline_run_id
+                    session,
+                    settings,
+                    issue_timestamp,
+                    current_states,
+                    forecasts,
+                    pipeline_run_id,
                 )
             )
         else:

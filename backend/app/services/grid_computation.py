@@ -27,7 +27,7 @@ from app.domain.repositories import (
     SensorReadingRepository,
 )
 from app.domain.sources import FireGradientModel
-from app.domain.types import PM25, BoundingBox, GridState
+from app.domain.types import PM25, BoundingBox, GridState, SensorReading
 from app.services.geospatial import GeospatialService
 
 logger = logging.getLogger(__name__)
@@ -45,6 +45,10 @@ class GridComputationResult:
     # pipeline's alert-generation stage) can use them directly instead of
     # re-querying the repository for what was just written.
     states: list[GridState] = field(default_factory=list)
+    # The timestamp- and source-eligible observations used for these states.
+    # Passing them downstream preserves their actual measurement times and
+    # prevents publication from rebuilding the run from unrelated DB rows.
+    sensor_readings: list[SensorReading] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
     @property
@@ -111,6 +115,11 @@ class GridComputationService:
                 reading
                 for reading in sensor_readings
                 if reading.source in allowed_sensor_sources
+                and reading.measured_at <= timestamp
+            ]
+        else:
+            sensor_readings = [
+                reading for reading in sensor_readings if reading.measured_at <= timestamp
             ]
 
         try:
@@ -173,6 +182,7 @@ class GridComputationService:
             fires_used=fires_used,
             cells_saved=len(saved),
             states=saved,
+            sensor_readings=sensor_readings,
         )
 
     def _with_fires(

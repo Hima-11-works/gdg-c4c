@@ -306,6 +306,39 @@ def test_weather_reading_list_latest_in_cells_filters_by_cell(db_session, cell: 
     assert {r.h3_cell for r in result} == {cell}
 
 
+def test_weather_reading_latest_in_cells_applies_time_bounds_before_latest(
+    db_session, cell: str
+) -> None:
+    repo = SqlWeatherReadingRepository(db_session)
+    for measured_at, speed in (
+        (NOW - timedelta(hours=4), 1.0),
+        (NOW - timedelta(hours=2), 2.0),
+        (NOW + timedelta(hours=1), 3.0),
+    ):
+        repo.add(
+            WeatherReading(
+                h3_cell=cell,
+                latitude=37.7749,
+                longitude=-122.4194,
+                wind_speed=speed,
+                wind_direction=270.0,
+                precipitation=0.0,
+                measured_at=measured_at,
+            )
+        )
+
+    result = repo.list_latest_in_cells(
+        [cell],
+        source="open-meteo",
+        since=NOW - timedelta(hours=3),
+        through=NOW,
+    )
+
+    assert len(result) == 1
+    assert result[0].wind_speed == 2.0
+    assert result[0].measured_at == NOW - timedelta(hours=2)
+
+
 def test_weather_reading_list_latest_in_cells_with_no_cells_is_a_no_op(db_session) -> None:
     assert SqlWeatherReadingRepository(db_session).list_latest_in_cells([]) == []
 

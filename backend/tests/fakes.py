@@ -105,10 +105,27 @@ class FakeWeatherReadingRepository:
         return list(readings)
 
     def list_latest_in_cells(
-        self, cells: list[str], *, source: str | None = None
+        self,
+        cells: list[str],
+        *,
+        source: str | None = None,
+        since: datetime | None = None,
+        through: datetime | None = None,
     ) -> list[WeatherReading]:
         cell_set = set(cells)
-        return [r for r in self.list_latest(source=source) if r.h3_cell in cell_set]
+        latest: dict[str, WeatherReading] = {}
+        for reading in self.readings:
+            if (
+                reading.h3_cell not in cell_set
+                or (source is not None and reading.source != source)
+                or (since is not None and reading.measured_at < since)
+                or (through is not None and reading.measured_at > through)
+            ):
+                continue
+            previous = latest.get(reading.h3_cell)
+            if previous is None or reading.measured_at > previous.measured_at:
+                latest[reading.h3_cell] = reading
+        return list(latest.values())
 
 
 class FakeGridStateRepository:

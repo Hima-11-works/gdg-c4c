@@ -83,12 +83,14 @@ class WeatherReadingRepository(Protocol):
         ...
 
     def list_latest_in_cells(
-        self, cells: list[str], *, source: str | None = None
+        self,
+        cells: list[str],
+        *,
+        source: str | None = None,
+        since: datetime | None = None,
+        through: datetime | None = None,
     ) -> list[WeatherReading]:
-        """Same as list_latest, restricted to these specific H3 cells —
-        a cell with no reading is simply absent, never fabricated. Used
-        for resolution/viewport-scoped API reads; see
-        app.services.weather.WeatherService."""
+        """Latest reading per selected cell, optionally source/time bounded."""
         ...
 
 

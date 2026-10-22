@@ -291,6 +291,8 @@ def test_publication_failure_is_a_failed_stage_not_a_crash(monkeypatch) -> None:
         NOW,
         forecasts=[],
         current_states=[],
+        sensor_readings=[],
+        weather_readings=[],
     )
 
     assert outcome.name == "publication"

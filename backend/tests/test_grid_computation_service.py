@@ -107,6 +107,7 @@ def _reading(
     value: float = 20.0,
     *,
     source: str = "openaq",
+    measured_at: datetime = TIMESTAMP,
 ) -> SensorReading:
     return SensorReading(
         source=source,
@@ -116,7 +117,7 @@ def _reading(
         pollutant=PM25,
         value=value,
         unit="ug/m3",
-        measured_at=TIMESTAMP,
+        measured_at=measured_at,
     )
 
 
@@ -169,6 +170,25 @@ def test_run_can_exclude_readings_from_a_different_data_mode() -> None:
     assert result.succeeded is True
     assert estimator.calls[0][1]
     assert {reading.source for reading in estimator.calls[0][1]} == {"openaq"}
+
+
+def test_run_excludes_future_sensor_inputs_and_returns_only_used_readings() -> None:
+    sensor_repo = FakeSensorReadingRepository()
+    sensor_repo.add(_reading(37.75, -122.40, measured_at=TIMESTAMP + timedelta(minutes=1)))
+    estimator = _FakeEstimator()
+    service = GridComputationService(
+        estimator,
+        _FakePDIModel(),
+        GEOSPATIAL,
+        sensor_repo,
+        FakeGridStateRepository(),
+    )
+
+    result = service.run(BBOX, timestamp=TIMESTAMP, sensor_max_age=timedelta(hours=3))
+
+    assert result.succeeded is True
+    assert estimator.calls[0][1] == []
+    assert result.sensor_readings == []
 
 
 class _ConstantFireGradient:

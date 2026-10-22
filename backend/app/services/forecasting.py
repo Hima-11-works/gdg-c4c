@@ -1,5 +1,6 @@
 """Orchestrates the forecast pipeline: read current pollution/weather
-state, run a PollutionForecastModel, persist every horizon it produces.
+state (or accept a run-scoped snapshot), run a PollutionForecastModel,
+and persist every horizon it produces.
 
 No FastAPI/HTTP concerns here — app.cli's `forecast` command is the
 manual trigger for local development; a scheduler would call this same
@@ -20,7 +21,7 @@ from app.domain.repositories import (
     GridStateRepository,
     WeatherReadingRepository,
 )
-from app.domain.types import Forecast
+from app.domain.types import Forecast, GridState, WeatherReading
 
 logger = logging.getLogger(__name__)
 
@@ -63,14 +64,24 @@ class ForecastingService:
         hours: Sequence[float] = (1, 3, 6),
         step_minutes: float = 60,
         weather_source: str | None = None,
+        current_states: Sequence[GridState] | None = None,
+        weather_readings: Sequence[WeatherReading] | None = None,
     ) -> ForecastingResult:
-        current_state = self._grid_repository.latest()
+        current_state = (
+            self._grid_repository.latest()
+            if current_states is None
+            else list(current_states)
+        )
         if not current_state:
             message = "No current GridState rows to forecast from — run estimation/ingestion first."
             logger.warning(message)
             return ForecastingResult(errors=[message])
 
-        weather = self._weather_repository.list_latest(source=weather_source)
+        weather = (
+            self._weather_repository.list_latest(source=weather_source)
+            if weather_readings is None
+            else list(weather_readings)
+        )
 
         try:
             result = self._model.forecast(current_state, weather, hours, generated_at=generated_at, step_minutes=step_minutes)

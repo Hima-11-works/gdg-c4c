@@ -29,6 +29,7 @@ from app.pipeline.run import (
     _ingest_fires,
     _ingest_sensors,
     _scan_live_satellite_hotspots,
+    run_pipeline,
 )
 
 GENERATED_AT = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
@@ -68,6 +69,55 @@ def test_report_fails_if_any_single_stage_fails() -> None:
 
 def test_report_with_no_stages_is_vacuously_successful() -> None:
     assert PipelineReport(stages=[]).succeeded is True
+
+
+async def test_failed_current_grid_skips_forecast_and_preserves_last_publication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(demo_mode=False)
+
+    class _Session:
+        def close(self) -> None:
+            pass
+
+    session = _Session()
+    monkeypatch.setattr("app.pipeline.run.get_settings", lambda: settings)
+    monkeypatch.setattr("app.pipeline.run.get_session_factory", lambda: lambda: session)
+
+    async def ingestion_ok(*args):
+        return StageOutcome("ingestion", True, "ok")
+
+    async def fires_ok(*args):
+        return StageOutcome("fire_ingestion", True, "ok"), False, None
+
+    monkeypatch.setattr("app.pipeline.run._ingest_sensors", ingestion_ok)
+    monkeypatch.setattr("app.pipeline.run._ingest_national_overview_sensors", ingestion_ok)
+    monkeypatch.setattr("app.pipeline.run._ingest_weather", ingestion_ok)
+    monkeypatch.setattr("app.pipeline.run._ingest_fires", fires_ok)
+    monkeypatch.setattr("app.pipeline.run._scan_live_satellite_hotspots", ingestion_ok)
+    monkeypatch.setattr(
+        "app.pipeline.run._seed_fire_reports",
+        lambda *args: StageOutcome("fire_reports", True, "ok"),
+    )
+    monkeypatch.setattr(
+        "app.pipeline.run._compute_grid",
+        lambda *args: (StageOutcome("grid_computation", False, "failed"), [], []),
+    )
+
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("downstream core stages must not reuse persisted grid data")
+
+    monkeypatch.setattr("app.pipeline.run._forecast", must_not_run)
+    monkeypatch.setattr("app.pipeline.run._publish", must_not_run)
+
+    report = await run_pipeline(BBOX, timestamp=GENERATED_AT)
+
+    stages = {stage.name: stage for stage in report.stages}
+    assert stages["forecasting"].succeeded is False
+    assert "persisted grid state was not reused" in stages["forecasting"].summary
+    assert stages["publication"].succeeded is False
+    assert "last published run was preserved" in stages["publication"].summary
+    assert stages["alert_generation"].succeeded is False
 
 
 # --- sensor ingestion stage: missing API key ---
