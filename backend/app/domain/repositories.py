@@ -43,7 +43,7 @@ class DuplicateReadingError(Exception):
     """Raised by SensorReadingRepository.add() or WeatherReadingRepository.add()
     for a row that already exists per that table's real unique constraint
     (sensor: source + external_sensor_id + pollutant + measured_at; weather:
-    h3_cell + measured_at).
+    source + h3_cell + measured_at).
 
     A domain-level exception rather than e.g. sqlalchemy.exc.IntegrityError
     so callers (app.services.ingestion) can catch "this was a duplicate"
@@ -68,6 +68,10 @@ class SensorReadingRepository(Protocol):
 class WeatherReadingRepository(Protocol):
     def add(self, reading: WeatherReading) -> WeatherReading:
         """Raises DuplicateReadingError for an exact repeat (see above)."""
+        ...
+
+    def add_many(self, readings: list[WeatherReading]) -> tuple[int, int]:
+        """Insert a batch atomically; return saved and duplicate counts."""
         ...
 
     def list_since(self, since: datetime) -> list[WeatherReading]: ...

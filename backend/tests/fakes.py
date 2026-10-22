@@ -78,6 +78,19 @@ class FakeWeatherReadingRepository:
         self.readings.append(reading)
         return reading
 
+    def add_many(self, readings: list[WeatherReading]) -> tuple[int, int]:
+        saved_readings: list[WeatherReading] = []
+        skipped = 0
+        for reading in readings:
+            key = (reading.source, reading.h3_cell, reading.measured_at)
+            if key in self._seen_keys:
+                skipped += 1
+                continue
+            self._seen_keys.add(key)
+            saved_readings.append(reading)
+        self.readings.extend(saved_readings)
+        return len(saved_readings), skipped
+
     def list_since(self, since: datetime) -> list[WeatherReading]:
         return [r for r in self.readings if r.measured_at >= since]
 

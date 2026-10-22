@@ -7,6 +7,7 @@ from datetime import datetime
 from geoalchemy2.elements import WKTElement
 from psycopg.errors import UniqueViolation
 from sqlalchemy import Insert, Select, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Row
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -16,6 +17,8 @@ from app.domain.h3_grid import assert_valid_cell
 from app.domain.repositories import DuplicateReadingError
 from app.domain.types import WeatherReading
 from app.models.tables import weather_reading as weather_reading_table
+
+_WEATHER_READING_INSERT_BATCH_SIZE = 500
 
 _COLUMNS = (
     weather_reading_table.c.id,
@@ -134,6 +137,52 @@ class SqlWeatherReadingRepository:
                 ) from exc
             raise
         return _row_to_domain(row)
+
+    def add_many(self, readings: list[WeatherReading]) -> tuple[int, int]:
+        """Insert a bounded multi-row batch in one all-or-nothing transaction."""
+        if not readings:
+            return 0, 0
+
+        values = []
+        resolution = get_settings().h3_resolution
+        for reading in readings:
+            assert_valid_cell(reading.h3_cell, resolution=resolution)
+            values.append(
+                {
+                    "h3_cell": reading.h3_cell,
+                    "source": reading.source,
+                    "latitude": reading.latitude,
+                    "longitude": reading.longitude,
+                    "geom": _to_point(reading.latitude, reading.longitude),
+                    "wind_speed": reading.wind_speed,
+                    "wind_direction": reading.wind_direction,
+                    "precipitation": reading.precipitation,
+                    "boundary_layer_height": reading.boundary_layer_height,
+                    "temperature": reading.temperature,
+                    "humidity": reading.humidity,
+                    "measured_at": reading.measured_at,
+                }
+            )
+
+        saved = 0
+        try:
+            for start in range(0, len(values), _WEATHER_READING_INSERT_BATCH_SIZE):
+                batch = values[start : start + _WEATHER_READING_INSERT_BATCH_SIZE]
+                stmt = (
+                    pg_insert(weather_reading_table)
+                    .values(batch)
+                    .on_conflict_do_nothing(
+                        constraint="uq_weather_reading_source_cell_time"
+                    )
+                    .returning(weather_reading_table.c.id)
+                )
+                saved += len(self._session.execute(stmt).all())
+            self._session.commit()
+        except Exception:
+            self._session.rollback()
+            raise
+
+        return saved, len(readings) - saved
 
     def list_since(self, since: datetime) -> list[WeatherReading]:
         rows = self._session.execute(_list_since_stmt(since)).all()

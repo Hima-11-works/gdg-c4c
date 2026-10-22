@@ -13,6 +13,7 @@ import h3
 import pytest
 from sqlalchemy.exc import IntegrityError
 
+import app.db.repositories.weather_reading as weather_reading_repository
 from app.core.config import get_settings
 from app.db.repositories import (
     SqlAlertRepository,
@@ -175,6 +176,80 @@ def test_weather_reading_duplicate_identity_is_rejected(db_session, cell: str) -
 
     with pytest.raises(DuplicateReadingError):
         repo.add(reading)
+
+
+def test_weather_reading_add_many_counts_inserted_and_duplicate_rows(
+    db_session, cell: str
+) -> None:
+    repo = SqlWeatherReadingRepository(db_session)
+    readings = [
+        WeatherReading(
+            h3_cell=cell,
+            latitude=37.7749,
+            longitude=-122.4194,
+            wind_speed=3.2,
+            wind_direction=270.0,
+            precipitation=0.0,
+            measured_at=NOW - timedelta(hours=1),
+        ),
+        WeatherReading(
+            h3_cell=cell,
+            latitude=37.7749,
+            longitude=-122.4194,
+            wind_speed=4.2,
+            wind_direction=260.0,
+            precipitation=0.1,
+            measured_at=NOW,
+        ),
+    ]
+
+    assert repo.add_many([*readings, readings[0]]) == (2, 1)
+    assert repo.add_many(readings) == (0, 2)
+    assert len(repo.list_since(NOW - timedelta(hours=1))) == 2
+
+
+def test_weather_reading_add_many_rolls_back_all_chunks_on_failure(
+    db_session, cell: str, monkeypatch
+) -> None:
+    monkeypatch.setattr(weather_reading_repository, "_WEATHER_READING_INSERT_BATCH_SIZE", 1)
+    original_execute = db_session.execute
+    execute_calls = 0
+
+    def fail_second_execute(statement, *args, **kwargs):
+        nonlocal execute_calls
+        execute_calls += 1
+        if execute_calls == 2:
+            raise RuntimeError("simulated later chunk failure")
+        return original_execute(statement, *args, **kwargs)
+
+    monkeypatch.setattr(db_session, "execute", fail_second_execute)
+    repo = SqlWeatherReadingRepository(db_session)
+    readings = [
+        WeatherReading(
+            h3_cell=cell,
+            latitude=37.7749,
+            longitude=-122.4194,
+            wind_speed=3.2,
+            wind_direction=270.0,
+            precipitation=0.0,
+            measured_at=NOW - timedelta(hours=1),
+        ),
+        WeatherReading(
+            h3_cell=cell,
+            latitude=37.7749,
+            longitude=-122.4194,
+            wind_speed=4.2,
+            wind_direction=260.0,
+            precipitation=0.1,
+            measured_at=NOW,
+        ),
+    ]
+
+    with pytest.raises(RuntimeError, match="simulated later chunk failure"):
+        repo.add_many(readings)
+
+    assert execute_calls == 2
+    assert repo.list_since(NOW - timedelta(hours=1)) == []
 
 
 def test_weather_reading_list_latest_returns_one_per_cell(db_session, cell: str) -> None:
