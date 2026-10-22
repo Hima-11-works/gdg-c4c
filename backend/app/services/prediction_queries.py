@@ -752,6 +752,7 @@ class PredictionQueryService:
         rows: list[PredictionResult],
         threshold_pm25: float,
     ) -> PredictionCellView:
+        rows = _non_overlapping_spatial_partition(rows)
         expected = h3.cell_to_children_size(target, self.native_resolution)
         area_by_row = {row.h3_cell: h3.cell_area(row.h3_cell, unit="km^2") for row in rows}
         supported = [row for row in rows if row.predicted_pm25 is not None]
@@ -899,6 +900,24 @@ def _weighted_mean(values: list[tuple[float | None, float]]) -> float | None:
     present = [(value, weight) for value, weight in values if value is not None and weight > 0]
     denominator = sum(weight for _, weight in present)
     return None if denominator == 0 else sum(value * weight for value, weight in present) / denominator
+
+
+def _non_overlapping_spatial_partition(
+    rows: list[PredictionResult],
+) -> list[PredictionResult]:
+    """Choose one source resolution for a display cell before aggregation.
+
+    A run can contain coarse national cells and fine city cells. The coarsest
+    available tier has the broadest coverage at a coarse display level; using
+    that tier alone avoids adding a parent cell and its descendants together.
+    Finer display requests already filter out coarser rows before this point.
+    """
+    if not rows:
+        return rows
+    selected_resolution = min(h3.get_resolution(row.h3_cell) for row in rows)
+    return [
+        row for row in rows if h3.get_resolution(row.h3_cell) == selected_resolution
+    ]
 
 
 def _interpolate_number(first: float | None, second: float | None, ratio: float) -> float | None:

@@ -394,6 +394,65 @@ def test_h3_parent_aggregation_keeps_partial_coverage_and_separate_exposure():
     assert view.confidence == pytest.approx(0.6)
 
 
+def test_aggregation_uses_one_resolution_tier_for_overlapping_cells():
+    now = datetime(2026, 9, 22, tzinfo=UTC)
+    parent = h3.latlng_to_cell(28.6, 77.1, 7)
+    child = sorted(h3.cell_to_children(parent, 8))[0]
+    run = PredictionRun(
+        run_id="mixed-resolution-1",
+        generated_at=now,
+        published_at=now,
+        region="india",
+        mode=DataMode.LIVE,
+        feature_run_id="features-1",
+        feature_schema_version="environmental-v1",
+    )
+    rows = [
+        PredictionResult(
+            run_id=run.run_id,
+            h3_cell=parent,
+            horizon_hours=0,
+            valid_at=now,
+            baseline_pm25=10.0,
+            predicted_pm25=10.0,
+            prediction_method="coarse-observed-current",
+            input_kind=InputKind.OBSERVED,
+            feature_vector={"population_count": 700.0},
+        ),
+        PredictionResult(
+            run_id=run.run_id,
+            h3_cell=child,
+            horizon_hours=0,
+            valid_at=now,
+            baseline_pm25=100.0,
+            predicted_pm25=100.0,
+            prediction_method="fine-observed-current",
+            input_kind=InputKind.OBSERVED,
+            feature_vector={"population_count": 100.0},
+        ),
+    ]
+    service = PredictionQueryService(
+        MemoryPublicationRepository(run, rows), native_resolution=8, region="india"
+    )
+
+    [coarse_view] = service.aggregate(
+        run, target_cells=[parent], resolution=7, horizon=0
+    )
+    fine_source_cells = service.source_cells_for_targets(run, [child], resolution=8)
+    [fine_view] = service.aggregate(
+        run,
+        target_cells=[child],
+        resolution=8,
+        horizon=0,
+        source_cells=fine_source_cells,
+    )
+
+    assert coarse_view.pm25 == 10.0
+    assert coarse_view.exposure.covered_population == 700.0
+    assert coarse_view.spatial_coverage_fraction == pytest.approx(1.0)
+    assert fine_view.pm25 == 100.0
+
+
 def test_published_run_is_not_upscaled_to_finer_display_resolution():
     now = datetime(2026, 9, 22, tzinfo=UTC)
     coarse = h3.latlng_to_cell(28.6, 77.1, 7)
