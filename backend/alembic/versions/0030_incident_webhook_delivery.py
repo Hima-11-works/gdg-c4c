@@ -31,7 +31,9 @@ def upgrade() -> None:
         sa.Column("audience_role", sa.String(30), nullable=False),
         sa.Column("assignee", sa.String(120), nullable=False),
         sa.Column("status", sa.String(20), nullable=False, server_default="queued"),
-        sa.Column("attempt_count", sa.SmallInteger(), nullable=False, server_default="0"),
+        sa.Column(
+            "attempt_count", sa.SmallInteger(), nullable=False, server_default=sa.text("0")
+        ),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("next_attempt_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("last_attempt_at", sa.DateTime(timezone=True), nullable=True),
