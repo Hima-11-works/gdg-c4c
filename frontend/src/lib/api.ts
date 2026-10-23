@@ -24,6 +24,7 @@ import type {
   FireReportWithStatus,
   ForecastOut,
   FederationStatusOut,
+  FederationWorkflowStatusOut,
   HotspotCatalogOut,
   HotspotEventsOut,
   HotspotScanOut,
@@ -488,6 +489,11 @@ export function fetchAlerts(
 /** The latest recorded two-partition federation demonstration. */
 export function fetchFederationStatus(): Promise<Envelope<FederationStatusOut>> {
   return apiGet<Envelope<FederationStatusOut>>('/api/v1/federation/status')
+}
+
+/** Status from the separately running, authenticated federation clients/aggregator. */
+export function fetchFederationWorkflowStatus(): Promise<Envelope<FederationWorkflowStatusOut>> {
+  return apiGet<Envelope<FederationWorkflowStatusOut>>('/api/v1/federation/workflow-status')
 }
 
 export function fetchReports(): Promise<Envelope<FireReportOut[]>> {

@@ -52,6 +52,12 @@ class Settings(BaseSettings):
     # environment-specific origins are added to CORS_ORIGINS.
     cors_origins: str = "http://localhost:5173,https://air-health.vercel.app"
 
+    # Optional internal status endpoint for the separately runnable federation
+    # clients/aggregator. Set this to the aggregator's trusted GET /status URL
+    # so the dashboard can show the actual multi-process demonstration.
+    federation_workflow_status_url: str | None = None
+    federation_workflow_status_timeout_seconds: float = Field(default=2.0, gt=0, le=15)
+
     # When true, app.ingestion.factory substitutes a fixed, deterministic
     # sensor/weather dataset (app.ingestion.demo) for OpenAQ/Open-Meteo —
     # the ONLY thing demo mode changes. Everything downstream (H3 grid,

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { fetchFederationStatus } from '../lib/api'
+import { fetchFederationStatus, fetchFederationWorkflowStatus } from '../lib/api'
 import { useApiResource } from '../hooks/useApiResource'
 import {
   evaluation,
@@ -15,7 +15,7 @@ import {
 import { STATE_FEDERATED_NODES } from '../lib/federationNodes'
 import { formatCount, formatNumber, relativeTime } from '../lib/format'
 import type { AsyncResource } from '../hooks/useApiResource'
-import type { FederationStatusOut } from '../lib/types'
+import type { FederationStatusOut, FederationWorkflowStatusOut } from '../lib/types'
 
 // The demonstration is a recorded run, not a live feed: it changes only when
 // someone runs `python -m app.cli federation-demo`. A slow poll is enough.
@@ -34,16 +34,25 @@ function when(iso: string | null | undefined): string {
 
 export function FederatedStatusPill() {
   const [open, setOpen] = useState(false)
-  const [activeTab, setActiveTab] = useState<'nodes' | 'aggregator'>('nodes')
+  const [activeTab, setActiveTab] = useState<'workflow' | 'partition' | 'nodes'>('workflow')
   const { resource, refetch } = useApiResource(fetchFederationStatus, [], {
     pollIntervalMs: POLL_INTERVAL_MS,
   })
+  const { resource: workflowResource, refetch: refetchWorkflow } = useApiResource(
+    fetchFederationWorkflowStatus,
+    [],
+    { pollIntervalMs: POLL_INTERVAL_MS },
+  )
 
   const status: FederationStatusOut | null = resource.status === 'success' ? resource.data : null
-  const failed = resource.status === 'error'
-  const loading = resource.status === 'idle' || resource.status === 'loading'
-  const succeeded = hasRun(status) && status.status === 'succeeded'
-  const runFailed = hasRun(status) && status.status === 'failed'
+  const workflowStatus: FederationWorkflowStatusOut | null =
+    workflowResource.status === 'success' ? workflowResource.data : null
+  const failed = workflowResource.status === 'error'
+  const loading = workflowResource.status === 'idle' || workflowResource.status === 'loading'
+  const partitionFailed = resource.status === 'error'
+  const partitionLoading = resource.status === 'idle' || resource.status === 'loading'
+  const succeeded = workflowStatus?.status === 'aggregated'
+  const runFailed = workflowStatus?.status === 'failed'
 
   const dotClass =
     failed || runFailed
@@ -55,9 +64,9 @@ export function FederatedStatusPill() {
           : 'federated-dot federated-dot-none'
 
   const label = loading
-    ? 'Federation: checking…'
+    ? 'Federation workflow: checking…'
     : failed
-      ? 'Federation: status unavailable'
+      ? 'Federation workflow: status unavailable'
       : runFailed
         ? 'Federation demo: last run failed'
         : succeeded
@@ -75,7 +84,7 @@ export function FederatedStatusPill() {
         className="federated-pill"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        title="Federation demo status. The state-node cards are illustrative samples and are not connected to live state boards."
+        title="Status from the configured, separately running federation aggregator."
       >
         <span className={dotClass} aria-hidden="true" />
         {label}
@@ -86,12 +95,12 @@ export function FederatedStatusPill() {
           <div className="federated-header-row">
             <div>
               <h3 className="federated-title">
-                Federated Air Quality Network
-                <span className="federated-badge">India Mesh</span>
+                Federated Climate Model Demo
+                <span className="federated-badge">multi-client</span>
               </h3>
               <p className="muted federated-subtitle">
-                Demonstration of regional model collaboration; no live state-board nodes are
-                connected.
+                Status comes from the configured client and aggregator processes. Participant
+                identities are not independently verified as Indian agencies.
               </p>
             </div>
             <button
@@ -108,17 +117,24 @@ export function FederatedStatusPill() {
           <div className="federated-tab-bar">
             <button
               type="button"
-              className={`federated-tab-btn ${activeTab === 'nodes' ? 'active' : ''}`}
-              onClick={() => setActiveTab('nodes')}
+              className={`federated-tab-btn ${activeTab === 'workflow' ? 'active' : ''}`}
+              onClick={() => setActiveTab('workflow')}
             >
-              Sample Nodes ({STATE_FEDERATED_NODES.length})
+              Client/aggregator run
             </button>
             <button
               type="button"
-              className={`federated-tab-btn ${activeTab === 'aggregator' ? 'active' : ''}`}
-              onClick={() => setActiveTab('aggregator')}
+              className={`federated-tab-btn ${activeTab === 'partition' ? 'active' : ''}`}
+              onClick={() => setActiveTab('partition')}
             >
-              Central Aggregator Telemetry
+              Single-process partition demo
+            </button>
+            <button
+              type="button"
+              className={`federated-tab-btn ${activeTab === 'nodes' ? 'active' : ''}`}
+              onClick={() => setActiveTab('nodes')}
+            >
+              Illustrative nodes
             </button>
           </div>
 
@@ -231,16 +247,43 @@ export function FederatedStatusPill() {
             </div>
           )}
 
-          {activeTab === 'aggregator' && (
+          {activeTab === 'workflow' && (
             <div className="federated-aggregator-view">
-              {loading && <p className="muted">Reading the demonstration status…</p>}
-
+              {loading && <p className="muted">Reading the configured federation aggregator…</p>}
               {failed && (
+                <>
+                  <h3>Client/aggregator status unavailable</h3>
+                  <p className="muted">
+                    Configure the backend's trusted FEDERATION_WORKFLOW_STATUS_URL to the
+                    aggregator's GET /status endpoint. The separate demo process may still be
+                    running; this screen does not substitute sample telemetry.
+                  </p>
+                  <p className="federated-error" role="alert">
+                    {workflowResource.message}
+                  </p>
+                  <button type="button" className="federated-refresh" onClick={refetchWorkflow}>
+                    Check again
+                  </button>
+                </>
+              )}
+              {workflowResource.status === 'success' && (
+                <FederationWorkflowRunDetails
+                  status={workflowResource.data}
+                  onRefresh={refetchWorkflow}
+                />
+              )}
+            </div>
+          )}
+
+          {activeTab === 'partition' && (
+            <div className="federated-aggregator-view">
+              {partitionLoading && <p className="muted">Reading the demonstration status…</p>}
+
+              {partitionFailed && (
                 <>
                   <h3>Federation status unavailable</h3>
                   <p className="muted">
-                    The status endpoint could not be read. The backend central aggregator may still
-                    be running training rounds in the background.
+                    The database-backed, single-process partition demonstration could not be read.
                   </p>
                   <p className="federated-error" role="alert">
                     {resource.message}
@@ -253,10 +296,9 @@ export function FederatedStatusPill() {
 
               {resource.status === 'success' && !hasRun(status) && (
                 <>
-                  <h3>Central CPCB Aggregator · Standby</h3>
+                  <h3>No single-process partition run recorded</h3>
                   <p className="muted">
-                    The central server is currently listening for regional state board gradient
-                    updates. Local nodes retain raw station telemetry on-premise.
+                    Run python -m app.cli federation-demo to create this optional local run.
                   </p>
                   <p className="muted federated-scope">
                     Default regional scope: <b>{scopeLine(status)}</b>.
@@ -275,6 +317,137 @@ export function FederatedStatusPill() {
         </div>
       )}
     </div>
+  )
+}
+
+function FederationWorkflowRunDetails({
+  status,
+  onRefresh,
+}: {
+  status: FederationWorkflowStatusOut
+  onRefresh: () => void
+}) {
+  const comparisons = status.evaluation.local_vs_aggregate ?? []
+  return (
+    <>
+      <h3>
+        Separate client/aggregator workflow
+        <span className="federated-badge">{status.status}</span>
+      </h3>
+      <p className="muted">{status.workflow}</p>
+      <dl className="federated-grid">
+        <dt>Run</dt>
+        <dd className="federated-mono">{status.run_id}</dd>
+        <dt>Round completion</dt>
+        <dd>
+          {formatCount(status.participants_received)} /{' '}
+          {formatCount(status.participants_expected)} client updates · {status.status}
+        </dd>
+        <dt>Update bytes received</dt>
+        <dd>
+          {status.model_update_bytes_exchanged === undefined
+            ? 'not reported by this aggregator version'
+            : `${formatCount(status.model_update_bytes_exchanged)} bytes`}
+        </dd>
+        <dt>Raw rows received</dt>
+        <dd>{formatCount(status.raw_rows_exchanged_to_aggregator)}</dd>
+        <dt>Data provenance</dt>
+        <dd>
+          {status.synthetic_only
+            ? 'Synthetic-only demonstration'
+            : 'Observed data, participant-reported'}{' '}
+          · {status.independent_agencies
+            ? 'agency identity verified'
+            : 'agencies not independently verified'}
+        </dd>
+      </dl>
+
+      <h4 className="federated-subhead">Authenticated client updates</h4>
+      {status.participants.length === 0 ? (
+        <p className="muted">No client updates received for this run yet.</p>
+      ) : (
+        <ul className="federated-regions">
+          {status.participants.map((participant) => (
+            <li key={participant.participant_id}>
+              <div className="federated-region-head">
+                <b>{participant.participant_id}</b>
+                <span className="muted">
+                  {participant.signature_verified
+                    ? 'signature verified'
+                    : 'signature not verified'}
+                </span>
+              </div>
+              <span className="muted">
+                Scope {participant.scope.scope_id ?? 'not reported'} · update{' '}
+                {participant.update_size_bytes === undefined
+                  ? 'update size not reported'
+                  : `${formatCount(participant.update_size_bytes)} bytes`}
+                {' · '}held-out evaluation{' '}
+                {participant.evaluation_reported ? 'reported' : 'pending'}
+              </span>
+              {participant.scope.dataset_sha256 && (
+                <div className="federated-mono federated-hash-text">
+                  Local dataset digest: {participant.scope.dataset_sha256}
+                </div>
+              )}
+              <div className="federated-mono federated-hash-text">
+                Update SHA-256: {participant.update_sha256}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {status.aggregate && (
+        <>
+          <h4 className="federated-subhead">Aggregate artifact</h4>
+          <p className="federated-mono federated-hash-text">
+            SHA-256: {status.aggregate.artifact_sha256}
+          </p>
+          <p className="muted">{status.aggregate.algorithm}</p>
+        </>
+      )}
+
+      <h4 className="federated-subhead">Local versus aggregate evaluation</h4>
+      <p className="muted">
+        Evaluation is calculated on each client&apos;s local held-out examples. Only metrics are
+        returned; raw rows stay on the client. These prototype scores are not evidence of
+        real-world accuracy.
+      </p>
+      {comparisons.length === 0 ? (
+        <p className="muted">Client evaluations have not been reported yet.</p>
+      ) : (
+        <ul className="federated-metrics">
+          {comparisons.flatMap((client) =>
+            client.horizons.map((horizon) => (
+              <li key={`${client.participant_id}-${horizon.horizon_hours}`}>
+                {client.participant_id} +{horizon.horizon_hours}h: local MAE{' '}
+                {formatNumber(horizon.local_mae_ugm3)} · aggregate MAE{' '}
+                {formatNumber(horizon.aggregate_mae_ugm3)} · persistence{' '}
+                {formatNumber(horizon.baseline_mae_ugm3)} µg/m³ · held out{' '}
+                {formatCount(horizon.heldout_count)}
+              </li>
+            )),
+          )}
+        </ul>
+      )}
+
+      <p className="muted">
+        {status.evaluation.status}: {status.evaluation.reason}
+      </p>
+      {Object.entries(status.limitations).length > 0 && (
+        <ul className="federated-limitations">
+          {Object.entries(status.limitations).map(([key, value]) => (
+            <li key={key}>
+              <b>{key}:</b> {value}
+            </li>
+          ))}
+        </ul>
+      )}
+      <button type="button" className="federated-refresh" onClick={onRefresh}>
+        Refresh workflow status
+      </button>
+    </>
   )
 }
 

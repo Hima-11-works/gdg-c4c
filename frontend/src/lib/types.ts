@@ -283,6 +283,65 @@ export interface FederationParticipantOut {
   joined_at?: string
 }
 
+export interface FederationWorkflowParticipantOut {
+  participant_id: string
+  update_sha256: string
+  update_size_bytes?: number
+  signature_verified: boolean
+  evaluation_reported: boolean
+  scope: {
+    scope_id?: string
+    dataset_sha256?: string
+    synthetic_only?: boolean
+    independent_agency?: boolean
+  }
+}
+
+export interface FederationWorkflowStatusOut {
+  status_schema_version: string
+  run_id: string
+  code_version: string
+  status: string
+  workflow: string
+  independent_agencies: boolean
+  synthetic_only: boolean
+  participants_expected: number
+  participants_received: number
+  participants: FederationWorkflowParticipantOut[]
+  model_update_bytes_exchanged?: number
+  raw_rows_exchanged_to_aggregator: number
+  aggregate: {
+    artifact_sha256: string
+    algorithm: string
+    model_schema_version: string
+    synthetic_only: boolean
+  } | null
+  evaluation: {
+    status: string
+    usable_as_real_world_evidence: boolean
+    label_provenance: string
+    client_reports: number
+    reason: string
+    horizons: Array<{
+      horizon_hours: number
+      client_mae_ugm3: number[]
+      mean_client_mae_ugm3: number
+      heldout_count: number
+    }>
+    local_vs_aggregate?: Array<{
+      participant_id: string
+      horizons: Array<{
+        horizon_hours: number
+        local_mae_ugm3: number
+        aggregate_mae_ugm3: number
+        baseline_mae_ugm3: number
+        heldout_count: number
+      }>
+    }>
+  }
+  limitations: Record<string, string>
+}
+
 export interface FederationModelVersionOut {
   model_id: string
   region: string

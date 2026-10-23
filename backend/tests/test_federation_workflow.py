@@ -329,7 +329,10 @@ def _run_full_workflow(tmp_path: Path) -> tuple[FederationAggregator, dict]:
             )["heldout"]
         ]
         report = client_evaluation_report(
-            aggregate=aggregate, heldout_examples=heldout, participant_id=participant_id
+            aggregate=aggregate,
+            heldout_examples=heldout,
+            participant_id=participant_id,
+            local_update=client.update,
         )
         assert report["raw_rows_sent"] == 0
         assert report["usable_as_real_world_evidence"] is False
@@ -346,8 +349,17 @@ def test_full_workflow_records_a_run_with_identity_scope_and_limits(tmp_path: Pa
     assert status["status"] == "aggregated"
     assert status["run_id"] == RUN_ID
     assert status["raw_rows_exchanged_to_aggregator"] == 0
+    assert status["model_update_bytes_exchanged"] == sum(
+        row["update_size_bytes"] for row in status["participants"]
+    )
+    assert all(row["update_size_bytes"] > 0 for row in status["participants"])
     # Participant identity and source scope, per participant.
     assert {row["participant_id"] for row in status["participants"]} == {"region-a", "region-b"}
+    assert len(status["evaluation"]["local_vs_aggregate"]) == 2
+    assert all(
+        report["horizons"]
+        for report in status["evaluation"]["local_vs_aggregate"]
+    )
     for row in status["participants"]:
         assert row["signature_verified"] is True
         assert row["scope"]["synthetic_only"] is True
@@ -536,6 +548,7 @@ def test_http_round_trip_records_a_run(aggregator_server, tmp_path: Path) -> Non
     assert aggregate["source_scopes"][0]["signature_verified"] is True
 
     for participant_id in ("region-a", "region-b"):
+        client = _client(participant_id, store=tmp_path / participant_id)
         heldout = [
             example_from_dict(row)
             for row in json.loads(
@@ -543,7 +556,10 @@ def test_http_round_trip_records_a_run(aggregator_server, tmp_path: Path) -> Non
             )["heldout"]
         ]
         report = client_evaluation_report(
-            aggregate=aggregate, heldout_examples=heldout, participant_id=participant_id
+            aggregate=aggregate,
+            heldout_examples=heldout,
+            participant_id=participant_id,
+            local_update=client.update,
         )
         status, body = _http_post(
             base,

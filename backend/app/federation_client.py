@@ -153,13 +153,23 @@ def run_client(args: argparse.Namespace) -> int:
         for row in json.loads((store / "heldout.json").read_text(encoding="utf-8"))["heldout"]
     ]
     report = client_evaluation_report(
-        aggregate=aggregate, heldout_examples=heldout, participant_id=prepared.participant_id
+        aggregate=aggregate,
+        heldout_examples=heldout,
+        participant_id=prepared.participant_id,
+        local_update=prepared.update,
     )
     (store / "evaluation.json").write_text(dumps(report), encoding="utf-8")
     for entry in report["horizons"]:
         print(
             f"  held-out +{entry['horizon_hours']:g}h mae={entry['mae_ugm3']:.2f} "
             f"baseline_mae={entry['baseline_mae_ugm3']:.2f} n={entry['heldout_count']}"
+        )
+    for entry in report["local_vs_aggregate"]:
+        print(
+            f"  local-vs-aggregate +{entry['horizon_hours']:g}h "
+            f"local_mae={entry['local_mae_ugm3']:.2f} "
+            f"aggregate_mae={entry['aggregate_mae_ugm3']:.2f} "
+            f"n={entry['heldout_count']}"
         )
     print(f"  evaluation provenance={report['label_provenance']}; "
           "not independently verified or eligible for live model promotion")

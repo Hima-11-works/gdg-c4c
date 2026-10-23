@@ -547,6 +547,7 @@ def client_evaluation_report(
     aggregate: dict[str, Any],
     heldout_examples: list,
     participant_id: str,
+    local_update: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Score the received aggregate on this client's own held-out rows.
 
@@ -558,12 +559,44 @@ def client_evaluation_report(
         aggregate, heldout_by_participant={participant_id: heldout_examples}
     )
     synthetic_only = bool(aggregate.get("synthetic_only", True))
+    local_comparison: list[dict[str, Any]] = []
+    if local_update is not None:
+        if local_update.get("participant_id") != participant_id:
+            raise ValueError("local update participant does not match evaluation participant")
+        # Score local and aggregate parameters against the same private held-out
+        # examples. Only evaluation metrics leave the client process.
+        local_model = {
+            "artifact_sha256": local_update.get("update_sha256", ""),
+            "models": local_update["horizons"],
+            "synthetic_only": synthetic_only,
+        }
+        local_metrics = evaluate_aggregate(
+            local_model, heldout_by_participant={participant_id: heldout_examples}
+        )
+        local_by_horizon = {
+            float(row["horizon_hours"]): row
+            for row in local_metrics.get("horizons", [])
+        }
+        for aggregate_row in metrics.get("horizons", []):
+            local_row = local_by_horizon.get(float(aggregate_row["horizon_hours"]))
+            if local_row is None:
+                continue
+            local_comparison.append(
+                {
+                    "horizon_hours": aggregate_row["horizon_hours"],
+                    "local_mae_ugm3": local_row["mae_ugm3"],
+                    "aggregate_mae_ugm3": aggregate_row["mae_ugm3"],
+                    "baseline_mae_ugm3": aggregate_row["baseline_mae_ugm3"],
+                    "heldout_count": aggregate_row["heldout_count"],
+                }
+            )
     return {
         "evaluation_schema_version": WORKFLOW_EVALUATION_SCHEMA,
         "participant_id": participant_id,
         "aggregate_sha256": aggregate["artifact_sha256"],
         "heldout_examples": metrics.get("heldout_examples", 0),
         "horizons": metrics.get("horizons", []),
+        "local_vs_aggregate": local_comparison,
         "status": metrics.get("status", "unavailable"),
         "usable_as_real_world_evidence": False,
         "synthetic_only": synthetic_only,
@@ -643,6 +676,7 @@ class FederationAggregator:
         self.participant_ids = participant_ids
         self.expected_updates = expected_updates or len(participant_ids)
         self._updates: dict[str, dict[str, Any]] = {}
+        self._update_sizes: dict[str, int] = {}
         self._signatures: dict[str, str] = {}
         self._evaluations: dict[str, dict[str, Any]] = {}
         self._aggregate: dict[str, Any] | None = None
@@ -687,6 +721,9 @@ class FederationAggregator:
         reference = next(iter(self._updates.values()), None)
         assert_compatible(payload, reference)
         self._updates[participant_id] = payload
+        # Count the exact canonical JSON bytes accepted from this participant.
+        # Keep only the size in status; never retain or publish raw rows.
+        self._update_sizes[participant_id] = len(canonical_bytes(payload))
         self._signatures[participant_id] = signature
         if len(self._updates) == self.expected_updates:
             self._aggregate = self._build_aggregate()
@@ -774,6 +811,7 @@ class FederationAggregator:
             {
                 "participant_id": participant,
                 "update_sha256": self._updates[participant]["update_sha256"],
+                "update_size_bytes": self._update_sizes[participant],
                 "signature_verified": participant in self._signatures,
                 "scope": payload_scope(self._updates[participant]),
                 "evaluation_reported": participant in self._evaluations,
@@ -804,6 +842,13 @@ class FederationAggregator:
             "usable_as_real_world_evidence": False,
             "label_provenance": "synthetic" if synthetic_only else "participant-reported-observed",
             "client_reports": len(self._evaluations),
+            "local_vs_aggregate": [
+                {
+                    "participant_id": participant,
+                    "horizons": report.get("local_vs_aggregate", []),
+                }
+                for participant, report in sorted(self._evaluations.items())
+            ],
             "reason": (
                 "each client scored the aggregate on its own synthetic held-out rows; "
                 "these metrics are not evidence of real-world accuracy"
@@ -837,6 +882,7 @@ class FederationAggregator:
             "participants_expected": self.expected_updates,
             "participants_received": len(self._updates),
             "participants": participants,
+            "model_update_bytes_exchanged": sum(self._update_sizes.values()),
             "raw_rows_exchanged_to_aggregator": 0,
             "aggregate": None
             if self._aggregate is None

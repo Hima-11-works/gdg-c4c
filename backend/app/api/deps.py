@@ -42,6 +42,7 @@ from app.services.cells import CellService
 from app.services.citizen_sensors import CitizenSensorSubmissionService
 from app.services.evidence import EvidenceService
 from app.services.federation import FederationStatusReader
+from app.services.federation_workflow_status import FederationWorkflowStatusReader
 from app.services.fires import FireHotspotService
 from app.services.gemini_assessment import GeminiAssessmentService
 from app.services.grid import GridService
@@ -214,6 +215,15 @@ def get_federation_status_service(
     session: Session = Depends(get_db),
 ) -> FederationStatusReader:
     return FederationStatusReader(SqlFederationRepository(session))
+
+
+def get_federation_workflow_status_service(
+    settings: Settings = Depends(get_settings),
+) -> FederationWorkflowStatusReader:
+    return FederationWorkflowStatusReader(
+        settings.federation_workflow_status_url,
+        timeout_seconds=settings.federation_workflow_status_timeout_seconds,
+    )
 
 
 def get_hotspot_scan_store(session: Session = Depends(get_db)) -> HotspotScanStore:

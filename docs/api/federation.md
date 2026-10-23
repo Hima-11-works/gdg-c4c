@@ -6,7 +6,7 @@ repository. They are independent features; neither is a rewrite of the other.
 | Part | What it is | Entry points | Status API |
 | --- | --- | --- | --- |
 | **A — two-partition demo** (§1–§8) | one process splits one synthetic dataset into two regions, trains locally, aggregates, evaluates, and can persist to the database | `python -m app.cli federation-demo` | `GET /api/v1/federation/status` (public, database-backed) |
-| **B — client/aggregator workflow** (§9–§20) | **two client processes with distinct data stores** and **one aggregator process**, exchanging authenticated, versioned model updates over HTTP and evaluating the aggregate on held-out data; clients can use synthetic demo rows or a validated, locally held observed-label export | `python -m app.federation_client`, `python -m app.federation_aggregator` | the aggregator process's own `GET /status` |
+| **B — client/aggregator workflow** (§9–§20) | **two client processes with distinct data stores** and **one aggregator process**, exchanging authenticated, versioned model updates over HTTP and evaluating the aggregate on held-out data; clients can use synthetic demo rows or a validated, locally held observed-label export | `python -m app.federation_client`, `python -m app.federation_aggregator` | aggregator `GET /status`, optionally read through the dashboard API |
 
 Part A is unchanged by Part B. Read §1 first: the same honesty rules govern both,
 and in particular neither workflow claims independent agencies, real-world
@@ -578,12 +578,14 @@ same payload is written to `<out-dir>/status.json` (§18).
     {
       "participant_id": "region-a",
       "update_sha256": "9f59c04a…",
+      "update_size_bytes": 4128,
       "signature_verified": true,
       "evaluation_reported": true,
       "scope": { "scope_id": "synthetic-basin-a", "dataset_sha256": "d8fb214d…", "synthetic_only": true, "independent_agency": false, "...": "see §12" }
     },
     { "participant_id": "region-b", "...": "same shape" }
   ],
+  "model_update_bytes_exchanged": 8256,
   "raw_rows_exchanged_to_aggregator": 0,
   "aggregate": {
     "artifact_sha256": "537f17e0…",
@@ -606,10 +608,29 @@ same payload is written to `<out-dir>/status.json` (§18).
 then `synthetic_evaluation_only`. The numbers above are from a real recorded
 run; the contract is the shape.
 
-**`GET /api/v1/federation/status` (Part A) does not read Part B runs.** Part B
-is a standalone demonstration process with its own status API; it is not wired
-into the platform's database-backed status endpoint, and it should not be
-mistaken for one.
+After clients submit evaluations, `evaluation.local_vs_aggregate` contains
+per-client, per-horizon MAE for that client's locally fitted model, the
+aggregate model, and the persistence baseline, all computed on that client's
+same held-out examples. The client sends these metrics and counts only; its
+held-out rows remain local. `model_update_bytes_exchanged` counts the
+canonical JSON model-update bodies received, excluding HTTP headers and
+transport framing.
+
+`GET /api/v1/federation/status` continues to report Part A's database-backed
+single-process demonstration. Part B remains a separate client/aggregator
+workflow, and its own `GET /status` is the source of truth. To display Part B in
+the dashboard, set the backend-only `FEDERATION_WORKFLOW_STATUS_URL` to the
+trusted aggregator URL (for example, an internal URL ending in `/status`). The
+backend exposes a bounded read-through at
+`GET /api/v1/federation/workflow-status`; it rejects redirects, limits the
+response size and timeout, and refuses unsupported status schema versions.
+Do not point this setting at a user-controlled URL.
+
+The Part B status includes each participant's update digest and canonical JSON
+byte count, update signature status, aggregate digest, completion state, and
+the local-versus-aggregate metrics each client computed on its own held-out
+rows. These are demonstration telemetry, not verified agency identities or
+real-world accuracy claims.
 
 ## 17. Launching the three processes
 
