@@ -3,10 +3,31 @@
 ## Current state
 
 - Continue on branch `beta`, tracking `origin/beta`.
-- RT07 is complete and pushed in commit `e519581` (`feat(satellite): persist NRT products and availability`). RT01–RT06 are also present earlier in the branch history.
+- RT08 is complete and tested (`feat(pipeline): bound publication volume and preserve live evaluation evidence`). RT01–RT07 are also present in the branch history.
 - The detailed scope and decisions remain in `docs/REAL_TIME_DATA_IMPLEMENTATION_PLAN.md`.
 - Before editing, inspect `git status`. Preserve the existing untracked `docs/BUG_AUDIT.md` and `docs/REAL_TIME_DATA_IMPLEMENTATION_PLAN.md`; do not stage them as part of later steps.
 - Complete one RT step at a time. Quickly verify the step, make one commit for it, push to `origin/beta`, and only then start the next step. Do not combine speculative work from future steps into a commit.
+
+## RT08 delivered
+
+RT08 bounds prediction publication volume, decouples unchanged source checks from dense publication snapshots, caps active grid cell and horizon computation, and introduces automated retention and compaction for predictions while safeguarding evaluation holdout evidence and active alert pins:
+
+- **Source Check Decoupling:** Added deterministic source input fingerprinting (`_compute_input_fingerprint` across sensors, weather, and qualified fire detections). Unchanged inputs skip dense publication snapshots, preserving the existing active published run and alerts.
+- **Computation Limits:** Capped active grid computation states via `pipeline_max_active_cells` (default 500) and forecast horizons via `pipeline_max_forecast_horizons` (default 24).
+- **Retention & Compaction Service:** Added `PredictionRetentionService` with `sweep()`, a periodic background scheduler job (`prediction-retention`), and CLI command `sweep-predictions`. Compaction preserves key issue-time/evaluation horizons while trimming intermediate granular horizons older than `prediction_compact_after_hours` (default 24h); sweeping prunes unpinned runs older than `prediction_retention_hours` (default 72h) while protecting the latest run per (region, mode), active alert runs, and runs with scenario/evaluation evidence.
+- **Evaluation Evidence & Spatial Holdouts:** Added `contributing_station_ids` to `FeatureQuality` and database storage. Enhanced corridor evaluation (`require_unused_stations`) to verify independent holdout stations against contributing station IDs.
+- **Live Cell & Alert Guardrails:** Enforced rejection of unsupported/unavailable live cells (`predicted_pm25 = None`, `confidence = 0.0`, method `"unavailable-unsupported"`). In alert generation, excluded unsupported cells and expired forecasts (`forecast_time <= generated_at` or `forecast_hours <= 0`) to prevent future-spike alerts from expired runs.
+
+RT08 verification completed:
+- Focused backend suite: 109 passed across `test_prediction_retention.py`, `test_prediction_publication.py`, `test_alert_generation_service.py`, `test_pipeline_run.py`, `test_corridor_evaluation.py`, and `test_feature_builder.py`.
+- Backend `compileall` and focused Ruff checks passed.
+- Frontend production build (`npm run build`) passed.
+- `git diff --check` passed cleanly.
+
+Operational limits to preserve:
+- Unchanged check skipping applies only when input fingerprints match; `force_publish=True` forces dense snapshot creation when required.
+- Compaction drops intermediate granular horizons (`h > 0 and h not in keep_horizons`), keeping 0h, 1h, 6h, 12h, and 24h for audit and evaluation holdout scoring.
+- Active alert runs remain pinned and protected from retention sweeps until expired/closed.
 
 ## RT07 delivered
 

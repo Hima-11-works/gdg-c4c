@@ -118,6 +118,7 @@ class PredictionPublicationService:
         confidence_by_cell_horizon: Mapping[tuple[str, float], float] | None = None,
         scenario_id: str | None = None,
         source_health_run_id: str | None = None,
+        input_fingerprint: str | None = None,
     ) -> tuple[PredictionRun, list[PredictionResult]]:
         if not snapshots:
             raise ValueError("cannot publish a run without feature snapshots")
@@ -174,6 +175,7 @@ class PredictionPublicationService:
             expected_cells=len(current_snapshots),
             max_observation_age_hours=max_input_age,
             unavailable_reasons=tuple(sorted(unavailable_reasons)),
+            input_fingerprint=input_fingerprint,
         )
         available_models: dict[float, tuple[ModelVersion, dict] | None] = {}
         horizons = sorted({item.horizon_hours for item in snapshots if item.horizon_hours > 0})
@@ -203,28 +205,39 @@ class PredictionPublicationService:
             value = baseline
             lower = upper = None
             model_version = None
-            method = (
-                "modeled-current-nowcast"
-                if horizon == 0 and InputKind.MODELED in {ref.kind for ref in snapshot.dataset_refs}
-                else "observed-current"
-                if horizon == 0
-                else "persistence-baseline"
+            cell_confidence = confidence_by_cell_horizon.get(
+                (snapshot.h3_cell, horizon)
             )
-            selected = available_models.get(horizon) if horizon > 0 else None
-            has_synthetic_input = any(ref.kind is InputKind.SYNTHETIC for ref in snapshot.dataset_refs)
-            if mode is not DataMode.DEMO and has_synthetic_input:
-                selected = None
-            if selected is not None and baseline is not None:
-                model_version, artifact_model = selected
-                value = max(0.0, baseline + predict_residual(artifact_model, vector))
-                lower_offset = artifact_model.get("interval_80_lower_offset")
-                upper_offset = artifact_model.get("interval_80_upper_offset")
-                if lower_offset is not None and upper_offset is not None:
-                    lower, upper = prediction_interval(value, lower_offset, upper_offset)
-                method = "experimental-residual-ridge" if model_version.synthetic_only else "residual-ridge"
-                used_models.add(model_version.model_id)
-            elif horizon > 0 and (snapshot.h3_cell, horizon) in baseline_by_cell_horizon:
-                method = "deterministic-dispersion-baseline"
+            if mode is DataMode.LIVE and snapshot.h3_cell not in supported_cells:
+                # Reject unsupported live cells from returning valid predictions
+                baseline = None
+                value = None
+                lower = upper = None
+                cell_confidence = 0.0
+                method = "unavailable-unsupported"
+            else:
+                method = (
+                    "modeled-current-nowcast"
+                    if horizon == 0 and InputKind.MODELED in {ref.kind for ref in snapshot.dataset_refs}
+                    else "observed-current"
+                    if horizon == 0
+                    else "persistence-baseline"
+                )
+                selected = available_models.get(horizon) if horizon > 0 else None
+                has_synthetic_input = any(ref.kind is InputKind.SYNTHETIC for ref in snapshot.dataset_refs)
+                if mode is not DataMode.DEMO and has_synthetic_input:
+                    selected = None
+                if selected is not None and baseline is not None:
+                    model_version, artifact_model = selected
+                    value = max(0.0, baseline + predict_residual(artifact_model, vector))
+                    lower_offset = artifact_model.get("interval_80_lower_offset")
+                    upper_offset = artifact_model.get("interval_80_upper_offset")
+                    if lower_offset is not None and upper_offset is not None:
+                        lower, upper = prediction_interval(value, lower_offset, upper_offset)
+                    method = "experimental-residual-ridge" if model_version.synthetic_only else "residual-ridge"
+                    used_models.add(model_version.model_id)
+                elif horizon > 0 and (snapshot.h3_cell, horizon) in baseline_by_cell_horizon:
+                    method = "deterministic-dispersion-baseline"
 
             refs = snapshot.dataset_refs
             result_rows.append(
@@ -243,9 +256,7 @@ class PredictionPublicationService:
                         if horizon == 0
                         else None
                     ),
-                    confidence=confidence_by_cell_horizon.get(
-                        (snapshot.h3_cell, horizon)
-                    ),
+                    confidence=cell_confidence,
                     prediction_method=method,
                     model_version=model_version.model_id if model_version else None,
                     feature_schema_version=snapshot.feature_schema_version,

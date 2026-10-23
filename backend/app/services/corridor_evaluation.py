@@ -46,7 +46,6 @@ from app.domain.corridor import (
     make_event_id,
 )
 from app.domain.prediction import PredictionResult, PredictionRun
-from app.domain.types import SensorReading
 
 #: The window a station observation must fall in to score one horizon. A whole
 #: hour centred on the valid time: narrow enough to score a specific horizon,
@@ -470,12 +469,32 @@ def evaluate_event(
             f"+{first.horizon_hours:g}h: {first.note})"
         )
     if require_unused_stations:
-        reasons.append(
-            "strict input-holdout mode was requested but is not available yet: a run "
-            "does not record which stations contributed to which cell's interpolation, "
-            "so a station cannot be proven to be outside the model's influence. Reported "
-            "as a data gap rather than approximated"
+        has_recorded_stations = any(
+            bool(getattr(row.quality, "contributing_station_ids", ()))
+            for row in results
         )
+        if not has_recorded_stations:
+            reasons.append(
+                "strict input-holdout mode was requested but is not available yet: a run "
+                "does not record which stations contributed to which cell's interpolation, "
+                "so a station cannot be proven to be outside the model's influence. Reported "
+                "as a data gap rather than approximated"
+            )
+        else:
+            used_stations = {
+                station_id
+                for row in results
+                for station_id in getattr(row.quality, "contributing_station_ids", ())
+            }
+            holdout_labels = [
+                label for label in all_labels
+                if label.external_sensor_id not in used_stations
+            ]
+            if not holdout_labels:
+                reasons.append(
+                    "strict input-holdout mode: all available station observations contributed "
+                    "to the model's interpolated estimates; no independent holdout stations exist"
+                )
 
     verdict = (
         EvaluationVerdict.EVALUATED

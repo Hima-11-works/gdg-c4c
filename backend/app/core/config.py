@@ -268,6 +268,14 @@ class Settings(BaseSettings):
     # see that module's own comments), while still catching a genuinely
     # oversized request (a very large monitor, or a non-map caller).
     grid_query_max_cells: int = Field(default=50_000, ge=1)
+    # Maximum active fine cells published per pipeline run to cap storage and compute.
+    pipeline_max_active_cells: int = Field(default=500, ge=1, le=50_000)
+    # Maximum forecast horizons produced and published per run.
+    pipeline_max_forecast_horizons: int = Field(default=24, ge=1, le=96)
+    # Retention period in hours before unpinned prediction runs are pruned.
+    prediction_retention_hours: int = Field(default=72, ge=1, le=24 * 365)
+    # Time in hours after which intermediate forecast horizons are compacted.
+    prediction_compact_after_hours: int = Field(default=24, ge=1, le=24 * 365)
 
     # --- PM2.5 estimation (app.services.estimation.IDWPollutionEstimator) ---
     # A cell with no sensor within this radius gets no estimate (pm25=None,

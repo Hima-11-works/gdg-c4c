@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Mapping
 
 from app.domain.features import (
     FEATURE_SCHEMA_VERSION,
@@ -31,6 +31,7 @@ class PredictionInputQuality:
     expected_cells: int
     max_observation_age_hours: float | None = None
     unavailable_reasons: tuple[str, ...] = ()
+    input_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         if self.expected_cells < 0 or self.supported_cells < 0:
@@ -43,6 +44,8 @@ class PredictionInputQuality:
                 raise ValueError("max_observation_age_hours must be >= 0")
         if any(not reason.strip() for reason in self.unavailable_reasons):
             raise ValueError("unavailable reasons must not be empty")
+        if self.input_fingerprint is not None and not self.input_fingerprint.strip():
+            raise ValueError("input_fingerprint must not be empty when provided")
 
     @property
     def completeness_fraction(self) -> float:

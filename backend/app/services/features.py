@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from dataclasses import fields
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
-from typing import Any, Mapping, Sequence
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.domain.features import (
@@ -166,6 +167,7 @@ def _quality_dict(quality: FeatureQuality) -> dict[str, Any]:
         "weather_received_at": _serialize_datetime(quality.weather_received_at),
         "missing_fields": list(quality.missing_fields),
         "warnings": list(quality.warnings),
+        "contributing_station_ids": list(quality.contributing_station_ids),
     }
 
 
@@ -246,6 +248,7 @@ def feature_snapshot_from_dict(value: Mapping[str, Any]) -> FeatureSnapshot:
             weather_received_at=_optional_datetime(quality.get("weather_received_at")),
             missing_fields=tuple(quality.get("missing_fields", ())),
             warnings=tuple(quality.get("warnings", ())),
+            contributing_station_ids=tuple(quality.get("contributing_station_ids", ())),
         ),
         dataset_refs=tuple(
             DatasetRef(
@@ -506,6 +509,15 @@ class FeatureBuilder:
             weather_received_at=current_weather.received_at if current_weather else None,
             missing_fields=tuple(sorted(missing)),
             warnings=tuple(sorted(warnings)),
+            contributing_station_ids=tuple(
+                sorted(
+                    {
+                        reading.station_identity
+                        for reading in eligible_readings
+                        if getattr(reading, "station_identity", None)
+                    }
+                )
+            ),
         )
         return FeatureSnapshot(
             h3_cell=cell,

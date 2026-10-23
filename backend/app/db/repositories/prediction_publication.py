@@ -66,6 +66,7 @@ def _quality_values(quality: FeatureQuality) -> dict:
         "weather_received_at": timestamp(quality.weather_received_at),
         "missing_fields": list(quality.missing_fields),
         "warnings": list(quality.warnings),
+        "contributing_station_ids": list(quality.contributing_station_ids),
     }
 
 
@@ -87,6 +88,7 @@ def _quality_from_values(value: dict) -> FeatureQuality:
         weather_received_at=timestamp("weather_received_at"),
         missing_fields=tuple(value.get("missing_fields", ())),
         warnings=tuple(value.get("warnings", ())),
+        contributing_station_ids=tuple(value.get("contributing_station_ids", ())),
     )
 
 
@@ -111,6 +113,7 @@ def _run_values(run: PredictionRun) -> dict:
                 "expected_cells": input_quality.expected_cells,
                 "max_observation_age_hours": input_quality.max_observation_age_hours,
                 "unavailable_reasons": list(input_quality.unavailable_reasons),
+                "input_fingerprint": input_quality.input_fingerprint,
             }
             if input_quality is not None
             else None
@@ -150,6 +153,7 @@ def _row_to_run(row: Row) -> PredictionRun:
             expected_cells=int(input_quality_value["expected_cells"]),
             max_observation_age_hours=input_quality_value.get("max_observation_age_hours"),
             unavailable_reasons=tuple(input_quality_value.get("unavailable_reasons", ())),
+            input_fingerprint=input_quality_value.get("input_fingerprint"),
         )
         if input_quality_value is not None
         else None
@@ -409,3 +413,41 @@ class SqlPredictionPublicationRepository:
         covers without loading a single result row.
         """
         return [row.h3_cell for row in self._session.execute(_cells_stmt(run_id)).all()]
+
+    def list_runs_before(
+        self,
+        before: datetime,
+        *,
+        region: str | None = None,
+        mode: DataMode | None = None,
+    ) -> list[PredictionRun]:
+        """Runs generated strictly before the given cutoff, oldest first."""
+        stmt = select(prediction_run).where(prediction_run.c.generated_at < before)
+        if region is not None:
+            stmt = stmt.where(prediction_run.c.region == region)
+        if mode is not None:
+            stmt = stmt.where(prediction_run.c.mode == mode.value)
+        stmt = stmt.order_by(prediction_run.c.generated_at.asc())
+        rows = self._session.execute(stmt).all()
+        return [_row_to_run(row) for row in rows]
+
+    def delete_run(self, run_id: str) -> bool:
+        """Atomically delete a run header and cascade to its result rows."""
+        from sqlalchemy import delete
+        res = self._session.execute(
+            delete(prediction_run).where(prediction_run.c.id == run_id)
+        )
+        self._session.commit()
+        return bool(res.rowcount and res.rowcount > 0)
+
+    def compact_run_results(self, run_id: str, keep_horizons: Sequence[float]) -> int:
+        """Drop high-density granular horizons for an older run, keeping key horizons."""
+        from sqlalchemy import delete
+        res = self._session.execute(
+            delete(prediction_result).where(
+                prediction_result.c.run_id == run_id,
+                ~prediction_result.c.horizon_hours.in_(keep_horizons),
+            )
+        )
+        self._session.commit()
+        return int(res.rowcount or 0)

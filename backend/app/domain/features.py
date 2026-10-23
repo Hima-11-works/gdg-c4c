@@ -9,11 +9,10 @@ changing the meaning of an existing model artifact.
 
 from __future__ import annotations
 
-import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
-from typing import Mapping
 
 from app.domain.types import _require_finite, _require_utc
 
@@ -80,6 +79,7 @@ class FeatureQuality:
     weather_received_at: datetime | None = None
     missing_fields: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
+    contributing_station_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _bounded(self.coverage_fraction, "coverage_fraction", 0.0, 1.0)
@@ -99,6 +99,9 @@ class FeatureQuality:
             value = getattr(self, name)
             if value is not None:
                 _require_utc(value, name)
+        for station_id in self.contributing_station_ids:
+            if not station_id.strip():
+                raise ValueError("contributing_station_ids must not contain empty strings")
 
 
 @dataclass(frozen=True, slots=True)

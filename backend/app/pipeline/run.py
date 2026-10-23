@@ -179,6 +179,41 @@ def _weather_features(
     ]
 
 
+def _compute_input_fingerprint(
+    sensors: list[SensorReading],
+    weather: list[WeatherReading],
+    fire_detections: list[object],
+) -> str:
+    import hashlib
+    import json
+    sensor_items = sorted(
+        (getattr(r, "station_identity", ""), r.measured_at.isoformat(), round(r.value, 2))
+        for r in sensors
+    )
+    weather_items = sorted(
+        (
+            r.h3_cell,
+            r.measured_at.isoformat(),
+            round(r.wind_speed, 2),
+            round(r.temperature or 0.0, 2),
+        )
+        for r in weather
+    )
+    fire_items: list[tuple[str, str]] = []
+    for f in fire_detections:
+        if hasattr(f, "__dict__"):
+            det_id = str(getattr(f, "detection_id", None) or getattr(f, "h3_cell", ""))
+            det_time = str(getattr(f, "available_at", None) or getattr(f, "acquired_at", ""))
+        else:
+            d = dict(f)
+            det_id = str(d.get("detection_id") or d.get("h3_cell", ""))
+            det_time = str(d.get("available_at") or d.get("acquired_at", ""))
+        fire_items.append((det_id, det_time))
+    fire_items.sort()
+    raw = json.dumps({"s": sensor_items, "w": weather_items, "f": fire_items}, sort_keys=True)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 def _publish(
     session: Session,
     settings: Settings,
@@ -191,6 +226,7 @@ def _publish(
     *,
     fire_feed_available: bool = False,
     fire_dataset_id: str | None = None,
+    force_publish: bool = False,
 ) -> StageOutcome:
     """Publish this run's grid as an immutable, queryable v2 result (F3).
 
@@ -214,6 +250,7 @@ def _publish(
             weather_readings,
             fire_feed_available=fire_feed_available,
             fire_dataset_id=fire_dataset_id,
+            force_publish=force_publish,
         )
     except Exception as exc:  # noqa: BLE001 - see docstring
         logger.exception("Publication stage failed for run %s", pipeline_run_id)
@@ -267,6 +304,7 @@ def _publish_inner(
     *,
     fire_feed_available: bool = False,
     fire_dataset_id: str | None = None,
+    force_publish: bool = False,
 ) -> StageOutcome:
     if not current_states:
         # Not a crash: with no grid there is genuinely nothing to publish, and
@@ -305,6 +343,25 @@ def _publish_inner(
         feed_available=fire_feed_available,
         dataset_id=fire_dataset_id,
     )
+    fingerprint = _compute_input_fingerprint(sensors, weather, fire_detections)
+    if not force_publish:
+        latest_run = SqlPredictionPublicationRepository(session).latest_run(
+            region=DEFAULT_REGION,
+            mode=DataMode.DEMO if settings.demo_mode else DataMode.LIVE,
+        )
+        if (
+            latest_run is not None
+            and latest_run.input_quality is not None
+            and latest_run.input_quality.input_fingerprint == fingerprint
+        ):
+            return StageOutcome(
+                "publication",
+                True,
+                (
+                    f"skipped: source inputs unchanged since run {latest_run.run_id}; "
+                    "preserved existing published run"
+                ),
+            )
     grid_dataset_ref = DatasetRef(
         dataset_id="idw-grid-nowcast-v1",
         source="Air Health grid computation",
@@ -478,6 +535,7 @@ def _publish_inner(
             },
         },
         source_health_run_id=pipeline_run_id,
+        input_fingerprint=fingerprint,
     )
 
     # Distinct cells, not snapshots: the coarse count includes one snapshot per
@@ -1364,16 +1422,24 @@ def _compute_grid(
         if not result.sensor_readings or missing_pm25_cells
         else "available"
     )
+    states = result.states
+    if len(states) > settings.pipeline_max_active_cells:
+        logger.info(
+            "Capping grid states from %d to %d (settings.pipeline_max_active_cells)",
+            len(states),
+            settings.pipeline_max_active_cells,
+        )
+        states = states[:settings.pipeline_max_active_cells]
     return (
         StageOutcome(
             "grid_computation",
             True,
-            f"cells={result.cells} sensors_used={result.sensors_used} saved={result.cells_saved} "
+            f"cells={len(states)} sensors_used={result.sensors_used} saved={result.cells_saved} "
             f"sensor_status={sensor_status} "
             f"sensor_oldest_age={sensor_age_summary} "
             f"pm25_missing_cells={missing_pm25_cells}",
         ),
-        result.states,
+        states,
         result.sensor_readings,
     )
 
@@ -1457,9 +1523,10 @@ def _forecast(
         SqlWeatherReadingRepository(session),
         SqlForecastRepository(session),
     )
+    horizons = list(FORECAST_HORIZONS_HOURS[:settings.pipeline_max_forecast_horizons])
     result = service.run(
         generated_at=timestamp,
-        hours=list(FORECAST_HORIZONS_HOURS),
+        hours=horizons,
         step_minutes=15,
         weather_source="demo" if settings.demo_mode else "open-meteo",
         current_states=current_states,
@@ -1529,7 +1596,9 @@ def _generate_alerts(
     )
 
 
-async def run_pipeline(bbox: BoundingBox, *, timestamp: datetime) -> PipelineReport:
+async def run_pipeline(
+    bbox: BoundingBox, *, timestamp: datetime, force_publish: bool = False
+) -> PipelineReport:
     """Runs every stage once, in order, against one DB session. Never
     raises for a stage-level failure (see module docstring) — only an
     unreachable database propagates, since nothing below can do anything
@@ -1623,19 +1692,29 @@ async def run_pipeline(bbox: BoundingBox, *, timestamp: datetime) -> PipelineRep
                 weather_readings,
                 fire_feed_available=fire_feed_available,
                 fire_dataset_id=fire_dataset_id,
+                force_publish=force_publish,
             )
         stages.append(publication_outcome)
         if publication_outcome.succeeded:
-            stages.append(
-                _generate_alerts(
-                    session,
-                    settings,
-                    issue_timestamp,
-                    current_states,
-                    forecasts,
-                    pipeline_run_id,
+            if publication_outcome.summary.startswith("skipped: source inputs unchanged"):
+                stages.append(
+                    StageOutcome(
+                        "alert_generation",
+                        True,
+                        "skipped: source inputs unchanged; active alerts preserved",
+                    )
                 )
-            )
+            else:
+                stages.append(
+                    _generate_alerts(
+                        session,
+                        settings,
+                        issue_timestamp,
+                        current_states,
+                        forecasts,
+                        pipeline_run_id,
+                    )
+                )
         else:
             stages.append(
                 StageOutcome(

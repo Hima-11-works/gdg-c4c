@@ -17,6 +17,7 @@ JOB_DEFINITIONS: dict[str, int] = {
     "weather-collection": 15 * 60,
     "environmental-pipeline": 60 * 60,
     "satellite-hotspot-scan": 30 * 60,
+    "prediction-retention": 60 * 60,
 }
 LEASE_SECONDS = 45 * 60
 MAX_FAILURE_BACKOFF_SECONDS = 60 * 60

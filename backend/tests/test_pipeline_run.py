@@ -566,3 +566,69 @@ async def test_live_satellite_scan_records_provenanced_uvai_candidates(
     assert sensor_query["pollutant"] == "pm25"
     assert sensor_query["through"] >= station_reading.measured_at
     assert sensor_query["bbox"].min_lat < DELHI_BBOX.min_lat
+
+
+def test_unchanged_source_inputs_skip_dense_publication(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.domain.features import DataMode
+    from app.domain.prediction import PredictionInputQuality, PredictionRun
+    from app.domain.types import GridState
+    from app.pipeline.run import _compute_input_fingerprint, _publish
+
+    settings = _settings(demo_mode=True)
+    now = datetime(2026, 10, 24, 12, 0, tzinfo=UTC)
+    sensors = [
+        SensorReading(
+            source="demo",
+            external_sensor_id="demo-1",
+            latitude=28.6,
+            longitude=77.2,
+            pollutant="pm25",
+            value=50.0,
+            unit="µg/m³",
+            measured_at=now - timedelta(minutes=10),
+        )
+    ]
+    weather: list[object] = []
+    fires: list[object] = []
+
+    fingerprint = _compute_input_fingerprint(sensors, weather, fires)
+    existing_run = PredictionRun(
+        run_id="run-existing-123",
+        generated_at=now - timedelta(minutes=10),
+        region="india",
+        mode=DataMode.DEMO,
+        feature_run_id="feat-existing",
+        feature_schema_version="environmental-v1",
+        input_quality=PredictionInputQuality(
+            supported_cells=1,
+            expected_cells=1,
+            input_fingerprint=fingerprint,
+        ),
+    )
+
+    class _PubRepo:
+        def __init__(self, _session) -> None:
+            pass
+
+        def latest_run(self, **_kwargs) -> PredictionRun | None:
+            return existing_run
+
+    monkeypatch.setattr("app.pipeline.run.SqlPredictionPublicationRepository", _PubRepo)
+    monkeypatch.setattr(
+        "app.pipeline.run._fire_feature_inputs", lambda *args, **kwargs: (fires, ())
+    )
+
+    state = GridState(h3_cell="8861892e0dfffff", timestamp=now, confidence=1.0, pm25=50.0)
+    outcome = _publish(
+        object(),
+        settings,
+        "run-candidate",
+        now,
+        forecasts=[],
+        current_states=[state],
+        sensor_readings=sensors,
+        weather_readings=[],
+    )
+
+    assert outcome.succeeded is True
+    assert "skipped: source inputs unchanged since run run-existing-123" in outcome.summary

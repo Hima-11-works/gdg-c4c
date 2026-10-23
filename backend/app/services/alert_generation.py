@@ -176,8 +176,26 @@ class AlertGenerationService:
     def _evaluate_cell(
         self, state: GridState, forecasts: list[Forecast], generated_at: datetime
     ) -> Alert | None:
-        # forecasts is already sorted ascending by forecast_hours.
-        nearest_forecast = forecasts[0] if forecasts else None
+        # Reject unavailable/unsupported current cells (confidence <= 0 means no evidence)
+        if state.confidence <= 0.0 or state.pm25 is None:
+            return None
+
+        # Filter out expired predictions (forecast_time <= generated_at or forecast_hours <= 0)
+        # and unevidenced predictions (confidence <= 0.0 or predicted_pm25 is None)
+        # to prevent expired predictions from creating future-spike alerts.
+        active_forecasts = [
+            forecast
+            for forecast in forecasts
+            if forecast.forecast_time > generated_at
+            and forecast.forecast_hours > 0
+            and forecast.confidence > 0.0
+            and forecast.predicted_pm25 is not None
+        ]
+        nearest_forecast = (
+            active_forecasts[0]
+            if active_forecasts
+            else (forecasts[0] if forecasts else None)
+        )
 
         # Rule 1: current conditions already exceed a threshold.
         if state.pm25 is not None:
@@ -202,7 +220,7 @@ class AlertGenerationService:
 
         # Rule 2: no current exceedance, but a future forecast horizon
         # crosses a threshold — advance warning, not an active condition.
-        for forecast in forecasts:
+        for forecast in active_forecasts:
             crossed = self._level_crossed(forecast.predicted_pm25)
             if crossed is not None:
                 _, label = crossed
@@ -222,7 +240,7 @@ class AlertGenerationService:
         # Rule 3: sharp current-to-forecast increase, regardless of
         # whether either value alone crosses a threshold.
         if state.pm25 is not None:
-            for forecast in forecasts:
+            for forecast in active_forecasts:
                 delta = forecast.predicted_pm25 - state.pm25
                 if delta >= self._sharp_increase:
                     return self._build_alert(
@@ -243,7 +261,7 @@ class AlertGenerationService:
         # forecast — a milder increase bar than rule 3, since the
         # combination is what makes it worth flagging.
         if state.pdi is not None and state.pm25 is not None and state.pdi >= self._pdi_high:
-            for forecast in forecasts:
+            for forecast in active_forecasts:
                 delta = forecast.predicted_pm25 - state.pm25
                 if delta >= self._pdi_worsening_min_increase:
                     return self._build_alert(

@@ -460,3 +460,37 @@ def test_run_with_no_cells_is_a_successful_no_op() -> None:
 
     assert result.succeeded is True
     assert result.alerts_created == 0
+
+
+def test_expired_forecasts_do_not_create_future_spike_alerts() -> None:
+    repository = FakeAlertRepository()
+    # Forecast that has already passed valid_at <= generated_at
+    expired_forecast = Forecast(
+        h3_cell=CELL,
+        generated_at=GENERATED_AT - timedelta(hours=2),
+        forecast_time=GENERATED_AT - timedelta(hours=1),
+        forecast_hours=1.0,
+        predicted_pm25=180.0,  # Critical level, would trigger rule 2 or 3 if active
+        confidence=0.9,
+    )
+    result = _service(repository).run([_state(10.0)], [expired_forecast], generated_at=GENERATED_AT)
+
+    assert result.succeeded is True
+    assert result.alerts_created == 0
+    assert repository.alerts == []
+
+
+def test_unsupported_current_cells_are_rejected() -> None:
+    repository = FakeAlertRepository()
+    # Cell with no evidence (confidence=0.0)
+    unsupported_state = GridState(
+        h3_cell=CELL,
+        timestamp=GENERATED_AT,
+        confidence=0.0,
+        pm25=200.0,
+    )
+    result = _service(repository).run([unsupported_state], [], generated_at=GENERATED_AT)
+
+    assert result.succeeded is True
+    assert result.alerts_created == 0
+    assert repository.alerts == []

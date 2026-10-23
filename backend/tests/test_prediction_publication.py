@@ -793,3 +793,109 @@ def test_alert_candidates_are_thresholded_and_include_current_context():
         params={"run_id": run.run_id, "h3_cell": "zzzzzzzzzzzzzzz"},
     )
     assert invalid_cell_response.status_code == 422
+
+
+def test_live_publication_rejects_unsupported_current_cells() -> None:
+    now = datetime(2026, 9, 22, tzinfo=UTC)
+    ref = DatasetRef(
+        dataset_id="openaq-pm25-v3",
+        source="openaq",
+        product="pm25",
+        version="v3",
+        kind=InputKind.OBSERVED,
+        region="india",
+        attribution="OpenAQ",
+        license="open",
+    )
+    supported_cell = h3.latlng_to_cell(28.6, 77.1, 8)
+    unsupported_cell = h3.grid_disk(supported_cell, 1)[1]
+
+    supported_snap = FeatureSnapshot(
+        h3_cell=supported_cell,
+        issued_at=now,
+        valid_at=now,
+        horizon_hours=0,
+        feature_schema_version="environmental-v1",
+        vector=CellFeatureVector(current_pm25=45.0),
+        quality=FeatureQuality(observed_station_count=1),
+        dataset_refs=(ref,),
+    )
+    unsupported_snap = FeatureSnapshot(
+        h3_cell=unsupported_cell,
+        issued_at=now,
+        valid_at=now,
+        horizon_hours=0,
+        feature_schema_version="environmental-v1",
+        vector=CellFeatureVector(current_pm25=None),
+        quality=FeatureQuality(observed_station_count=0),
+        dataset_refs=(ref,),
+    )
+
+    repo = MemoryPublicationRepository()
+    service = PredictionPublicationService(repo)
+    _run, rows = service.publish(
+        run_id="live-support-test",
+        feature_run_id="feat-test",
+        region="india",
+        mode=DataMode.LIVE,
+        generated_at=now,
+        snapshots=[supported_snap, unsupported_snap],
+    )
+
+    rows_by_cell = {r.h3_cell: r for r in rows}
+    assert rows_by_cell[supported_cell].predicted_pm25 == 45.0
+    assert rows_by_cell[unsupported_cell].predicted_pm25 is None
+    assert rows_by_cell[unsupported_cell].baseline_pm25 is None
+    assert rows_by_cell[unsupported_cell].prediction_method == "unavailable-unsupported"
+    assert rows_by_cell[unsupported_cell].confidence == 0.0
+
+
+def test_feature_quality_records_contributing_stations() -> None:
+    quality = FeatureQuality(
+        observed_station_count=2,
+        contributing_station_ids=("station-001", "station-002"),
+    )
+    serialized = _quality_values(quality)
+    assert serialized["contributing_station_ids"] == ["station-001", "station-002"]
+
+    deserialized = _quality_from_values(serialized)
+    assert deserialized.contributing_station_ids == ("station-001", "station-002")
+
+
+def test_input_quality_records_fingerprint() -> None:
+    now = datetime(2026, 9, 22, tzinfo=UTC)
+    quality = PredictionInputQuality(
+        supported_cells=3,
+        expected_cells=4,
+        input_fingerprint="abc123sha256",
+    )
+    run = PredictionRun(
+        run_id="run-fp",
+        generated_at=now,
+        region="india",
+        mode=DataMode.LIVE,
+        feature_run_id="feat-fp",
+        feature_schema_version="environmental-v1",
+        input_quality=quality,
+    )
+    values = _run_values(run)
+    assert values["input_quality"]["input_fingerprint"] == "abc123sha256"
+
+    # Verify _row_to_run reconstruction
+    row_stub = SimpleNamespace(
+        id=run.run_id,
+        generated_at=run.generated_at,
+        published_at=now,
+        region=run.region,
+        mode="live",
+        feature_run_id=run.feature_run_id,
+        feature_schema_version=run.feature_schema_version,
+        model_versions=[],
+        scenario_id=None,
+        dataset_refs=[],
+        source_health_run_id=None,
+        input_quality=values["input_quality"],
+    )
+    restored = _row_to_run(row_stub)
+    assert restored.input_quality is not None
+    assert restored.input_quality.input_fingerprint == "abc123sha256"

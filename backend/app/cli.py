@@ -262,6 +262,28 @@ async def _run_openaq_history_job(settings, *, now=None) -> str:
         session.close()
 
 
+async def _run_prediction_retention_job(settings, *, now=None):
+    """Prune unpinned expired prediction runs and compact intermediate horizons."""
+    from app.db.repositories import SqlAlertRepository, SqlPredictionPublicationRepository
+    from app.services.prediction_retention import PredictionRetentionService
+
+    now = now or datetime.now(UTC)
+    session = get_session_factory()()
+    try:
+        service = PredictionRetentionService(
+            SqlPredictionPublicationRepository(session),
+            SqlAlertRepository(session),
+        )
+        return await asyncio.to_thread(
+            service.sweep,
+            now=now,
+            retention_hours=settings.prediction_retention_hours,
+            compact_after_hours=settings.prediction_compact_after_hours,
+        )
+    finally:
+        session.close()
+
+
 async def _run_weather_collection_job(settings, bbox, *, now=None) -> IngestionResult:
     """Collect bounded current and hourly Open-Meteo data outside publication."""
     from app.db.repositories.weather_forecast import SqlWeatherForecastRepository
@@ -460,6 +482,17 @@ async def _run_collect_due(_args: argparse.Namespace) -> int:
                     result.saved,
                     result.cache_hits,
                     result.omitted_locations,
+                )
+            elif job.job_key == "prediction-retention":
+                retention_report = await _run_prediction_retention_job(settings)
+                succeeded = retention_report.succeeded
+                error = "; ".join(retention_report.errors) if retention_report.errors else None
+                logger.info(
+                    "Prediction retention: pruned=%d compacted=%d preserved=%d errors=%d",
+                    len(retention_report.pruned_runs),
+                    len(retention_report.compacted_runs),
+                    len(retention_report.preserved_runs),
+                    len(retention_report.errors),
                 )
             else:
                 succeeded = False
@@ -1088,6 +1121,39 @@ async def _run_prediction_publish(args: argparse.Namespace) -> int:
         f"models={','.join(run.model_versions) or 'baseline-only'}"
     )
     return 0
+
+
+async def _run_sweep_predictions_cmd(args: argparse.Namespace) -> int:
+    """Sweep historical prediction runs, compacting granular horizons and pruning expired unpinned runs."""
+    settings = get_settings()
+    retention_hours = args.retention_hours or settings.prediction_retention_hours
+    compact_after_hours = args.compact_after_hours or settings.prediction_compact_after_hours
+    print(
+        f"Sweeping prediction runs: retention={retention_hours}h, "
+        f"compact_after={compact_after_hours}h..."
+    )
+    session = get_session_factory()()
+    try:
+        from app.db.repositories import SqlAlertRepository, SqlPredictionPublicationRepository
+        from app.services.prediction_retention import PredictionRetentionService
+
+        service = PredictionRetentionService(
+            SqlPredictionPublicationRepository(session),
+            SqlAlertRepository(session),
+        )
+        report = service.sweep(
+            now=datetime.now(UTC),
+            retention_hours=retention_hours,
+            compact_after_hours=compact_after_hours,
+        )
+        print(
+            f"Sweep complete: pruned={len(report.pruned_runs)} "
+            f"compacted={len(report.compacted_runs)} "
+            f"preserved={len(report.preserved_runs)} errors={len(report.errors)}"
+        )
+        return 0 if report.succeeded else 1
+    finally:
+        session.close()
 
 
 async def _run_expire_reports(args: argparse.Namespace) -> int:
@@ -1787,6 +1853,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     webhook_parser.add_argument("--limit", type=int, default=20, choices=range(1, 101))
     webhook_parser.set_defaults(func=_run_incident_webhook_dispatch)
+    retention_parser = subparsers.add_parser(
+        "sweep-predictions",
+        help="Prune unpinned prediction runs past retention and compact intermediate horizons.",
+    )
+    retention_parser.add_argument(
+        "--retention-hours",
+        type=int,
+        default=None,
+        help="Hours of prediction history to keep before pruning unpinned runs.",
+    )
+    retention_parser.add_argument(
+        "--compact-after-hours",
+        type=int,
+        default=None,
+        help="Hours after which granular forecast horizons are compacted.",
+    )
+    retention_parser.set_defaults(func=_run_sweep_predictions_cmd)
     hotspot_parser = subparsers.add_parser(
         "hotspot-scan",
         help=(
