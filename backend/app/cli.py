@@ -1423,6 +1423,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Write local artifacts without persisting a run to PostgreSQL.",
     )
     federation_parser.set_defaults(func=_run_federation_demo)
+    webhook_parser = subparsers.add_parser(
+        "incident-webhook-dispatch",
+        help="Dispatch due authority webhook outbox rows and retry failures.",
+    )
+    webhook_parser.add_argument("--limit", type=int, default=20, choices=range(1, 101))
+    webhook_parser.set_defaults(func=_run_incident_webhook_dispatch)
     hotspot_parser = subparsers.add_parser(
         "hotspot-scan",
         help=(
@@ -1567,6 +1573,38 @@ async def _run_federation_demo(args: argparse.Namespace) -> int:
         print(f"  evaluation: {evaluation['status']} — {evaluation['reason']}")
     print("  limitations: no privacy guarantee; not a nationwide deployment")
     return 0 if payload["status"] == "succeeded" else 1
+
+
+async def _run_incident_webhook_dispatch(args: argparse.Namespace) -> int:
+    """Dispatch at most one bounded page of pending authority hand-offs."""
+    from app.core.config import get_settings
+    from app.db.repositories import SqlIncidentRepository, SqlIncidentWebhookDeliveryRepository
+    from app.db.session import get_session_factory
+    from app.services.incident_webhook import IncidentWebhookService
+
+    settings = get_settings()
+    if not (
+        settings.incident_webhook_url
+        and settings.incident_webhook_secret
+        and settings.incident_webhook_ack_base_url
+    ):
+        print("incident webhook is not configured", file=sys.stderr)
+        return 2
+    session = get_session_factory()()
+    try:
+        service = IncidentWebhookService(
+            settings=settings,
+            delivery_repository=SqlIncidentWebhookDeliveryRepository(session),
+            incident_repository=SqlIncidentRepository(session),
+        )
+        result = service.dispatch_due(limit=args.limit)
+    finally:
+        session.close()
+    print(
+        f"claimed={result.claimed} delivered={result.delivered} "
+        f"retrying={result.retrying} failed={result.failed}"
+    )
+    return 0 if result.failed == 0 else 1
 
 
 if __name__ == "__main__":

@@ -18,9 +18,9 @@ Three rules shape everything below:
 2. **Writes carry an identity, not just a key.** The simulator key
    authenticates the deployment; `X-Actor-Id` names the responder, and the
    server decides that responder's role and jurisdiction (§3).
-3. **Delivery is simulated.** Assignment makes an incident visible in the
-   addressed role's inbox. **No email, SMS, webhook, push, or any other
-   notification is sent by this system** (§5, §6).
+3. **The simulator inbox is distinct from live dispatch.** Assignment always
+   records an inbox item. A real webhook is sent only when an operator
+   configures the optional authority integration (§5, §6).
 
 ---
 
@@ -106,6 +106,13 @@ current-hour row is not an alert.
 SIMULATOR_ACTORS="control-room:pollution_control:Delhi,unit-12:pollution_control:Delhi,engine-7:fire_department:Delhi"
 ```
 
+An authority webhook is optional and off by default. Configure
+`INCIDENT_WEBHOOK_URL`, `INCIDENT_WEBHOOK_SECRET` (at least 32 random
+characters), and `INCIDENT_WEBHOOK_ACK_BASE_URL` together. The destination and
+callback URL are operator-controlled; HTTPS is required except on loopback.
+The callback base URL is the public origin at which this API receives
+`/api/v1/incidents/webhook-deliveries/{id}/acknowledge`.
+
 - The registry is the **authority on who exists**. A caller cannot invent a role
   or a jurisdiction; an `X-Actor-Id` that is not listed cannot act at all.
 - An entry with no jurisdiction (`control-room:pollution_control`) is *not
@@ -125,6 +132,7 @@ optional and only checked for agreement.
 | Assign | required | required | actor role == `responder_role` | yes |
 | Transition | required | required | actor role == `responder_role` | yes |
 | Read incident / history / list / inbox / deliveries | not required | not required | — | — |
+| Webhook receipt callback | signed per-delivery token | not required | — | — |
 
 **Why creation is not jurisdiction-checked:** a new incident has no jurisdiction
 to violate. Naming the jurisdiction is the act of *classifying* the incident,
@@ -225,7 +233,9 @@ curl -X POST localhost:8000/api/v1/incidents/5/transitions \
 | `GET /api/v1/incidents/{id}` | One incident. |
 | `GET /api/v1/incidents/{id}/history` | Append-only event list, oldest first. |
 | `GET /api/v1/incidents/{id}/deliveries` | Simulated delivery records, oldest first. |
+| `GET /api/v1/incidents/{id}/webhook-deliveries` | Optional authority outbox status, without the receipt token. |
 | `GET /api/v1/incidents/inbox?role=&only_open=` | A responder role's simulated inbox, newest first (§5). |
+| `POST /api/v1/incidents/webhook-deliveries/{delivery_id}/acknowledge` | Receipt callback; requires the signed token in the request body. |
 
 ### 4.5 Objects
 
@@ -285,7 +295,7 @@ merely which role.
   "status": "simulated",
   "assignee": "unit-12",
   "simulated": true,
-  "notification": "none (simulated inbox only; no email, SMS, or webhook is sent)",
+"notification": "none (simulated inbox row; optional webhook is reported separately)",
   "simulated_at": "2026-09-24T09:05:00Z",
   "acknowledged_at": null
 }
@@ -306,10 +316,11 @@ Assignment writes an `incident_delivery` row addressed to the incident's
 (`GET /api/v1/incidents/inbox?role=…`) then shows it, and only that role's inbox
 does: a fire-department view never lists a pollution-control assignment.
 
-This is a **simulation, structurally**:
+The simulator inbox itself remains a **simulation, structurally**:
 
-- No email, SMS, webhook, push, or socket is sent. There is no notification code
-  path in the backend at all.
+- The inbox row itself never sends a message. Its table has no channel or
+  provider fields; the separately configured webhook has a separate table and
+  lifecycle.
 - The `incident_delivery` table has a CHECK constraint forcing `simulated =
   true`, so the database cannot record a row claiming a real dispatch, and it
   has no channel, address, or provider column to send one to.
@@ -320,8 +331,25 @@ This is a **simulation, structurally**:
   `acknowledged` transition closes their open items, and the DB CHECK keeps
   `status` and `acknowledged_at` consistent.
 
-Acknowledging the incident marks the delivery `acknowledged`; the incident
-status and the inbox can therefore never disagree.
+Acknowledging the incident marks the inbox delivery `acknowledged`; the
+incident status and the simulator inbox can therefore never disagree.
+
+### 5.1 Optional authority webhook
+
+Set `INCIDENT_WEBHOOK_URL`, `INCIDENT_WEBHOOK_SECRET` (at least 32 characters),
+and `INCIDENT_WEBHOOK_ACK_BASE_URL` together. HTTPS is required except for
+loopback development endpoints. Assignments enqueue an outbox row and trigger
+one bounded immediate dispatch attempt. The request includes the incident's
+minimal operational fields, an idempotency key, and a signed receipt token.
+It contains no citizen photo or private report notes. Redirects are disabled;
+requests have a configured timeout. Failures retry with exponential delay up
+to `INCIDENT_WEBHOOK_MAX_ATTEMPTS`.
+
+The receiver POSTs `{"token":"<token>"}` to the included acknowledgement URL.
+This callback proves transport receipt only; it does not change the incident's
+operational state. The responder still acknowledges through the authenticated
+transition route. A scheduled worker can drain retries with
+`python -m app.cli incident-webhook-dispatch`.
 
 ---
 
@@ -494,8 +522,8 @@ curl -X POST localhost:8000/api/v1/incidents/5/transitions \
 
 ## 10. Deliberately out of scope
 
-- **No real notifications of any kind.** The inbox is a table, not a dispatch.
-  Nothing is emailed, texted, or posted anywhere.
+- **No SMS or email dispatch.** The optional authority webhook (§5.1) is the
+  only external hand-off; there is no SMS or email provider integration.
 - **No incident creation on ingest.** Incidents are created explicitly through
   the route (automatic creation from a published alert is a possible future
   change, and would need its own deduplication policy).

@@ -24,6 +24,8 @@ __all__ = [
     "IncidentEventOut",
     "IncidentDeliveryOut",
     "IncidentInboxItemOut",
+    "IncidentWebhookDeliveryOut",
+    "IncidentWebhookAcknowledgeIn",
 ]
 
 
@@ -132,3 +134,22 @@ class IncidentInboxItemOut(BaseModel):
     delivery: IncidentDeliveryOut
     incident: IncidentOut
     is_open: bool
+
+
+class IncidentWebhookDeliveryOut(BaseModel):
+    id: int
+    incident_id: int
+    audience_role: ResponderRole
+    assignee: str
+    status: str
+    attempt_count: int
+    created_at: datetime
+    next_attempt_at: datetime | None
+    last_attempt_at: datetime | None
+    delivered_at: datetime | None
+    acknowledged_at: datetime | None
+    last_error: str | None
+
+
+class IncidentWebhookAcknowledgeIn(BaseModel):
+    token: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")

@@ -773,6 +773,48 @@ incident_delivery = Table(
     Index("ix_incident_delivery_role", "audience_role", "status", "simulated_at"),
 )
 
+# Durable webhook outbox. The configured recipient is stored outside the
+# database; rows retain only attempt state and the assigned responder identity.
+incident_webhook_delivery = Table(
+    "incident_webhook_delivery",
+    metadata,
+    Column("id", BigInteger, primary_key=True),
+    Column("incident_id", BigInteger, ForeignKey("incident.id", ondelete="CASCADE"), nullable=False),
+    Column("audience_role", String(30), nullable=False),
+    Column("assignee", String(120), nullable=False),
+    Column("status", String(20), nullable=False, server_default="queued"),
+    Column("attempt_count", SmallInteger, nullable=False, server_default=text("0")),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("next_attempt_at", DateTime(timezone=True), nullable=True),
+    Column("last_attempt_at", DateTime(timezone=True), nullable=True),
+    Column("delivered_at", DateTime(timezone=True), nullable=True),
+    Column("acknowledged_at", DateTime(timezone=True), nullable=True),
+    Column("last_error", String(500), nullable=True),
+    CheckConstraint(
+        "audience_role IN ('fire_department', 'pollution_control')",
+        name="ck_incident_webhook_delivery_role",
+    ),
+    CheckConstraint(
+        "status IN ('queued', 'sending', 'retrying', 'delivered', 'acknowledged', 'failed')",
+        name="ck_incident_webhook_delivery_status",
+    ),
+    CheckConstraint("attempt_count >= 0", name="ck_incident_webhook_attempt_count"),
+    CheckConstraint(
+        "delivered_at IS NULL OR delivered_at >= created_at",
+        name="ck_incident_webhook_delivered_at",
+    ),
+    CheckConstraint(
+        "acknowledged_at IS NULL OR acknowledged_at >= created_at",
+        name="ck_incident_webhook_acknowledged_at",
+    ),
+    CheckConstraint(
+        "(status = 'acknowledged') = (acknowledged_at IS NOT NULL)",
+        name="ck_incident_webhook_acknowledged_consistent",
+    ),
+    Index("ix_incident_webhook_due", "status", "next_attempt_at", "last_attempt_at"),
+    Index("ix_incident_webhook_incident", "incident_id", "created_at"),
+)
+
 # One current, versioned Gemini advisory per citizen-photo evidence row. The
 # image bytes remain in private MediaStore; only this validated JSON and its
 # minimal audit metadata are persisted in Postgres.

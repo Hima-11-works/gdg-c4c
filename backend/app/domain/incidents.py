@@ -97,6 +97,15 @@ class IncidentDeliveryStatus(StrEnum):
     ACKNOWLEDGED = "acknowledged"
 
 
+class IncidentWebhookStatus(StrEnum):
+    QUEUED = "queued"
+    SENDING = "sending"
+    RETRYING = "retrying"
+    DELIVERED = "delivered"
+    ACKNOWLEDGED = "acknowledged"
+    FAILED = "failed"
+
+
 # The complete transition table. Anything not listed here is rejected, which
 # includes every transition out of a terminal state.
 #
@@ -220,6 +229,47 @@ class IncidentDelivery:
         """Always True. Kept explicit in the API response so a consumer cannot
         mistake this for a real dispatch."""
         return True
+
+
+@dataclass(frozen=True, slots=True)
+class IncidentWebhookDelivery:
+    """Durable outbox item for an optional configured authority webhook."""
+
+    incident_id: int
+    audience_role: ResponderRole
+    assignee: str
+    status: IncidentWebhookStatus
+    created_at: datetime
+    attempt_count: int = 0
+    next_attempt_at: datetime | None = None
+    last_attempt_at: datetime | None = None
+    delivered_at: datetime | None = None
+    acknowledged_at: datetime | None = None
+    last_error: str | None = None
+    id: int | None = None
+
+    def __post_init__(self) -> None:
+        if not self.assignee.strip():
+            raise ValueError("webhook delivery assignee must not be empty")
+        if self.attempt_count < 0:
+            raise ValueError("webhook delivery attempt_count must be >= 0")
+        for name in (
+            "created_at",
+            "next_attempt_at",
+            "last_attempt_at",
+            "delivered_at",
+            "acknowledged_at",
+        ):
+            value = getattr(self, name)
+            if value is not None:
+                _require_utc(value, name)
+        if self.status in {
+            IncidentWebhookStatus.DELIVERED,
+            IncidentWebhookStatus.ACKNOWLEDGED,
+        } and self.delivered_at is None:
+            raise ValueError("a delivered webhook must record delivered_at")
+        if self.status is IncidentWebhookStatus.ACKNOWLEDGED and self.acknowledged_at is None:
+            raise ValueError("an acknowledged webhook must record acknowledged_at")
 
 
 @dataclass(frozen=True, slots=True)

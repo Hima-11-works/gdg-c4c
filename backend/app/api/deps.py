@@ -28,6 +28,7 @@ from app.db.repositories import (
     SqlGridStateRepository,
     SqlIncidentDeliveryRepository,
     SqlIncidentRepository,
+    SqlIncidentWebhookDeliveryRepository,
     SqlPredictionPublicationRepository,
     SqlSensorReadingRepository,
     SqlSourceHealthRepository,
@@ -52,6 +53,7 @@ from app.services.incidents import (
     IncidentService,
     SimulatorDisabledError,
 )
+from app.services.incident_webhook import IncidentWebhookService
 from app.services.media_storage import (
     build_media_store,
 )
@@ -136,10 +138,26 @@ def get_incident_service(session: Session = Depends(get_db)) -> IncidentService:
         alert_repository=SqlAlertRepository(session),
         report_repository=SqlFireReportRepository(session),
         delivery_repository=SqlIncidentDeliveryRepository(session),
+        webhook_delivery_repository=(
+            SqlIncidentWebhookDeliveryRepository(session)
+            if get_settings().incident_webhook_url
+            else None
+        ),
         published_alerts=PublishedAlertService(
             PredictionQueryService(SqlPredictionPublicationRepository(session))
         ),
         hotspot_store=build_store(get_settings(), session=session),
+    )
+
+
+def get_incident_webhook_service(
+    session: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> IncidentWebhookService:
+    return IncidentWebhookService(
+        settings=settings,
+        delivery_repository=SqlIncidentWebhookDeliveryRepository(session),
+        incident_repository=SqlIncidentRepository(session),
     )
 
 

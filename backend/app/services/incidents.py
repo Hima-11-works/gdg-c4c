@@ -37,6 +37,8 @@ from app.domain.incidents import (
     IncidentEventType,
     IncidentSourceType,
     IncidentStatus,
+    IncidentWebhookDelivery,
+    IncidentWebhookStatus,
     InvalidIncidentError,
     InvalidTransitionError,
     ResponderRole,
@@ -47,6 +49,7 @@ from app.domain.repositories import (
     AlertRepository,
     FireReportRepository,
     IncidentDeliveryRepository,
+    IncidentWebhookDeliveryRepository,
     IncidentRepository,
 )
 from app.domain.types import Alert, AlertSeverity, FireKind, FireReport
@@ -181,6 +184,7 @@ class IncidentService:
         alert_repository: AlertRepository,
         report_repository: FireReportRepository,
         delivery_repository: IncidentDeliveryRepository,
+        webhook_delivery_repository: IncidentWebhookDeliveryRepository | None = None,
         published_alerts: PublishedAlertService,
         hotspot_store: HotspotScanStore | None = None,
     ) -> None:
@@ -188,8 +192,13 @@ class IncidentService:
         self._alerts = alert_repository
         self._reports = report_repository
         self._deliveries = delivery_repository
+        self._webhook_deliveries = webhook_delivery_repository
         self._published_alerts = published_alerts
         self._hotspot_store = hotspot_store
+
+    @property
+    def webhook_dispatch_enabled(self) -> bool:
+        return self._webhook_deliveries is not None
 
     # -- permissions --------------------------------------------------------
 
@@ -527,6 +536,19 @@ class IncidentService:
         # Assignment makes the incident visible in the addressed role's
         # *simulated* inbox. This records a hand-off; it sends nothing.
         self._record_delivery(stored, assignee=assignee, actor=actor, now=now)
+        if self._webhook_deliveries is not None:
+            if stored.id is None:  # pragma: no cover - persisted incidents have ids
+                raise InvalidIncidentError("cannot enqueue delivery for an incident without an id")
+            self._webhook_deliveries.create(
+                IncidentWebhookDelivery(
+                    incident_id=stored.id,
+                    audience_role=stored.responder_role,
+                    assignee=assignee.strip(),
+                    status=IncidentWebhookStatus.QUEUED,
+                    created_at=now,
+                    next_attempt_at=now,
+                )
+            )
         return stored
 
     def _record_delivery(

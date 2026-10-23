@@ -1,20 +1,23 @@
 """Routes for the incident workflow (the fire-department simulator).
 
-Every write depends on `require_incident_actor`: the simulator key plus an
-`X-Actor-Id` naming a configured responder, whose role and jurisdiction come
-from the server-side registry. Reads are open. Delivery is **simulated** — the
-inbox routes expose assignments to the intended role without notifying anyone.
-Business logic lives in app.services.incidents.IncidentService; see
-docs/api/incidents.md.
+Every incident write depends on `require_incident_actor`: the simulator key plus
+an `X-Actor-Id` naming a configured responder, whose role and jurisdiction come
+from the server-side registry. The simulator inbox is always recorded. An
+additional real webhook is sent only when an operator configures the destination,
+secret, and acknowledgement base URL. See docs/api/incidents.md.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
 
-from app.api.deps import get_incident_service, require_incident_actor
+from app.api.deps import (
+    get_incident_service,
+    get_incident_webhook_service,
+    require_incident_actor,
+)
 from app.api.schemas import Envelope
 from app.api.schemas_incidents import (
     IncidentAssignIn,
@@ -26,12 +29,15 @@ from app.api.schemas_incidents import (
     IncidentSourceType,
     IncidentStatus,
     IncidentTransitionIn,
+    IncidentWebhookAcknowledgeIn,
+    IncidentWebhookDeliveryOut,
     ResponderRole,
 )
 from app.domain.incidents import (
     IncidentActor,
     IncidentDelivery,
     IncidentEvent,
+    IncidentWebhookDelivery,
     InvalidIncidentError,
     InvalidTransitionError,
 )
@@ -47,12 +53,14 @@ from app.services.incidents import (
     SourceNotEligibleError,
     UseAssignEndpointError,
 )
+from app.services.incident_webhook import IncidentWebhookAckError, IncidentWebhookService
+from app.services.incident_webhook_runtime import dispatch_incident_webhooks
 
 router = APIRouter(prefix="/incidents", tags=["incidents"])
 
 # What a delivery row is, stated in the payload: this workflow records a
 # hand-off and sends nothing.
-_NO_NOTIFICATION = "none (simulated inbox only; no email, SMS, or webhook is sent)"
+_NO_NOTIFICATION = "none (simulated inbox row; optional webhook is reported separately)"
 
 
 def _incident_out(incident) -> IncidentOut:
@@ -112,6 +120,23 @@ def _inbox_out(item: InboxItem) -> IncidentInboxItemOut:
         delivery=_delivery_out(item.delivery),
         incident=_incident_out(item.incident),
         is_open=item.is_open,
+    )
+
+
+def _webhook_delivery_out(delivery: IncidentWebhookDelivery) -> IncidentWebhookDeliveryOut:
+    return IncidentWebhookDeliveryOut(
+        id=delivery.id,
+        incident_id=delivery.incident_id,
+        audience_role=delivery.audience_role,
+        assignee=delivery.assignee,
+        status=delivery.status.value,
+        attempt_count=delivery.attempt_count,
+        created_at=delivery.created_at,
+        next_attempt_at=delivery.next_attempt_at,
+        last_attempt_at=delivery.last_attempt_at,
+        delivered_at=delivery.delivered_at,
+        acknowledged_at=delivery.acknowledged_at,
+        last_error=delivery.last_error,
     )
 
 
@@ -183,6 +208,7 @@ def create_incident(
 def assign_incident(
     incident_id: int,
     payload: IncidentAssignIn,
+    background_tasks: BackgroundTasks,
     actor: IncidentActor = Depends(require_incident_actor),
     service: IncidentService = Depends(get_incident_service),
 ) -> Envelope[IncidentOut]:
@@ -214,8 +240,52 @@ def assign_incident(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
+    if service.webhook_dispatch_enabled:
+        background_tasks.add_task(dispatch_incident_webhooks)
     return Envelope(
         generated_at=datetime.now(UTC), is_demo=False, data=_incident_out(incident)
+    )
+
+
+@router.get(
+    "/{incident_id}/webhook-deliveries",
+    response_model=Envelope[list[IncidentWebhookDeliveryOut]],
+    summary="Authority webhook delivery and acknowledgement status",
+)
+def incident_webhook_deliveries(
+    incident_id: int,
+    incident_service: IncidentService = Depends(get_incident_service),
+    webhook_service: IncidentWebhookService = Depends(get_incident_webhook_service),
+) -> Envelope[list[IncidentWebhookDeliveryOut]]:
+    try:
+        incident_service.get(incident_id)
+    except IncidentNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return Envelope(
+        generated_at=datetime.now(UTC),
+        is_demo=False,
+        data=[_webhook_delivery_out(row) for row in webhook_service.list_for_incident(incident_id)],
+    )
+
+
+@router.post(
+    "/webhook-deliveries/{delivery_id}/acknowledge",
+    response_model=Envelope[IncidentWebhookDeliveryOut],
+    summary="Acknowledge receipt of an authority webhook",
+)
+def acknowledge_webhook_delivery(
+    delivery_id: int,
+    payload: IncidentWebhookAcknowledgeIn,
+    service: IncidentWebhookService = Depends(get_incident_webhook_service),
+) -> Envelope[IncidentWebhookDeliveryOut]:
+    try:
+        delivery = service.acknowledge(delivery_id=delivery_id, token=payload.token)
+    except IncidentWebhookAckError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    return Envelope(
+        generated_at=datetime.now(UTC),
+        is_demo=False,
+        data=_webhook_delivery_out(delivery),
     )
 
 @router.post(
@@ -298,7 +368,7 @@ def list_incidents(
 @router.get(
     "/inbox",
     response_model=Envelope[list[IncidentInboxItemOut]],
-    summary="A responder role's simulated inbox (no notifications are sent)",
+    summary="A responder role's simulated inbox",
 )
 def incident_inbox(
     role: ResponderRole = Query(..., description="The responding authority's role."),

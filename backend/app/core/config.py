@@ -3,6 +3,8 @@
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from ipaddress import ip_address
+from urllib.parse import urlsplit
 
 from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -57,6 +59,14 @@ class Settings(BaseSettings):
     # so the dashboard can show the actual multi-process demonstration.
     federation_workflow_status_url: str | None = None
     federation_workflow_status_timeout_seconds: float = Field(default=2.0, gt=0, le=15)
+
+    # Optional outbound authority hand-off. The destination and callback base
+    # are operator-controlled; callers cannot supply webhook URLs.
+    incident_webhook_url: str | None = None
+    incident_webhook_secret: SecretStr | None = None
+    incident_webhook_ack_base_url: str | None = None
+    incident_webhook_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
+    incident_webhook_max_attempts: int = Field(default=5, ge=1, le=10)
 
     # When true, app.ingestion.factory substitutes a fixed, deterministic
     # sensor/weather dataset (app.ingestion.demo) for OpenAQ/Open-Meteo —
@@ -592,6 +602,58 @@ class Settings(BaseSettings):
             endpoint = self.citizen_media_s3_endpoint_url
             if endpoint and not endpoint.lower().startswith("https://"):
                 raise ValueError("CITIZEN_MEDIA_S3_ENDPOINT_URL must use HTTPS")
+        return self
+
+    @model_validator(mode="after")
+    def _check_incident_webhook_config(self) -> "Settings":
+        values = (
+            self.incident_webhook_url,
+            self.incident_webhook_secret,
+            self.incident_webhook_ack_base_url,
+        )
+        if any(value is not None for value in values) and not all(
+            value is not None and (not isinstance(value, str) or value.strip())
+            for value in values
+        ):
+            raise ValueError(
+                "INCIDENT_WEBHOOK_URL, INCIDENT_WEBHOOK_SECRET, and "
+                "INCIDENT_WEBHOOK_ACK_BASE_URL must be configured together"
+            )
+        if not self.incident_webhook_url:
+            return self
+        if len(self.incident_webhook_secret.get_secret_value()) < 32:
+            raise ValueError("INCIDENT_WEBHOOK_SECRET must contain at least 32 characters")
+
+        for name, raw in (
+            ("INCIDENT_WEBHOOK_URL", self.incident_webhook_url),
+            ("INCIDENT_WEBHOOK_ACK_BASE_URL", self.incident_webhook_ack_base_url),
+        ):
+            try:
+                parsed = urlsplit(raw or "")
+                hostname = parsed.hostname or ""
+                is_loopback = hostname.lower() == "localhost"
+                if not is_loopback:
+                    try:
+                        is_loopback = ip_address(hostname).is_loopback
+                    except ValueError:
+                        pass
+                if (
+                    parsed.scheme not in {"https", "http"}
+                    or not parsed.netloc
+                    or not hostname
+                    or parsed.username is not None
+                    or parsed.password is not None
+                    or parsed.query
+                    or parsed.fragment
+                    or (parsed.scheme == "http" and not is_loopback)
+                ):
+                    raise ValueError
+                _ = parsed.port  # reject malformed/out-of-range explicit ports
+            except ValueError as exc:
+                raise ValueError(
+                    f"{name} must use HTTPS (HTTP is allowed only for loopback development) "
+                    "and must not contain credentials, a query, or a fragment"
+                ) from exc
         return self
 
     @property

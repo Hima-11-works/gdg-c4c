@@ -20,6 +20,8 @@ from app.domain.incidents import (
     Incident,
     IncidentDelivery,
     IncidentEvent,
+    IncidentWebhookDelivery,
+    IncidentWebhookStatus,
     IncidentSourceType,
     IncidentStatus,
     ResponderRole,
@@ -265,6 +267,35 @@ class IncidentDeliveryRepository(Protocol):
     def list_for_role(
         self, role: ResponderRole, *, only_open: bool = False
     ) -> list[IncidentDelivery]: ...
+
+
+class IncidentWebhookDeliveryRepository(Protocol):
+    def create(self, delivery: IncidentWebhookDelivery) -> IncidentWebhookDelivery: ...
+    def claim_due(
+        self,
+        *,
+        now: datetime,
+        limit: int,
+        stale_sending_before: datetime,
+        max_attempts: int,
+    ) -> list[IncidentWebhookDelivery]: ...
+    def get(self, delivery_id: int) -> IncidentWebhookDelivery | None: ...
+    def mark_delivered(
+        self, delivery_id: int, *, delivered_at: datetime
+    ) -> IncidentWebhookDelivery | None: ...
+    def mark_failure(
+        self,
+        delivery_id: int,
+        *,
+        attempted_at: datetime,
+        next_attempt_at: datetime | None,
+        error: str,
+        status: IncidentWebhookStatus,
+    ) -> IncidentWebhookDelivery | None: ...
+    def acknowledge(
+        self, delivery_id: int, *, acknowledged_at: datetime
+    ) -> IncidentWebhookDelivery | None: ...
+    def list_for_incident(self, incident_id: int) -> list[IncidentWebhookDelivery]: ...
 
 
 class FireHotspotRepository(Protocol):
