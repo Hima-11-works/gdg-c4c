@@ -152,16 +152,16 @@ class _Handler(BaseHTTPRequestHandler):
         result = self.aggregator.submit_update(
             payload, participant_id=participant_id, signature=signature
         )
-        self._send(200, result)
         if result.get("aggregate_ready"):
             _record(self)
+        self._send(200, result)
 
     def _post_evaluation(self) -> None:
         participant_id = self.headers.get("x-participant-id") or ""
         report = self._read_json()
         result = self.aggregator.submit_evaluation(report, participant_id=participant_id)
-        self._send(200, result)
         _record(self)
+        self._send(200, result)
 
 
 def _record(handler: _Handler) -> None:
