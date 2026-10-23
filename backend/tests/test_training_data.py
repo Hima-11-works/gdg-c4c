@@ -40,6 +40,7 @@ def _record(
 def test_export_filters_by_mode_and_exclusive_time_range() -> None:
     first = _record("demo-1")
     second = _record("demo-2", issued_at=datetime(2025, 1, 1, 1, tzinfo=UTC))
+    end_boundary = _record("demo-3", issued_at=datetime(2025, 1, 1, 2, tzinfo=UTC))
     live = _record(
         "live-1",
         mode=DataMode.LIVE,
@@ -48,10 +49,10 @@ def test_export_filters_by_mode_and_exclusive_time_range() -> None:
     )
 
     exported = export_training_dataset(
-        [first, second, live],
+        [first, second, end_boundary, live],
         mode=DataMode.DEMO,
-        start=datetime(2025, 1, 1, 1, tzinfo=UTC),
-        end=datetime(2025, 1, 1, 2, tzinfo=UTC),
+        start=datetime(2025, 1, 1, 2, tzinfo=UTC),
+        end=datetime(2025, 1, 1, 3, tzinfo=UTC),
     )
 
     assert exported["example_count"] == 1

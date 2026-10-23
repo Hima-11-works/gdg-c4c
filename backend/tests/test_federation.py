@@ -249,6 +249,8 @@ def test_cli_federation_demo_no_db(tmp_path) -> None:
             "--no-db",
             "--out-dir",
             str(out_dir),
+            "--run-id",
+            "ci-federation-test",
         ],
         capture_output=True,
         text=True,
@@ -256,11 +258,13 @@ def test_cli_federation_demo_no_db(tmp_path) -> None:
     )
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    payload = json.loads(completed.stdout[completed.stdout.index("{") :])
+    assert "run_id=ci-federation-test" in completed.stdout
+    assert "status=succeeded" in completed.stdout
+    run_dir = out_dir / "ci-federation-test"
+    payload = json.loads((run_dir / "status.json").read_text(encoding="utf-8"))
     assert payload["status"] == "succeeded"
     assert payload["raw_rows_exchanged_to_aggregator"] == 0
 
-    run_dir = out_dir / payload["run_id"]
     updates = sorted(path.name for path in (run_dir / "updates").glob("*.json"))
     assert updates == ["region-a.json", "region-b.json"]
     # The aggregate artifact exists and matches the reported hash.

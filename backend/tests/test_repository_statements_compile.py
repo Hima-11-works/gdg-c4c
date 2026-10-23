@@ -472,12 +472,14 @@ def test_model_version_statements() -> None:
         synthetic_only=True,
         status=ModelStatus.CANDIDATE,
     )
-    upsert = _sql(model_version_repo._upsert_stmt(version))
+    upsert, params = _sql_and_params(model_version_repo._upsert_stmt(version))
 
     assert "INSERT INTO model_version" in upsert
     assert "ON CONFLICT (id) DO UPDATE" in upsert
     assert "feature_schema_version" in upsert
     assert "synthetic_only" in upsert
+    assert list(params.values()).count(["rain_1h_mm", "wind_speed_ms"]) == 1
+    assert list(params.values()).count({"mae": 12.3}) == 1
     assert "FROM model_version" in _sql(model_version_repo._get_stmt("candidate-1h"))
     listing = _sql(model_version_repo._list_stmt("delhi-ncr", 1.0, "candidate"))
     assert "model_version.region = 'delhi-ncr'" in listing

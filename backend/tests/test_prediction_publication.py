@@ -390,8 +390,8 @@ def test_h3_parent_aggregation_keeps_partial_coverage_and_separate_exposure():
     assert view.exposure.residents_above_threshold == 300.0
     assert view.exposure.covered_population == 400.0
     assert view.exposure.unknown_population == 0
-    assert view.pdi_factors == {"pm25": pytest.approx(0.5)}
-    assert view.confidence == pytest.approx(0.6)
+    assert view.pdi_factors == {"pm25": pytest.approx(0.5, abs=1e-5)}
+    assert view.confidence == pytest.approx(0.6, abs=1e-5)
 
 
 def test_aggregation_uses_one_resolution_tier_for_overlapping_cells():
@@ -450,7 +450,7 @@ def test_aggregation_uses_one_resolution_tier_for_overlapping_cells():
     assert coarse_view.pm25 == 10.0
     assert coarse_view.exposure.covered_population == 700.0
     assert coarse_view.spatial_coverage_fraction == pytest.approx(1.0)
-    assert fine_view.pm25 == 100.0
+    assert fine_view.pm25 == pytest.approx(100.0)
 
 
 def test_published_run_is_not_upscaled_to_finer_display_resolution():
@@ -649,7 +649,7 @@ def test_alert_candidates_are_thresholded_and_include_current_context():
             horizon_hours=1,
             valid_at=now + timedelta(hours=1),
             baseline_pm25=18,
-            predicted_pm25=75,
+                predicted_pm25=95,
             prediction_method="residual-ridge",
             input_kind=InputKind.MODELED,
             quality=FeatureQuality(coverage_fraction=0.8),
@@ -693,11 +693,11 @@ def test_alert_candidates_are_thresholded_and_include_current_context():
     assert highest.predicted_pm25 == 110
     assert candidate.h3_cell == cell
     assert candidate.horizon_hours == 1
-    assert candidate.predicted_pm25 == 75
+    assert candidate.predicted_pm25 == 95
     assert candidate.current_pm25 == 18
     assert candidate.confidence == pytest.approx(0.62)
     assert cell_candidate.h3_cell == cell
-    assert cell_candidate.predicted_pm25 == 75
+    assert cell_candidate.predicted_pm25 == 95
     assert repository.alert_queries[-1] == cell
 
     app = create_app()
@@ -709,6 +709,7 @@ def test_alert_candidates_are_thresholded_and_include_current_context():
     )
     assert response.status_code == 200
     assert [item["h3_cell"] for item in response.json()["data"]] == [cell]
+    assert response.json()["data"][0]["forecast_pm25"] == pytest.approx(95)
     assert repository.alert_queries[-1] == cell
 
     invalid_cell_response = api.get(

@@ -30,6 +30,10 @@ from tests.fakes import FakeAlertRepository, FakeGridStateRepository, FakeSensor
 
 NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 BBOX = BoundingBox(min_lat=28.40, min_lon=76.80, max_lat=28.90, max_lon=77.50)
+# The end-to-end case needs the five synthetic stations and the hotspot's
+# immediate neighbors; a smaller evidence area keeps this physics regression
+# useful in CI without forecasting thousands of unrelated cells.
+E2E_BBOX = BoundingBox(min_lat=28.52, min_lon=77.11, max_lat=28.65, max_lon=77.50)
 
 
 def _settings(**overrides) -> Settings:
@@ -175,8 +179,10 @@ async def test_demo_mode_end_to_end_produces_a_hotspot_downwind_movement_and_an_
     # --- ingestion: the only demo-mode-aware step in this whole test ---
     sensor_repo = FakeSensorReadingRepository()
     pollution_provider = DemoPollutionDataProvider()
-    for reading in await pollution_provider.fetch_readings(BBOX, since=NOW - timedelta(hours=3)):
+    readings = await pollution_provider.fetch_readings(BBOX, since=NOW - timedelta(hours=3))
+    for reading in readings:
         sensor_repo.add(reading)
+    run_at = max(reading.measured_at for reading in readings)
 
     # --- grid computation: the real estimator + PDI, unaware of demo mode ---
     grid_repo = FakeGridStateRepository()
@@ -196,12 +202,16 @@ async def test_demo_mode_end_to_end_produces_a_hotspot_downwind_movement_and_an_
         sensor_repo,
         grid_repo,
     )
+    # Keep the model check focused on the demo stations and hotspot area.
+    # The full configured coverage is exercised by pipeline tests.
     grid_result = grid_service.run(
-        BBOX, timestamp=NOW, sensor_max_age=timedelta(hours=settings.ingest_max_reading_age_hours)
+        E2E_BBOX,
+        timestamp=run_at,
+        sensor_max_age=timedelta(hours=settings.ingest_max_reading_age_hours),
     )
     assert grid_result.succeeded is True
 
-    hotspot_state = grid_repo.get(hotspot_cell, NOW)
+    hotspot_state = grid_repo.get(hotspot_cell, run_at)
     assert hotspot_state is not None
     assert hotspot_state.pm25 == pytest.approx(280.0, abs=5.0)  # the hotspot is clearly visible
 
@@ -219,7 +229,7 @@ async def test_demo_mode_end_to_end_produces_a_hotspot_downwind_movement_and_an_
             wind_direction=sample.wind_direction,
             precipitation=sample.precipitation,
             boundary_layer_height=sample.boundary_layer_height,
-            measured_at=NOW,
+            measured_at=run_at,
             source="demo",
         )
         for cell, point, sample in zip(cells, points, weather_samples, strict=True)
@@ -236,7 +246,7 @@ async def test_demo_mode_end_to_end_produces_a_hotspot_downwind_movement_and_an_
         missing_weather_confidence_penalty=settings.dispersion_missing_weather_confidence_penalty,
     )
     forecast_result = dispersion_model.forecast(
-        grid_result.states, weather_readings, hours=(1, 3, 6), generated_at=NOW
+        grid_result.states, weather_readings, hours=(1, 3, 6), generated_at=run_at
     )
     predicted = {(f.h3_cell, f.forecast_hours): f.predicted_pm25 for f in forecast_result.forecasts}
 
@@ -267,7 +277,7 @@ async def test_demo_mode_end_to_end_produces_a_hotspot_downwind_movement_and_an_
         active_lookback=timedelta(hours=settings.alert_active_lookback_hours),
     )
     alert_result = alert_service.run(
-        grid_result.states, forecast_result.forecasts, generated_at=NOW
+        grid_result.states, forecast_result.forecasts, generated_at=run_at
     )
 
     assert alert_result.alerts_created >= 1

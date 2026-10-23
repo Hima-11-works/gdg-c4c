@@ -93,6 +93,7 @@ def test_forecast_grid_returns_real_data_when_present(
             "generated_at": "2026-01-01T00:00:00Z",
             "forecast_time": "2026-01-01T03:00:00Z",
             "forecast_hours": 3,
+            "forecast_minutes": 180,
             "predicted_pm25": 25.0,
             "confidence": 0.7,
         }
@@ -104,13 +105,13 @@ def test_forecast_grid_returns_real_data_when_present(
     assert other.json()["is_demo"] is True
 
 
-def test_forecast_grid_requires_hours(api_client: TestClient) -> None:
+def test_forecast_grid_defaults_to_one_hour(api_client: TestClient) -> None:
     response = api_client.get("/api/v1/grid/forecast")
 
-    assert response.status_code == 422
+    assert response.status_code == 200
     body = response.json()
-    assert body["error"]["code"] == "validation_error"
-    assert body["error"]["details"]
+    assert body["data"]
+    assert all(row["forecast_minutes"] == 60 for row in body["data"])
 
 
 def test_forecast_grid_rejects_invalid_hours(api_client: TestClient) -> None:

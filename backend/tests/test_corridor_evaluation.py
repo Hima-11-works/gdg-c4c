@@ -483,7 +483,9 @@ def test_api_returns_the_event_and_its_evidence(monkeypatch) -> None:
 
     catalog = client.get("/api/v1/corridors")
     assert catalog.status_code == 200
-    [entry] = catalog.json()["data"]
+    entry = next(
+        item for item in catalog.json()["data"] if item["corridor_id"] == "delhi-kanpur"
+    )
     assert entry["corridor_id"] == "delhi-kanpur"
     assert entry["geometry_source"] == "illustrative"
     assert "not a road route" in entry["geometry_note"]

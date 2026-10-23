@@ -1,12 +1,20 @@
 {
   "meta": {
     "region": "delhi-ncr",
+    "latest_run_id": "demo-winter-20250115T080000Z",
+    "generated_at": "2025-01-15T08:00:00Z",
     "native_resolution": 8,
     "supported_display_resolutions": [3, 4, 5, 8],
     "supported_horizons_hours": [1, 2, 3, 4, 5, 6],
     "feature_schema_version": "environmental-v2",
     "model_version": "baseline-demo-1",
-    "data_mode": "demo"
+    "data_mode": "demo",
+    "is_demo": true,
+    "is_fallback": false,
+    "fallback_reason": null,
+    "age_seconds": 0,
+    "is_stale": false,
+    "source_health": []
   },
   "current": {
     "generated_at": "2025-01-15T08:00:00Z",
@@ -16,11 +24,14 @@
     "data": [
       {
         "h3_cell": "8843a136a1fffff",
+        "latitude": 25.184259237224307,
+        "longitude": 55.27200044889869,
         "valid_at": "2025-01-15T08:00:00Z",
         "pm25": 164.2,
         "pm25_unit": "ug/m3",
         "pdi": 76.4,
         "pdi_version": "heuristic-v1",
+        "confidence": 0.8,
         "metadata": {
           "input_kind": "synthetic",
           "prediction_method": "baseline_demo",
@@ -88,6 +99,8 @@
         "upper_pm25": null,
         "forecast_hours": 3.0,
         "forecast_time": "2025-01-15T11:00:00Z",
+        "generated_at": "2025-01-15T08:00:00Z",
+        "confidence": 0.65,
         "metadata": {
           "input_kind": "synthetic",
           "prediction_method": "baseline_demo",

@@ -120,7 +120,7 @@ def test_live_mode_reports_why_the_coarse_tier_is_empty() -> None:
 
     assert overview.snapshots == []
     assert overview.unavailable_reason is not None
-    assert "live mode" in overview.unavailable_reason
+    assert "no fresh OpenAQ PM2.5 observations" in overview.unavailable_reason
 
 
 def test_live_national_overview_ignores_persisted_demo_readings() -> None:

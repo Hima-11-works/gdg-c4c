@@ -431,8 +431,7 @@ def test_client_and_aggregator_entry_points_load() -> None:
     assert callable(client_module.main)
     assert callable(aggregator_module.main)
     # The client refuses an unknown participant before doing anything.
-    with pytest.raises(SystemExit):
-        client_module.main(["--participant", "region-z", "--run-id", RUN_ID])
+    assert client_module.main(["--participant", "region-z", "--run-id", RUN_ID]) == 1
 
 
 def test_default_client_stores_are_per_participant() -> None:
