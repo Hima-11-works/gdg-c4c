@@ -1,8 +1,7 @@
 name: Pollution pipeline
 
-# Runs the full ingestion -> grid -> forecast -> alerts pipeline against the
-# hosted database. The app itself has no scheduler (see README "MVP
-# limitations"); this workflow is that scheduler.
+# Invokes the collector worker against the hosted database. PostgreSQL owns
+# durable job leases and provider budgets; Actions only wakes due work.
 #
 # Repository configuration:
 #   secret   DATABASE_URL         direct (non-pooler) Neon connection string
@@ -19,8 +18,11 @@ name: Pollution pipeline
 
 on:
   schedule:
-    # Hourly on the hour, UTC. Scheduled runs can be delayed under load.
-    - cron: "0 * * * *"
+    # The worker claims only database jobs that are due; this cadence allows
+    # source schedules shorter than GitHub Actions' previous hourly cadence.
+    - cron: "*/10 * * * *"
+    # Run the storage retention sweep daily, not on every collector wake-up.
+    - cron: "17 0 * * *"
   workflow_dispatch:
 
 permissions:
@@ -84,9 +86,9 @@ jobs:
       - name: Apply migrations
         run: alembic upgrade head
 
-      - name: Run pipeline
-        run: python -m app.pipeline.run
+      - name: Run due collector jobs
+        run: python -m app.cli collect-due
 
       - name: Verify photo storage and expire old evidence
-        if: ${{ vars.CITIZEN_MEDIA_STORAGE == 's3' }}
+        if: ${{ (github.event_name == 'workflow_dispatch' || github.event.schedule == '17 0 * * *') && vars.CITIZEN_MEDIA_STORAGE == 's3' }}
         run: python -m app.cli verify-media-storage --sweep-expired

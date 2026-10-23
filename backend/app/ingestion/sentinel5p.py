@@ -10,11 +10,14 @@ pixels to the candidate detector.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import logging
 import math
+import random
 import re
 import tempfile
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
@@ -25,6 +28,7 @@ import numpy as np
 
 from app.domain.hotspots import ImageryArtifact, ImageryTile
 from app.domain.types import BoundingBox
+from app.ingestion.http import RequestBudget, _reset_time
 
 CATALOG_URL = "https://catalogue.dataspace.copernicus.eu/odata/v1/Products"
 IDENTITY_TOKEN_URL = (
@@ -44,6 +48,7 @@ NO2_MIN_QUALITY_DEFAULT = 0.50
 LICENSE = "Contains modified Copernicus Sentinel data, processed by ESA, CC BY-SA 3.0 IGO"
 _VERSION_RE = re.compile(r"_(\d{2})_(\d{2})_(\d{2})(?:_|\.nc$)")
 _QA_THRESHOLD_EPSILON = 1e-6
+logger = logging.getLogger(__name__)
 
 
 def normalize_uvai(value: float) -> float:
@@ -426,7 +431,8 @@ def parse_no2_product(
         notes=(
             f"CDSE OData product {product_name}; {len(tiles)} H3 cells from "
             f"{len(rows)} QA-qualified pixels (qa_value > {min_quality:g}); "
-            f"{excluded_quality} in-bounds pixels rejected by QA. Cell values are means in {NO2_UNIT}. "
+            f"{excluded_quality} in-bounds pixels rejected by QA. "
+            f"Cell values are means in {NO2_UNIT}. "
             "Satellite tropospheric NO2 column density is a column total and not ground-level "
             "concentration or CPCB AQI."
         ),
@@ -445,6 +451,7 @@ class CopernicusSentinel5PProvider:
         max_products: int = 3,
         max_product_bytes: int = 150_000_000,
         max_tiles: int = 20_000,
+        request_budget: RequestBudget | None = None,
     ) -> None:
         if not refresh_token.strip():
             raise ValueError("CDSE refresh token is required")
@@ -454,12 +461,75 @@ class CopernicusSentinel5PProvider:
         self.max_products = max_products
         self.max_product_bytes = max_product_bytes
         self.max_tiles = max_tiles
+        self.request_budget = request_budget
         self._access_token: str | None = None
+
+    async def _reserve(self, url: str, *, bytes_reserved: int = 0) -> int | None:
+        if self.request_budget is None:
+            return None
+        key_hash = hashlib.sha256(f"cdse\0{url}".encode("utf-8")).hexdigest()
+        reservation = await self.request_budget.reserve_request(
+            provider="cdse",
+            request_key_hash=key_hash,
+            request_units=1,
+            bytes_reserved=bytes_reserved,
+        )
+        if not reservation.allowed or reservation.reservation_id is None:
+            retry_at = reservation.retry_at.isoformat() if reservation.retry_at else "later"
+            raise RuntimeError(f"CDSE request paused by shared budget until {retry_at}")
+        return reservation.reservation_id
+
+    async def _complete(
+        self,
+        reservation_id: int | None,
+        *,
+        status_code: int,
+        response: httpx.Response | None = None,
+        bytes_used: int | None = None,
+    ) -> None:
+        if reservation_id is None or self.request_budget is None:
+            return
+        cooldown_until = None
+        if response is not None and response.status_code == 429:
+            cooldown_until = _reset_time(
+                response.headers, provider="cdse", now=datetime.now(UTC)
+            ) + timedelta(seconds=random.uniform(1.0, 5.0))
+        try:
+            await self.request_budget.complete_request(
+                reservation_id=reservation_id,
+                status_code=status_code,
+                bytes_used=bytes_used,
+                cooldown_until=cooldown_until,
+            )
+        except Exception:
+            # The reservation remains charged and expires by lease if this
+            # bookkeeping write fails; do not lose a successfully downloaded
+            # source product or leak its temporary file.
+            logger.exception("Could not complete CDSE request-budget record")
+
+    async def _request(self, method: str, url: str, **kwargs: object) -> httpx.Response:
+        reservation_id = await self._reserve(url)
+        response: httpx.Response | None = None
+        try:
+            response = await self.client.request(method, url, **kwargs)
+            return response
+        except httpx.TransportError:
+            await self._complete(reservation_id, status_code=599)
+            raise
+        finally:
+            if response is not None:
+                await self._complete(
+                    reservation_id,
+                    status_code=response.status_code,
+                    response=response,
+                    bytes_used=len(response.content),
+                )
 
     async def _get_access_token(self) -> str:
         if self._access_token:
             return self._access_token
-        response = await self.client.post(
+        response = await self._request(
+            "POST",
             IDENTITY_TOKEN_URL,
             data={
                 "grant_type": "refresh_token",
@@ -484,7 +554,8 @@ class CopernicusSentinel5PProvider:
         since: datetime,
         until: datetime,
     ) -> list[dict[str, object]]:
-        response = await self.client.get(
+        response = await self._request(
+            "GET",
             CATALOG_URL,
             params={
                 "$filter": build_catalog_filter(bbox=bbox, since=since, until=until),
@@ -503,39 +574,85 @@ class CopernicusSentinel5PProvider:
     async def _download(self, product_id: str) -> Path:
         token = await self._get_access_token()
         url = f"{DOWNLOAD_URL}({product_id})/$value"
-        async with self.client.stream(
-            "GET",
-            url,
-            headers={"Authorization": f"Bearer {token}"},
-            follow_redirects=False,
-            timeout=self.timeout_seconds,
-        ) as response:
-            if response.status_code not in {301, 302, 303, 307, 308}:
-                return await self._save_stream(response)
-            location = response.headers.get("location")
-            if not location:
-                raise RuntimeError("CDSE product download redirect has no location")
-            redirected_url = urljoin(url, location)
-            original_host = urlparse(url).hostname
-            redirected_host = urlparse(redirected_url).hostname
-            # CDSE may redirect to a signed object-store URL. Never forward the
-            # bearer token to a different host; that URL already carries access.
-            headers = (
-                {"Authorization": f"Bearer {token}"}
-                if redirected_host == original_host
-                else {}
+        reservation_id = await self._reserve(url, bytes_reserved=self.max_product_bytes)
+        redirect_reservation_id: int | None = None
+        response: httpx.Response | None = None
+        saved_path: Path | None = None
+        try:
+            async with asyncio.timeout(self.timeout_seconds * 10):
+                async with self.client.stream(
+                    "GET",
+                    url,
+                    headers={"Authorization": f"Bearer {token}"},
+                    follow_redirects=False,
+                    timeout=self.timeout_seconds,
+                ) as response:
+                    if response.status_code not in {301, 302, 303, 307, 308}:
+                        saved_path = await self._save_stream(response)
+                    else:
+                        location = response.headers.get("location")
+                        if not location:
+                            raise RuntimeError("CDSE product download redirect has no location")
+                        redirected_url = urljoin(url, location)
+                        original_host = urlparse(url).hostname
+                        redirected_host = urlparse(redirected_url).hostname
+                        # CDSE may redirect to a signed object-store URL. Never forward the
+                        # bearer token to a different host; that URL already carries access.
+                        headers = (
+                            {"Authorization": f"Bearer {token}"}
+                            if redirected_host == original_host
+                            else {}
+                        )
+                        # CDSE's signed object-store redirect is a separate
+                        # outbound request, but not a second product transfer.
+                        redirect_reservation_id = await self._reserve(redirected_url)
+                if saved_path is None:
+                    async with self.client.stream(
+                        "GET",
+                        redirected_url,
+                        headers=headers,
+                        follow_redirects=True,
+                        timeout=self.timeout_seconds,
+                    ) as response:
+                        saved_path = await self._save_stream(response)
+            if saved_path is None:
+                raise RuntimeError("CDSE product download completed without a saved file")
+            return saved_path
+        except (TimeoutError, httpx.TransportError):
+            await self._complete(reservation_id, status_code=599)
+            await self._complete(redirect_reservation_id, status_code=599)
+            raise
+        except Exception:
+            status_code = response.status_code if response is not None else 599
+            await self._complete(
+                reservation_id,
+                status_code=status_code,
+                response=response,
             )
-        async with self.client.stream(
-            "GET",
-            redirected_url,
-            headers=headers,
-            follow_redirects=True,
-            timeout=self.timeout_seconds,
-        ) as response:
-            return await self._save_stream(response)
+            await self._complete(
+                redirect_reservation_id,
+                status_code=status_code,
+                response=response,
+            )
+            raise
+        finally:
+            if saved_path is not None:
+                await self._complete(
+                    reservation_id,
+                    status_code=200,
+                    response=response,
+                    bytes_used=saved_path.stat().st_size,
+                )
+                await self._complete(
+                    redirect_reservation_id,
+                    status_code=response.status_code if response is not None else 200,
+                    response=response,
+                )
 
     async def _save_stream(self, response: httpx.Response) -> Path:
-        response.raise_for_status()
+        if response.status_code >= 400:
+            # Avoid echoing signed object-store URLs from redirect responses.
+            raise RuntimeError(f"CDSE product download failed with HTTP {response.status_code}")
         content_length = response.headers.get("content-length")
         if content_length is not None and int(content_length) > self.max_product_bytes:
             raise RuntimeError("CDSE product exceeds configured download-size limit")

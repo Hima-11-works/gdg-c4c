@@ -7,15 +7,14 @@ retry/error messages.
 
 from __future__ import annotations
 
-import asyncio
 import csv
 import hashlib
 import io
 import logging
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from collections.abc import Callable
 from urllib.parse import quote
 
 import h3
@@ -24,9 +23,9 @@ import httpx
 from app.domain.environmental_observations import FireHotspot
 from app.domain.providers import ProviderError
 from app.domain.types import BoundingBox
+from app.ingestion import http as http_helper
 
 logger = logging.getLogger(__name__)
-RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,41 +243,33 @@ class FirmsProvider:
                 str(day_range),
             )
         )
-        response: httpx.Response | None = None
-        last_error = "unknown upstream failure"
-        for attempt in range(1, self._max_retries + 1):
-            try:
-                response = await self._client.get(url, timeout=self._timeout)
-            except (httpx.TimeoutException, httpx.TransportError) as exc:
-                last_error = type(exc).__name__
-            else:
-                if response.status_code == 200:
-                    body = response.text
-                    lower_body = body[:300].lower()
-                    if "invalid map key" in lower_body or "map_key" in lower_body and "error" in lower_body:
-                        raise ProviderError("NASA FIRMS rejected the configured MAP_KEY")
-                    try:
-                        fetched_at = self._clock().astimezone(UTC)
-                        return parse_firms_csv(
-                            body,
-                            source=self._source,
-                            bbox=bbox,
-                            dataset_id=dataset_id,
-                            ingestion_run_id=ingestion_run_id,
-                            fetched_at=fetched_at,
-                            h3_resolution=self._h3_resolution,
-                            stale_after_hours=self._stale_after_hours,
-                        )
-                    except (csv.Error, ValueError) as exc:
-                        raise ProviderError(f"NASA FIRMS returned an invalid CSV feed: {exc}") from exc
-                if response.status_code not in RETRYABLE_STATUS_CODES:
-                    raise ProviderError(
-                        f"NASA FIRMS request failed with HTTP {response.status_code}"
-                    )
-                last_error = f"HTTP {response.status_code}"
-            logger.warning("NASA FIRMS request failed (%s), attempt %d/%d", last_error, attempt, self._max_retries)
-            if attempt < self._max_retries:
-                await asyncio.sleep(0.5 * 2 ** (attempt - 1))
-        raise ProviderError(
-            f"NASA FIRMS request failed after {self._max_retries} attempts ({last_error})"
-        )
+        try:
+            payload = await http_helper.get_bytes(
+                self._client,
+                url,
+                params={},
+                timeout_seconds=self._timeout,
+                max_retries=self._max_retries,
+                log_prefix="NASA FIRMS",
+                provider="firms",
+            )
+        except http_helper.RequestFailedError as exc:
+            raise ProviderError(f"NASA FIRMS request failed: {exc}") from exc
+        body = payload.decode("utf-8-sig", errors="replace")
+        lower_body = body[:300].lower()
+        if "invalid map key" in lower_body or "map_key" in lower_body and "error" in lower_body:
+            raise ProviderError("NASA FIRMS rejected the configured MAP_KEY")
+        try:
+            fetched_at = self._clock().astimezone(UTC)
+            return parse_firms_csv(
+                body,
+                source=self._source,
+                bbox=bbox,
+                dataset_id=dataset_id,
+                ingestion_run_id=ingestion_run_id,
+                fetched_at=fetched_at,
+                h3_resolution=self._h3_resolution,
+                stale_after_hours=self._stale_after_hours,
+            )
+        except (csv.Error, ValueError) as exc:
+            raise ProviderError(f"NASA FIRMS returned an invalid CSV feed: {exc}") from exc

@@ -15,6 +15,7 @@ worse than an empty layer, which is what the toggle already looks like.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -106,6 +107,12 @@ class Tile:
     cache_control: str
 
 
+@dataclass(slots=True)
+class _InFlightTile:
+    lock: asyncio.Lock
+    users: int = 0
+
+
 def _yesterday_utc() -> date:
     """The newest GIBS daily composite that is reliably complete. Today's is
     still being written (the classic half-black-map), so the default is
@@ -191,10 +198,12 @@ class TileService:
     ) -> None:
         self._settings = settings
         self._client_factory = client_factory or httpx.AsyncClient
+        self._shared_budget_enabled = client_factory is None
         self._cache = _TileCache(
             max_entries=settings.tile_cache_max_entries,
             ttl_seconds=settings.tile_cache_ttl_seconds,
         )
+        self._in_flight: dict[tuple, _InFlightTile] = {}
 
     async def gibs_tile(
         self, *, layer: str, z: int, y: int, x: int, day: date | None = None
@@ -209,18 +218,16 @@ class TileService:
 
         resolved = day or _yesterday_utc()
         key = ("gibs", layer, resolved.isoformat(), z, y, x)
-        cached = self._cache.get(key)
-        if cached is not None:
-            return cached
-
         url = (
             f"{self._settings.gibs_base_url.rstrip('/')}/{spec.product}/default/"
             f"{resolved.isoformat()}/{spec.matrix_set}/{z}/{y}/{x}.{spec.extension}"
         )
-        content = await self._fetch(url, params={})
-        tile = Tile(content, spec.media_type, GIBS_CACHE_CONTROL)
-        self._cache.put(key, tile)
-        return tile
+        return await self._get_or_fetch(
+            key,
+            media_type=spec.media_type,
+            cache_control=GIBS_CACHE_CONTROL,
+            fetch=lambda: self._fetch(url, params={}, provider="gibs"),
+        )
 
     async def no2_tile(self, *, z: int, y: int, x: int) -> Tile:
         """One Sentinel-5P NO2 tile, via a WMS GetMap passthrough.
@@ -238,10 +245,6 @@ class TileService:
         _assert_tile_coords(z, y, x, max_zoom=NO2_MAX_ZOOM)
 
         key = ("no2", z, y, x)
-        cached = self._cache.get(key)
-        if cached is not None:
-            return cached
-
         min_x, min_y, max_x, max_y = tile_bbox_3857(z, y, x)
         params: dict[str, object] = {
             "service": "WMS",
@@ -262,15 +265,60 @@ class TileService:
         # httpx merges `params` into whatever query string the configured URL
         # already carries, so an endpoint that keeps its own auth or instance
         # id in the URL still works.
-        content = await self._fetch(settings.no2_wms_url, params=params)
-        tile = Tile(content, "image/png", NO2_CACHE_CONTROL)
-        self._cache.put(key, tile)
-        return tile
+        return await self._get_or_fetch(
+            key,
+            media_type="image/png",
+            cache_control=NO2_CACHE_CONTROL,
+            fetch=lambda: self._fetch(
+                settings.no2_wms_url,
+                params=params,
+                provider="satellite-tile",
+            ),
+        )
 
-    async def _fetch(self, url: str, *, params: dict[str, object]) -> bytes:
+    async def _get_or_fetch(
+        self,
+        key: tuple,
+        *,
+        media_type: str,
+        cache_control: str,
+        fetch,
+    ) -> Tile:
+        cached = self._cache.get(key)
+        if cached is not None:
+            return cached
+        entry = self._in_flight.get(key)
+        if entry is None:
+            entry = _InFlightTile(asyncio.Lock())
+            self._in_flight[key] = entry
+        entry.users += 1
+        try:
+            async with entry.lock:
+                cached = self._cache.get(key)
+                if cached is not None:
+                    return cached
+                content = await fetch()
+                tile = Tile(content, media_type, cache_control)
+                self._cache.put(key, tile)
+                return tile
+        finally:
+            entry.users -= 1
+            if entry.users == 0 and self._in_flight.get(key) is entry:
+                self._in_flight.pop(key, None)
+
+    async def _fetch(self, url: str, *, params: dict[str, object], provider: str) -> bytes:
         settings = self._settings
         try:
             async with self._client_factory(timeout=settings.tile_timeout_seconds) as client:
+                if self._shared_budget_enabled:
+                    from app.db.session import get_session_factory
+                    from app.services.provider_budget import SqlProviderRequestBudget
+
+                    http_helper.attach_request_budget(
+                        client,
+                        provider=provider,
+                        budget=SqlProviderRequestBudget(get_session_factory()),
+                    )
                 return await http_helper.get_bytes(
                     client,
                     url,
@@ -278,6 +326,7 @@ class TileService:
                     timeout_seconds=settings.tile_timeout_seconds,
                     max_retries=settings.tile_max_retries,
                     log_prefix="tile proxy",
+                    provider=provider,
                 )
         except http_helper.RequestFailedError as exc:
             if exc.status == 404:

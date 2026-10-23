@@ -12,6 +12,8 @@ validation can't drift between them.
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 from fastapi import Depends, Header, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
@@ -48,12 +50,12 @@ from app.services.fires import FireHotspotService
 from app.services.gemini_assessment import GeminiAssessmentService
 from app.services.grid import GridService
 from app.services.hotspot_detection import HotspotScanStore, build_store
+from app.services.incident_webhook import IncidentWebhookService
 from app.services.incidents import (
     ActorNotPermittedError,
     IncidentService,
     SimulatorDisabledError,
 )
-from app.services.incident_webhook import IncidentWebhookService
 from app.services.media_storage import (
     build_media_store,
 )
@@ -255,9 +257,9 @@ def get_hotspot_scan_store(session: Session = Depends(get_db)) -> HotspotScanSto
     return build_store(get_settings(), session=session)
 
 
+@lru_cache(maxsize=1)
 def get_tile_service() -> TileService:
-    """No session: the tile proxy reads settings and one upstream HTTP call,
-    never the database."""
+    """Reuse one process cache/lock set; upstream misses use shared DB quotas."""
     return TileService(get_settings())
 
 

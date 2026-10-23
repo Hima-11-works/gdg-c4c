@@ -332,6 +332,7 @@ class OpenAQProvider:
             timeout_seconds=self._timeout_seconds,
             max_retries=self._max_retries,
             log_prefix="OpenAQ",
+            provider="openaq",
         )
 
 
@@ -384,6 +385,7 @@ class OpenAQNationalOverviewProvider:
                     timeout_seconds=self._timeout_seconds,
                     max_retries=self._max_retries,
                     log_prefix="OpenAQ national overview",
+                    provider="openaq",
                 )
             except http.RequestFailedError as exc:
                 raise ProviderError(f"OpenAQ national overview: {exc}") from exc

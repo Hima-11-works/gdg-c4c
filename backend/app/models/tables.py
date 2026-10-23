@@ -612,6 +612,75 @@ ingestion_source_health = Table(
     Index("ix_ingestion_source_health_status", "status", "fetched_at"),
 )
 
+# Shared source quota and scheduler state. Requests are reserved before network
+# I/O so concurrent workers cannot spend the same remaining quota twice.
+provider_budget_state = Table(
+    "provider_budget_state",
+    metadata,
+    Column("provider", String(40), primary_key=True),
+    Column("cooldown_until", DateTime(timezone=True), nullable=True),
+    Column("cooldown_reason", String(120), nullable=True),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+
+provider_request_usage = Table(
+    "provider_request_usage",
+    metadata,
+    Column("id", BigInteger, primary_key=True),
+    Column("provider", String(40), nullable=False),
+    Column("request_key_hash", String(64), nullable=False),
+    Column("reserved_at", DateTime(timezone=True), nullable=False),
+    Column("completed_at", DateTime(timezone=True), nullable=True),
+    Column("request_units", Integer, nullable=False),
+    Column("bytes_reserved", BigInteger, nullable=False, server_default="0"),
+    Column("bytes_used", BigInteger, nullable=True),
+    Column("status_code", SmallInteger, nullable=True),
+    Column("outcome", String(20), nullable=False, server_default="in_flight"),
+    Column("cooldown_until", DateTime(timezone=True), nullable=True),
+    Column("remaining_units", Integer, nullable=True),
+    CheckConstraint("request_units > 0", name="ck_provider_usage_units_positive"),
+    CheckConstraint("bytes_reserved >= 0", name="ck_provider_usage_bytes_reserved"),
+    CheckConstraint("bytes_used IS NULL OR bytes_used >= 0", name="ck_provider_usage_bytes_used"),
+    CheckConstraint(
+        "outcome IN ('in_flight','success','empty','client_error','server_error','rate_limited','transport_error')",
+        name="ck_provider_usage_outcome",
+    ),
+    Index("ix_provider_usage_window", "provider", "reserved_at"),
+    Index("ix_provider_usage_active", "provider", "completed_at", "reserved_at"),
+)
+
+scheduled_job = Table(
+    "scheduled_job",
+    metadata,
+    Column("job_key", String(80), primary_key=True),
+    Column("interval_seconds", Integer, nullable=False),
+    Column("enabled", Boolean, nullable=False, server_default=text("true")),
+    Column("next_run_at", DateTime(timezone=True), nullable=False),
+    Column("lease_owner", String(120), nullable=True),
+    Column("lease_expires_at", DateTime(timezone=True), nullable=True),
+    Column("last_started_at", DateTime(timezone=True), nullable=True),
+    Column("last_finished_at", DateTime(timezone=True), nullable=True),
+    Column("last_success_at", DateTime(timezone=True), nullable=True),
+    Column("consecutive_failures", Integer, nullable=False, server_default="0"),
+    Column("last_error", String(500), nullable=True),
+    Column("cursor", JSONB, nullable=False, server_default=text("'{}'::jsonb")),
+    Column("input_hash", String(64), nullable=True),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint("interval_seconds > 0", name="ck_scheduled_job_interval_positive"),
+    CheckConstraint("consecutive_failures >= 0", name="ck_scheduled_job_failures_nonnegative"),
+    Index("ix_scheduled_job_due", "enabled", "next_run_at", "lease_expires_at"),
+)
+
+scheduler_heartbeat = Table(
+    "scheduler_heartbeat",
+    metadata,
+    Column("worker_id", String(120), primary_key=True),
+    Column("started_at", DateTime(timezone=True), nullable=False),
+    Column("last_tick_at", DateTime(timezone=True), nullable=False),
+    Column("last_heartbeat_at", DateTime(timezone=True), nullable=False),
+    Column("last_error", String(500), nullable=True),
+)
+
 fire_hotspot = Table(
     "fire_hotspot",
     metadata,

@@ -43,8 +43,8 @@ import uuid
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 
-import httpx
 import h3
+import httpx
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
@@ -70,6 +70,7 @@ from app.domain.types import BoundingBox, Forecast, GridState, SensorReading, We
 from app.ingestion.demo_reports import demo_fire_reports
 from app.ingestion.factory import build_pollution_provider, build_weather_provider
 from app.ingestion.firms import FirmsProvider
+from app.ingestion.http import attach_request_budget
 from app.ingestion.openaq import OpenAQNationalOverviewProvider
 from app.ingestion.sentinel5p import CopernicusSentinel5PProvider, normalized_threshold
 from app.services.alert_generation import AlertGenerationService
@@ -91,6 +92,7 @@ from app.services.ingestion import SensorIngestionService, WeatherIngestionServi
 from app.services.national_overview import INDIA_OVERVIEW_BBOX, build_national_overview
 from app.services.pdi import HeuristicPDIModel
 from app.services.prediction_publication import PredictionPublicationService
+from app.services.provider_budget import SqlProviderRequestBudget
 from app.services.reports import FireReportService, ReportRateLimitedError
 
 logger = logging.getLogger(__name__)
@@ -515,6 +517,9 @@ async def _ingest_sensors(
     pipeline_run_id: str,
 ) -> StageOutcome:
     async with httpx.AsyncClient(timeout=settings.openaq_timeout_seconds) as client:
+        attach_request_budget(
+            client, provider="openaq", budget=SqlProviderRequestBudget(get_session_factory())
+        )
         provider = build_pollution_provider(settings, client)
         if provider is None:
             message = "OPENAQ_API_KEY is not set — skipping sensor ingestion for this run"
@@ -595,6 +600,9 @@ async def _ingest_national_overview_sensors(
         return StageOutcome(dataset_id, False, "skipped (OPENAQ_API_KEY not configured)")
 
     async with httpx.AsyncClient(timeout=settings.openaq_timeout_seconds) as client:
+        attach_request_budget(
+            client, provider="openaq", budget=SqlProviderRequestBudget(get_session_factory())
+        )
         provider = OpenAQNationalOverviewProvider(
             api_key=settings.openaq_api_key.get_secret_value(),
             client=client,
@@ -667,6 +675,9 @@ async def _ingest_fires(
 
     try:
         async with httpx.AsyncClient(timeout=settings.firms_timeout_seconds) as client:
+            attach_request_budget(
+                client, provider="firms", budget=SqlProviderRequestBudget(get_session_factory())
+            )
             provider = FirmsProvider(
                 client,
                 map_key=settings.firms_map_key.get_secret_value(),
@@ -791,6 +802,10 @@ async def _scan_live_satellite_hotspots(
         if isinstance(case_id := summary.get("case_id"), str)
         and case_id.startswith("live-s5p-")
     }
+    # Release the read transaction before catalogue requests and large file
+    # transfers; database writes begin again after the source work completes.
+    if hasattr(session, "rollback"):
+        session.rollback()
 
     now = max(timestamp, datetime.now(UTC))
     since = now - timedelta(hours=settings.hotspot_sentinel5p_max_age_hours)
@@ -804,6 +819,7 @@ async def _scan_live_satellite_hotspots(
                 timeout_seconds=settings.hotspot_sentinel5p_timeout_seconds,
                 max_products=settings.hotspot_sentinel5p_max_products,
                 max_tiles=settings.hotspot_max_tiles,
+                request_budget=SqlProviderRequestBudget(get_session_factory()),
             )
             artifacts = await provider.fetch_new_artifacts(
                 bbox=bbox,
@@ -1077,6 +1093,9 @@ async def _ingest_weather(
     pipeline_run_id: str,
 ) -> StageOutcome:
     async with httpx.AsyncClient(timeout=settings.open_meteo_timeout_seconds) as client:
+        attach_request_budget(
+            client, provider="open-meteo", budget=SqlProviderRequestBudget(get_session_factory())
+        )
         provider = build_weather_provider(settings, client)
         result = await WeatherIngestionService(
             provider,
@@ -1111,6 +1130,27 @@ async def _ingest_weather(
         f"fetched={result.fetched} saved={result.saved} "
         f"skipped_duplicates={result.skipped_duplicates}",
     )
+
+
+async def run_satellite_scan(
+    bbox: BoundingBox, *, timestamp: datetime | None = None
+) -> StageOutcome:
+    """Run the slow satellite source independently from station publication."""
+    settings = get_settings()
+    evaluated_at = timestamp or datetime.now(UTC)
+    pipeline_run_id = _new_run_id(evaluated_at)
+    session = get_session_factory()()
+    try:
+        outcome = await _scan_live_satellite_hotspots(
+            session, settings, bbox, evaluated_at, pipeline_run_id
+        )
+        session.commit()
+        return outcome
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
 
 def _seed_fire_reports(session: Session, settings: Settings, timestamp: datetime) -> StageOutcome:
@@ -1395,8 +1435,10 @@ async def run_pipeline(bbox: BoundingBox, *, timestamp: datetime) -> PipelineRep
         fire_outcome, fire_feed_available, fire_dataset_id = await _ingest_fires(
             session, settings, bbox, pipeline_run_id
         )
-        satellite_hotspot_outcome = await _scan_live_satellite_hotspots(
-            session, settings, bbox, timestamp, pipeline_run_id
+        satellite_hotspot_outcome = StageOutcome(
+            "satellite_hotspot_scanning",
+            True,
+            "deferred to the independent satellite-hotspot-scan scheduled job",
         )
         # FIRMS's available_at is the fetch completion time. Issue the forecast
         # after that time so only data already fetched can enter its features.

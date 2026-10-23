@@ -149,6 +149,7 @@ class OpenMeteoProvider:
                 timeout_seconds=self._timeout_seconds,
                 max_retries=self._max_retries,
                 log_prefix="Open-Meteo",
+                provider="open-meteo",
             )
         except http.RequestFailedError as exc:
             raise ProviderError(f"Open-Meteo: {exc}") from exc

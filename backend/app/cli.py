@@ -10,9 +10,8 @@
     python -m app.cli hotspot-scan --fixture tests/fixtures/hotspots/positive_hotspot.json
 
 Runs one ingestion pass against the bounding box from .env (overridable
-per-call with the flags above) and prints a summary. This is a manual
-trigger for local development — see docs/architecture.md for where a real
-scheduler/worker will eventually call the same services. `export-grid`
+per-call with the flags above) and prints a summary. `collect-due` is the
+database-leased scheduler entry point used by the hosted workflow. `export-grid`
 writes the configured MVP region's H3 coverage as a GeoJSON
 FeatureCollection, for visual inspection (e.g. geojson.io or a GIS tool).
 `forecast` runs DeterministicH3DispersionModel against the latest
@@ -30,7 +29,10 @@ import argparse
 import asyncio
 import json
 import logging
+import os
+import socket
 import sys
+import uuid
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -61,6 +63,7 @@ from app.domain.types import BoundingBox
 from app.ingestion.demo_scenarios import ScenarioGenerator
 from app.ingestion.factory import build_pollution_provider, build_weather_provider
 from app.ingestion.firms import FirmsProvider
+from app.ingestion.http import attach_request_budget
 from app.services.corridor_evaluation import (
     DEFAULT_MIN_LABELS,
     EventNotFoundError,
@@ -111,6 +114,7 @@ from app.services.prediction_queries import (
     DEFAULT_EXPOSURE_THRESHOLD_PM25,
     PredictionQueryService,
 )
+from app.services.provider_budget import SqlProviderRequestBudget
 from app.services.training_data import (
     export_training_dataset,
     generate_synthetic_training_dataset,
@@ -154,6 +158,9 @@ async def _run_ingest(args: argparse.Namespace) -> int:
     session = get_session_factory()()
     try:
         async with httpx.AsyncClient(timeout=settings.openaq_timeout_seconds) as client:
+            attach_request_budget(
+                client, provider="openaq", budget=SqlProviderRequestBudget(get_session_factory())
+            )
             provider = build_pollution_provider(settings, client)
             if provider is None:
                 print(
@@ -182,6 +189,11 @@ async def _run_ingest_weather(args: argparse.Namespace) -> int:
     session = get_session_factory()()
     try:
         async with httpx.AsyncClient(timeout=settings.open_meteo_timeout_seconds) as client:
+            attach_request_budget(
+                client,
+                provider="open-meteo",
+                budget=SqlProviderRequestBudget(get_session_factory()),
+            )
             provider = build_weather_provider(settings, client)
             service = WeatherIngestionService(provider, SqlWeatherReadingRepository(session))
             result = await service.run(bbox)
@@ -202,6 +214,9 @@ async def _run_ingest_fires(args: argparse.Namespace) -> int:
     session = get_session_factory()()
     try:
         async with httpx.AsyncClient() as client:
+            attach_request_budget(
+                client, provider="firms", budget=SqlProviderRequestBudget(get_session_factory())
+            )
             provider = FirmsProvider(
                 client,
                 map_key=settings.firms_map_key.get_secret_value(),
@@ -238,6 +253,118 @@ async def _run_ingest_fires(args: argparse.Namespace) -> int:
     for error in result.run.errors:
         print(f"  {error}", file=sys.stderr)
     return 0 if result.succeeded else 1
+
+
+async def _run_collect_due(_args: argparse.Namespace) -> int:
+    """Claim and execute due jobs, with durable leases shared across workers."""
+    from app.pipeline.run import run_pipeline, run_satellite_scan
+    from app.services.scheduler import SqlJobScheduler
+
+    settings = get_settings()
+    factory = get_session_factory()
+    scheduler = SqlJobScheduler(factory)
+    worker_id = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
+    heartbeat_id = os.environ.get("SCHEDULER_HEARTBEAT_ID", "collector")
+    now = datetime.now(UTC)
+    bbox = BoundingBox(
+        min_lat=settings.ingest_bbox_min_lat,
+        min_lon=settings.ingest_bbox_min_lon,
+        max_lat=settings.ingest_bbox_max_lat,
+        max_lon=settings.ingest_bbox_max_lon,
+    )
+
+    try:
+        await asyncio.to_thread(scheduler.ensure_jobs, now=now)
+        await asyncio.to_thread(scheduler.heartbeat, heartbeat_id, now=now)
+        await SqlProviderRequestBudget(factory).prune_usage(
+            older_than=now - timedelta(days=7)
+        )
+        # Claim one job per workflow tick. A slow satellite scan must not let
+        # another job's lease age while it waits behind it in this process.
+        jobs = await asyncio.to_thread(scheduler.claim_due, worker_id, now=now, limit=1)
+    except SQLAlchemyError:
+        logger.exception("scheduler state is unavailable; no provider work was started")
+        return 1
+
+    failed = False
+    for job in jobs:
+        error: str | None = None
+        try:
+            if job.job_key == "environmental-pipeline":
+                report = await run_pipeline(bbox, timestamp=datetime.now(UTC))
+                succeeded = report.succeeded
+                error = "; ".join(stage.summary for stage in report.stages if not stage.succeeded)
+            elif job.job_key == "satellite-hotspot-scan":
+                outcome = await run_satellite_scan(bbox)
+                succeeded = outcome.succeeded
+                error = None if succeeded else outcome.summary
+            else:
+                succeeded = False
+                error = f"no worker registered for job {job.job_key}"
+        except Exception as exc:  # noqa: BLE001 - persist failure and continue other due jobs
+            logger.exception("scheduled job %s failed", job.job_key)
+            succeeded = False
+            error = f"{type(exc).__name__}: {exc}"
+
+        try:
+            finished = await asyncio.to_thread(
+                scheduler.finish,
+                job,
+                succeeded=succeeded,
+                error=error,
+            )
+            await asyncio.to_thread(scheduler.heartbeat, heartbeat_id, error=error)
+        except SQLAlchemyError:
+            logger.exception("could not persist completion for scheduled job %s", job.job_key)
+            failed = True
+            continue
+        if not finished:
+            logger.error("lease for scheduled job %s was lost before completion", job.job_key)
+            failed = True
+        elif not succeeded:
+            logger.error("scheduled job %s failed: %s", job.job_key, error)
+            failed = True
+        else:
+            logger.info("scheduled job %s completed", job.job_key)
+
+    if not jobs:
+        logger.info("no scheduled jobs are due")
+    print(f"collector tick complete: claimed={len(jobs)} failed={int(failed)}")
+    return 1 if failed else 0
+
+
+async def _run_scheduler_status(_args: argparse.Namespace) -> int:
+    from app.services.scheduler import SqlJobScheduler
+
+    factory = get_session_factory()
+    diagnostics = await asyncio.to_thread(SqlJobScheduler(factory).diagnostics)
+    for job in diagnostics["jobs"]:
+        print(
+            f"job={job['job_key']} enabled={job['enabled']} "
+            f"next_run={job['next_run_at'].isoformat()} overdue_s={job['overdue_seconds']:.0f} "
+            f"failures={job['consecutive_failures']} lease={job['lease_owner'] or 'none'} "
+            f"last_error={job['last_error'] or 'none'}"
+        )
+    for worker in diagnostics["workers"]:
+        print(
+            f"worker={worker['worker_id']} heartbeat_age_s={worker['heartbeat_age_seconds']:.0f} "
+            f"last_error={worker['last_error'] or 'none'}"
+        )
+    if not diagnostics["jobs"]:
+        print("scheduler has no jobs; run `python -m app.cli collect-due` to initialize it")
+    budgets = await SqlProviderRequestBudget(factory).budget_snapshot()
+    for provider, state in budgets.items():
+        windows = ",".join(
+            f"{window}={used}/{state['limits'][window]}"
+            for window, used in state["usage"].items()
+        )
+        cooldown = state["cooldown_until"]
+        cooldown_text = cooldown.isoformat() if cooldown else "none"
+        byte_limit = state["bytes_limit_24h"]
+        byte_usage = state["bytes_reserved_24h"]
+        byte_text = f" bytes24h={byte_usage}/{byte_limit}" if byte_limit else ""
+        print(f"provider={provider} usage={windows}{byte_text} cooldown={cooldown_text}")
+    return 0
 
 
 async def _run_ingest_traffic(args: argparse.Namespace) -> int:
@@ -1198,6 +1325,16 @@ def _add_demo_features_parser(subparsers: argparse._SubParsersAction) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.cli", description="Development commands.")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    collect_parser = subparsers.add_parser(
+        "collect-due", help="Run due source jobs with shared leases and provider budgets."
+    )
+    collect_parser.set_defaults(func=_run_collect_due)
+
+    scheduler_status_parser = subparsers.add_parser(
+        "scheduler-status", help="Show due-job leases, failures, and worker heartbeat ages."
+    )
+    scheduler_status_parser.set_defaults(func=_run_scheduler_status)
 
     ingest_parser = subparsers.add_parser("ingest", help="Run one OpenAQ PM2.5 ingestion pass.")
     ingest_parser.add_argument("--min-lat", type=float, default=None)
