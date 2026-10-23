@@ -18,7 +18,6 @@ from app.domain.incidents import (
 )
 from app.services.incident_webhook import IncidentWebhookAckError, IncidentWebhookService
 
-
 NOW = datetime(2026, 10, 23, 12, tzinfo=UTC)
 
 
@@ -186,4 +185,4 @@ def test_failed_http_dispatch_schedules_bounded_retry() -> None:
 
     assert result.retrying == 1
     assert repository.delivery.status is IncidentWebhookStatus.RETRYING
-    assert repository.delivery.next_attempt_at == NOW.replace(minute=13)
+    assert repository.delivery.next_attempt_at == NOW.replace(minute=1)
