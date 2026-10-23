@@ -1,4 +1,4 @@
-"""Backend-owned evidence bundle assembly, thumbnail rendering, and Gemini satellite interpretation."""
+"""Backend-owned evidence bundles and clearly labelled H3 indicator previews."""
 
 from __future__ import annotations
 
@@ -11,14 +11,11 @@ from typing import Protocol
 logger = logging.getLogger(__name__)
 
 import h3
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 from app.core.config import Settings, get_settings
-from app.domain.cpcb_aqi import calculate_cpcb_aqi
 from app.domain.h3_grid import assert_valid_cell
 from app.domain.satellite_context import (
-    PROMPT_VERSION_SATELLITE,
-    SCHEMA_VERSION_SATELLITE,
     BaselineAnomalyContext,
     CellEvidenceBundle,
     CellSatelliteAnalysisOut,
@@ -30,6 +27,7 @@ from app.domain.satellite_context import (
     ThermalAnomalyContext,
     WeatherContext,
 )
+from app.domain.types import BoundingBox
 from app.services.gemini_assessment import (
     GeminiAnalysisDisabled,
     GeminiAssessmentError,
@@ -44,7 +42,9 @@ You MUST NOT invent ground pollutant concentrations, AQI values, source attribut
 All numeric values, units, timestamps, and data provenance are strictly owned by the server and must not be altered.
 Mark your assessment as advisory only."""
 
-INTERPRETATION_TTL_HOURS = 6
+MAX_SURFACE_STATION_DISTANCE_KM = 25.0
+MAX_SURFACE_STATION_AGE = timedelta(hours=3)
+MAX_CONTEXT_INPUT_AGE = timedelta(hours=24)
 
 # Keep the satellite advisory thumbnail's selected H3 outline aligned with
 # the PM2.5 ramp used by the frontend map (CPCB bands). These stops mirror
@@ -199,7 +199,7 @@ def render_cell_thumbnail(
 
     # Top product banner
     draw.rectangle([(0, 0), (width, 36)], fill=(30, 41, 59, 240))
-    title_text = "Sentinel-5P | map PM2.5 cell overlay"
+    title_text = "Illustrative H3 indicator preview (not satellite imagery)"
     draw.text((12, 10), title_text, fill=(241, 245, 249, 255))
 
     # Bottom legend and metadata bar
@@ -235,8 +235,25 @@ def _haversine_distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -
     return r * c
 
 
+def _pm25_value_ugm3(reading: object) -> float | None:
+    """Convert recognized PM2.5 mass units to µg/m³; reject ambiguous units."""
+    unit = str(getattr(reading, "unit", "")).strip().lower()
+    normalized = (
+        unit.replace("µ", "u")
+        .replace("μ", "u")
+        .replace("³", "3")
+        .replace(" ", "")
+    )
+    value = float(getattr(reading, "value"))
+    if normalized in {"ug/m3", "ugm-3"}:
+        return value
+    if normalized in {"mg/m3", "mgm-3"}:
+        return value * 1000.0
+    return None
+
+
 class CellSatelliteService:
-    """Assembles server-owned cell evidence bundles and generates cached Gemini interpretations."""
+    """Assemble cell evidence bundles with source, mode, and freshness checks."""
 
     def __init__(
         self,
@@ -256,6 +273,10 @@ class CellSatelliteService:
         self._grid_repo = grid_repo
         self._interpretation_repo = interpretation_repo
         self._analyzer = analyzer or GeminiSatelliteVisionAnalyzer(self._settings)
+
+    @property
+    def is_demo(self) -> bool:
+        return self._settings.demo_mode
 
     def assemble_bundle(
         self,
@@ -280,19 +301,21 @@ class CellSatelliteService:
         window_start = window_end - timedelta(hours=24)
 
         # 1. Surface PM2.5 and ground monitors
-        pm25_context = self._get_surface_pm25(h3_cell, center_lat, center_lon, window_start, moment)
+        pm25_context = self._get_surface_pm25(center_lat, center_lon, moment)
 
         # 2. CPCB AQI
-        cpcb_context = self._get_cpcb_aqi(h3_cell, window_start, moment)
+        cpcb_context = self._get_cpcb_aqi()
 
         # 3. Satellite NO2 Column Density
-        no2_context = self._get_satellite_no2(h3_cell, center_lat, center_lon, moment)
+        no2_context = self._get_satellite_no2()
 
         # 4. Satellite UV Aerosol Index
-        uvai_context = self._get_satellite_uvai(h3_cell, center_lat, center_lon, moment)
+        uvai_context = self._get_satellite_uvai()
 
         # 5. Nearby Thermal Anomalies (FIRMS)
-        firms_context = self._get_thermal_anomalies(h3_cell, center_lat, center_lon, window_start)
+        firms_context = self._get_thermal_anomalies(
+            h3_cell, window_start, moment
+        )
 
         # 6. Local Weather
         weather_context = self._get_weather(h3_cell, moment)
@@ -316,9 +339,12 @@ class CellSatelliteService:
             weather=weather_context,
             baseline_anomaly=baseline_context,
             data_provenance={
-                "sentinel5p_source": "Copernicus Data Space Ecosystem (CDSE)",
+                "satellite_context": (
+                    "unavailable: Sentinel-5P cell observations are not persisted for this endpoint"
+                ),
                 "firms_source": "NASA FIRMS NRT VIIRS",
-                "cpcb_method": "CPCB National Air Quality Index (2014 guidelines, min 3 pollutants)",
+                "cpcb_method": "CPCB AQI withheld unless a colocated station has valid averaging windows",
+                "data_mode": "demo" if self.is_demo else "live",
             },
         )
 
@@ -330,96 +356,20 @@ class CellSatelliteService:
         reanalyze: bool = False,
         now: datetime | None = None,
     ) -> CellSatelliteAnalysisOut:
-        """Gets or generates Gemini satellite interpretation with caching and error isolation."""
+        """Return verified cell context; do not interpret an illustrative preview as imagery."""
+        del reanalyze
         moment = now or datetime.now(UTC)
         bundle = self.assemble_bundle(h3_cell, resolution=resolution, now=moment)
 
-        model_id = self._settings.gemini_model
-        prompt_version = PROMPT_VERSION_SATELLITE
-        schema_version = SCHEMA_VERSION_SATELLITE
-
-        # Check repository cache
-        if self._interpretation_repo is not None and not reanalyze:
-            cached = self._interpretation_repo.get_valid(
-                h3_cell=h3_cell,
-                window_start=bundle.window_start,
-                window_end=bundle.window_end,
-                model_id=model_id,
-                prompt_version=prompt_version,
-                now=moment,
-            )
-            if cached is not None:
-                return CellSatelliteAnalysisOut(
-                    evidence_bundle=bundle,
-                    interpretation=cached.interpretation,
-                    model_id=cached.model_id,
-                    prompt_version=cached.prompt_version,
-                    schema_version=cached.schema_version,
-                    cached=True,
-                    generated_at=cached.generated_at,
-                    expires_at=cached.expires_at,
-                    thumbnail_available=True,
-                )
-
-        # Check if satellite data is present or if both are completely unavailable
-        no2_available = bundle.satellite_no2.status == "available"
-        uvai_available = bundle.satellite_uvai.status == "available"
-
-        # If analysis is disabled or key not present, return bundle without AI interpretation
-        if self._settings.gemini_api_key is None:
-            return CellSatelliteAnalysisOut(
-                evidence_bundle=bundle,
-                interpretation=None,
-                cached=False,
-                thumbnail_available=False,
-            )
-
-        # Generate cell thumbnail
-        no2_val = bundle.satellite_no2.value if no2_available else None
-        uvai_val = bundle.satellite_uvai.value if uvai_available else None
-        firms_count = bundle.thermal_anomalies.detection_count
-
-        thumbnail_bytes = render_cell_thumbnail(
-            h3_cell,
-            pm25_val=self.map_pm25_for_cell(h3_cell),
-            no2_val=no2_val,
-            uvai_val=uvai_val,
-            firms_count=firms_count,
-        )
-
-        try:
-            interpretation = self._analyzer.analyze(thumbnail_bytes, bundle)
-        except GeminiAssessmentError:
-            raise
-        except Exception as exc:
-            raise _safe_provider_error(exc) from None
-
-        expires_at = moment + timedelta(hours=INTERPRETATION_TTL_HOURS)
-
-        if self._interpretation_repo is not None:
-            self._interpretation_repo.save(
-                h3_cell=h3_cell,
-                window_start=bundle.window_start,
-                window_end=bundle.window_end,
-                evidence_bundle=bundle,
-                interpretation=interpretation,
-                model_id=model_id,
-                prompt_version=prompt_version,
-                schema_version=schema_version,
-                generated_at=moment,
-                expires_at=expires_at,
-            )
-
         return CellSatelliteAnalysisOut(
             evidence_bundle=bundle,
-            interpretation=interpretation,
-            model_id=model_id,
-            prompt_version=prompt_version,
-            schema_version=schema_version,
+            interpretation=None,
             cached=False,
-            generated_at=moment,
-            expires_at=expires_at,
-            thumbnail_available=True,
+            thumbnail_available=False,
+            analysis_unavailable_reason=(
+                "No georeferenced satellite raster is available for this cell. "
+                "The H3 preview is illustrative and is not sent to Gemini."
+            ),
         )
 
     def map_pm25_for_cell(self, h3_cell: str) -> float | None:
@@ -435,53 +385,65 @@ class CellSatelliteService:
 
     def _get_surface_pm25(
         self,
-        h3_cell: str,
         center_lat: float,
         center_lon: float,
-        window_start: datetime,
         now: datetime,
     ) -> SurfacePM25Context:
-        """Looks up closest surface monitor or validated grid state."""
+        """Return a nearby station reading with its distance and freshness visible."""
         # Try sensor_reading repository first
         if self._sensor_repo is not None and hasattr(self._sensor_repo, "list_since"):
             try:
-                readings = self._sensor_repo.list_since(window_start, pollutant="pm25")
-                if readings:
-                    # Find nearest station
-                    closest = min(
-                        readings,
-                        key=lambda r: _haversine_distance_km(center_lat, center_lon, r.latitude, r.longitude),
+                readings = self._sensor_repo.list_since(
+                    now - MAX_CONTEXT_INPUT_AGE, pollutant="pm25"
+                )
+                latest_by_station = {}
+                for reading in readings:
+                    if not self._sensor_source_allowed(reading.source) or reading.measured_at > now:
+                        continue
+                    value_ugm3 = _pm25_value_ugm3(reading)
+                    if value_ugm3 is None:
+                        continue
+                    key = (reading.source, reading.external_sensor_id)
+                    existing = latest_by_station.get(key)
+                    if existing is None or reading.measured_at > existing[0].measured_at:
+                        latest_by_station[key] = (reading, value_ugm3)
+                eligible = [
+                    (reading, value_ugm3)
+                    for reading, value_ugm3 in latest_by_station.values()
+                    if _haversine_distance_km(
+                        center_lat, center_lon, reading.latitude, reading.longitude
+                    ) <= MAX_SURFACE_STATION_DISTANCE_KM
+                ]
+                if eligible:
+                    closest, value_ugm3 = min(
+                        eligible,
+                        key=lambda item: (
+                            item[0].measured_at < now - MAX_SURFACE_STATION_AGE,
+                            _haversine_distance_km(
+                                center_lat, center_lon, item[0].latitude, item[0].longitude
+                            ),
+                            -item[0].measured_at.timestamp(),
+                        ),
                     )
-                    dist_km = _haversine_distance_km(center_lat, center_lon, closest.latitude, closest.longitude)
+                    dist_km = _haversine_distance_km(
+                        center_lat, center_lon, closest.latitude, closest.longitude
+                    )
                     return SurfacePM25Context(
-                        status="available",
-                        value_ugm3=closest.value,
+                        status=(
+                            "available"
+                            if closest.measured_at >= now - MAX_SURFACE_STATION_AGE
+                            else "stale"
+                        ),
+                        value_ugm3=value_ugm3,
                         is_estimate=False,
-                        source=f"Ground Monitor ({closest.source})",
+                        source=f"Nearest station ({closest.source})",
                         station_id=closest.external_sensor_id,
                         station_distance_km=round(dist_km, 2),
                         measured_at=closest.measured_at,
-                        uncertainty_ugm3=5.0,
+                        uncertainty_ugm3=None,
                     )
             except Exception as exc:
-                logger.warning("Error fetching surface PM2.5 readings for cell %s: %s", h3_cell, exc)
-
-        # Fallback to latest grid state if available (modeled estimate)
-        if self._grid_repo is not None and hasattr(self._grid_repo, "latest_for_cell"):
-            try:
-                grid = self._grid_repo.latest_for_cell(h3_cell)
-                if grid is not None and grid.pm25 is not None:
-                    return SurfacePM25Context(
-                        status="available",
-                        value_ugm3=grid.pm25,
-                        is_estimate=True,
-                        source="Calibrated Surface Model",
-                        station_distance_km=0.0,
-                        measured_at=grid.timestamp,
-                        uncertainty_ugm3=12.0,
-                    )
-            except Exception as exc:
-                logger.warning("Error fetching grid state for cell %s: %s", h3_cell, exc)
+                logger.warning("Error fetching nearby surface PM2.5 readings: %s", exc)
 
         return SurfacePM25Context(
             status="unavailable",
@@ -490,94 +452,95 @@ class CellSatelliteService:
             source=None,
         )
 
-    def _get_cpcb_aqi(self, h3_cell: str, window_start: datetime, now: datetime) -> CPCBContext:
-        """Determines CPCB National AQI strictly based on CPCB criteria (minimum 3 pollutants)."""
-        pollutants: dict[str, float | None] = {}
-        if self._sensor_repo is not None and hasattr(self._sensor_repo, "list_since"):
-            try:
-                for pol in ("pm25", "pm10", "no2", "so2", "co", "o3"):
-                    readings = self._sensor_repo.list_since(window_start, pollutant=pol)
-                    if readings:
-                        pollutants[pol] = readings[0].value
-            except Exception as exc:
-                logger.warning("Error querying pollutants for CPCB AQI in cell %s: %s", h3_cell, exc)
+    def _get_cpcb_aqi(self) -> CPCBContext:
+        """Withhold statutory AQI until same-station averaging data is available.
 
-        cpcb_res = calculate_cpcb_aqi(pollutants)
+        Sensor rows currently lack CPCB station grouping and validated averaging
+        windows. Combining the first row for each pollutant can mix cities and
+        timestamps, so a numeric AQI would not be defensible.
+        """
         return CPCBContext(
-            aqi=cpcb_res.aqi,
-            category=cpcb_res.category,
-            prominent_pollutant=cpcb_res.prominent_pollutant,
-            status="available" if cpcb_res.status == "available" else "unavailable",
-            reason=cpcb_res.reason,
+            status="unavailable",
+            reason=(
+                "CPCB AQI unavailable: this endpoint does not yet have a colocated "
+                "station series with CPCB-compliant pollutant averaging windows."
+            ),
         )
 
-    def _get_satellite_no2(
-        self,
-        h3_cell: str,
-        center_lat: float,
-        center_lon: float,
-        now: datetime,
-    ) -> SatelliteIndicatorContext:
-        # Default baseline or ingested value
-        # For demonstration or live data, retain native mol/m² unit
-        # In Delhi NCR / northern India typical tropospheric column is ~80 to 220 µmol/m² (0.000080 to 0.000220 mol/m²)
+    def _get_satellite_no2(self) -> SatelliteIndicatorContext:
         return SatelliteIndicatorContext(
             name="Tropospheric NO₂ column",
-            status="available",
-            value=0.000142,  # 142 µmol/m²
+            status="unavailable",
+            value=None,
             unit="mol/m²",
-            observed_at=now - timedelta(hours=3),
-            qa_score=0.88,
-            coverage_fraction=0.92,
-            valid_pixels=8,
-            source="Sentinel-5P TROPOMI Level-2 Tropospheric NO2 NRTI",
-            product_version="02.06.00",
+            observed_at=None,
+            qa_score=None,
+            coverage_fraction=None,
+            valid_pixels=None,
+            source="Copernicus Sentinel-5P (no persisted cell observation)",
+            product_version=None,
         )
 
-    def _get_satellite_uvai(
-        self,
-        h3_cell: str,
-        center_lat: float,
-        center_lon: float,
-        now: datetime,
-    ) -> SatelliteIndicatorContext:
+    def _get_satellite_uvai(self) -> SatelliteIndicatorContext:
         return SatelliteIndicatorContext(
             name="UV Aerosol Index",
-            status="available",
-            value=1.65,
+            status="unavailable",
+            value=None,
             unit="dimensionless UVAI (340/380 nm)",
-            observed_at=now - timedelta(hours=3),
-            qa_score=0.90,
-            coverage_fraction=0.95,
-            valid_pixels=9,
-            source="Sentinel-5P TROPOMI Level-2 UV Aerosol Index NRTI",
-            product_version="02.06.00",
+            observed_at=None,
+            qa_score=None,
+            coverage_fraction=None,
+            valid_pixels=None,
+            source="Copernicus Sentinel-5P (no persisted cell observation)",
+            product_version=None,
         )
 
     def _get_thermal_anomalies(
         self,
         h3_cell: str,
-        center_lat: float,
-        center_lon: float,
         window_start: datetime,
+        now: datetime,
     ) -> ThermalAnomalyContext:
-        if self._fire_repo is not None and hasattr(self._fire_repo, "list_in_cell"):
+        if self._fire_repo is not None and hasattr(self._fire_repo, "list_for_window"):
             try:
-                fires = self._fire_repo.list_in_cell(h3_cell)
-                if fires:
-                    max_frp = max((f.frp_mw for f in fires), default=0.0)
-                    return ThermalAnomalyContext(
-                        detection_count=len(fires),
-                        nearest_distance_km=0.0,
-                        max_frp_mw=max_frp,
-                        confidence_class=fires[0].confidence_class,
-                        satellite=fires[0].satellite,
-                        observed_at=fires[0].acquired_at,
+                boundary = h3.cell_to_boundary(h3_cell)
+                bbox = BoundingBox(
+                    min_lat=min(lat for lat, _lon in boundary),
+                    min_lon=min(lon for _lat, lon in boundary),
+                    max_lat=max(lat for lat, _lon in boundary),
+                    max_lon=max(lon for _lat, lon in boundary),
+                )
+                fires = self._fire_repo.list_for_window(
+                    acquired_from=window_start,
+                    acquired_to=now,
+                    available_by=now,
+                    bbox=bbox,
+                )
+                recent_fires = [
+                    fire
+                    for fire in fires
+                    if fire.source == "nasa-firms"
+                    and window_start <= fire.acquired_at <= now
+                    and fire.available_at <= now
+                    and h3.latlng_to_cell(
+                        fire.latitude, fire.longitude, h3.get_resolution(h3_cell)
                     )
+                    == h3_cell
+                ]
+                return ThermalAnomalyContext(
+                    status="available",
+                    detection_count=len(recent_fires),
+                    nearest_distance_km=0.0 if recent_fires else None,
+                    max_frp_mw=max((fire.frp_mw for fire in recent_fires), default=None),
+                    confidence_class=(recent_fires[-1].confidence_class if recent_fires else None),
+                    satellite=(recent_fires[-1].satellite if recent_fires else None),
+                    observed_at=(recent_fires[-1].acquired_at if recent_fires else None),
+                )
             except Exception as exc:
                 logger.warning("Error querying thermal anomalies for cell %s: %s", h3_cell, exc)
 
         return ThermalAnomalyContext(
+            status="unavailable",
             detection_count=0,
             nearest_distance_km=None,
             max_frp_mw=None,
@@ -586,11 +549,19 @@ class CellSatelliteService:
     def _get_weather(self, h3_cell: str, now: datetime) -> WeatherContext:
         if self._weather_repo is not None and hasattr(self._weather_repo, "latest_for_cell"):
             try:
-                weather = self._weather_repo.latest_for_cell(h3_cell)
+                source = "demo" if self.is_demo else "open-meteo"
+                weather = self._weather_repo.latest_for_cell(h3_cell, source=source)
                 if weather is not None:
                     # WeatherReading stores measured_at; fallback to timestamp if present
                     observed_at = getattr(weather, "measured_at", None) or getattr(weather, "timestamp", None)
+                    if observed_at is None or observed_at > now:
+                        return WeatherContext(status="unavailable")
                     return WeatherContext(
+                        status=(
+                            "available"
+                            if observed_at >= now - MAX_CONTEXT_INPUT_AGE
+                            else "stale"
+                        ),
                         wind_speed_ms=weather.wind_speed,
                         wind_direction_deg=weather.wind_direction,
                         humidity_pct=weather.humidity,
@@ -602,12 +573,13 @@ class CellSatelliteService:
                 logger.warning("Error querying weather reading for cell %s: %s", h3_cell, exc)
 
         return WeatherContext(
-            wind_speed_ms=3.5,
-            wind_direction_deg=295.0,
-            humidity_pct=52.0,
-            temperature_c=28.4,
+            status="unavailable",
+            wind_speed_ms=None,
+            wind_direction_deg=None,
+            humidity_pct=None,
+            temperature_c=None,
             boundary_layer_height_m=None,
-            observed_at=now - timedelta(minutes=45),
+            observed_at=None,
         )
 
     def _get_baseline_anomaly(
@@ -616,19 +588,15 @@ class CellSatelliteService:
         no2: SatelliteIndicatorContext,
         uvai: SatelliteIndicatorContext,
     ) -> BaselineAnomalyContext:
-        # Step 6.3: "Compare with a cell's historical baseline only when enough comparable,
-        # quality-controlled observations exist; label the result as an anomaly/screening signal, not AQI."
-        if no2.status == "available" and uvai.status == "available":
-            return BaselineAnomalyContext(
-                baseline_eligible=True,
-                screening_signal="elevated",
-                deviation_sigma=1.85,
-                note="Screening anomaly (+1.85σ vs 30-day baseline); screening signal only, not AQI.",
-            )
-
+        del h3_cell, no2, uvai
         return BaselineAnomalyContext(
             baseline_eligible=False,
             screening_signal="insufficient_baseline",
             deviation_sigma=None,
             note="Insufficient quality-controlled historical satellite observations for baseline screening.",
         )
+
+    def _sensor_source_allowed(self, source: str) -> bool:
+        if self.is_demo:
+            return source.strip().lower() in {"demo", "air-health-synthetic"}
+        return source.strip().lower() == "openaq"

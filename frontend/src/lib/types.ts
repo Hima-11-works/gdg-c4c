@@ -613,6 +613,7 @@ export interface SatelliteIndicatorContext {
 }
 
 export interface ThermalAnomalyContext {
+  status: 'available' | 'unavailable' | 'stale'
   detection_count: number
   nearest_distance_km: number | null
   max_frp_mw: number | null
@@ -623,6 +624,7 @@ export interface ThermalAnomalyContext {
 }
 
 export interface WeatherContext {
+  status: 'available' | 'unavailable' | 'stale'
   wind_speed_ms: number | null
   wind_direction_deg: number | null
   humidity_pct: number | null
@@ -683,5 +685,6 @@ export interface CellSatelliteAnalysisOut {
   generated_at: string | null
   expires_at: string | null
   thumbnail_available: boolean
+  analysis_unavailable_reason: string | null
 }
 

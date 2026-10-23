@@ -14,6 +14,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import h3
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
@@ -21,21 +22,15 @@ from pydantic import SecretStr
 from app.core.config import Settings
 from app.domain.satellite_context import (
     CellEvidenceBundle,
-    CellSatelliteAnalysisOut,
     SatelliteInterpretation,
     SatelliteVisualPattern,
 )
+from app.domain.types import SensorReading
 from app.main import create_app
 from app.services.cell_satellite import (
     CellSatelliteService,
     _pm25_color,
     render_cell_thumbnail,
-)
-from app.services.gemini_assessment import (
-    GeminiAnalysisDisabled,
-    GeminiInvalidApiKey,
-    GeminiProviderTimeout,
-    GeminiQuotaExceeded,
 )
 
 NOW = datetime(2026, 9, 30, 10, 0, tzinfo=UTC)
@@ -125,8 +120,55 @@ class MockInterpretationRepo:
         return record
 
 
+class MockSensorRepo:
+    def __init__(self, readings: list[SensorReading]) -> None:
+        self.readings = readings
+        self.queries: list[tuple[datetime, str | None]] = []
+
+    def list_since(self, since: datetime, *, pollutant: str | None = None) -> list[SensorReading]:
+        self.queries.append((since, pollutant))
+        return [
+            reading
+            for reading in self.readings
+            if reading.measured_at >= since
+            and (pollutant is None or reading.pollutant == pollutant)
+        ]
+
+
+class MockFireRepo:
+    def __init__(self) -> None:
+        self.query: dict[str, Any] | None = None
+
+    def list_for_window(self, **query: Any) -> list[Any]:
+        self.query = query
+        return []
+
+
+def _sensor(
+    *,
+    source: str = "openaq",
+    sensor_id: str = "sensor-1",
+    latitude: float | None = None,
+    longitude: float | None = None,
+    measured_at: datetime = NOW,
+    value: float = 42.0,
+    unit: str = "µg/m³",
+) -> SensorReading:
+    center_lat, center_lon = h3.cell_to_latlng(DELHI_CELL)
+    return SensorReading(
+        source=source,
+        external_sensor_id=sensor_id,
+        latitude=center_lat if latitude is None else latitude,
+        longitude=center_lon if longitude is None else longitude,
+        pollutant="pm25",
+        value=value,
+        unit=unit,
+        measured_at=measured_at,
+    )
+
+
 def test_evidence_bundle_contains_native_satellite_units_and_cpcb_gate() -> None:
-    settings = Settings(gemini_api_key=SecretStr("test-key"))
+    settings = Settings(gemini_api_key=SecretStr("test-key"), demo_mode=True)
     service = CellSatelliteService(settings=settings)
     bundle = service.assemble_bundle(DELHI_CELL, now=NOW)
 
@@ -135,7 +177,13 @@ def test_evidence_bundle_contains_native_satellite_units_and_cpcb_gate() -> None
     assert "satellite indicator — not ground-level concentration" in bundle.satellite_no2.disclaimer
     assert bundle.satellite_uvai.unit == "dimensionless UVAI (340/380 nm)"
     assert bundle.surface_pm25.unit == "µg/m³"
-    # CPCB gate: with insufficient station pollutants, status is strictly unavailable
+    assert bundle.satellite_no2.status == "unavailable"
+    assert bundle.satellite_no2.value is None
+    assert bundle.satellite_uvai.status == "unavailable"
+    assert bundle.satellite_uvai.value is None
+    assert bundle.weather.status == "unavailable"
+    assert bundle.thermal_anomalies.status == "unavailable"
+    assert bundle.baseline_anomaly.deviation_sigma is None
     assert bundle.cpcb_aqi.status == "unavailable"
     assert "CPCB" in bundle.cpcb_aqi.reason
 
@@ -152,6 +200,63 @@ def test_thumbnail_rendering_produces_valid_png() -> None:
     assert png.startswith(b"\x89PNG\r\n\x1a\n")  # PNG magic header
 
 
+def test_surface_context_uses_only_a_nearby_reading_from_the_active_mode() -> None:
+    far = _sensor(latitude=29.2, longitude=78.0)
+    stale = _sensor(sensor_id="stale", measured_at=NOW - timedelta(hours=5))
+    fresh = _sensor(
+        sensor_id="fresh",
+        measured_at=NOW - timedelta(minutes=25),
+        value=0.042,
+        unit="mg/m³",
+    )
+    synthetic = _sensor(source="demo", sensor_id="synthetic", value=999)
+    service = CellSatelliteService(
+        settings=Settings(demo_mode=False),
+        sensor_repo=MockSensorRepo([far, stale, fresh, synthetic]),
+    )
+
+    surface = service._get_surface_pm25(
+        *h3.cell_to_latlng(DELHI_CELL),
+        NOW,
+    )
+
+    assert surface.status == "available"
+    assert surface.station_id == "fresh"
+    assert surface.value_ugm3 == 42.0
+    assert surface.uncertainty_ugm3 is None
+    assert surface.station_distance_km == 0
+
+
+def test_surface_context_marks_old_nearby_station_data_stale() -> None:
+    service = CellSatelliteService(
+        settings=Settings(demo_mode=False),
+        sensor_repo=MockSensorRepo(
+            [_sensor(measured_at=NOW - timedelta(hours=5))]
+        ),
+    )
+    center = h3.cell_to_latlng(DELHI_CELL)
+
+    surface = service._get_surface_pm25(
+        *center, NOW
+    )
+
+    assert surface.status == "stale"
+    assert surface.value_ugm3 == 42.0
+
+
+def test_firms_context_queries_actual_window_repository() -> None:
+    repo = MockFireRepo()
+    service = CellSatelliteService(fire_repo=repo)
+
+    bundle = service.assemble_bundle(DELHI_CELL, now=NOW)
+
+    assert bundle.thermal_anomalies.status == "available"
+    assert bundle.thermal_anomalies.detection_count == 0
+    assert repo.query is not None
+    assert repo.query["bbox"].min_lat < repo.query["bbox"].max_lat
+    assert repo.query["available_by"] == NOW
+
+
 def test_satellite_cell_color_uses_the_map_pm25_ramp() -> None:
     assert _pm25_color(0) == (34, 197, 94)
     assert _pm25_color(251) == (127, 29, 29)
@@ -160,7 +265,7 @@ def test_satellite_cell_color_uses_the_map_pm25_ramp() -> None:
     assert _pm25_color(200) != _pm25_color(251)
 
 
-def test_gemini_analysis_caches_and_does_not_call_model_twice() -> None:
+def test_gemini_is_not_given_an_illustrative_cell_diagram() -> None:
     settings = Settings(gemini_api_key=SecretStr("test-key"))
     mock_analyzer = MockSatelliteAnalyzer()
     mock_repo = MockInterpretationRepo()
@@ -170,21 +275,21 @@ def test_gemini_analysis_caches_and_does_not_call_model_twice() -> None:
         analyzer=mock_analyzer,
     )
 
-    # First call: triggers analyzer
+    # There is no georeferenced raster in this service, so the model must not
+    # receive the generated H3 indicator diagram as if it were imagery.
     res1 = service.analyze_cell(DELHI_CELL, now=NOW)
     assert res1.cached is False
-    assert mock_analyzer.call_count == 1
-    assert res1.interpretation is not None
-    assert res1.interpretation.visual_pattern == SatelliteVisualPattern.PLUME_LIKE
+    assert mock_analyzer.call_count == 0
+    assert res1.interpretation is None
+    assert res1.thumbnail_available is False
+    assert "not sent to Gemini" in res1.analysis_unavailable_reason
 
-    # Second call within TTL: served from cache
     res2 = service.analyze_cell(DELHI_CELL, now=NOW + timedelta(minutes=5))
-    assert res2.cached is True
-    assert mock_analyzer.call_count == 1  # No additional model call!
-    assert res2.interpretation == res1.interpretation
+    assert res2.cached is False
+    assert mock_analyzer.call_count == 0
 
 
-def test_reanalyze_forces_fresh_model_call() -> None:
+def test_reanalyze_does_not_send_a_diagram_to_gemini() -> None:
     settings = Settings(gemini_api_key=SecretStr("test-key"))
     mock_analyzer = MockSatelliteAnalyzer()
     mock_repo = MockInterpretationRepo()
@@ -195,29 +300,28 @@ def test_reanalyze_forces_fresh_model_call() -> None:
     )
 
     service.analyze_cell(DELHI_CELL, now=NOW)
-    assert mock_analyzer.call_count == 1
+    assert mock_analyzer.call_count == 0
 
     # Call with reanalyze=True
     service.analyze_cell(DELHI_CELL, reanalyze=True, now=NOW + timedelta(minutes=1))
-    assert mock_analyzer.call_count == 2
+    assert mock_analyzer.call_count == 0
 
 
-def test_model_cannot_alter_server_measurements() -> None:
-    """Invariant: numeric measurements and units in response originate from server, not Gemini."""
+def test_absent_satellite_measurements_stay_null_even_with_gemini_configured() -> None:
     settings = Settings(gemini_api_key=SecretStr("test-key"))
     mock_analyzer = MockSatelliteAnalyzer()
     service = CellSatelliteService(settings=settings, analyzer=mock_analyzer)
 
     res = service.analyze_cell(DELHI_CELL, now=NOW)
-    assert res.evidence_bundle.satellite_no2.value == 0.000142
+    assert res.evidence_bundle.satellite_no2.value is None
     assert res.evidence_bundle.satellite_no2.unit == "mol/m²"
-    # Even if model output had arbitrary text, the bundle numbers are intact
-    assert res.interpretation.summary != ""
+    assert res.interpretation is None
+    assert mock_analyzer.call_count == 0
     assert res.evidence_bundle.satellite_no2.unit == "mol/m²"
 
 
 def test_api_routes_satellite_context_and_analysis() -> None:
-    settings = Settings(gemini_api_key=SecretStr("test-key"))
+    settings = Settings(gemini_api_key=SecretStr("test-key"), demo_mode=True)
     mock_analyzer = MockSatelliteAnalyzer()
     mock_repo = MockInterpretationRepo()
     service = CellSatelliteService(
@@ -238,7 +342,8 @@ def test_api_routes_satellite_context_and_analysis() -> None:
     assert resp.status_code == 200
     data = resp.json()["data"]
     assert data["evidence_bundle"]["h3_cell"] == DELHI_CELL
-    assert data["evidence_bundle"]["satellite_no2"]["unit"] == "mol/m²"
+    assert data["evidence_bundle"]["satellite_no2"]["value"] is None
+    assert resp.json()["is_demo"] is True
 
     # 2. POST satellite-analysis
     resp_post = client.post(
@@ -246,7 +351,9 @@ def test_api_routes_satellite_context_and_analysis() -> None:
         json={"reanalyze": False},
     )
     assert resp_post.status_code == 200
-    assert resp_post.json()["data"]["interpretation"]["visual_pattern"] == "plume_like"
+    assert resp_post.json()["data"]["interpretation"] is None
+    assert resp_post.json()["data"]["thumbnail_available"] is False
+    assert mock_analyzer.call_count == 0
 
     # 3. GET thumbnail
     resp_thumb = client.get(f"/api/v1/cells/{DELHI_CELL}/satellite-thumbnail")
@@ -255,30 +362,6 @@ def test_api_routes_satellite_context_and_analysis() -> None:
     assert resp_thumb.content.startswith(b"\x89PNG\r\n\x1a\n")
 
 
-def test_api_error_mappings() -> None:
-    settings = Settings(gemini_api_key=SecretStr("test-key"))
-    app = create_app()
-    from app.api.deps import get_cell_satellite_service, get_settings
-
-    app.dependency_overrides[get_settings] = lambda: settings
-
-    # Quota failure maps to 429
-    service_quota = CellSatelliteService(
-        settings=settings,
-        analyzer=MockSatelliteAnalyzer(exception=GeminiQuotaExceeded("Quota exceeded")),
-    )
-    app.dependency_overrides[get_cell_satellite_service] = lambda: service_quota
-    client = TestClient(app)
-    resp = client.post(f"/api/v1/cells/{DELHI_CELL}/satellite-analysis", json={"reanalyze": True})
-    assert resp.status_code == 429
-    assert resp.json()["error"]["code"] == "gemini_quota_exceeded"
-
-    # Timeout maps to 504
-    service_timeout = CellSatelliteService(
-        settings=settings,
-        analyzer=MockSatelliteAnalyzer(exception=GeminiProviderTimeout("Timed out")),
-    )
-    app.dependency_overrides[get_cell_satellite_service] = lambda: service_timeout
-    resp2 = client.post(f"/api/v1/cells/{DELHI_CELL}/satellite-analysis", json={"reanalyze": True})
-    assert resp2.status_code == 504
-    assert resp2.json()["error"]["code"] == "gemini_timeout"
+def test_thumbnail_is_explicitly_an_illustrative_indicator_preview() -> None:
+    png = render_cell_thumbnail(DELHI_CELL)
+    assert png.startswith(b"\x89PNG\r\n\x1a\n")

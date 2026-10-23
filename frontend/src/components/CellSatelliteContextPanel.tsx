@@ -1,9 +1,5 @@
 import { useState, useEffect } from 'react'
-import {
-  cellSatelliteThumbnailUrl,
-  fetchCellSatelliteContext,
-  triggerCellSatelliteAnalysis,
-} from '../lib/api'
+import { fetchCellSatelliteContext } from '../lib/api'
 import { formatNumber } from '../lib/format'
 import { useApiResource } from '../hooks/useApiResource'
 import type { CellSatelliteAnalysisOut } from '../lib/types'
@@ -49,10 +45,6 @@ export function CellSatelliteContextPanel({ h3Cell, resolution }: CellSatelliteC
     },
   )
 
-  const [analysisOverride, setAnalysisOverride] = useState<CellSatelliteAnalysisOut | null>(null)
-  const [analyzing, setAnalyzing] = useState(false)
-  const [analysisError, setAnalysisError] = useState<string | null>(null)
-
   useEffect(() => {
     if (resource.status !== 'loading') {
       setLoadProgress(resource.status === 'success' ? 100 : 0)
@@ -71,27 +63,6 @@ export function CellSatelliteContextPanel({ h3Cell, resolution }: CellSatelliteC
     }, 160)
     return () => window.clearInterval(timer)
   }, [resource.status, h3Cell, resolution])
-
-  useEffect(() => {
-    setAnalysisOverride(null)
-  }, [h3Cell, resolution])
-
-  const handleRunAnalysis = async (reanalyze: boolean = false) => {
-    setAnalyzing(true)
-    setAnalysisError(null)
-    try {
-      const response = await triggerCellSatelliteAnalysis(h3Cell, reanalyze, resolution)
-      setAnalysisOverride(response.data)
-    } catch (err: unknown) {
-      if (err instanceof Error) {
-        setAnalysisError(err.message)
-      } else {
-        setAnalysisError('Unable to complete Gemini satellite analysis.')
-      }
-    } finally {
-      setAnalyzing(false)
-    }
-  }
 
   const handlePrint = () => {
     const source = document.querySelector<HTMLElement>('.cell-satellite-section')
@@ -160,9 +131,8 @@ export function CellSatelliteContextPanel({ h3Cell, resolution }: CellSatelliteC
     return null
   }
 
-  const analysis = analysisOverride ?? resource.data
+  const analysis = resource.data
   const bundle = analysis.evidence_bundle
-  const interpretation = analysis.interpretation
   const surface = bundle.surface_pm25
   const cpcb = bundle.cpcb_aqi
   const no2 = bundle.satellite_no2
@@ -180,7 +150,10 @@ export function CellSatelliteContextPanel({ h3Cell, resolution }: CellSatelliteC
         </p>
         <div className="cell-satellite-actions">
           <span className="coverage-badge">
-            H3 Res {bundle.resolution} · {Math.round((no2.coverage_fraction ?? 1) * 100)}% coverage
+            H3 Res {bundle.resolution} ·{' '}
+            {no2.coverage_fraction === null
+              ? 'satellite coverage unavailable'
+              : `${Math.round(no2.coverage_fraction * 100)}% satellite coverage`}
           </span>
           <button
             type="button"
@@ -200,18 +173,22 @@ export function CellSatelliteContextPanel({ h3Cell, resolution }: CellSatelliteC
       {/* Surface PM2.5 vs Satellite Distinction */}
       <div className="surface-air-card">
         <div className="surface-air-title-row">
-          <strong>Measured Surface Air Quality</strong>
+            <strong>Nearest Ground Monitor</strong>
           <span
             className={`surface-kind-tag ${surface.is_estimate ? 'tag-estimate' : 'tag-observed'}`}
           >
-            {surface.is_estimate ? 'Validated Surface Estimate' : 'Station Observation'}
+            {surface.is_estimate
+              ? 'Model estimate'
+              : surface.status === 'stale'
+                ? 'Stale station reading'
+                : 'Station reading'}
           </span>
         </div>
 
         <dl className="satellite-metrics-grid">
           <dt>Surface PM2.5</dt>
           <dd>
-            {surface.status === 'available' && surface.value_ugm3 !== null ? (
+            {surface.status !== 'unavailable' && surface.value_ugm3 !== null ? (
               <>
                 <strong>{formatNumber(surface.value_ugm3)} µg/m³</strong>
                 {surface.uncertainty_ugm3 && (
@@ -330,7 +307,9 @@ export function CellSatelliteContextPanel({ h3Cell, resolution }: CellSatelliteC
         <div className="corroborating-item">
           <strong>Thermal Anomalies (FIRMS)</strong>
           <p className="muted">
-            {firms.detection_count > 0 ? (
+            {firms.status === 'unavailable' ? (
+              'FIRMS observations unavailable'
+            ) : firms.detection_count > 0 ? (
               <>
                 {firms.detection_count} detection(s)
                 {firms.max_frp_mw !== null && ` · max FRP ${formatNumber(firms.max_frp_mw)} MW`}
@@ -359,8 +338,11 @@ export function CellSatelliteContextPanel({ h3Cell, resolution }: CellSatelliteC
         <div className="corroborating-item">
           <strong>Surface Weather</strong>
           <p className="muted">
-            {weather.temperature_c !== null || weather.wind_speed_ms !== null ? (
+            {weather.status === 'unavailable' ? (
+              'Weather observation unavailable'
+            ) : weather.temperature_c !== null || weather.wind_speed_ms !== null ? (
               <>
+                {weather.status === 'stale' && 'Stale observation · '}
                 {weather.temperature_c !== null && `${formatNumber(weather.temperature_c, 1)}°C`}
                 {weather.wind_speed_ms !== null &&
                   ` · ${formatNumber(weather.wind_speed_ms, 1)} m/s`}
@@ -375,104 +357,20 @@ export function CellSatelliteContextPanel({ h3Cell, resolution }: CellSatelliteC
         </div>
       </div>
 
-      {/* Gemini Advisory Section */}
+      {/* Visual interpretation requires a real georeferenced satellite raster. */}
       <div className="gemini-satellite-card">
         <div className="gemini-card-header">
           <div className="gemini-title-group">
-            <span className="gemini-badge">Gemini Advisory</span>
-            <strong>Satellite Pattern Interpretation</strong>
+            <span className="gemini-badge">Satellite imagery</span>
+            <strong>Visual interpretation unavailable</strong>
           </div>
-          <span className="advisory-caution-tag">AI-assisted, uncertain, and advisory</span>
+          <span className="advisory-caution-tag">Awaiting georeferenced raster data</span>
         </div>
 
         <p className="muted gemini-scope-text">
-          Advisory visual pattern analysis. Gemini cannot infer ground AQI, confirm pollution
-          sources, or trigger emergency response. All numeric data comes from server pipelines.
+          {analysis.analysis_unavailable_reason ??
+            'A satellite image is required before visual interpretation can run.'}
         </p>
-
-        {analysis.thumbnail_available && (
-          <div className="gemini-thumbnail-preview">
-            <img
-              src={cellSatelliteThumbnailUrl(h3Cell)}
-              alt={`Satellite layer thumbnail for cell ${h3Cell}`}
-              className="cell-thumbnail-img"
-              loading="lazy"
-            />
-          </div>
-        )}
-
-        {interpretation ? (
-          <div className="gemini-interpretation-body">
-            <div className="pattern-row">
-              <span className="pattern-label">Visual Pattern:</span>
-              <strong className={`pattern-tag pattern-${interpretation.visual_pattern}`}>
-                {interpretation.visual_pattern.replace('_', ' ')}
-              </strong>
-              <span className="muted">({interpretation.possible_event_type})</span>
-            </div>
-
-            <p className="interpretation-summary">{interpretation.summary}</p>
-
-            {interpretation.supporting_evidence.length > 0 && (
-              <div className="interpretation-evidence">
-                <strong>Supporting observations:</strong>
-                <ul>
-                  {interpretation.supporting_evidence.map((item, idx) => (
-                    <li key={idx}>{item}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {interpretation.limitations.length > 0 && (
-              <div className="interpretation-limitations">
-                <strong>Limitations & caveats:</strong>
-                <ul>
-                  {interpretation.limitations.map((item, idx) => (
-                    <li key={idx}>{item}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            <div className="gemini-meta-footer">
-              <span className="muted">
-                {analysis.cached ? 'Loaded from cache' : 'Newly generated'} ·{' '}
-                {analysis.generated_at ? new Date(analysis.generated_at).toLocaleTimeString() : ''}{' '}
-                · Model: {analysis.model_id ?? 'Gemini'}
-              </span>
-              <button
-                type="button"
-                className="btn-gemini-rerun"
-                disabled={analyzing}
-                onClick={() => handleRunAnalysis(true)}
-              >
-                {analyzing ? 'Refreshing…' : 'Re-analyze with Gemini'}
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="gemini-empty-action">
-            <p className="muted">
-              Request an AI-assisted visual pattern interpretation of this cell’s satellite
-              evidence.
-            </p>
-            <button
-              type="button"
-              className="btn-gemini-action"
-              disabled={analyzing}
-              onClick={() => handleRunAnalysis(false)}
-            >
-              {analyzing ? 'Analyzing with Gemini…' : '✨ Analyze Satellite Context with Gemini'}
-            </button>
-          </div>
-        )}
-
-        {analysisError && (
-          <div className="gemini-error-banner" role="alert">
-            <span>{analysisError}</span>
-          </div>
-        )}
       </div>
     </section>
   )

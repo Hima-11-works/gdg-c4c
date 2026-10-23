@@ -147,7 +147,7 @@ def get_cell_satellite_context(
 
     return Envelope(
         generated_at=datetime.now(UTC),
-        is_demo=False,
+        is_demo=service.is_demo,
         data=analysis,
     )
 
@@ -155,7 +155,7 @@ def get_cell_satellite_context(
 @router.post(
     "/{h3_cell}/satellite-analysis",
     response_model=Envelope[CellSatelliteAnalysisOut],
-    summary="User-triggered Gemini satellite pattern interpretation per cell",
+    summary="Cell context; image interpretation is withheld without a real satellite raster",
 )
 def trigger_cell_satellite_analysis(
     h3_cell: str,
@@ -178,14 +178,14 @@ def trigger_cell_satellite_analysis(
 
     return Envelope(
         generated_at=datetime.now(UTC),
-        is_demo=False,
+        is_demo=service.is_demo,
         data=analysis,
     )
 
 
 @router.get(
     "/{h3_cell}/satellite-thumbnail",
-    summary="Cell-clipped satellite visualization thumbnail PNG",
+    summary="Illustrative H3 indicator preview PNG (not satellite imagery)",
     responses={
         status.HTTP_200_OK: {"content": {"image/png": {}}},
         status.HTTP_422_UNPROCESSABLE_CONTENT: {"model": ErrorResponse},

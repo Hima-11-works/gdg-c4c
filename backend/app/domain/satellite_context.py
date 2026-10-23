@@ -61,6 +61,7 @@ class SatelliteIndicatorContext(BaseModel):
 class ThermalAnomalyContext(BaseModel):
     model_config = ConfigDict(frozen=True)
 
+    status: Literal["available", "unavailable", "stale"] = "unavailable"
     detection_count: int = 0
     nearest_distance_km: float | None = None
     max_frp_mw: float | None = None
@@ -75,6 +76,7 @@ class ThermalAnomalyContext(BaseModel):
 class WeatherContext(BaseModel):
     model_config = ConfigDict(frozen=True)
 
+    status: Literal["available", "unavailable", "stale"] = "unavailable"
     wind_speed_ms: float | None = None
     wind_direction_deg: float | None = None
     humidity_pct: float | None = None
@@ -168,3 +170,4 @@ class CellSatelliteAnalysisOut(BaseModel):
     generated_at: datetime | None = None
     expires_at: datetime | None = None
     thumbnail_available: bool = False
+    analysis_unavailable_reason: str | None = None
