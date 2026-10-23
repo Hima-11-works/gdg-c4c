@@ -110,10 +110,6 @@ from app.services.prediction_publication import (
     PredictionPublicationService,
     assert_live_snapshots_available,
 )
-from app.services.prediction_queries import (
-    DEFAULT_EXPOSURE_THRESHOLD_PM25,
-    PredictionQueryService,
-)
 from app.services.provider_budget import SqlProviderRequestBudget
 from app.services.training_data import (
     export_training_dataset,
@@ -154,6 +150,22 @@ async def _run_ingest(args: argparse.Namespace) -> int:
     print(f"Ingesting PM2.5 readings for {bbox} since {since.isoformat()}...")
     if settings.demo_mode:
         print("DEMO_MODE=true — using the fixed demo dataset, not OpenAQ.")
+    else:
+        if settings.openaq_api_key is None:
+            print("OPENAQ_API_KEY is not set in .env - see .env.example.", file=sys.stderr)
+            return 1
+        report = await _run_openaq_collection_job(settings, bbox, poll_bbox=bbox)
+        print(
+            "OpenAQ registry collection "
+            f"{'complete' if report.succeeded else 'partial'}: "
+            f"pages={report.registry_pages} registry_complete={report.registry_complete} "
+            f"locations={report.locations_seen} sensors={report.stations_seen} "
+            f"polled={report.locations_polled} readings={report.readings_fetched} "
+            f"saved={report.readings_saved}"
+        )
+        for failure in report.failures:
+            print(f"  {failure}", file=sys.stderr)
+        return 0 if report.succeeded else 1
 
     session = get_session_factory()()
     try:
@@ -174,6 +186,80 @@ async def _run_ingest(args: argparse.Namespace) -> int:
         session.close()
 
     return _report(result)
+
+
+async def _run_openaq_collection_job(
+    settings, bbox: BoundingBox, *, now=None, poll_bbox: BoundingBox | None = None
+):
+    """Run one independent OpenAQ directory and latest-reading collection."""
+    from app.db.repositories.openaq_station import SqlOpenAQStationRepository
+    from app.db.repositories.sensor_reading import SqlSensorReadingRepository
+    from app.domain.providers import ProviderError
+    from app.ingestion.openaq import OpenAQRegistryProvider
+    from app.services.openaq_collection import OpenAQCollectionService
+
+    if settings.openaq_api_key is None:
+        raise ProviderError("OPENAQ_API_KEY is not configured")
+    factory = get_session_factory()
+    session = factory()
+    try:
+        async with httpx.AsyncClient(timeout=settings.openaq_timeout_seconds) as client:
+            attach_request_budget(
+                client, provider="openaq", budget=SqlProviderRequestBudget(factory)
+            )
+            provider = OpenAQRegistryProvider(
+                api_key=settings.openaq_api_key.get_secret_value(),
+                client=client,
+                base_url=settings.openaq_base_url,
+                timeout_seconds=settings.openaq_timeout_seconds,
+                max_retries=settings.openaq_max_retries,
+            )
+            service = OpenAQCollectionService(
+                provider=provider,
+                station_repository=SqlOpenAQStationRepository(session),
+                reading_repository=SqlSensorReadingRepository(session),
+                priority_bbox=bbox,
+                max_reading_age_hours=settings.ingest_max_reading_age_hours,
+            )
+            return await service.collect(now=now, poll_bbox=poll_bbox)
+    finally:
+        session.close()
+
+
+async def _run_openaq_history_job(settings, *, now=None) -> str:
+    """Run one lower-priority, resumable OpenAQ history page."""
+    from app.db.repositories.openaq_station import SqlOpenAQStationRepository
+    from app.db.repositories.sensor_reading import SqlSensorReadingRepository
+    from app.domain.providers import ProviderError
+    from app.ingestion.openaq import OpenAQRegistryProvider
+    from app.services.openaq_collection import OpenAQHistoryRecoveryService
+
+    if settings.openaq_api_key is None:
+        raise ProviderError("OPENAQ_API_KEY is not configured")
+    factory = get_session_factory()
+    session = factory()
+    try:
+        async with httpx.AsyncClient(timeout=settings.openaq_timeout_seconds) as client:
+            attach_request_budget(
+                client, provider="openaq", budget=SqlProviderRequestBudget(factory)
+            )
+            provider = OpenAQRegistryProvider(
+                api_key=settings.openaq_api_key.get_secret_value(),
+                client=client,
+                base_url=settings.openaq_base_url,
+                timeout_seconds=settings.openaq_timeout_seconds,
+                max_retries=settings.openaq_max_retries,
+            )
+            service = OpenAQHistoryRecoveryService(
+                provider=provider,
+                station_repository=SqlOpenAQStationRepository(session),
+                reading_repository=SqlSensorReadingRepository(session),
+            )
+            result = await service.recover_one_page(now=now)
+            logger.info("OpenAQ history recovery: %s", result)
+            return result
+    finally:
+        session.close()
 
 
 async def _run_ingest_weather(args: argparse.Namespace) -> int:
@@ -298,6 +384,24 @@ async def _run_collect_due(_args: argparse.Namespace) -> int:
                 outcome = await run_satellite_scan(bbox)
                 succeeded = outcome.succeeded
                 error = None if succeeded else outcome.summary
+            elif job.job_key == "openaq-collection":
+                report = await _run_openaq_collection_job(settings, bbox)
+                succeeded = report.succeeded
+                error = "; ".join(report.failures) if report.failures else None
+                logger.info(
+                    "OpenAQ collection: registry_pages=%d complete=%s locations=%d "
+                    "sensors=%d polled=%d readings=%d saved=%d",
+                    report.registry_pages,
+                    report.registry_complete,
+                    report.locations_seen,
+                    report.stations_seen,
+                    report.locations_polled,
+                    report.readings_fetched,
+                    report.readings_saved,
+                )
+            elif job.job_key == "openaq-history":
+                error = await _run_openaq_history_job(settings)
+                succeeded = True
             else:
                 succeeded = False
                 error = f"no worker registered for job {job.job_key}"
@@ -334,6 +438,7 @@ async def _run_collect_due(_args: argparse.Namespace) -> int:
 
 
 async def _run_scheduler_status(_args: argparse.Namespace) -> int:
+    from app.db.repositories.openaq_station import SqlOpenAQStationRepository
     from app.services.scheduler import SqlJobScheduler
 
     factory = get_session_factory()
@@ -349,6 +454,22 @@ async def _run_scheduler_status(_args: argparse.Namespace) -> int:
         print(
             f"worker={worker['worker_id']} heartbeat_age_s={worker['heartbeat_age_seconds']:.0f} "
             f"last_error={worker['last_error'] or 'none'}"
+        )
+    session = factory()
+    try:
+        registry = SqlOpenAQStationRepository(session).registry_status()
+    finally:
+        session.close()
+    if registry is None:
+        print("openaq_registry=not_discovered")
+    else:
+        print(
+            f"openaq_registry={'complete' if registry['complete'] else 'incomplete'} "
+            f"pages={registry['pages_seen']} locations={registry['locations_seen']} "
+            f"pm25_sensors={registry['sensors_seen']} "
+            f"scan_started_at={registry['scan_started_at']} "
+            f"scan_completed_at={registry['scan_completed_at']} "
+            f"last_error={registry['last_error'] or 'none'}"
         )
     if not diagnostics["jobs"]:
         print("scheduler has no jobs; run `python -m app.cli collect-due` to initialize it")

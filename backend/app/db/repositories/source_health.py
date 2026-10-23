@@ -58,8 +58,8 @@ class SourceHealth:
 
 
 _JOB_KEYS_BY_DATASET = {
-    "openaq": "environmental-pipeline",
-    "openaq-national-overview": "environmental-pipeline",
+    "openaq": "openaq-collection",
+    "openaq-national-overview": "openaq-collection",
     "nasa-firms": "environmental-pipeline",
     "open-meteo": "environmental-pipeline",
     "copernicus-sentinel5p-aer-ai": "satellite-hotspot-scan",

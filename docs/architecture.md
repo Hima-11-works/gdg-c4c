@@ -413,6 +413,18 @@ provider that violates its Protocol (raises something other than
 never take down the process that also ingests the other — see
 `backend/tests/test_ingestion_resilience.py`.
 
+**Live OpenAQ collection:** the scheduled `openaq-collection` job paginates
+India's PM2.5 location directory into `openaq_station`; `openaq_registry_scan`
+tracks pages and only marks a scan complete after the final page. Stations
+missing from a partial scan remain active. Each collection cycle polls at most
+100 priority locations and a small general-coverage batch, grouping all PM2.5
+sensors at one location into a single `/latest` request. The hourly
+`openaq-history` job resumes one bounded sensor/time-window page at a time.
+Both use the shared OpenAQ request budget. The publication pipeline reads those
+stored observations for city and country views instead of making overlapping
+poll requests. `python -m app.cli scheduler-status` reports registry scan
+completeness and page/station counts so partial coverage is visible.
+
 **Duplicate prevention:** both `SensorReadingRepository.add()` and
 `WeatherReadingRepository.add()` raise `DuplicateReadingError` — a
 domain-level exception, not `sqlalchemy.exc.IntegrityError` — for an exact

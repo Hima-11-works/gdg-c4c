@@ -1,9 +1,9 @@
 """Application settings, loaded from environment variables / the repo-root .env."""
 
 from functools import lru_cache
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Literal
-from ipaddress import ip_address
 from urllib.parse import urlsplit
 
 from pydantic import AliasChoices, Field, SecretStr, model_validator
@@ -107,10 +107,9 @@ class Settings(BaseSettings):
     openaq_base_url: str = "https://api.openaq.org/v3"
     openaq_timeout_seconds: float = Field(default=10.0, gt=0)
     openaq_max_retries: int = Field(default=3, ge=1, le=10)
-    openaq_locations_limit: int = Field(default=100, ge=1, le=1000)
-    # Number of pages from OpenAQ's global latest-PM2.5 endpoint inspected for
-    # fresh readings inside India. This bounds the nationwide overview work.
-    openaq_national_overview_pages: int = Field(default=5, ge=1, le=100)
+    # Paginated directory scans use 1000 locations per request. Polling is
+    # capped by the collector service and its shared provider budget.
+    openaq_locations_limit: int = Field(default=1000, ge=1, le=1000)
 
     # Bounding box ingestion is scoped to (a city/region, not "the world").
     # Defaults to the Delhi NCR area, matching app.ingestion.demo's Demo

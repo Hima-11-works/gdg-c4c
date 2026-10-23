@@ -1,6 +1,6 @@
 """The complete processing pipeline for the configured region:
 
-    OpenAQ city + national overview -> sensor ingestion -> H3 grid + PM2.5 interpolation -> PDI
+    cached OpenAQ station observations -> H3 grid + PM2.5 interpolation -> PDI
     -> Open-Meteo -> weather ingestion -> dispersion model -> forecasts
     -> prediction publication -> alerts
 
@@ -71,7 +71,6 @@ from app.ingestion.demo_reports import demo_fire_reports
 from app.ingestion.factory import build_pollution_provider, build_weather_provider
 from app.ingestion.firms import FirmsProvider
 from app.ingestion.http import attach_request_budget
-from app.ingestion.openaq import OpenAQNationalOverviewProvider
 from app.ingestion.sentinel5p import CopernicusSentinel5PProvider, normalized_threshold
 from app.services.alert_generation import AlertGenerationService
 from app.services.dispersion import DeterministicH3DispersionModel
@@ -363,11 +362,22 @@ def _publish_inner(
     # sees the nationwide cells and a request finer than the coarse resolution
     # sees only the fine grid. That is what makes "coarse everywhere, detailed
     # where measured" one product rather than two competing ones.
+    overview_readings = (
+        []
+        if settings.demo_mode
+        else SqlSensorReadingRepository(session).list_since(
+            timestamp - timedelta(hours=settings.ingest_max_reading_age_hours),
+            pollutant="pm25",
+            source="openaq",
+            through=timestamp,
+            bbox=INDIA_OVERVIEW_BBOX,
+        )
+    )
     overview = build_national_overview(
         settings,
         issued_at=timestamp,
         forecast_horizons=FORECAST_HORIZONS_HOURS,
-        sensor_readings=sensors,
+        sensor_readings=overview_readings,
     )
     if overview.unavailable_reason is not None:
         # Reported, not swallowed: an operator seeing a blank country needs to
@@ -520,56 +530,53 @@ async def _ingest_sensors(
     since: datetime,
     pipeline_run_id: str,
 ) -> StageOutcome:
-    async with httpx.AsyncClient(timeout=settings.openaq_timeout_seconds) as client:
-        attach_request_budget(
-            client, provider="openaq", budget=SqlProviderRequestBudget(get_session_factory())
-        )
-        provider = build_pollution_provider(settings, client)
-        if provider is None:
-            message = "OPENAQ_API_KEY is not set — skipping sensor ingestion for this run"
-            logger.warning(message)
-            _record_source_health(
-                session,
-                pipeline_run_id=pipeline_run_id,
-                dataset_id="openaq",
-                called=False,
-                failed=False,
-                item_count=0,
-                error_summary="not configured",
-            )
-            return StageOutcome("sensor_ingestion", False, message)
-
-        result = await SensorIngestionService(provider, SqlSensorReadingRepository(session)).run(
-            bbox, since=since
-        )
-
-    if not result.succeeded:
-        message = f"OpenAQ ingestion failed: {'; '.join(result.errors)}"
-        logger.error(message)
+    if settings.demo_mode:
+        # Demo remains deterministic and self-contained. Only live-mode
+        # publications reuse observations from the independent registry job.
+        async with httpx.AsyncClient(timeout=settings.openaq_timeout_seconds) as client:
+            provider = build_pollution_provider(settings, client)
+            if provider is None:
+                return StageOutcome(
+                    "sensor_ingestion", False, "demo pollution provider unavailable"
+                )
+            result = await SensorIngestionService(
+                provider, SqlSensorReadingRepository(session)
+            ).run(bbox, since=since)
         _record_source_health(
             session,
             pipeline_run_id=pipeline_run_id,
             dataset_id="openaq",
             called=True,
-            failed=True,
+            failed=not result.succeeded,
             item_count=result.fetched,
-            error_summary="; ".join(result.errors)[:500],
+            error_summary="; ".join(result.errors)[:500] if result.errors else None,
         )
-        return StageOutcome("sensor_ingestion", False, message)
+        return StageOutcome(
+            "sensor_ingestion",
+            result.succeeded,
+            f"demo fetched={result.fetched} saved={result.saved}",
+        )
+
+    # OpenAQ is collected by its independent, quota-bounded scheduler job.
+    # Publication reads the same persisted observations rather than making a
+    # second location scan or duplicate per-location requests.
+    readings = SqlSensorReadingRepository(session).list_since(
+        since,
+        pollutant="pm25",
+        source="openaq",
+        bbox=bbox,
+    )
+    session.commit()
     _record_source_health(
         session,
         pipeline_run_id=pipeline_run_id,
         dataset_id="openaq",
         called=True,
         failed=False,
-        item_count=result.fetched,
+        item_count=len(readings),
+        error_summary=None if readings else "no fresh stored PM2.5 observations in the pilot area",
     )
-    return StageOutcome(
-        "sensor_ingestion",
-        True,
-        f"fetched={result.fetched} saved={result.saved} "
-        f"skipped_duplicates={result.skipped_duplicates}",
-    )
+    return StageOutcome("sensor_ingestion", bool(readings), f"reused={len(readings)} stored OpenAQ readings")
 
 
 async def _ingest_national_overview_sensors(
@@ -591,60 +598,23 @@ async def _ingest_national_overview_sensors(
             error_summary=reason,
         )
         return StageOutcome(dataset_id, True, f"skipped ({reason})")
-    if settings.openaq_api_key is None:
-        _record_source_health(
-            session,
-            pipeline_run_id=pipeline_run_id,
-            dataset_id=dataset_id,
-            called=False,
-            failed=False,
-            item_count=0,
-            error_summary="OPENAQ_API_KEY not configured",
-        )
-        return StageOutcome(dataset_id, False, "skipped (OPENAQ_API_KEY not configured)")
-
-    async with httpx.AsyncClient(timeout=settings.openaq_timeout_seconds) as client:
-        attach_request_budget(
-            client, provider="openaq", budget=SqlProviderRequestBudget(get_session_factory())
-        )
-        provider = OpenAQNationalOverviewProvider(
-            api_key=settings.openaq_api_key.get_secret_value(),
-            client=client,
-            base_url=settings.openaq_base_url,
-            timeout_seconds=settings.openaq_timeout_seconds,
-            max_retries=settings.openaq_max_retries,
-            max_pages=settings.openaq_national_overview_pages,
-        )
-        result = await SensorIngestionService(
-            provider, SqlSensorReadingRepository(session)
-        ).run(INDIA_OVERVIEW_BBOX, since=since)
-
-    if not result.succeeded:
-        message = "; ".join(result.errors)
-        _record_source_health(
-            session,
-            pipeline_run_id=pipeline_run_id,
-            dataset_id=dataset_id,
-            called=True,
-            failed=True,
-            item_count=result.fetched,
-            error_summary=message[:500],
-        )
-        return StageOutcome(dataset_id, False, f"failed: {message}")
+    readings = SqlSensorReadingRepository(session).list_since(
+        since,
+        pollutant="pm25",
+        source="openaq",
+        bbox=INDIA_OVERVIEW_BBOX,
+    )
+    session.commit()
     _record_source_health(
         session,
         pipeline_run_id=pipeline_run_id,
         dataset_id=dataset_id,
         called=True,
         failed=False,
-        item_count=result.fetched,
+        item_count=len(readings),
+        error_summary=None if readings else "no fresh stored OpenAQ PM2.5 observations in India",
     )
-    return StageOutcome(
-        dataset_id,
-        True,
-        f"India readings fetched={result.fetched} saved={result.saved} "
-        f"duplicates={result.skipped_duplicates}",
-    )
+    return StageOutcome(dataset_id, bool(readings), f"reused={len(readings)} stored India OpenAQ readings")
 
 
 async def _ingest_fires(

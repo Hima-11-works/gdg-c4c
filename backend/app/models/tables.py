@@ -224,6 +224,73 @@ sensor_reading = Table(
     Index("ix_sensor_reading_geom", "geom", postgresql_using="gist"),
 )
 
+# OpenAQ station metadata is discovered independently from measurement pulls.
+# One row represents one PM2.5 sensor; polling is grouped by location_id so a
+# location with multiple sensors still costs one /latest request per cycle.
+openaq_station = Table(
+    "openaq_station",
+    metadata,
+    Column("sensor_id", BigInteger, primary_key=True),
+    Column("location_id", BigInteger, nullable=False),
+    Column("canonical_station_id", String(120), nullable=False),
+    Column("location_name", String(240), nullable=False),
+    Column("sensor_name", String(240), nullable=False),
+    Column("latitude", Float, nullable=True),
+    Column("longitude", Float, nullable=True),
+    Column("pollutant", String(20), nullable=False),
+    Column("unit", String(20), nullable=False),
+    Column("metadata", JSONB, nullable=False, server_default=text("'{}'::jsonb")),
+    Column("priority", Integer, nullable=False, server_default="0"),
+    Column("active", Boolean, nullable=False, server_default=text("true")),
+    Column("last_seen_scan_id", String(36), nullable=False),
+    Column("first_seen_at", DateTime(timezone=True), nullable=False),
+    Column("last_seen_at", DateTime(timezone=True), nullable=False),
+    Column("last_polled_at", DateTime(timezone=True), nullable=True),
+    Column("next_poll_at", DateTime(timezone=True), nullable=False),
+    Column("latest_observed_at", DateTime(timezone=True), nullable=True),
+    Column("history_cursor_at", DateTime(timezone=True), nullable=False),
+    Column("history_window_to", DateTime(timezone=True), nullable=True),
+    Column("history_page", Integer, nullable=False, server_default="1"),
+    Column("last_history_at", DateTime(timezone=True), nullable=True),
+    Column("next_history_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint("priority >= 0", name="ck_openaq_station_priority_nonnegative"),
+    CheckConstraint("history_page >= 1", name="ck_openaq_station_history_page_positive"),
+    CheckConstraint(
+        "latitude IS NULL OR latitude BETWEEN -90 AND 90",
+        name="ck_openaq_station_latitude",
+    ),
+    CheckConstraint(
+        "longitude IS NULL OR longitude BETWEEN -180 AND 180",
+        name="ck_openaq_station_longitude",
+    ),
+    Index("ix_openaq_station_due", "active", "next_poll_at", "priority"),
+    Index("ix_openaq_station_location", "location_id", "active"),
+    Index("ix_openaq_station_history_due", "active", "next_history_at", "last_history_at"),
+)
+
+# The singleton scan record is the explicit coverage contract. A station
+# missing from an incomplete scan remains active; deactivation occurs only
+# after the directory has been paginated to its final page.
+openaq_registry_scan = Table(
+    "openaq_registry_scan",
+    metadata,
+    Column("registry_id", String(80), primary_key=True),
+    Column("scan_id", String(36), nullable=True),
+    Column("scan_started_at", DateTime(timezone=True), nullable=True),
+    Column("scan_completed_at", DateTime(timezone=True), nullable=True),
+    Column("last_page", Integer, nullable=False, server_default="0"),
+    Column("pages_seen", Integer, nullable=False, server_default="0"),
+    Column("locations_seen", Integer, nullable=False, server_default="0"),
+    Column("sensors_seen", Integer, nullable=False, server_default="0"),
+    Column("complete", Boolean, nullable=False, server_default=text("false")),
+    Column("last_error", String(500), nullable=True),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint("last_page >= 0", name="ck_openaq_registry_page_nonnegative"),
+    CheckConstraint("pages_seen >= 0", name="ck_openaq_registry_pages_nonnegative"),
+    CheckConstraint("locations_seen >= 0", name="ck_openaq_registry_locations_nonnegative"),
+    CheckConstraint("sensors_seen >= 0", name="ck_openaq_registry_sensors_nonnegative"),
+)
+
 # Community-submitted measurements are deliberately isolated from provider
 # sensor_reading rows until a reviewer accepts them. The forecast pipeline only
 # reads sensor_reading, so an unverified citizen value can never become a

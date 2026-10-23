@@ -1,4 +1,4 @@
-"""OpenAQ v3 implementation of app.domain.providers.PollutionDataProvider.
+"""OpenAQ v3 adapters for legacy direct ingestion and scheduled registry collection.
 
 API shape (verified against https://api.openaq.org/openapi.json, since
 OpenAQ has changed its API significantly across versions):
@@ -19,18 +19,23 @@ OpenAQ has changed its API significantly across versions):
       sensor id found above.
 
 Auth: X-API-Key header (required by OpenAQ v3 on every endpoint).
+
+Live scheduled collection uses ``OpenAQRegistryProvider``: directory pages are
+persisted before polling, location latest calls are grouped across registered
+sensors, and historical measurements use resumable sensor-level time windows.
 """
 
 from __future__ import annotations
 
 import logging
 import math
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from app.domain import india
+from app.domain.openaq import OpenAQStation
 from app.domain.providers import ProviderError
 from app.domain.types import PM25, BoundingBox, SensorReading
 from app.ingestion import http
@@ -54,18 +59,24 @@ class _Coordinates(BaseModel):
 
 
 class _ParameterInfo(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     id: int
     name: str
     units: str
 
 
 class _SensorInfo(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     id: int
     name: str
     parameter: _ParameterInfo
 
 
 class _Location(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     id: int
     name: str
     coordinates: _Coordinates | None = None
@@ -108,7 +119,7 @@ class _LatestItem(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     measured_at: _DatetimeInfo = Field(alias="datetime")
-    value: float
+    value: float | None
     coordinates: _Coordinates | None = None
     sensor_id: int = Field(alias="sensorsId")
     location_id: int | None = Field(default=None, alias="locationsId")
@@ -118,13 +129,42 @@ class _LatestResponse(BaseModel):
     results: list[_LatestItem] = Field(default_factory=list)
 
 
-def _is_usable_value(value: float) -> bool:
+class _HistoryPeriod(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    datetime_from: _DatetimeInfo | None = Field(default=None, alias="datetimeFrom")
+    datetime_to: _DatetimeInfo | None = Field(default=None, alias="datetimeTo")
+
+
+class _HistoryItem(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    value: float | None = None
+    period: _HistoryPeriod | None = None
+    coordinates: _Coordinates | None = None
+
+
+class _HistoryResponse(BaseModel):
+    results: list[dict[str, object]] = Field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class OpenAQLocationPage:
+    stations: tuple[OpenAQStation, ...]
+    locations_count: int
+    page: int
+    limit: int
+    found: int | None
+    complete: bool
+
+
+def _is_usable_value(value: float | None) -> bool:
     """OpenAQ uses negative sentinels (-999 is the common one) to mean "no
     value", and a negative PM2.5 mass concentration is meaningless anyway.
     NaN/inf would pass the domain's range checks and then poison every
     average computed downstream, so they are rejected here too.
     """
-    return math.isfinite(value) and value >= 0
+    return value is not None and math.isfinite(value) and value >= 0
 
 
 def _first_present(*candidates: float | None) -> float | None:
@@ -338,17 +378,8 @@ class OpenAQProvider:
         )
 
 
-class OpenAQNationalOverviewProvider:
-    """Fetch a bounded sample of current PM2.5 sensors across India.
-
-    OpenAQ's parameter-latest endpoint is global, so this provider reads a
-    small, configured number of pages and retains only recent values inside
-    India's state/UT geofence. It is intentionally a coarse overview input;
-    the city-bounded provider above remains the source for detailed grids.
-    """
-
-    PARAMETER_PM25 = 2
-    PAGE_SIZE = 1000
+class OpenAQRegistryProvider:
+    """OpenAQ v3 endpoints used by the persisted, paginated India registry."""
 
     def __init__(
         self,
@@ -358,7 +389,6 @@ class OpenAQNationalOverviewProvider:
         base_url: str = "https://api.openaq.org/v3",
         timeout_seconds: float = 10.0,
         max_retries: int = 3,
-        max_pages: int = 5,
     ) -> None:
         if not api_key:
             raise ValueError("api_key must not be empty")
@@ -367,72 +397,189 @@ class OpenAQNationalOverviewProvider:
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
         self._max_retries = max_retries
-        self._max_pages = max_pages
 
-    async def fetch_readings(
-        self, _bbox: BoundingBox, *, since: datetime
-    ) -> list[SensorReading]:
-        readings_by_sensor: dict[int, SensorReading] = {}
-        for page in range(1, self._max_pages + 1):
-            try:
-                payload = await http.get_json(
-                    self._client,
-                    f"{self._base_url}/parameters/{self.PARAMETER_PM25}/latest",
-                    params={
-                        "limit": self.PAGE_SIZE,
-                        "page": page,
-                        "datetime_min": since.isoformat(),
-                    },
-                    headers={"X-API-Key": self._api_key},
-                    timeout_seconds=self._timeout_seconds,
-                    max_retries=self._max_retries,
-                    log_prefix="OpenAQ national overview",
-                    provider="openaq",
-                )
-            except http.RequestFailedError as exc:
-                raise ProviderError(f"OpenAQ national overview: {exc}") from exc
-            try:
-                parsed = _LatestResponse.model_validate(payload)
-            except ValidationError as exc:
-                raise ProviderError(
-                    f"OpenAQ national overview: malformed PM2.5 latest response: {exc}"
-                ) from exc
+    async def fetch_india_pm25_page(self, *, page: int, limit: int) -> OpenAQLocationPage:
+        if page < 1 or not 1 <= limit <= 1000:
+            raise ValueError("page must be positive and limit must be between 1 and 1000")
+        try:
+            payload = await self._get_json(
+                "/locations",
+                {"iso": "IN", "parameters_id": 2, "page": page, "limit": limit},
+            )
+            parsed = _LocationsResponse.model_validate(payload)
+        except http.RequestFailedError as exc:
+            raise ProviderError(f"OpenAQ registry: {exc}", status=exc.status) from exc
+        except ValidationError as exc:
+            raise ProviderError(f"OpenAQ registry: malformed /locations response: {exc}") from exc
 
-            for item in parsed.results:
-                coordinates = item.coordinates
-                latitude = coordinates.latitude if coordinates else None
-                longitude = coordinates.longitude if coordinates else None
-                measured_at = item.measured_at.utc
-                if (
-                    latitude is None
-                    or longitude is None
-                    or measured_at < since
-                    or not _is_usable_value(item.value)
-                    or not india.is_inside_india(latitude, longitude)
-                ):
+        stations: list[OpenAQStation] = []
+        for location in parsed.results:
+            for sensor in location.sensors:
+                if sensor.parameter.name.lower().replace(".", "") != "pm25":
                     continue
-                previous = readings_by_sensor.get(item.sensor_id)
-                if previous is None or measured_at > previous.measured_at:
-                    readings_by_sensor[item.sensor_id] = SensorReading(
+                metadata = {
+                    "location": location.model_dump(mode="json", exclude={"sensors"}),
+                    "sensor": sensor.model_dump(mode="json"),
+                }
+                stations.append(
+                    OpenAQStation(
+                        sensor_id=sensor.id,
+                        location_id=location.id,
+                        location_name=location.name,
+                        sensor_name=sensor.name,
+                        latitude=(location.coordinates.latitude if location.coordinates else None),
+                        longitude=(location.coordinates.longitude if location.coordinates else None),
+                        pollutant=PM25,
+                        unit=sensor.parameter.units,
+                        metadata=metadata,
+                    )
+                )
+        found = parsed.meta.found
+        found_count = int(found) if isinstance(found, (int, str)) and str(found).isdigit() else None
+        complete = len(parsed.results) < limit or (
+            found_count is not None and page * limit >= found_count
+        )
+        return OpenAQLocationPage(
+            stations=tuple(stations),
+            locations_count=len(parsed.results),
+            page=page,
+            limit=limit,
+            found=found_count,
+            complete=complete,
+        )
+
+    async def fetch_location_latest(
+        self,
+        location_id: int,
+        stations: list[OpenAQStation],
+        *,
+        since: datetime,
+    ) -> list[SensorReading]:
+        try:
+            payload = await self._get_json(f"/locations/{location_id}/latest", {})
+            latest = _LatestResponse.model_validate(payload)
+        except http.RequestFailedError as exc:
+            raise ProviderError(
+                f"OpenAQ latest for location {location_id}: {exc}", status=exc.status
+            ) from exc
+        except ValidationError as exc:
+            raise ProviderError(
+                f"OpenAQ latest for location {location_id}: malformed response: {exc}"
+            ) from exc
+
+        stations_by_id = {station.sensor_id: station for station in stations}
+        readings: list[SensorReading] = []
+        for item in latest.results:
+            station = stations_by_id.get(item.sensor_id)
+            if station is None or item.location_id not in (None, location_id):
+                continue
+            if not _is_usable_value(item.value) or item.measured_at.utc < since:
+                continue
+            latitude = _first_present(
+                station.latitude,
+                item.coordinates.latitude if item.coordinates else None,
+            )
+            longitude = _first_present(
+                station.longitude,
+                item.coordinates.longitude if item.coordinates else None,
+            )
+            if latitude is None or longitude is None:
+                continue
+            try:
+                readings.append(
+                    SensorReading(
                         source=SOURCE,
-                        external_sensor_id=str(item.sensor_id),
+                        external_sensor_id=str(station.sensor_id),
                         latitude=latitude,
                         longitude=longitude,
-                        pollutant=PM25,
+                        pollutant=station.pollutant,
                         value=item.value,
-                        unit="µg/m³",
-                        measured_at=measured_at,
-                        canonical_station_id=(
-                            f"openaq-location:{item.location_id}"
-                            if item.location_id is not None
-                            else None
-                        ),
+                        unit=station.unit,
+                        measured_at=item.measured_at.utc,
+                        canonical_station_id=station.canonical_station_id,
                     )
-            if len(parsed.results) < self.PAGE_SIZE:
-                break
-            if page == self._max_pages:
-                logger.warning(
-                    "OpenAQ national overview reached its %d-page cap; the country sample may be partial",
-                    self._max_pages,
                 )
-        return list(readings_by_sensor.values())
+            except ValueError:
+                logger.warning("OpenAQ latest: invalid reading for sensor %s", station.sensor_id)
+        return readings
+
+    async def fetch_history_page(
+        self,
+        station: OpenAQStation,
+        *,
+        datetime_from: datetime,
+        datetime_to: datetime,
+        page: int,
+        limit: int = 100,
+    ) -> tuple[list[SensorReading], int]:
+        """Read one bounded sensor history page for resumable backfill."""
+        try:
+            payload = await self._get_json(
+                f"/sensors/{station.sensor_id}/measurements",
+                {
+                    "datetime_from": datetime_from.isoformat(),
+                    "datetime_to": datetime_to.isoformat(),
+                    "page": page,
+                    "limit": limit,
+                },
+            )
+            response = _HistoryResponse.model_validate(payload)
+        except http.RequestFailedError as exc:
+            raise ProviderError(
+                f"OpenAQ history for sensor {station.sensor_id}: {exc}", status=exc.status
+            ) from exc
+        except ValidationError as exc:
+            raise ProviderError(
+                f"OpenAQ history for sensor {station.sensor_id}: malformed response: {exc}"
+            ) from exc
+
+        readings: list[SensorReading] = []
+        for raw in response.results:
+            try:
+                item = _HistoryItem.model_validate(raw)
+            except ValidationError:
+                continue
+            if item.value is None or not _is_usable_value(item.value) or item.period is None:
+                continue
+            measured_at = item.period.datetime_to or item.period.datetime_from
+            if measured_at is None:
+                continue
+            latitude = _first_present(
+                station.latitude,
+                item.coordinates.latitude if item.coordinates else None,
+            )
+            longitude = _first_present(
+                station.longitude,
+                item.coordinates.longitude if item.coordinates else None,
+            )
+            if latitude is None or longitude is None:
+                continue
+            try:
+                readings.append(
+                    SensorReading(
+                        source=SOURCE,
+                        external_sensor_id=str(station.sensor_id),
+                        latitude=latitude,
+                        longitude=longitude,
+                        pollutant=station.pollutant,
+                        value=item.value,
+                        unit=station.unit,
+                        measured_at=measured_at.utc,
+                        canonical_station_id=station.canonical_station_id,
+                    )
+                )
+            except ValueError:
+                continue
+        return readings, len(response.results)
+
+    async def _get_json(self, path: str, params: dict[str, object]) -> dict:
+        return await http.get_json(
+            self._client,
+            f"{self._base_url}{path}",
+            params=params,
+            headers={"X-API-Key": self._api_key},
+            timeout_seconds=self._timeout_seconds,
+            max_retries=self._max_retries,
+            log_prefix="OpenAQ",
+            provider="openaq",
+        )

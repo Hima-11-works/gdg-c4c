@@ -12,6 +12,8 @@ from sqlalchemy.orm import sessionmaker
 from app.models.tables import scheduled_job, scheduler_heartbeat
 
 JOB_DEFINITIONS: dict[str, int] = {
+    "openaq-collection": 10 * 60,
+    "openaq-history": 60 * 60,
     "environmental-pipeline": 60 * 60,
     "satellite-hotspot-scan": 30 * 60,
 }

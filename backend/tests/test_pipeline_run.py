@@ -126,20 +126,13 @@ async def test_failed_current_grid_skips_forecast_and_preserves_last_publication
 # --- sensor ingestion stage: missing API key ---
 
 
-async def test_ingest_sensors_without_an_api_key_is_a_clear_failure_not_a_crash(
+async def test_ingest_sensors_without_cached_data_is_a_clear_failure_not_a_crash(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # demo_mode is pinned explicitly (not just left at Settings' False
-    # default): this test reads the real repo-root .env via Settings'
-    # env_file, and DEMO_MODE=true there (a valid thing for a developer to
-    # have set locally) would otherwise silently change which branch of
-    # _ingest_sensors this test actually exercises.
     settings = _settings(openaq_api_key=None, demo_mode=False)
 
-    # F3: the unconfigured path is the clearest case of "a source that was
-    # never asked" - the API returned nothing *because nobody called it*. It
-    # records `missing` rather than `empty`, and the distinction is only
-    # meaningful if it is asserted somewhere, so it is asserted here.
+    # Collection is independent from publication. Missing cached readings
+    # are empty coverage even when the provider key is not in this process.
     recorded: list[dict[str, object]] = []
 
     class _RecordingHealthRepo:
@@ -149,12 +142,24 @@ async def test_ingest_sensors_without_an_api_key_is_a_clear_failure_not_a_crash(
         def record(self, **kwargs: object) -> None:
             recorded.append(kwargs)
 
+    class _EmptySensorRepository:
+        def __init__(self, _session: object) -> None:
+            pass
+
+        def list_since(self, *_args: object, **_kwargs: object) -> list[object]:
+            return []
+
+    class _ReadSession:
+        def commit(self) -> None:
+            pass
+
     monkeypatch.setattr(
         "app.db.repositories.source_health.SqlSourceHealthRepository", _RecordingHealthRepo
     )
+    monkeypatch.setattr("app.pipeline.run.SqlSensorReadingRepository", _EmptySensorRepository)
 
     outcome = await _ingest_sensors(
-        None,  # type: ignore[arg-type]
+        _ReadSession(),  # type: ignore[arg-type]
         settings,
         BBOX,
         GENERATED_AT,
@@ -163,16 +168,14 @@ async def test_ingest_sensors_without_an_api_key_is_a_clear_failure_not_a_crash(
 
     assert outcome.name == "sensor_ingestion"
     assert outcome.succeeded is False
-    assert "OPENAQ_API_KEY" in outcome.summary
+    assert "reused=0" in outcome.summary
 
     assert len(recorded) == 1
     [call] = recorded
     assert call["dataset_id"] == "openaq"
     assert call["pipeline_run_id"] == "run-test"
-    # `called` is folded into `status` by classify() rather than stored, so the
-    # distinction survives as the word itself.
-    assert call["status"] == "missing"
-    assert call["error_summary"] == "not configured"
+    assert call["status"] == "empty"
+    assert "no fresh stored" in call["error_summary"]
 
 
 async def test_duplicate_only_ingestion_remains_present_in_source_health(
@@ -187,7 +190,18 @@ async def test_duplicate_only_ingestion_remains_present_in_source_health(
         async def __aexit__(self, *_args):
             return None
 
-    class _DuplicateOnlyIngestion:
+    class _StoredSensorRepository:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def list_since(self, *_args, **_kwargs):
+            return [object(), object(), object()]
+
+    class _ReadSession:
+        def commit(self) -> None:
+            pass
+
+    class _WeatherIngestion:
         def __init__(self, *_args, **_kwargs):
             pass
 
@@ -211,23 +225,16 @@ async def test_duplicate_only_ingestion_remains_present_in_source_health(
         "app.db.repositories.source_health.SqlSourceHealthRepository",
         _RecordingHealthRepo,
     )
-    monkeypatch.setattr(
-        "app.pipeline.run.SensorIngestionService", _DuplicateOnlyIngestion
-    )
-    monkeypatch.setattr(
-        "app.pipeline.run.WeatherIngestionService", _DuplicateOnlyIngestion
-    )
-    monkeypatch.setattr("app.pipeline.run.SqlSensorReadingRepository", lambda _session: object())
+    monkeypatch.setattr("app.pipeline.run.SqlSensorReadingRepository", _StoredSensorRepository)
+    monkeypatch.setattr("app.pipeline.run.WeatherIngestionService", _WeatherIngestion)
     monkeypatch.setattr("app.pipeline.run.SqlWeatherReadingRepository", lambda _session: object())
-    monkeypatch.setattr("app.pipeline.run.build_pollution_provider", lambda *_args: object())
     monkeypatch.setattr("app.pipeline.run.build_weather_provider", lambda *_args: object())
-    monkeypatch.setattr(
-        "app.pipeline.run.OpenAQNationalOverviewProvider", lambda **_kwargs: object()
-    )
 
     outcomes = [
-        await _ingest_sensors(None, settings, BBOX, GENERATED_AT, "run-test"),
-        await _ingest_national_overview_sensors(None, settings, GENERATED_AT, "run-test"),
+        await _ingest_sensors(_ReadSession(), settings, BBOX, GENERATED_AT, "run-test"),
+        await _ingest_national_overview_sensors(
+            _ReadSession(), settings, GENERATED_AT, "run-test"
+        ),
         await _ingest_weather(None, settings, BBOX, "run-test"),
     ]
 
@@ -236,7 +243,8 @@ async def test_duplicate_only_ingestion_remains_present_in_source_health(
     assert set(health_by_dataset) == {"openaq", "openaq-national-overview", "open-meteo"}
     assert all(record["status"] == "present" for record in health_by_dataset.values())
     assert all(record["item_count"] == 3 for record in health_by_dataset.values())
-    assert all("saved=0" in outcome.summary for outcome in outcomes)
+    assert "reused=3" in outcomes[0].summary
+    assert "reused=3" in outcomes[1].summary
 
 
 async def test_ingest_fires_without_a_key_keeps_the_baseline_available(
