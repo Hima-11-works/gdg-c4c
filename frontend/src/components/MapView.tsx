@@ -19,9 +19,9 @@ setWorkerUrl(maplibreWorkerUrl)
 import { colorScaleExpression, NO_DATA_COLORS, PDI_COLOR_SCALE, PM25_COLOR_SCALE } from '../lib/colorScales'
 import {
   freightLinesFeatureCollection,
-  freightNodesFeatureCollection,
-  normalizeCorridorProperties,
+  FREIGHT_LINE_COLOR,
 } from '../lib/freightCorridors'
+import type { FreightCorridorProperties } from '../lib/freightCorridors'
 import { EMPTY_REPORTS, cameraPinImage, reportsFeatureCollection } from '../lib/citizenReports'
 import { activeFirePopupHtml, activeFiresFeatureCollection } from '../lib/activeFires'
 import type { ActiveFire } from '../lib/activeFires'
@@ -262,29 +262,12 @@ const WIND_STREAK_IMAGES = Array.from({ length: WIND_STREAK_FRAME_COUNT }, (_, i
 const SOURCE_SELECTED = 'selected-cell'
 const LAYER_SELECTED_OUTLINE = 'selected-cell-outline'
 
-// Economic freight corridors — a glowing polyline overlay plus clickable
-// congestion node markers. Pure context for the intervention picture.
+// Backend corridor axes — a glowing, clickable line overlay.
 const SOURCE_FREIGHT_LINES = 'freight-lines'
 const LAYER_FREIGHT_GLOW = 'corridor-layer-glow'
 const LAYER_FREIGHT_LINE = 'corridor-layer'
-const SOURCE_FREIGHT_NODES = 'freight-nodes'
-const LAYER_FREIGHT_NODES = 'freight-nodes-markers'
-const FREIGHT_NODE_COLOR = '#00F5D4'
 const FREIGHT_GLOW_OPACITY = 0.38
 const FREIGHT_LINE_OPACITY = 0.95
-
-/** Color coding for major economic freight corridors based on predictive risk status */
-const CORRIDOR_COLOR_EXPRESSION = [
-  'match',
-  ['get', 'status'],
-  'Critical',
-  '#EF4444', // Red for Critical / AKIC
-  'Warning',
-  '#F59E0B', // Amber for Warning
-  'Normal',
-  '#00F5D4', // Cyan for Normal
-  '#00F5D4',
-]
 
 // Citizen report camera pins — amber, wrapped in white pill badges, above
 // corridors but below the selection outline, hidden until toggled on.
@@ -634,6 +617,8 @@ interface MapViewProps {
   overviewForecastGrid: AsyncResource<ForecastOut[]>
   parentForecastGrid: AsyncResource<ForecastOut[]>
   weather: AsyncResource<WeatherReadingOut[]>
+  /** Corridor definitions read from the backend, including provenance. */
+  corridors: AsyncResource<FreightCorridorProperties[]>
   /** Citizen reports, read from GET /api/v2/reports so each row carries its
    *  lifecycle status. The pin image is chosen per report from that status -
    *  see the citizen-report-pins layer. */
@@ -663,6 +648,7 @@ export function MapView({
   overviewForecastGrid,
   parentForecastGrid,
   weather,
+  corridors,
   citizenReports,
   activeFires,
   localHotspots,
@@ -676,9 +662,13 @@ export function MapView({
   useLayoutEffect(() => { themeRef.current = state.theme }, [state.theme])
   const [mapReady, setMapReady] = useState(false)
   const viewportCallbacksRef = useRef({ onViewportMoveStart, onViewportSettled })
+  const corridorsRef = useRef(corridors)
   useEffect(() => {
     viewportCallbacksRef.current = { onViewportMoveStart, onViewportSettled }
   }, [onViewportMoveStart, onViewportSettled])
+  useEffect(() => {
+    corridorsRef.current = corridors
+  }, [corridors])
 
   // Which double-buffer set is currently visible.
   const visibleSetRef = useRef<Pm25Set>('a')
@@ -1187,11 +1177,10 @@ export function MapView({
             },
           })
 
-          // Freight corridors — glow under a bright core stroke, hidden
-          // until the toggle effect fades them in. Node markers sit above.
+          // Backend corridor axes, hidden until selected in the layer controls.
           map!.addSource(SOURCE_FREIGHT_LINES, {
             type: 'geojson',
-            data: freightLinesFeatureCollection(),
+            data: EMPTY_FEATURE_COLLECTION,
           })
           map!.addLayer({
             id: LAYER_FREIGHT_GLOW,
@@ -1199,7 +1188,7 @@ export function MapView({
             source: SOURCE_FREIGHT_LINES,
             layout: { 'line-cap': 'round', 'line-join': 'round', visibility: 'none' },
             paint: {
-              'line-color': CORRIDOR_COLOR_EXPRESSION as never,
+              'line-color': FREIGHT_LINE_COLOR,
               'line-width': ['interpolate', ['linear'], ['zoom'], 3, 8, 8, 14, 12, 18],
               'line-opacity': FREIGHT_GLOW_OPACITY,
               'line-blur': 3,
@@ -1211,29 +1200,11 @@ export function MapView({
             source: SOURCE_FREIGHT_LINES,
             layout: { 'line-cap': 'round', 'line-join': 'round', visibility: 'none' },
             paint: {
-              'line-color': CORRIDOR_COLOR_EXPRESSION as never,
+              'line-color': FREIGHT_LINE_COLOR,
               'line-width': ['interpolate', ['linear'], ['zoom'], 3, 3.5, 8, 5.5, 12, 7.5],
               'line-opacity': FREIGHT_LINE_OPACITY,
             },
           })
-          map!.addSource(SOURCE_FREIGHT_NODES, {
-            type: 'geojson',
-            data: freightNodesFeatureCollection(),
-          })
-          map!.addLayer({
-            id: LAYER_FREIGHT_NODES,
-            type: 'circle',
-            source: SOURCE_FREIGHT_NODES,
-            layout: { visibility: 'none' },
-            paint: {
-              'circle-radius': 7,
-              'circle-color': FREIGHT_NODE_COLOR,
-              'circle-stroke-color': '#0b1f1c',
-              'circle-stroke-width': 2,
-              'circle-opacity': 0.95,
-            },
-          })
-
           // Citizen report camera pins — amber, above corridors but below
           // the selection outline, hidden until the toggle turns them on.
           map!.addSource(SOURCE_CITIZEN, {
@@ -1288,47 +1259,20 @@ export function MapView({
             popupRef.current = { key, popup }
           }
 
-          // Freight node popups contain illustrative sample values only.
-          // Popup garbage-collects itself on close.
-          map!.on('click', LAYER_FREIGHT_NODES, (event) => {
-            const feature = event.features?.[0]
-            const props = feature?.properties
-            if (!feature || !props) return
-            // Node features are authored Points (see freightCorridors.ts).
-            const geometry = feature.geometry as unknown as { coordinates: [number, number] }
-            togglePopup(
-              `freight:${props.name}`,
-              geometry.coordinates,
-              'freight-node-popup',
-              `<strong>${props.name}</strong>` +
-                `<span class="freight-popup-demo">Illustrative sample values — not live measurements or a model forecast</span>` +
-                `<span class="freight-popup-corridor">${props.corridor}</span>` +
-                `<span>Example congestion: <b>${props.congestion}%</b></span>` +
-                `<span>Example emissions: <b>${props.emission}</b> t CO₂e / day</span>` +
-                (props.spikeRisk
-                  ? `<span class="freight-popup-risk">Illustrative scenario risk (not a forecast): <b class="freight-risk-badge freight-risk-${props.spikeRisk.toLowerCase()}">${props.spikeRisk}</b></span>`
-                  : '') +
-                (props.advisory
-                  ? `<span class="freight-popup-advisory">Example response text (not official guidance): ${props.advisory}</span>`
-                  : ''),
-              12,
-            )
-          })
-          map!.on('mouseenter', LAYER_FREIGHT_NODES, () => {
-            map!.getCanvas().style.cursor = 'pointer'
-          })
-          map!.on('mouseleave', LAYER_FREIGHT_NODES, () => {
-            map!.getCanvas().style.cursor = ''
-          })
-
-          // Major economic freight corridors: click event extracts predictive
-          // metadata and sets it into the app's selected corridor state.
+          // Corridor line clicks select a backend definition; forecast detail
+          // is fetched by the selected-corridor panel.
           const handleCorridorClick = (event: { features?: unknown[] }) => {
             const feature = event.features?.[0] as
               { properties?: Record<string, unknown> } | undefined
             const props = feature?.properties
             if (!feature || !props) return
-            const corridor = normalizeCorridorProperties(props)
+            if (typeof props.corridor_id !== 'string') return
+            const resource = corridorsRef.current
+            if (resource.status !== 'success') return
+            const corridor = resource.data.find(
+              (item) => item.corridor_id === props.corridor_id,
+            )
+            if (!corridor) return
             dispatch({ type: 'SELECT_CORRIDOR', corridor })
           }
 
@@ -1853,15 +1797,25 @@ export function MapView({
     // PDI actually toggled.
   }, [mapReady, state.showPdi, state.viewMode, state.contrast])
 
-  // Freight corridors toggle — visibility-based hiding on all three layers
-  // (glow stroke, core stroke, node markers), same rule as the fire layer.
+  // Refresh corridor definitions only when the backend resource changes.
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return
+    const source = mapRef.current.getSource(SOURCE_FREIGHT_LINES)
+    if (!(source instanceof GeoJSONSource)) return
+    source.setData(
+      corridors.status === 'success'
+        ? freightLinesFeatureCollection(corridors.data)
+        : EMPTY_FEATURE_COLLECTION,
+    )
+  }, [mapReady, corridors])
+
+  // Corridor visibility is shared by the core and glow strokes.
   useEffect(() => {
     if (!mapReady || !mapRef.current) return
     const map = mapRef.current
     const visibility: 'visible' | 'none' = state.showFreightCorridors ? 'visible' : 'none'
     map.setLayoutProperty(LAYER_FREIGHT_GLOW, 'visibility', visibility)
     map.setLayoutProperty(LAYER_FREIGHT_LINE, 'visibility', visibility)
-    map.setLayoutProperty(LAYER_FREIGHT_NODES, 'visibility', visibility)
   }, [mapReady, state.showFreightCorridors])
 
   // Citizen report pins toggle — visibility-based hiding.

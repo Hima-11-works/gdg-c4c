@@ -42,7 +42,7 @@ export interface MapUiState {
   showFireHotspots: boolean
   /** Citizen sensor readings & photo submissions layer. */
   showCitizenSensors: boolean
-  /** Major economic freight corridors overlay (DMIC / DFC). */
+  /** Backend-provided illustrative corridor axes. */
   showFreightCorridors: boolean
   /** NASA GIBS True Color satellite raster (VIIRS S-NPP daily imagery). */
   showSatelliteImagery: boolean
@@ -79,7 +79,7 @@ export interface MapUiState {
   selectedCellResolution: number | null
   /** Whether the selected fine map cell is showing its coarser parent. */
   selectedCellGeneralized: boolean
-  /** Selected major economic freight corridor for predictive interstate drawer. */
+  /** Selected backend corridor definition for its published-run drawer. */
   selectedCorridor: FreightCorridorProperties | null
   /** The current zoom tier + resolution — see lib/lod.ts. */
   lod: Lod

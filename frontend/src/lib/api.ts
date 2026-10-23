@@ -36,6 +36,10 @@ import type {
   WeatherV2Out,
   WeatherReadingOut,
 } from './types'
+import type {
+  CorridorCurrentOut,
+  FreightCorridorProperties,
+} from './freightCorridors'
 import { activeFireFromHotspot } from './activeFires'
 import type { ActiveFire } from './activeFires'
 
@@ -553,6 +557,25 @@ export function fetchHotspotScan(
   signal?: AbortSignal,
 ): Promise<Envelope<HotspotScanOut>> {
   return apiGet<Envelope<HotspotScanOut>>(`/api/v1/hotspots/${encodeURIComponent(scanId)}`, signal)
+}
+
+/** Named corridor definitions and their explicit geometry provenance. */
+export function fetchCorridors(
+  signal?: AbortSignal,
+): Promise<Envelope<FreightCorridorProperties[]>> {
+  return apiGet<Envelope<FreightCorridorProperties[]>>('/api/v1/corridors', signal)
+}
+
+/** Current published-run corridor forecast plus its observed-label evaluation. */
+export function fetchCurrentCorridor(
+  corridorId: string,
+  runId?: string,
+  signal?: AbortSignal,
+): Promise<Envelope<CorridorCurrentOut>> {
+  return apiGet<Envelope<CorridorCurrentOut>>(
+    `/api/v1/corridors/${encodeURIComponent(corridorId)}/current${buildQuery({ run_id: runId })}`,
+    signal,
+  )
 }
 
 export function submitReport(payload: FireReportSubmit): Promise<Envelope<FireReportOut>> {

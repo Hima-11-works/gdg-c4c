@@ -29,7 +29,6 @@ from app.core.config import Settings, get_settings
 from app.domain.corridor import (
     Corridor,
     CorridorEvaluation,
-    EvaluationVerdict,
     get_corridor,
     list_corridors,
 )
@@ -66,7 +65,12 @@ def _corridor_out(corridor: Corridor) -> CorridorOut:
     )
 
 
-def _event_out(corridor: Corridor, evaluation: CorridorEvaluation, peak) -> CorridorEventOut:
+def _event_out(
+    corridor: Corridor,
+    evaluation: CorridorEvaluation,
+    peak,
+    results,
+) -> CorridorEventOut:
     event = evaluation.event
     return CorridorEventOut(
         event_id=event.event_id,
@@ -90,7 +94,31 @@ def _event_out(corridor: Corridor, evaluation: CorridorEvaluation, peak) -> Corr
         peak_horizon_hours=peak[1],
         label_count=event.label_count,
         label_sources=list(event.label_sources),
+        prediction_methods=sorted({item.prediction_method for item in results}),
+        model_versions=sorted({item.model_version for item in results if item.model_version}),
+        dataset_versions=[
+            {
+                "dataset_id": ref.dataset_id,
+                "source": ref.source,
+                "product": ref.product,
+                "version": ref.version,
+                "kind": ref.kind.value,
+                "region": ref.region,
+                "attribution": ref.attribution,
+                "license": ref.license,
+            }
+            for ref in _unique_dataset_refs(results)
+        ],
     )
+
+
+def _unique_dataset_refs(results):
+    refs = {
+        ref.dataset_id: ref
+        for result in results
+        for ref in result.dataset_refs
+    }
+    return [refs[key] for key in sorted(refs)]
 
 
 def _evaluation_out(evaluation: CorridorEvaluation) -> CorridorEvaluationOut:
@@ -134,6 +162,50 @@ def get_corridor_route(corridor_id: str) -> Envelope[CorridorOut]:
         )
     return Envelope(
         generated_at=datetime.now(UTC), is_demo=False, data=_corridor_out(corridor)
+    )
+
+
+@router.get(
+    "/{corridor_id}/current",
+    response_model=Envelope[dict],
+    summary="Latest published forecast and evaluation for a corridor",
+)
+def get_current_corridor_event(
+    corridor_id: str,
+    run_id: str | None = Query(
+        default=None, description="Pin to a published prediction run; latest is used by default."
+    ),
+    min_labels: int = Query(default=DEFAULT_MIN_LABELS, ge=1, le=1000),
+    session: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Envelope[dict]:
+    corridor = get_corridor(corridor_id)
+    if corridor is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"no corridor with id {corridor_id!r}",
+        )
+    try:
+        event, _run, results = event_for_run(session, corridor=corridor, run_id=run_id)
+    except EventNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    evaluation = evaluate_event(
+        session,
+        corridor=corridor,
+        event=event,
+        results=results,
+        settings=settings,
+        min_labels=min_labels,
+    )
+    return Envelope(
+        generated_at=datetime.now(UTC),
+        is_demo=event.run_synthetic or event.run_mode == "demo",
+        data={
+            "event": _event_out(
+                corridor, evaluation, event_peak(results), results
+            ).model_dump(),
+            "evaluation": _evaluation_out(evaluation).model_dump(),
+        },
     )
 
 
@@ -199,9 +271,11 @@ def get_corridor_event(
     )
     return Envelope(
         generated_at=datetime.now(UTC),
-        is_demo=evaluation.verdict is not EvaluationVerdict.EVALUATED,
+        is_demo=event.run_synthetic or event.run_mode == "demo",
         data={
-            "event": _event_out(corridor, evaluation, event_peak(results)).model_dump(),
+            "event": _event_out(
+                corridor, evaluation, event_peak(results), results
+            ).model_dump(),
             "evaluation": _evaluation_out(evaluation).model_dump(),
         },
     )

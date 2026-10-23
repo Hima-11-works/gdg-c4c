@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   fetchActiveFires,
+  fetchCorridors,
   fetchGridCurrent,
   fetchPublishedMeta,
   fetchReportsWithStatus,
@@ -111,6 +112,7 @@ export function MapPage() {
   const publishedMeta = useApiResource(fetchPublishedMeta, [], {
     pollIntervalMs: 5 * 60 * 1000,
   })
+  const corridors = useApiResource(fetchCorridors, [])
   const supportedHours =
     publishedMeta.resource.status === 'success'
       ? publishedMeta.resource.data.supported_horizons_hours
@@ -424,6 +426,7 @@ export function MapPage() {
           overviewForecastGrid={overviewForecastGrid}
           parentForecastGrid={parentForecastGrid}
           weather={weather.resource}
+          corridors={corridors.resource}
           citizenReports={reports.resource}
           activeFires={activeFires.resource}
           localHotspots={localHotspots}
@@ -497,7 +500,7 @@ export function MapPage() {
 
       {state.selectedCorridor !== null ? (
         <Suspense fallback={<FeatureLoading label="Loading corridor details…" />}>
-          <CorridorDetailPanel corridor={state.selectedCorridor} />
+          <CorridorDetailPanel corridor={state.selectedCorridor} runId={publishedRunId} />
         </Suspense>
       ) : state.selectedCell !== null ? (
         <Suspense fallback={<FeatureLoading label="Loading cell details…" />}>

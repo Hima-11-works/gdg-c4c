@@ -61,6 +61,13 @@ at a set of horizons.
 | `cells[]` | The corridor cells, in order from the first endpoint to the last |
 | `peak_predicted_ugm3` | Highest forecast PM2.5 in the corridor, and the horizon it occurred at |
 | `label_count` / `label_sources` | How many station observations were found, and from where |
+| `prediction_methods` / `model_versions` | Methods and registered models used by the returned forecast rows |
+| `dataset_versions` | Attributed input datasets recorded on those rows |
+
+`GET /api/v1/corridors/{corridor_id}/current` returns the latest published
+corridor event and its evaluation. Pass `run_id` to pin it to the same run as
+the map. A missing evaluation label set leaves `evaluation.verdict` at
+`insufficient_data`; it does not mark a real live run as demo data.
 
 The id is stable: the same run at the same horizons always names the same event,
 and a different run or a different horizon set is a different event.
@@ -212,10 +219,13 @@ curl localhost:8000/api/v1/corridors
 
 ```bash
 curl "localhost:8000/api/v1/corridors/delhi-kanpur/events/corridor:delhi-kanpur:prediction-features-20260924T0600Z:h1a2b3c4d?min_labels=5"
+
+# The latest corridor run and its evaluation, without first knowing event_id
+curl "localhost:8000/api/v1/corridors/delhi-kanpur/current?run_id=prediction-features-20260924T0600Z"
 ```
 
 ```json
-{"generated_at":"…","is_demo":true,"data":{
+{"generated_at":"…","is_demo":false,"data":{
   "event":{
     "event_id":"corridor:delhi-kanpur:prediction-features-20260924T0600Z:h1a2b3c4d",
     "corridor_id":"delhi-kanpur",
@@ -234,7 +244,10 @@ curl "localhost:8000/api/v1/corridors/delhi-kanpur/events/corridor:delhi-kanpur:
     "peak_predicted_ugm3":144.0,
     "peak_horizon_hours":3.0,
     "label_count":0,
-    "label_sources":[]
+    "label_sources":[],
+    "prediction_methods":["deterministic-dispersion-baseline"],
+    "model_versions":[],
+    "dataset_versions":[]
   },
   "evaluation":{
     "verdict":"insufficient_data",

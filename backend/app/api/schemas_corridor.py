@@ -54,6 +54,9 @@ class CorridorEventOut(BaseModel):
     peak_horizon_hours: float | None = None
     label_count: int
     label_sources: list[str]
+    prediction_methods: list[str] = Field(default_factory=list)
+    model_versions: list[str] = Field(default_factory=list)
+    dataset_versions: list[dict[str, str]] = Field(default_factory=list)
 
 
 class ScoreSliceOut(BaseModel):

@@ -497,6 +497,7 @@ def test_api_returns_the_event_and_its_evidence(monkeypatch) -> None:
     body = response.json()
     data = body["data"]
     assert data["event"]["event_id"] == event.event_id
+    assert data["event"]["prediction_methods"] == ["persistence-baseline"]
     assert [point["horizon_hours"] for point in data["event"]["horizons"]] == [
         1.0,
         3.0,
@@ -506,8 +507,20 @@ def test_api_returns_the_event_and_its_evidence(monkeypatch) -> None:
     assert data["evaluation"]["verdict"] == "insufficient_data"
     assert data["evaluation"]["usable_as_real_world_evidence"] is False
     assert data["evaluation"]["reasons"]
-    # A missing real evaluation is signalled on the envelope too.
-    assert body["is_demo"] is True
+    # The envelope reports the run's data mode, not whether validation labels exist.
+    assert body["is_demo"] is False
+
+    current = client.get(
+        "/api/v1/corridors/delhi-kanpur/current", params={"run_id": run.run_id}
+    )
+    assert current.status_code == 200
+    current_body = current.json()
+    assert current_body["data"]["event"]["run_id"] == run.run_id
+    assert current_body["data"]["event"]["prediction_methods"] == [
+        "persistence-baseline"
+    ]
+    assert current_body["data"]["evaluation"]["verdict"] == "insufficient_data"
+    assert current_body["is_demo"] is False
 
     unknown = client.get("/api/v1/corridors/delhi-kanpur/events/corridor:nope")
     assert unknown.status_code == 404
