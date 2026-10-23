@@ -48,7 +48,8 @@
             "max_observation_age_hours": 0.0,
             "missing_fields": [],
             "warnings": ["synthetic_input"]
-          }
+          },
+          "limitations": []
         }
       }
     ],
@@ -103,7 +104,10 @@
             "max_observation_age_hours": 0.0,
             "missing_fields": [],
             "warnings": ["synthetic_input", "interval_unavailable"]
-          }
+          },
+          "limitations": [
+            "This is a model estimate, not a calibrated probability of a pollution event."
+          ]
         },
         "exposure": {
           "population_weighted_pm25": 144.6,

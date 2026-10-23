@@ -60,6 +60,7 @@ class PredictionMetadataOut(BaseModel):
     valid_at: datetime
     synthetic: bool
     quality: QualityFlagsOut
+    limitations: list[str] = Field(default_factory=list)
 
     _validate_observed_at = field_validator("observed_at", "issued_at", "valid_at")(_utc)
 

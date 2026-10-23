@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -14,6 +15,7 @@ from app.api.schemas_v2 import (
     MetaV2Out,
     V2Envelope,
 )
+from app.api.routes.predictions_v2 import _forecast_limitations
 from app.domain.features import (
     FEATURE_SCHEMA_VERSION,
     CellFeatureVector,
@@ -89,6 +91,32 @@ def test_v2_examples_validate_against_public_schemas() -> None:
     assert current.data[0].metadata.synthetic is True
     assert forecast.data[0].exposure is not None
     assert forecast.data[0].lower_pm25 is None
+
+
+def test_forecast_metadata_discloses_dispersion_assumptions() -> None:
+    limitations = _forecast_limitations(
+        SimpleNamespace(
+            horizon_hours=3.0,
+            prediction_method="deterministic-dispersion-baseline",
+            feature_vector={"wind_speed_ms": None},
+        )
+    )
+
+    assert any("does not add new emissions" in item for item in limitations)
+    assert any("held constant" in item for item in limitations)
+    assert any("decay-only" in item for item in limitations)
+
+
+def test_persistence_forecast_discloses_that_it_repeats_current_value() -> None:
+    limitations = _forecast_limitations(
+        SimpleNamespace(
+            horizon_hours=1.0,
+            prediction_method="persistence-baseline",
+            feature_vector={},
+        )
+    )
+
+    assert any("carried forward unchanged" in item for item in limitations)
 
 
 def test_dummy_manifests_are_json_and_have_required_contract_fields() -> None:

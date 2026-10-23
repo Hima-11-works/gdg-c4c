@@ -107,6 +107,45 @@ def _quality(view: PredictionCellView) -> QualityFlagsOut:
     )
 
 
+def _forecast_limitations(view: PredictionCellView) -> list[str]:
+    """Expose the concrete assumptions behind each published forecast method."""
+    method = view.prediction_method
+    if view.horizon_hours <= 0:
+        return []
+    if method == "persistence-baseline":
+        return [
+            "The current PM2.5 estimate is carried forward unchanged; no weather transport or new emissions are modeled.",
+            "This is a baseline scenario, not a calibrated probability of a pollution event.",
+        ]
+    if method == "native-cell aggregate":
+        return [
+            "This display cell aggregates multiple native prediction rows, so the underlying methods and assumptions may differ.",
+            "This is a model scenario, not a calibrated probability of a pollution event.",
+        ]
+    if method in {
+        "deterministic-dispersion-baseline",
+        "residual-ridge",
+        "experimental-residual-ridge",
+    }:
+        limitations = [
+            "The H3 dispersion baseline redistributes and removes existing PM2.5; it does not add new emissions or model atmospheric chemistry.",
+            "The latest eligible weather sample is held constant across forecast steps; future hourly weather is not applied.",
+            "This is a model scenario, not a calibrated probability of a pollution event.",
+        ]
+        if view.feature_vector.get("wind_speed_ms") is None:
+            limitations.append(
+                "No eligible wind observation was available for this cell, so the dispersion baseline uses decay-only behavior."
+            )
+        if method in {"residual-ridge", "experimental-residual-ridge"}:
+            limitations.append(
+                "The named residual model adjusts the dispersion baseline; its version and training record identify that model."
+            )
+        return limitations
+    return [
+        "This is a model estimate, not a calibrated probability of a pollution event."
+    ]
+
+
 def _metadata(run: PredictionRun, view: PredictionCellView) -> PredictionMetadataOut:
     return PredictionMetadataOut(
         input_kind=view.input_kind,
@@ -119,6 +158,7 @@ def _metadata(run: PredictionRun, view: PredictionCellView) -> PredictionMetadat
         valid_at=view.valid_at,
         synthetic=view.synthetic,
         quality=_quality(view),
+        limitations=_forecast_limitations(view),
     )
 
 

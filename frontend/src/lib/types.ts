@@ -56,6 +56,7 @@ export interface PredictionMetadataOut {
   valid_at: string
   synthetic: boolean
   quality: QualityFlagsOut
+  limitations: string[]
 }
 
 export interface ExposureOut {

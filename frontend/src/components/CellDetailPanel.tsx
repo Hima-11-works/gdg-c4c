@@ -259,6 +259,8 @@ function CellDetailContent({
   const windDirection = detail.weather?.wind_direction ?? current?.wind_direction ?? null
   const environmental = detail.environmental
   const provenance = environmental?.metadata ?? current?.metadata ?? null
+  const forecastMetadata = [...detail.forecasts]
+    .sort((a, b) => a.forecast_hours - b.forecast_hours)[0]?.metadata
   const staticFeatures = environmental?.static_features ?? null
   const exposure = environmental?.exposure ?? current?.exposure ?? null
   const drift = estimatePlumeDrift(windSpeed, windDirection)
@@ -403,6 +405,18 @@ function CellDetailContent({
         <p>No forecast available for this cell yet.</p>
       ) : (
         <ForecastChart forecasts={detail.forecasts} />
+      )}
+      {forecastMetadata && forecastMetadata.limitations.length > 0 && (
+        <details className="forecast-limitations">
+          <summary>
+            Forecast method and limits · {forecastMetadata.prediction_method}
+          </summary>
+          <ul>
+            {forecastMetadata.limitations.map((limitation) => (
+              <li key={limitation}>{limitation}</li>
+            ))}
+          </ul>
+        </details>
       )}
 
       <h3 title={PDI_TOOLTIP}>{PDI_LABEL} factors</h3>
