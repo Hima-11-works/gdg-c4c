@@ -73,10 +73,14 @@ def _insert_stmt(reading: SensorReading) -> Insert:
     )
 
 
-def _list_since_stmt(since: datetime, pollutant: str | None) -> Select:
+def _list_since_stmt(
+    since: datetime, pollutant: str | None, source: str | None = None
+) -> Select:
     stmt = select(*_COLUMNS).where(sensor_reading_table.c.measured_at >= since)
     if pollutant is not None:
         stmt = stmt.where(sensor_reading_table.c.pollutant == pollutant)
+    if source is not None:
+        stmt = stmt.where(sensor_reading_table.c.source == source)
     return stmt.order_by(sensor_reading_table.c.measured_at)
 
 
@@ -147,8 +151,14 @@ class SqlSensorReadingRepository:
             raise
         return saved, len(readings) - saved
 
-    def list_since(self, since: datetime, *, pollutant: str | None = None) -> list[SensorReading]:
-        rows = self._session.execute(_list_since_stmt(since, pollutant)).all()
+    def list_since(
+        self,
+        since: datetime,
+        *,
+        pollutant: str | None = None,
+        source: str | None = None,
+    ) -> list[SensorReading]:
+        rows = self._session.execute(_list_since_stmt(since, pollutant, source)).all()
         return [_row_to_domain(row) for row in rows]
 
     def list_latest(self) -> list[SensorReading]:

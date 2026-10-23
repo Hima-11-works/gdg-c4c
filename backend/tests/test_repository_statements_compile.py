@@ -17,6 +17,7 @@ from app.db.repositories import feature_snapshot as feature_repo
 from app.db.repositories import fire_report as fire_report_repo
 from app.db.repositories import forecast as forecast_repo
 from app.db.repositories import grid_state as grid_state_repo
+from app.db.repositories import incident as incident_repo
 from app.db.repositories import ingestion_run as run_repo
 from app.db.repositories import model_version as model_version_repo
 from app.db.repositories import prediction_publication as prediction_publication_repo
@@ -78,6 +79,8 @@ def test_sensor_reading_statements() -> None:
     select_sql = _sql(sensor_reading_repo._list_since_stmt(NOW, "pm25"))
     assert "FROM sensor_reading" in select_sql
     assert "sensor_reading.pollutant" in select_sql
+    source_sql = _sql(sensor_reading_repo._list_since_stmt(NOW, "pm25", "openaq"))
+    assert "sensor_reading.source =" in source_sql
 
     latest_sql = _sql(sensor_reading_repo._list_latest_stmt())
     assert "DISTINCT ON" in latest_sql
@@ -111,6 +114,11 @@ def test_weather_reading_statements() -> None:
     in_cells_sql = _sql(weather_reading_repo._list_latest_in_cells_stmt([CELL, other_cell]))
     assert "DISTINCT ON" in in_cells_sql
     assert "weather_reading.h3_cell IN" in in_cells_sql
+
+    live_weather_sql = _sql(
+        weather_reading_repo._list_latest_in_cells_stmt([CELL, other_cell], "open-meteo")
+    )
+    assert "weather_reading.source =" in live_weather_sql
 
 
 def test_grid_state_statements() -> None:
@@ -214,11 +222,31 @@ def test_alert_statements() -> None:
 
     alert_page_sql = _sql(
         prediction_publication_repo._alert_candidates_stmt(
-            "published-run", 91.0, limit=100, offset=200
+            "published-run", 91.0, h3_cell=CELL, limit=100, offset=200
         )
     )
     assert "ORDER BY forecast_prediction.predicted_pm25 DESC" in alert_page_sql
+    assert f"forecast_prediction.h3_cell = '{CELL}'" in alert_page_sql
     assert "LIMIT 100 OFFSET 200" in alert_page_sql
+
+
+def test_incident_list_defaults_to_active_and_supports_archive_pages() -> None:
+    active_sql = _sql(
+        incident_repo._list_stmt(None, None, limit=50, offset=0)
+    )
+    archive_sql = _sql(
+        incident_repo._list_stmt(
+            None, None, archived_only=True, limit=50, offset=100
+        )
+    )
+
+    assert (
+        "incident.status IN ('reported', 'assigned', 'acknowledged', 'en_route', 'on_scene')"
+        in active_sql
+    )
+    assert "LIMIT 50" in active_sql
+    assert "incident.status IN ('resolved', 'cancelled')" in archive_sql
+    assert "LIMIT 50 OFFSET 100" in archive_sql
 
 
 def test_fire_report_statements() -> None:

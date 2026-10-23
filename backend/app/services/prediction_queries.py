@@ -72,6 +72,7 @@ class PredictionCellView:
     lower_pm25: float | None
     upper_pm25: float | None
     pdi: float | None
+    pdi_factors: Mapping[str, float] | None
     confidence: float
     spatial_coverage_fraction: float
     supported_native_cells: int
@@ -223,13 +224,19 @@ class PredictionQueryService:
         run: PredictionRun,
         *,
         threshold_pm25: float,
+        h3_cell: str | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[AlertCandidate]:
-        """Fetch qualifying alerts, optionally as a page, without loading a run."""
+        """Fetch qualifying alerts for an optional cell and page without loading a run."""
         if run.run_id.startswith(DEMO_FALLBACK_PREFIX):
             rows = self.results(
-                run, cells=self.target_cells(run, self.native_resolution)
+                run,
+                cells=(
+                    [h3_cell]
+                    if h3_cell is not None
+                    else self.target_cells(run, self.native_resolution)
+                ),
             )
             current_by_cell = {
                 row.h3_cell: row for row in rows if row.horizon_hours == 0
@@ -249,7 +256,7 @@ class PredictionQueryService:
                     valid_at=row.valid_at,
                     predicted_pm25=row.predicted_pm25,
                     current_pm25=current.predicted_pm25 if current else None,
-                    confidence=row.quality.coverage_fraction,
+                    confidence=row.confidence,
                     synthetic=row.synthetic,
                 ))
             candidates.sort(
@@ -259,6 +266,7 @@ class PredictionQueryService:
         return self._repository.list_alert_candidates(
             run.run_id,
             threshold_pm25=threshold_pm25,
+            h3_cell=h3_cell,
             limit=limit,
             offset=offset,
         )
@@ -614,6 +622,9 @@ class PredictionQueryService:
                     predicted_pm25=predicted,
                     lower_pm25=None,
                     upper_pm25=None,
+                    confidence=_interpolate_number(
+                        lower.confidence, upper.confidence, ratio
+                    ),
                     prediction_method="interpolated-between-published-anchors",
                     model_version=(
                         lower.model_version
@@ -698,6 +709,7 @@ class PredictionQueryService:
                     value = current.pm25
                     valid_at = run.generated_at
                     method = "synthetic-demo-field"
+                    confidence = current.confidence
                 else:
                     if horizon not in {1.0, 2.0, 3.0, 4.0, 5.0, 6.0}:
                         continue
@@ -706,6 +718,7 @@ class PredictionQueryService:
                     value = forecast.predicted_pm25
                     valid_at = forecast.forecast_time
                     method = "synthetic-demo-forecast"
+                    confidence = forecast.confidence
                 output.append(
                     PredictionResult(
                         run_id=run.run_id,
@@ -715,6 +728,10 @@ class PredictionQueryService:
                         baseline_pm25=baseline,
                         predicted_pm25=value,
                         pdi=current.pdi if horizon == 0 else None,
+                        pdi_factors=(
+                            demo_data.generate_pdi_factors(cell) if horizon == 0 else None
+                        ),
+                        confidence=confidence,
                         prediction_method=method,
                         feature_schema_version=FEATURE_SCHEMA_VERSION,
                         input_kind=InputKind.SYNTHETIC,
@@ -735,6 +752,7 @@ class PredictionQueryService:
         rows: list[PredictionResult],
         threshold_pm25: float,
     ) -> PredictionCellView:
+        rows = _non_overlapping_spatial_partition(rows)
         expected = h3.cell_to_children_size(target, self.native_resolution)
         area_by_row = {row.h3_cell: h3.cell_area(row.h3_cell, unit="km^2") for row in rows}
         supported = [row for row in rows if row.predicted_pm25 is not None]
@@ -748,8 +766,26 @@ class PredictionQueryService:
             [(row.baseline_pm25, area_by_row[row.h3_cell]) for row in rows]
         )
         pdi = _weighted_mean([(row.pdi, area_by_row[row.h3_cell]) for row in rows])
+        factor_names = {
+            name for row in rows if row.pdi_factors for name in row.pdi_factors
+        }
+        pdi_factors = {
+            name: value
+            for name in factor_names
+            if (
+                value := _weighted_mean(
+                    [
+                        (
+                            row.pdi_factors.get(name) if row.pdi_factors else None,
+                            area_by_row[row.h3_cell],
+                        )
+                        for row in rows
+                    ]
+                )
+            ) is not None
+        }
         confidence = _weighted_mean(
-            [(row.quality.coverage_fraction, area_by_row[row.h3_cell]) for row in supported]
+            [(row.confidence, area_by_row[row.h3_cell]) for row in supported]
         ) or 0.0
         vector = _aggregate_vector(rows, area_by_row)
         pop_known = [row for row in rows if row.feature_vector.get("population_count") is not None]
@@ -843,6 +879,7 @@ class PredictionQueryService:
             lower_pm25=native_interval.lower_pm25 if native_interval is not None else None,
             upper_pm25=native_interval.upper_pm25 if native_interval is not None else None,
             pdi=pdi,
+            pdi_factors=pdi_factors or None,
             confidence=confidence,
             spatial_coverage_fraction=spatial_coverage,
             supported_native_cells=len(supported),
@@ -863,6 +900,24 @@ def _weighted_mean(values: list[tuple[float | None, float]]) -> float | None:
     present = [(value, weight) for value, weight in values if value is not None and weight > 0]
     denominator = sum(weight for _, weight in present)
     return None if denominator == 0 else sum(value * weight for value, weight in present) / denominator
+
+
+def _non_overlapping_spatial_partition(
+    rows: list[PredictionResult],
+) -> list[PredictionResult]:
+    """Choose one source resolution for a display cell before aggregation.
+
+    A run can contain coarse national cells and fine city cells. The coarsest
+    available tier has the broadest coverage at a coarse display level; using
+    that tier alone avoids adding a parent cell and its descendants together.
+    Finer display requests already filter out coarser rows before this point.
+    """
+    if not rows:
+        return rows
+    selected_resolution = min(h3.get_resolution(row.h3_cell) for row in rows)
+    return [
+        row for row in rows if h3.get_resolution(row.h3_cell) == selected_resolution
+    ]
 
 
 def _interpolate_number(first: float | None, second: float | None, ratio: float) -> float | None:

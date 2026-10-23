@@ -90,6 +90,8 @@ class _ApiResponse {
 }
 
 class IncidentApi {
+  static const incidentPageSize = 50;
+
   IncidentApi({
     required String baseUrl,
     String? apiKey,
@@ -188,10 +190,21 @@ class IncidentApi {
 
   // --- reads (public: no key required) ---
 
-  Future<List<Incident>> listIncidents({IncidentStatus? status, ResponderRole? role}) async {
+  /// Lists a bounded page of active work, or terminal incidents when [archive]
+  /// is true. The server applies status and role filters before pagination.
+  Future<List<Incident>> listIncidents({
+    IncidentStatus? status,
+    ResponderRole? role,
+    bool archive = false,
+    int limit = incidentPageSize,
+    int offset = 0,
+  }) async {
     final query = <String, String>{};
     if (status != null) query['status'] = wireOfStatus(status);
     if (role != null) query['role'] = wireOfRole(role);
+    if (archive) query['archive'] = 'true';
+    query['limit'] = '$limit';
+    query['offset'] = '$offset';
     final response = await _send('GET', '/api/v1/incidents', query: query);
     return (response.data as List)
         .map((row) => Incident.fromJson(row as Map<String, dynamic>))
@@ -230,6 +243,13 @@ class IncidentApi {
     return (response.data as List)
         .map((row) => CitizenReport.fromJson(row as Map<String, dynamic>))
         .toList();
+  }
+
+  /// Loads a persisted report directly by id, including reports outside the
+  /// active feed's age window.
+  Future<CitizenReport> getReport(int id) async {
+    final response = await _send('GET', '/api/v1/reports/$id');
+    return CitizenReport.fromJson(response.data as Map<String, dynamic>);
   }
 
   /// Current run's PM2.5 alerts, which the operator can select to open a

@@ -101,16 +101,23 @@ class _AlwaysFailsGridStateRepository:
         raise NotImplementedError
 
 
-def _reading(cell_lat: float, cell_lon: float, value: float = 20.0) -> SensorReading:
+def _reading(
+    cell_lat: float,
+    cell_lon: float,
+    value: float = 20.0,
+    *,
+    source: str = "openaq",
+    measured_at: datetime = TIMESTAMP,
+) -> SensorReading:
     return SensorReading(
-        source="openaq",
+        source=source,
         external_sensor_id="s1",
         latitude=cell_lat,
         longitude=cell_lon,
         pollutant=PM25,
         value=value,
         unit="ug/m3",
-        measured_at=TIMESTAMP,
+        measured_at=measured_at,
     )
 
 
@@ -137,6 +144,51 @@ def test_run_persists_one_grid_state_per_cell_with_pdi_folded_in() -> None:
     assert saved.pdi == 67.0
     # The factor breakdown is persisted, not just the score.
     assert saved.pdi_factors == {"pm25": 0.5}
+
+
+def test_run_can_exclude_readings_from_a_different_data_mode() -> None:
+    target_cell = GRID[0]
+    sensor_repo = FakeSensorReadingRepository()
+    sensor_repo.add(_reading(37.75, -122.40, source="demo"))
+    sensor_repo.add(_reading(37.75, -122.40, source="openaq"))
+    estimator = _FakeEstimator({target_cell: 42.0})
+    service = GridComputationService(
+        estimator,
+        _FakePDIModel(),
+        GEOSPATIAL,
+        sensor_repo,
+        FakeGridStateRepository(),
+    )
+
+    result = service.run(
+        BBOX,
+        timestamp=TIMESTAMP,
+        sensor_max_age=timedelta(hours=3),
+        allowed_sensor_sources={"openaq"},
+    )
+
+    assert result.succeeded is True
+    assert estimator.calls[0][1]
+    assert {reading.source for reading in estimator.calls[0][1]} == {"openaq"}
+
+
+def test_run_excludes_future_sensor_inputs_and_returns_only_used_readings() -> None:
+    sensor_repo = FakeSensorReadingRepository()
+    sensor_repo.add(_reading(37.75, -122.40, measured_at=TIMESTAMP + timedelta(minutes=1)))
+    estimator = _FakeEstimator()
+    service = GridComputationService(
+        estimator,
+        _FakePDIModel(),
+        GEOSPATIAL,
+        sensor_repo,
+        FakeGridStateRepository(),
+    )
+
+    result = service.run(BBOX, timestamp=TIMESTAMP, sensor_max_age=timedelta(hours=3))
+
+    assert result.succeeded is True
+    assert estimator.calls[0][1] == []
+    assert result.sensor_readings == []
 
 
 class _ConstantFireGradient:

@@ -22,6 +22,7 @@ from app.core.config import Settings
 from app.domain.features import DataMode
 from app.domain.h3_grid import cell_center
 from app.domain.prediction import PredictionRun
+from app.domain.types import SensorReading
 from app.services.national_overview import (
     NATIONAL_OVERVIEW_DATASET,
     build_national_overview,
@@ -120,6 +121,30 @@ def test_live_mode_reports_why_the_coarse_tier_is_empty() -> None:
     assert overview.snapshots == []
     assert overview.unavailable_reason is not None
     assert "live mode" in overview.unavailable_reason
+
+
+def test_live_national_overview_ignores_persisted_demo_readings() -> None:
+    reading = SensorReading(
+        source="demo",
+        external_sensor_id="demo-1",
+        latitude=_DELHI[0],
+        longitude=_DELHI[1],
+        pollutant="pm25",
+        value=280.0,
+        unit="ug/m3",
+        measured_at=NOW,
+    )
+
+    overview = build_national_overview(
+        _settings(demo_mode=False),
+        issued_at=NOW,
+        forecast_horizons=HORIZONS,
+        sensor_readings=[reading],
+    )
+
+    assert overview.snapshots == []
+    assert overview.unavailable_reason is not None
+    assert "no fresh OpenAQ" in overview.unavailable_reason
 
 
 def test_disabling_the_tier_says_so() -> None:

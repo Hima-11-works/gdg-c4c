@@ -61,6 +61,7 @@ class CitizenReportsStore {
             region: map['region'] as String?,
             photoBytes: photoBytes,
             photoFilename: map['photoFilename'] as String?,
+            photoUploadPending: map['photoUploadPending'] as bool? ?? false,
             notes: map['notes'] as String?,
             clientReportId: map['clientReportId'] as String?,
           ),
@@ -90,6 +91,7 @@ class CitizenReportsStore {
           'region': r.region,
           'photoBase64': photoBase64,
           'photoFilename': r.photoFilename,
+          'photoUploadPending': r.photoUploadPending,
           'notes': r.notes,
           'clientReportId': r.clientReportId,
         });

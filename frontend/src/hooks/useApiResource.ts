@@ -18,6 +18,8 @@ export type AsyncResource<T> =
       runId?: string
       mode?: DataMode
       generatedAt?: string
+      lastFetchedAt?: number
+      refreshError?: string
     }
   | { status: 'error'; message: string }
 
@@ -96,14 +98,29 @@ export function useApiResource<T>(
               runId: envelope.run_id,
               mode: envelope.mode,
               generatedAt: envelope.generated_at,
+              lastFetchedAt: Date.now(),
+              refreshError: undefined,
             })
         })
         .catch((error: unknown) => {
-          // A failed background refresh keeps showing the last good data
-          // rather than replacing it with an error banner.
-          if (cancelled || controller.signal.aborted || isBackgroundRefresh) return
-          const message = error instanceof ApiError ? error.message : 'Unknown error'
-          setResource({ status: 'error', message })
+          if (cancelled || controller.signal.aborted) return
+          const message =
+            error instanceof ApiError
+              ? error.message
+              : error instanceof Error
+                ? error.message
+                : 'Unknown error'
+          if (isBackgroundRefresh) {
+            // Keep the last good data, but retain the failed check so the UI
+            // can report that it may be out of date.
+            setResource((current) =>
+              current.status === 'success'
+                ? { ...current, refreshError: message }
+                : { status: 'error', message },
+            )
+          } else {
+            setResource({ status: 'error', message })
+          }
         })
         .finally(() => {
           if (activeController === controller) activeController = null

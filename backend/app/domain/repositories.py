@@ -43,7 +43,7 @@ class DuplicateReadingError(Exception):
     """Raised by SensorReadingRepository.add() or WeatherReadingRepository.add()
     for a row that already exists per that table's real unique constraint
     (sensor: source + external_sensor_id + pollutant + measured_at; weather:
-    h3_cell + measured_at).
+    source + h3_cell + measured_at).
 
     A domain-level exception rather than e.g. sqlalchemy.exc.IntegrityError
     so callers (app.services.ingestion) can catch "this was a duplicate"
@@ -57,7 +57,7 @@ class SensorReadingRepository(Protocol):
         ...
 
     def list_since(
-        self, since: datetime, *, pollutant: str | None = None
+        self, since: datetime, *, pollutant: str | None = None, source: str | None = None
     ) -> list[SensorReading]: ...
 
     def list_latest(self) -> list[SensorReading]:
@@ -70,19 +70,27 @@ class WeatherReadingRepository(Protocol):
         """Raises DuplicateReadingError for an exact repeat (see above)."""
         ...
 
+    def add_many(self, readings: list[WeatherReading]) -> tuple[int, int]:
+        """Insert a batch atomically; return saved and duplicate counts."""
+        ...
+
     def list_since(self, since: datetime) -> list[WeatherReading]: ...
 
     def latest_for_cell(self, h3_cell: str) -> WeatherReading | None: ...
 
-    def list_latest(self) -> list[WeatherReading]:
+    def list_latest(self, *, source: str | None = None) -> list[WeatherReading]:
         """The most recent reading for every cell that has one."""
         ...
 
-    def list_latest_in_cells(self, cells: list[str]) -> list[WeatherReading]:
-        """Same as list_latest, restricted to these specific H3 cells —
-        a cell with no reading is simply absent, never fabricated. Used
-        for resolution/viewport-scoped API reads; see
-        app.services.weather.WeatherService."""
+    def list_latest_in_cells(
+        self,
+        cells: list[str],
+        *,
+        source: str | None = None,
+        since: datetime | None = None,
+        through: datetime | None = None,
+    ) -> list[WeatherReading]:
+        """Latest reading per selected cell, optionally source/time bounded."""
         ...
 
 
@@ -235,6 +243,9 @@ class IncidentRepository(Protocol):
     def list(
         self, *, status: IncidentStatus | None = None,
         role: ResponderRole | None = None,
+        archived_only: bool = False,
+        limit: int | None = None,
+        offset: int = 0,
     ) -> list[Incident]: ...
     def history(self, incident_id: int) -> list[IncidentEvent]: ...
 
@@ -358,6 +369,7 @@ class PredictionPublicationRepository(Protocol):
         run_id: str,
         *,
         threshold_pm25: float,
+        h3_cell: str | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[AlertCandidate]:

@@ -55,9 +55,11 @@ def _input_kind(mode: DataMode, refs: tuple[DatasetRef, ...], horizon: float) ->
     kinds = {ref.kind for ref in refs}
     if mode is DataMode.DEMO or InputKind.SYNTHETIC in kinds:
         return InputKind.SYNTHETIC
+    if InputKind.MODELED in kinds:
+        return InputKind.MODELED
     if horizon == 0 and InputKind.OBSERVED in kinds:
         return InputKind.OBSERVED
-    if InputKind.MODELED in kinds or horizon > 0:
+    if horizon > 0:
         return InputKind.MODELED
     return InputKind.DERIVED
 
@@ -75,6 +77,11 @@ def assert_live_snapshots_available(mode: DataMode, snapshots: list[FeatureSnaps
         item.horizon_hours == 0
         and item.vector.current_pm25 is not None
         and item.quality.observed_station_count > 0
+        and any(
+            ref.kind is InputKind.OBSERVED
+            and ref.dataset_id in {"openaq-pm25-v3", "openaq-national-pm25"}
+            for ref in item.dataset_refs
+        )
         for item in snapshots
     )
     if not has_observed_current:
@@ -105,6 +112,8 @@ class PredictionPublicationService:
         snapshots: list[FeatureSnapshot],
         baseline_by_cell_horizon: Mapping[tuple[str, float], float] | None = None,
         pdi_by_cell: Mapping[str, float] | None = None,
+        pdi_factors_by_cell: Mapping[str, Mapping[str, float]] | None = None,
+        confidence_by_cell_horizon: Mapping[tuple[str, float], float] | None = None,
         scenario_id: str | None = None,
     ) -> tuple[PredictionRun, list[PredictionResult]]:
         if not snapshots:
@@ -118,6 +127,8 @@ class PredictionPublicationService:
 
         baseline_by_cell_horizon = baseline_by_cell_horizon or {}
         pdi_by_cell = pdi_by_cell or {}
+        pdi_factors_by_cell = pdi_factors_by_cell or {}
+        confidence_by_cell_horizon = confidence_by_cell_horizon or {}
         available_models: dict[float, tuple[ModelVersion, dict] | None] = {}
         horizons = sorted({item.horizon_hours for item in snapshots if item.horizon_hours > 0})
         for horizon in horizons:
@@ -146,7 +157,13 @@ class PredictionPublicationService:
             value = baseline
             lower = upper = None
             model_version = None
-            method = "observed-current" if horizon == 0 else "persistence-baseline"
+            method = (
+                "modeled-current-nowcast"
+                if horizon == 0 and InputKind.MODELED in {ref.kind for ref in snapshot.dataset_refs}
+                else "observed-current"
+                if horizon == 0
+                else "persistence-baseline"
+            )
             selected = available_models.get(horizon) if horizon > 0 else None
             has_synthetic_input = any(ref.kind is InputKind.SYNTHETIC for ref in snapshot.dataset_refs)
             if mode is not DataMode.DEMO and has_synthetic_input:
@@ -175,6 +192,14 @@ class PredictionPublicationService:
                     lower_pm25=lower,
                     upper_pm25=upper,
                     pdi=pdi_by_cell.get(snapshot.h3_cell) if horizon == 0 else None,
+                    pdi_factors=(
+                        pdi_factors_by_cell.get(snapshot.h3_cell)
+                        if horizon == 0
+                        else None
+                    ),
+                    confidence=confidence_by_cell_horizon.get(
+                        (snapshot.h3_cell, horizon)
+                    ),
                     prediction_method=method,
                     model_version=model_version.model_id if model_version else None,
                     feature_schema_version=snapshot.feature_schema_version,

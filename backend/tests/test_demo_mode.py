@@ -220,6 +220,7 @@ async def test_demo_mode_end_to_end_produces_a_hotspot_downwind_movement_and_an_
             precipitation=sample.precipitation,
             boundary_layer_height=sample.boundary_layer_height,
             measured_at=NOW,
+            source="demo",
         )
         for cell, point, sample in zip(cells, points, weather_samples, strict=True)
     ]

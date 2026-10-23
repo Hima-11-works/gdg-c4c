@@ -478,7 +478,7 @@ def get_cell_v2(
         weather=_weather(run, current_view),
         static_features=_static_features(current_view),
         exposure=_exposure(current_view.exposure),
-        pdi_factors=None,
+        pdi_factors=current_view.pdi_factors,
     )
     return V2Envelope(
         generated_at=run.generated_at,
@@ -525,14 +525,21 @@ def get_weather_v2(
 @router.get("/alerts", response_model=V2Envelope[list[AlertV2Out]])
 def get_alerts_v2(
     run_id: str | None = Query(None),
+    h3_cell: str | None = Query(None, min_length=15, max_length=15),
     limit: int | None = Query(None, ge=1, le=500),
     offset: int = Query(0, ge=0),
     service: PredictionQueryService = Depends(get_prediction_query_service),
 ) -> V2Envelope[list[AlertV2Out]]:
+    if h3_cell is not None and not h3.is_valid_cell(h3_cell):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="h3_cell must be a valid H3 cell",
+        )
     run = _run_or_404(service, run_id)
     candidates = service.alert_candidates(
         run,
         threshold_pm25=ALERT_WARNING_PM25,
+        h3_cell=h3_cell,
         limit=limit,
         offset=offset,
     )

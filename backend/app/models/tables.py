@@ -161,6 +161,8 @@ prediction_result = Table(
     Column("lower_pm25", Float, nullable=True),
     Column("upper_pm25", Float, nullable=True),
     Column("pdi", Float, nullable=True),
+    Column("pdi_factors", JSONB, nullable=True),
+    Column("confidence", Float, nullable=True),
     Column("prediction_method", String(80), nullable=False),
     Column("model_version", String(180), nullable=True),
     Column("feature_schema_version", String(60), nullable=False),
@@ -176,6 +178,10 @@ prediction_result = Table(
     CheckConstraint("upper_pm25 IS NULL OR upper_pm25 >= 0", name="ck_prediction_result_upper_pm25"),
     CheckConstraint("lower_pm25 IS NULL OR upper_pm25 IS NULL OR lower_pm25 <= upper_pm25", name="ck_prediction_result_interval_order"),
     CheckConstraint("input_kind IN ('observed', 'modeled', 'synthetic', 'derived')", name="ck_prediction_result_input_kind"),
+    CheckConstraint(
+        "confidence IS NULL OR confidence BETWEEN 0 AND 1",
+        name="ck_prediction_result_confidence",
+    ),
     Index("ix_prediction_result_run_valid", "run_id", "valid_at"),
     Index("ix_prediction_result_cell_valid", "h3_cell", "valid_at"),
 )
@@ -250,6 +256,7 @@ weather_reading = Table(
     metadata,
     Column("id", BigInteger, primary_key=True),
     Column("h3_cell", String(H3_CELL_LENGTH), nullable=False),
+    Column("source", String(50), nullable=False, server_default="open-meteo"),
     Column("latitude", Float, nullable=False),
     Column("longitude", Float, nullable=False),
     Column(
@@ -277,7 +284,9 @@ weather_reading = Table(
     CheckConstraint(
         "humidity IS NULL OR humidity BETWEEN 0 AND 100", name="ck_weather_reading_humidity"
     ),
-    UniqueConstraint("h3_cell", "measured_at", name="uq_weather_reading_cell_time"),
+    UniqueConstraint(
+        "source", "h3_cell", "measured_at", name="uq_weather_reading_source_cell_time"
+    ),
     Index("ix_weather_reading_measured_at", "measured_at"),
     Index("ix_weather_reading_h3_cell", "h3_cell"),
 )

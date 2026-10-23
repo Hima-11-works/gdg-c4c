@@ -6,10 +6,10 @@ which lives in tests/test_dispersion.py.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from app.domain.dispersion import ForecastResult
-from app.domain.types import Forecast, GridState
+from app.domain.types import Forecast, GridState, WeatherReading
 from app.services.forecasting import ForecastingService
 from tests.fakes import (
     FakeForecastRepository,
@@ -98,6 +98,42 @@ def test_run_passes_current_state_and_weather_to_the_model() -> None:
     assert [state.h3_cell for state in current_state] == [CELL]
     assert weather == []
     assert hours == (1, 3, 6)
+
+
+def test_run_uses_explicit_current_execution_inputs_without_global_latest_queries(
+    monkeypatch,
+) -> None:
+    grid_repo = FakeGridStateRepository()
+    weather_repo = FakeWeatherReadingRepository()
+    current = _grid_state(pm25=27.0)
+    weather = WeatherReading(
+        h3_cell=CELL,
+        latitude=37.7749,
+        longitude=-122.4194,
+        wind_speed=2.0,
+        wind_direction=270.0,
+        precipitation=0.1,
+        measured_at=GENERATED_AT - timedelta(minutes=12),
+    )
+
+    def unexpected_latest_query():
+        raise AssertionError("explicit pipeline inputs must bypass global latest queries")
+
+    monkeypatch.setattr(grid_repo, "latest", unexpected_latest_query)
+    monkeypatch.setattr(weather_repo, "list_latest", unexpected_latest_query)
+    model = _FakeModel()
+
+    result = ForecastingService(
+        model, grid_repo, weather_repo, FakeForecastRepository()
+    ).run(
+        generated_at=GENERATED_AT,
+        current_states=[current],
+        weather_readings=[weather],
+    )
+
+    assert result.succeeded is True
+    assert model.calls[0][0] == [current]
+    assert model.calls[0][1] == [weather]
 
 
 def test_run_with_no_current_state_is_a_reported_failure_not_an_exception() -> None:

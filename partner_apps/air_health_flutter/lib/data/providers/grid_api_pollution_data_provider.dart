@@ -32,6 +32,8 @@ class PollutionDataUnavailable implements Exception {
 ///  - "Nearby areas" are the nearest cells in a slightly larger box.
 ///  - "Pollution events" are `/alerts` for the user's cell.
 class GridApiPollutionDataProvider implements PollutionDataProvider {
+  static const _forecastRequestConcurrency = 4;
+
   GridApiPollutionDataProvider({
     required GridApiClient client,
     this.cellRadiusDeg = 0.06,
@@ -86,21 +88,33 @@ class GridApiPollutionDataProvider implements PollutionDataProvider {
 
     final bounds = GeoBounds.around(location, cellRadiusDeg);
     final points = <ForecastPoint>[];
-    for (final minutes in steps) {
-      final envelope = await _client.forecast(
-        minutes: minutes,
-        bounds: bounds,
-        runId: publication.runId,
+    // The API exposes one horizon per request. Fetch small batches in
+    // parallel to reduce mobile latency without flooding the backend or
+    // opening a socket for every published horizon at once.
+    for (var start = 0;
+        start < steps.length;
+        start += _forecastRequestConcurrency) {
+      final batch = steps.skip(start).take(_forecastRequestConcurrency).toList();
+      final envelopes = await Future.wait(
+        batch.map(
+          (minutes) => _client.forecast(
+            minutes: minutes,
+            bounds: bounds,
+            runId: publication.runId,
+          ),
+        ),
       );
-      _recordEnvelope(envelope);
-      for (final f in envelope.data) {
-        if (f.h3Cell != snapshot.h3Cell) continue;
-        points.add(ForecastPoint(
-          at: f.forecastTime,
-          aqiCpcb: pm25ToCpcbAqi(f.predictedPm25),
-          pm25: f.predictedPm25,
-          confidence: f.confidence,
-        ));
+      for (final envelope in envelopes) {
+        _recordEnvelope(envelope);
+        for (final f in envelope.data) {
+          if (f.h3Cell != snapshot.h3Cell) continue;
+          points.add(ForecastPoint(
+            at: f.forecastTime,
+            aqiCpcb: pm25ToCpcbAqi(f.predictedPm25),
+            pm25: f.predictedPm25,
+            confidence: f.confidence,
+          ));
+        }
       }
     }
     points.sort((a, b) => a.at.compareTo(b.at));
@@ -196,7 +210,10 @@ class GridApiPollutionDataProvider implements PollutionDataProvider {
     LocationPoint location,
   ) async {
     final snapshot = await _nearestCell(location);
-    final alerts = await _client.alerts(runId: snapshot.runId);
+    final alerts = await _client.alerts(
+      runId: snapshot.runId,
+      h3Cell: snapshot.h3Cell,
+    );
     _recordEnvelope(alerts);
 
     return alerts.data
@@ -222,11 +239,13 @@ class GridApiPollutionDataProvider implements PollutionDataProvider {
   @override
   Future<DataFreshness> getDataFreshness() async {
     if (_lastGeneratedAt == null) {
-      // No location argument, and we haven't fetched anything yet — the
-      // alerts endpoint is the cheapest way to obtain a `generated_at`.
+      // No location argument, and we haven't fetched anything yet. The
+      // publication metadata already carries freshness and provenance.
       final publication = await _client.latestPublication();
-      final envelope = await _client.alerts(runId: publication.runId);
-      _recordEnvelope(envelope);
+      _lastGeneratedAt = publication.generatedAt;
+      _lastIsDemo = publication.isDemo;
+      _lastMode = publication.mode;
+      _lastRunId = publication.runId;
     }
     return DataFreshness(
       retrievedAt: _lastGeneratedAt!,

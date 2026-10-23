@@ -14,6 +14,7 @@ class FakeGridApiClient implements GridApiClient {
     this.isDemo = false,
     this.mode = 'live',
     this.runId = 'test-run',
+    this.forecastDelay = Duration.zero,
   });
 
   final List<GridStateDto> states;
@@ -24,6 +25,13 @@ class FakeGridApiClient implements GridApiClient {
   final bool isDemo;
   final String mode;
   final String runId;
+  final Duration forecastDelay;
+
+  final requestedForecastMinutes = <int>[];
+  final requestedAlertCells = <String?>[];
+  int alertRequests = 0;
+  int activeForecastRequests = 0;
+  int maxConcurrentForecastRequests = 0;
 
   final DateTime generatedAt = DateTime.utc(2026, 9, 17, 10, 0);
 
@@ -50,14 +58,25 @@ class FakeGridApiClient implements GridApiClient {
     GeoBounds? bounds,
     int? resolution,
     String? runId,
-  }) async =>
-      GridEnvelope(
+  }) async {
+    requestedForecastMinutes.add(minutes);
+    activeForecastRequests++;
+    if (activeForecastRequests > maxConcurrentForecastRequests) {
+      maxConcurrentForecastRequests = activeForecastRequests;
+    }
+    try {
+      if (forecastDelay > Duration.zero) await Future<void>.delayed(forecastDelay);
+      return GridEnvelope(
         generatedAt: generatedAt,
         isDemo: isDemo,
         mode: mode,
         runId: runId,
         data: forecastList.where((f) => f.forecastMinutes == minutes).toList(),
       );
+    } finally {
+      activeForecastRequests--;
+    }
+  }
 
   @override
   Future<GridEnvelope<List<WeatherDto>>> weather({
@@ -68,8 +87,22 @@ class FakeGridApiClient implements GridApiClient {
       GridEnvelope(generatedAt: generatedAt, isDemo: isDemo, mode: mode, runId: runId, data: weatherList);
 
   @override
-  Future<GridEnvelope<List<AlertDto>>> alerts({String? runId}) async =>
-      GridEnvelope(generatedAt: generatedAt, isDemo: isDemo, mode: mode, runId: runId, data: alertList);
+  Future<GridEnvelope<List<AlertDto>>> alerts({
+    String? runId,
+    String? h3Cell,
+  }) async {
+    alertRequests++;
+    requestedAlertCells.add(h3Cell);
+    return GridEnvelope(
+      generatedAt: generatedAt,
+      isDemo: isDemo,
+      mode: mode,
+      runId: runId,
+      data: alertList
+          .where((alert) => h3Cell == null || alert.h3Cell == h3Cell)
+          .toList(),
+    );
+  }
 }
 
 void main() {
@@ -193,6 +226,24 @@ void main() {
     expect(points.last.pm25, 110);
   });
 
+  test('six-hour forecast uses bounded parallel horizon requests', () async {
+    final supported = List<int>.generate(24, (index) => (index + 1) * 15);
+    final client = FakeGridApiClient(
+      states: states,
+      weatherList: weather,
+      supportedHorizons: supported,
+      forecastDelay: const Duration(milliseconds: 2),
+    );
+    final provider = providerWith(client);
+
+    await provider.getForecast(location, const Duration(hours: 6));
+
+    expect(client.requestedForecastMinutes, hasLength(24));
+    expect(client.requestedForecastMinutes.toSet(), supported.toSet());
+    expect(client.maxConcurrentForecastRequests, greaterThan(1));
+    expect(client.maxConcurrentForecastRequests, lessThanOrEqualTo(4));
+  });
+
   test('forecast returns nothing for a non-positive horizon', () async {
     final provider = providerWith(
       FakeGridApiClient(states: states, weatherList: weather),
@@ -234,9 +285,12 @@ void main() {
   });
 
   test('events map alerts for the user cell only', () async {
-    final provider = providerWith(
-      FakeGridApiClient(states: states, weatherList: weather, alertList: alerts),
+    final client = FakeGridApiClient(
+      states: states,
+      weatherList: weather,
+      alertList: alerts,
     );
+    final provider = providerWith(client);
 
     final events = await provider.getPollutionEvents(location);
 
@@ -244,6 +298,7 @@ void main() {
     expect(events.single.peakAqiEstimate, pm25ToCpcbAqi(120));
     expect(events.single.description, 'PM2.5 is high');
     expect(events.single.confidence, 0.6);
+    expect(client.requestedAlertCells, ['cellA']);
   });
 
   test('freshness reflects the most recent response', () async {
@@ -260,6 +315,27 @@ void main() {
     expect(freshness.mode, 'live');
     expect(freshness.isDemo, isFalse);
   });
+
+  test(
+    'initial freshness uses publication metadata without downloading alerts',
+    () async {
+      final client = FakeGridApiClient(
+        states: states,
+        alertList: alerts,
+        isDemo: true,
+        mode: 'demo',
+      );
+      final provider = providerWith(client);
+
+      final freshness = await provider.getDataFreshness();
+
+      expect(client.alertRequests, 0);
+      expect(freshness.retrievedAt, client.generatedAt);
+      expect(freshness.runId, client.runId);
+      expect(freshness.mode, client.mode);
+      expect(freshness.isDemo, isTrue);
+    },
+  );
 
   test('freshness preserves demo provenance', () async {
     final provider = providerWith(FakeGridApiClient(

@@ -117,13 +117,41 @@ def _by_source_stmt(
     return stmt.where(incident_table.c.source_id == source_id)
 
 
-def _list_stmt(status, role) -> Select:
+def _list_stmt(
+    status,
+    role,
+    *,
+    archived_only: bool = False,
+    limit: int | None = None,
+    offset: int = 0,
+) -> Select:
     stmt = select(incident_table)
     if status is not None:
         stmt = stmt.where(incident_table.c.status == status.value)
+    elif archived_only:
+        stmt = stmt.where(
+            incident_table.c.status.in_(
+                [IncidentStatus.RESOLVED.value, IncidentStatus.CANCELLED.value]
+            )
+        )
+    else:
+        stmt = stmt.where(
+            incident_table.c.status.in_(
+                [
+                    item.value
+                    for item in IncidentStatus
+                    if not item.is_terminal
+                ]
+            )
+        )
     if role is not None:
         stmt = stmt.where(incident_table.c.responder_role == role.value)
-    return stmt.order_by(incident_table.c.created_at.desc(), incident_table.c.id)
+    stmt = stmt.order_by(incident_table.c.created_at.desc(), incident_table.c.id)
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    if offset:
+        stmt = stmt.offset(offset)
+    return stmt
 
 
 def _history_stmt(incident_id: int) -> Select:
@@ -247,8 +275,24 @@ class SqlIncidentRepository:
         self._session.commit()
         return _row_to_event(row)
 
-    def list(self, *, status=None, role=None) -> list[Incident]:
-        rows = self._session.execute(_list_stmt(status, role)).all()
+    def list(
+        self,
+        *,
+        status=None,
+        role=None,
+        archived_only=False,
+        limit=None,
+        offset=0,
+    ) -> list[Incident]:
+        rows = self._session.execute(
+            _list_stmt(
+                status,
+                role,
+                archived_only=archived_only,
+                limit=limit,
+                offset=offset,
+            )
+        ).all()
         return [_row_to_incident(row) for row in rows]
 
     def history(self, incident_id: int) -> list[IncidentEvent]:

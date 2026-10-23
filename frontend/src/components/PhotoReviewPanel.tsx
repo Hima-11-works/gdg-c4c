@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { fetchReportsWithStatus } from '../lib/api'
 import {
   fetchEvidence,
@@ -45,10 +45,12 @@ export function PhotoReviewPanel({
   const [decisionInFlight, setDecisionInFlight] = useState(false)
   const [assessment, setAssessment] = useState<EvidenceAssessmentOut | null>(null)
   const [assessmentLoading, setAssessmentLoading] = useState(false)
-  const [geminiInFlight, setGeminiInFlight] = useState(false)
+  const [geminiInFlightKey, setGeminiInFlightKey] = useState<string | null>(null)
   const [geminiError, setGeminiError] = useState<string | null>(null)
   const [geminiConsent, setGeminiConsent] = useState(true)
   const loadGeneration = useRef(0)
+  const geminiRequestRef = useRef<{ key: string } | null>(null)
+  const selectedGeminiKeyRef = useRef<string | null>(null)
   const panelRef = useRef<HTMLElement>(null)
   const onCloseRef = useRef(onClose)
   const decisionInFlightRef = useRef(decisionInFlight)
@@ -108,6 +110,7 @@ export function PhotoReviewPanel({
   }, [])
 
   const refreshQueue = () => {
+    invalidateGeminiRequest()
     setRefreshing(true)
     setPreview(null)
     setAssessment(null)
@@ -120,12 +123,39 @@ export function PhotoReviewPanel({
   const selectedEvidenceId = selected?.evidence.id
   const selectedScanState = selected?.evidence.scan_state
   const previewKey = reviewerKey.trim()
+  const selectedGeminiKey =
+    selectedReportId !== undefined && selectedEvidenceId !== undefined
+      ? `${selectedReportId}:${selectedEvidenceId}:${previewKey}`
+      : null
+  const geminiInFlight =
+    selectedGeminiKey !== null &&
+    geminiInFlightKey === selectedGeminiKey &&
+    geminiRequestRef.current?.key === selectedGeminiKey
   const selectedPreview =
     preview !== null &&
     preview.evidenceId === selectedEvidenceId &&
     preview.reviewerKey === previewKey
       ? preview
       : null
+
+  useLayoutEffect(() => {
+    selectedGeminiKeyRef.current = selectedGeminiKey
+    if (geminiRequestRef.current?.key !== selectedGeminiKey) {
+      geminiRequestRef.current = null
+    }
+  }, [selectedGeminiKey])
+
+  useEffect(
+    () => () => {
+      geminiRequestRef.current = null
+    },
+    [],
+  )
+
+  const invalidateGeminiRequest = () => {
+    geminiRequestRef.current = null
+    setGeminiInFlightKey(null)
+  }
 
   useEffect(() => {
     // This effect starts a remote read; loadQueue updates state only after its awaits settle.
@@ -218,7 +248,8 @@ export function PhotoReviewPanel({
       selectedReportId === undefined ||
       selectedEvidenceId === undefined ||
       previewKey === '' ||
-      geminiInFlight
+      selectedGeminiKey === null ||
+      geminiRequestRef.current !== null
     )
       return
 
@@ -227,7 +258,9 @@ export function PhotoReviewPanel({
       return
     }
 
-    setGeminiInFlight(true)
+    const request = { key: selectedGeminiKey }
+    geminiRequestRef.current = request
+    setGeminiInFlightKey(request.key)
     setGeminiError(null)
     try {
       const result = await analyzeEvidenceWithGemini(
@@ -239,8 +272,18 @@ export function PhotoReviewPanel({
           reanalyze,
         },
       )
-      setAssessment(result)
+      if (
+        geminiRequestRef.current === request &&
+        selectedGeminiKeyRef.current === request.key
+      ) {
+        setAssessment(result)
+      }
     } catch (error) {
+      if (
+        geminiRequestRef.current !== request ||
+        selectedGeminiKeyRef.current !== request.key
+      )
+        return
       if (error instanceof EvidenceError) {
         if (error.code === 'gemini_consent_required') {
           setGeminiError('Consent is required before sending photo to Gemini.')
@@ -274,7 +317,10 @@ export function PhotoReviewPanel({
         )
       }
     } finally {
-      setGeminiInFlight(false)
+      if (geminiRequestRef.current === request) {
+        geminiRequestRef.current = null
+        setGeminiInFlightKey(null)
+      }
     }
   }
 
@@ -338,6 +384,7 @@ export function PhotoReviewPanel({
       decisionInFlight
     )
       return
+    invalidateGeminiRequest()
     setDecisionInFlight(true)
     setDecisionError(null)
     setNotice(null)
@@ -411,6 +458,7 @@ export function PhotoReviewPanel({
             autoComplete="off"
             value={reviewerKey}
             onChange={(event) => {
+              invalidateGeminiRequest()
               setPreview(null)
               setAssessment(null)
               setGeminiError(null)
@@ -465,6 +513,7 @@ export function PhotoReviewPanel({
                 type="button"
                 className={`photo-review-item ${selected?.evidence.id === evidence.id ? 'is-selected' : ''}`}
                 onClick={() => {
+                  invalidateGeminiRequest()
                   setPreview(null)
                   setAssessment(null)
                   setGeminiError(null)

@@ -106,13 +106,21 @@ async def test_run_reports_persistence_failure_instead_of_raising() -> None:
 # --- WeatherIngestionService ---
 
 
-def _sample(wind_speed: float = 3.0, blh: float | None = 400.0) -> WeatherSample:
+def _sample(
+    wind_speed: float = 3.0,
+    blh: float | None = 400.0,
+    *,
+    temperature: float | None = None,
+    humidity: float | None = None,
+) -> WeatherSample:
     return WeatherSample(
         wind_speed=wind_speed,
         wind_direction=270.0,
         precipitation=0.0,
         measured_at=SINCE,
         boundary_layer_height=blh,
+        temperature=temperature,
+        humidity=humidity,
     )
 
 
@@ -144,6 +152,33 @@ async def test_weather_run_fans_one_sample_out_to_every_fine_cell() -> None:
     assert sorted(provider.calls[0], key=lambda p: (p.latitude, p.longitude)) == sorted(
         points_by_cell.values(), key=lambda p: (p.latitude, p.longitude)
     )
+
+
+async def test_weather_run_preserves_temperature_and_humidity() -> None:
+    sample = _sample(temperature=30.5, humidity=72.0)
+    repository = FakeWeatherReadingRepository()
+
+    result = await WeatherIngestionService(
+        FakeWeatherProvider(default_sample=sample), repository
+    ).run(BBOX)
+
+    assert result.succeeded is True
+    assert repository.readings
+    assert {reading.temperature for reading in repository.readings} == {30.5}
+    assert {reading.humidity for reading in repository.readings} == {72.0}
+
+
+async def test_weather_run_records_the_selected_data_mode_source() -> None:
+    repository = FakeWeatherReadingRepository()
+    service = WeatherIngestionService(
+        FakeWeatherProvider(default_sample=_sample()), repository, source="demo"
+    )
+
+    result = await service.run(BBOX)
+
+    assert result.succeeded is True
+    assert repository.readings
+    assert {reading.source for reading in repository.readings} == {"demo"}
 
 
 async def test_weather_run_skips_representative_point_with_no_sample() -> None:

@@ -1,12 +1,16 @@
 // Forecast timeline slider (15-minute frames between published anchors) with Play/Pause/
 // Restart controls. One canonical state: forecastMinutes in the shared
 // MapUiContext. Upcoming keyframes are prefetched into the shared frame
-// store (lib/forecastFrames.ts) so playback never stalls on the network.
+// store (lib/forecastFrames.ts); playback waits at a frame until its next
+// horizon is ready instead of advancing past the data on screen.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   PREFETCH_DEPTH,
+  ensureForecastFrame,
+  forecastFrameLabel,
   prefetchUpcoming,
+  useForecastFrame,
   useForecastWarming,
   warmForecastWindow,
 } from '../lib/forecastFrames'
@@ -57,6 +61,9 @@ export function TimelineControl({
   const { forecastMinutes, lod, bbox } = state
   const trackRef = useRef<HTMLDivElement>(null)
   const [playing, setPlaying] = useState(false)
+  const [playbackError, setPlaybackError] = useState<{ queryKey: string; message: string } | null>(
+    null,
+  )
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const positionRef = useRef(forecastMinutes)
   const keyframes = useMemo(
@@ -87,9 +94,25 @@ export function TimelineControl({
     [query, publishedRunId, supportedHours],
   )
 
+  const currentIndex = keyframes.indexOf(forecastMinutes)
+  const nextFrameMinutes = currentIndex >= 0 ? (keyframes[currentIndex + 1] ?? 0) : 0
+  const nextForecastFrame = useForecastFrame(
+    nextFrameMinutes,
+    queryKey,
+    query,
+    playing && nextFrameMinutes > 0 && publishedRunId !== undefined,
+    publishedRunId,
+  )
+  const nextFrameReady =
+    nextFrameMinutes > 0 &&
+    nextForecastFrame.status === 'success' &&
+    !nextForecastFrame.isStale &&
+    nextForecastFrame.error === undefined &&
+    nextForecastFrame.displayedMinutes === nextFrameMinutes
+
   // True while the current view's frames are being fetched into the cache
   // (a fresh map view, or a manual jump). Play/Restart are disabled until
-  // it clears, so playback never starts on a cold cache and stutters.
+  // it clears, so playback starts from a ready frame.
   const warming = useForecastWarming(queryKey)
 
   useEffect(() => {
@@ -106,6 +129,7 @@ export function TimelineControl({
   const selectManually = useCallback(
     (minutes: number) => {
       setPlaying(false)
+      setPlaybackError(null)
       dispatch({ type: 'SELECT_FORECAST', minutes })
       if (publishedRunId !== undefined) {
         warmForecastWindow(queryKey, query, minutes, supportedHours, publishedRunId)
@@ -156,9 +180,19 @@ export function TimelineControl({
       return
     }
     const next = keyframes[idx + 1]
+    if (next !== nextFrameMinutes || !nextFrameReady) return
     positionRef.current = next
     dispatch({ type: 'SELECT_FORECAST', minutes: next })
-  }, [dispatch, keyframes, stopPlayback])
+  }, [dispatch, keyframes, nextFrameMinutes, nextFrameReady, stopPlayback])
+
+  useEffect(() => {
+    if (!playing || !nextForecastFrame.error) return
+    setPlaying(false)
+    setPlaybackError({
+      queryKey,
+      message: `Playback stopped at ${forecastFrameLabel(forecastMinutes)} because ${forecastFrameLabel(nextFrameMinutes)} could not load.`,
+    })
+  }, [playing, nextForecastFrame.error, forecastMinutes, nextFrameMinutes, queryKey])
 
   // Start/stop timer when `playing` changes.
   useEffect(() => {
@@ -176,11 +210,23 @@ export function TimelineControl({
   }, [playing, advance, stopPlayback, dispatch, maxMinutes])
 
   const handlePlayPause = useCallback(() => {
+    if (!playing && nextForecastFrame.error && nextFrameMinutes > 0 && publishedRunId !== undefined) {
+      void ensureForecastFrame(nextFrameMinutes, queryKey, query, publishedRunId)
+    }
+    setPlaybackError(null)
     setPlaying((p) => !p)
-  }, [])
+  }, [
+    playing,
+    nextForecastFrame.error,
+    nextFrameMinutes,
+    publishedRunId,
+    queryKey,
+    query,
+  ])
 
   const handleRestart = useCallback(() => {
     setPlaying(false)
+    setPlaybackError(null)
     positionRef.current = 0
     dispatch({ type: 'SELECT_FORECAST', minutes: 0 })
     // Warm the frames a Play from Now would advance through.
@@ -267,6 +313,8 @@ export function TimelineControl({
 
   // Mark every interpolated frame, but label only current and hourly anchors.
   const majorTicks = keyframes.filter((minutes) => minutes % 60 === 0)
+  const visiblePlaybackError =
+    playbackError?.queryKey === queryKey ? playbackError.message : null
 
   const currentPct = minutesToPct(forecastMinutes, maxMinutes)
 
@@ -282,16 +330,26 @@ export function TimelineControl({
           type="button"
           className="timeline-playbtn"
           onClick={handlePlayPause}
-          disabled={warming}
+          disabled={warming || publishedRunId === undefined}
           aria-label={
             warming
               ? 'Playback disabled while frames are cached'
+              : publishedRunId === undefined
+                ? 'Playback disabled until a published forecast is available'
               : playing
                 ? 'Pause playback'
                 : 'Play forecast animation'
           }
           aria-pressed={playing}
-          title={warming ? 'Caching frames…' : playing ? 'Pause' : 'Play'}
+          title={
+            warming
+              ? 'Caching frames…'
+              : publishedRunId === undefined
+                ? 'Forecast unavailable'
+                : playing
+                  ? 'Pause'
+                  : 'Play'
+          }
         >
           {playing ? (
             <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -325,6 +383,14 @@ export function TimelineControl({
           </svg>
         </button>
       </div>
+
+      {visiblePlaybackError ? (
+        <p className="muted" role="status">{visiblePlaybackError}</p>
+      ) : playing && nextFrameMinutes > 0 && !nextFrameReady ? (
+        <p className="muted" role="status">
+          Waiting for {forecastFrameLabel(nextFrameMinutes)} before continuing.
+        </p>
+      ) : null}
 
       {/* Major tick labels (every 1h) */}
       <div className="timeline-ticks">

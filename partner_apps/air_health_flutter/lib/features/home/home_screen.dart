@@ -252,11 +252,15 @@ class HomeScreen extends ConsumerWidget {
                   error: (_, _) => const SizedBox.shrink(),
                   data: (reports) {
                     if (reports.isEmpty) return const SizedBox.shrink();
+                    final displayReports = [
+                      ...reports.where((report) => report.photoUploadPending),
+                      ...reports.where((report) => !report.photoUploadPending).take(3),
+                    ];
                     return Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const SectionHeader(title: 'Recent Citizen Hotspots'),
-                        ...reports.take(3).map((r) => _CitizenReportCard(report: r)),
+                        ...displayReports.map((r) => _CitizenReportCard(report: r)),
                       ],
                     );
                   },
@@ -406,13 +410,67 @@ class _FreshnessBanner extends StatelessWidget {
 
 // ── Citizen Report card ───────────────────────────────────────────────
 
-class _CitizenReportCard extends ConsumerWidget {
+class _CitizenReportCard extends ConsumerStatefulWidget {
   const _CitizenReportCard({required this.report});
 
   final FireReport report;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_CitizenReportCard> createState() => _CitizenReportCardState();
+}
+
+class _CitizenReportCardState extends ConsumerState<_CitizenReportCard> {
+  bool _uploadingPhoto = false;
+
+  Future<void> _retryPhotoUpload() async {
+    final report = widget.report;
+    final client = ref.read(fireReportApiClientProvider);
+    final bytes = report.photoBytes;
+    if (client is! CitizenPhotoApiClient || bytes == null || bytes.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Photo upload is currently unavailable.')),
+      );
+      return;
+    }
+
+    setState(() => _uploadingPhoto = true);
+    try {
+      await (client as CitizenPhotoApiClient).attachPhoto(
+        reportId: report.id,
+        bytes: bytes,
+        filename: report.photoFilename ?? 'citizen-photo.jpg',
+      );
+      await ref.read(citizenReportsProvider.notifier).addReport(
+            report.copyWith(photoUploadPending: false),
+          );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Photo attached to your report.')),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Photo upload failed. You can retry later.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _uploadingPhoto = false);
+    }
+  }
+
+  Future<void> _removePendingPhoto() async {
+    await ref.read(citizenReportsProvider.notifier).addReport(
+          widget.report.copyWith(
+            clearPhoto: true,
+            photoUploadPending: false,
+          ),
+        );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final report = widget.report;
     final cs = Theme.of(context).colorScheme;
 
     return AppCard(
@@ -482,6 +540,34 @@ class _CitizenReportCard extends ConsumerWidget {
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: AppTypography.bodySmall.copyWith(color: cs.onSurface),
+                  ),
+                ],
+                if (report.photoUploadPending) ...[
+                  const SizedBox(height: AppSpacing.xs),
+                  Text(
+                    'Photo upload pending · report already saved',
+                    style: AppTypography.bodySmall.copyWith(color: AppColors.warning),
+                  ),
+                  Wrap(
+                    spacing: AppSpacing.sm,
+                    children: [
+                      TextButton.icon(
+                        onPressed: _uploadingPhoto ? null : _retryPhotoUpload,
+                        icon: _uploadingPhoto
+                            ? const SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.refresh),
+                        label: const Text('Retry photo'),
+                      ),
+                      TextButton.icon(
+                        onPressed: _uploadingPhoto ? null : _removePendingPhoto,
+                        icon: const Icon(Icons.delete_outline),
+                        label: const Text('Remove photo'),
+                      ),
+                    ],
                   ),
                 ],
               ],

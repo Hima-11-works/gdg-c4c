@@ -628,6 +628,7 @@ def generate_weather_reading(h3_cell: str, *, timestamp: datetime | None = None)
         temperature=field.temperature,
         humidity=field.humidity,
         measured_at=timestamp or _now(),
+        source="demo",
     )
 
 

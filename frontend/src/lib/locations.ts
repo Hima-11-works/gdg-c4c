@@ -74,7 +74,13 @@ export function loadLocations(): Promise<IndiaLocation[]> {
     }
     return response.json() as Promise<IndiaLocation[]>
   })
-  return cache
+  const pending = cache
+  return pending.catch((error: unknown) => {
+    // Let a later search retry after a transient network or server failure.
+    // Clear only this request so an older rejection cannot discard a newer load.
+    if (cache === pending) cache = null
+    throw error
+  })
 }
 
 /**

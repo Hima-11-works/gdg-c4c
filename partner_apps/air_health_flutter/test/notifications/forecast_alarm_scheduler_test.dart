@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
 import 'package:air_health_flutter/domain/models/models.dart';
@@ -42,6 +44,23 @@ void main() {
   });
 
   group('desiredAlarms (pure selection)', () {
+    test('does not schedule alarms from synthetic publications', () {
+      final desired = ForecastAlarmScheduler.desiredAlarms(
+        forecast: [fp(250, const Duration(hours: 3))],
+        rules: standardRules,
+        preferences: const UserAlertPreferences(),
+        freshness: DataFreshness(
+          retrievedAt: now,
+          quality: DataQuality.full,
+          isDemo: true,
+          mode: 'demo',
+        ),
+        now: now,
+      );
+
+      expect(desired, isEmpty);
+    });
+
     test('schedules the nearest qualifying crossing', () {
       final desired = ForecastAlarmScheduler.desiredAlarms(
         forecast: [
@@ -55,18 +74,32 @@ void main() {
         now: now,
       );
 
-      expect(desired, hasLength(2));
+      expect(desired, hasLength(1));
       // alarmLead defaults to zero: the alarm rings at the crossing itself.
       expect(desired.first.fireAt, now.add(const Duration(hours: 3)));
       expect(desired.first.key,
           ForecastAlarmScheduler.keyFor(CpcbCategory.poor, now.add(const Duration(hours: 3))));
       expect(desired.first.severity, AlertSeverity.warning);
-      expect(desired.last.fireAt, now.add(const Duration(hours: 4)));
-      // Sorted oldest first.
-      expect(
-        desired.first.fireAt.isBefore(desired.last.fireAt),
-        isTrue,
+    });
+
+    test('schedules threshold entry and escalation, not each episode point', () {
+      final desired = ForecastAlarmScheduler.desiredAlarms(
+        forecast: [
+          fp(180, const Duration(hours: 1)),
+          fp(250, const Duration(hours: 2)),
+          fp(260, const Duration(hours: 2, minutes: 15)),
+          fp(350, const Duration(hours: 3)),
+          fp(360, const Duration(hours: 3, minutes: 15)),
+        ],
+        rules: standardRules,
+        preferences: const UserAlertPreferences(),
+        freshness: fresh(now),
+        now: now,
       );
+
+      expect(desired, hasLength(2));
+      expect(desired.first.categoryLabel, CpcbCategory.poor.label);
+      expect(desired.last.categoryLabel, CpcbCategory.veryPoor.label);
     });
 
     test('skips low-confidence crossings', () {
@@ -161,13 +194,82 @@ void main() {
           now.add(const Duration(hours: 3)).subtract(const Duration(minutes: 30)));
     });
 
+    test('skips a non-urgent alarm whose firing time is in quiet hours', () {
+      final alarmNow = DateTime(2026, 9, 21, 20);
+      final desired = ForecastAlarmScheduler.desiredAlarms(
+        forecast: [
+          ForecastPoint(
+            at: DateTime(2026, 9, 21, 23),
+            aqiCpcb: 250,
+            confidence: 0.9,
+          ),
+        ],
+        rules: standardRules,
+        preferences: UserAlertPreferences(
+          quietHoursStart: DateTime(2020, 1, 1, 22),
+          quietHoursEnd: DateTime(2020, 1, 1, 7),
+        ),
+        freshness: fresh(alarmNow),
+        now: alarmNow,
+      );
+
+      expect(desired, isEmpty);
+    });
+
+    test('allows urgent alarms during quiet hours', () {
+      final alarmNow = DateTime(2026, 9, 21, 20);
+      final desired = ForecastAlarmScheduler.desiredAlarms(
+        forecast: [
+          ForecastPoint(
+            at: DateTime(2026, 9, 21, 23),
+            aqiCpcb: 450,
+            confidence: 0.9,
+          ),
+        ],
+        rules: standardRules,
+        preferences: UserAlertPreferences(
+          quietHoursStart: DateTime(2020, 1, 1, 22),
+          quietHoursEnd: DateTime(2020, 1, 1, 7),
+        ),
+        freshness: fresh(alarmNow),
+        now: alarmNow,
+      );
+
+      expect(desired, hasLength(1));
+      expect(desired.single.severity, AlertSeverity.urgent);
+    });
+
+    test('checks quiet hours at fire time after applying alarm lead', () {
+      final alarmNow = DateTime(2026, 9, 21, 20);
+      final desired = ForecastAlarmScheduler.desiredAlarms(
+        forecast: [
+          ForecastPoint(
+            at: DateTime(2026, 9, 21, 23),
+            aqiCpcb: 250,
+            confidence: 0.9,
+          ),
+        ],
+        rules: standardRules,
+        preferences: UserAlertPreferences(
+          quietHoursStart: DateTime(2020, 1, 1, 22),
+          quietHoursEnd: DateTime(2020, 1, 1, 7),
+          alarmLead: const Duration(hours: 2),
+        ),
+        freshness: fresh(alarmNow),
+        now: alarmNow,
+      );
+
+      expect(desired, hasLength(1));
+      expect(desired.single.fireAt, DateTime(2026, 9, 21, 21));
+    });
+
     test('keeps at most the nearest three alarms', () {
       final desired = ForecastAlarmScheduler.desiredAlarms(
         forecast: [
           fp(250, const Duration(hours: 3)),
-          fp(260, const Duration(hours: 4)),
-          fp(270, const Duration(hours: 5)),
-          fp(280, const Duration(hours: 5, minutes: 30)),
+          fp(350, const Duration(hours: 4)),
+          fp(450, const Duration(hours: 5)),
+          fp(500, const Duration(hours: 5, minutes: 30)),
         ],
         rules: standardRules,
         preferences: const UserAlertPreferences(),
@@ -287,6 +389,96 @@ void main() {
             urgent: any(named: 'urgent'),
           )).called(1);
       verify(() => store.writeAll(any())).called(1);
+    });
+
+    test('keeps episode dedup across refreshes and resets after a forecast dip',
+        () async {
+      var persisted = <ScheduledAlarm>[];
+      when(() => store.readAll())
+          .thenAnswer((_) async => List<ScheduledAlarm>.of(persisted));
+      when(() => store.writeAll(any())).thenAnswer((invocation) async {
+        persisted = List<ScheduledAlarm>.of(
+          invocation.positionalArguments.first as List<ScheduledAlarm>,
+        );
+      });
+
+      ForecastPoint at(int aqi, DateTime time) => ForecastPoint(
+            at: time,
+            aqiCpcb: aqi,
+            confidence: 0.9,
+          );
+
+      final initial = await scheduler.reconcile(
+        forecast: [
+          fp(250, const Duration(minutes: 15)),
+          fp(260, const Duration(minutes: 30)),
+        ],
+        rules: standardRules,
+        preferences: const UserAlertPreferences(),
+        freshness: fresh(now),
+        now: now,
+      );
+      expect(initial, hasLength(1));
+      expect(persisted, hasLength(1));
+
+      final nextRefresh = now.add(const Duration(minutes: 20));
+      final sustained = await scheduler.reconcile(
+        forecast: [
+          at(260, nextRefresh.add(const Duration(minutes: 15))),
+          at(270, nextRefresh.add(const Duration(minutes: 30))),
+        ],
+        rules: standardRules,
+        preferences: const UserAlertPreferences(),
+        freshness: fresh(nextRefresh),
+        now: nextRefresh,
+      );
+      expect(sustained, isEmpty);
+      expect(persisted, hasLength(1), reason: 'expired alarm remains an episode marker');
+
+      final afterDip = await scheduler.reconcile(
+        forecast: [
+          at(180, nextRefresh.add(const Duration(minutes: 15))),
+          at(250, nextRefresh.add(const Duration(minutes: 30))),
+        ],
+        rules: standardRules,
+        preferences: const UserAlertPreferences(),
+        freshness: fresh(nextRefresh),
+        now: nextRefresh,
+      );
+      expect(afterDip, hasLength(1));
+      expect(afterDip.single.fireAt, nextRefresh.add(const Duration(minutes: 30)));
+    });
+
+    test('serializes cancellation after an in-flight reconciliation', () async {
+      final schedulingStarted = Completer<void>();
+      final finishScheduling = Completer<void>();
+      when(() => store.readAll()).thenAnswer((_) async => const []);
+      when(() => store.deleteAll()).thenAnswer((_) async {});
+      when(() => service.scheduleAlarm(
+            id: any(named: 'id'),
+            fireAt: any(named: 'fireAt'),
+            title: any(named: 'title'),
+            body: any(named: 'body'),
+            payload: any(named: 'payload'),
+            urgent: any(named: 'urgent'),
+          )).thenAnswer((_) async {
+            schedulingStarted.complete();
+            await finishScheduling.future;
+          });
+
+      final reconciliation = run([fp(250, const Duration(hours: 3))]);
+      await schedulingStarted.future;
+      final cancellation = scheduler.cancelAll();
+
+      verifyNever(() => store.deleteAll());
+      finishScheduling.complete();
+      await reconciliation;
+      await cancellation;
+
+      verifyInOrder([
+        () => store.writeAll(any()),
+        () => store.deleteAll(),
+      ]);
     });
 
     test('an unchanged alarm is kept without re-registering it', () async {

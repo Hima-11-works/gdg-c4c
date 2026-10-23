@@ -39,6 +39,7 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
   /// action button is disabled for the duration, so a second tap cannot fire a
   /// second request. (The API is idempotent as a backstop, not as the plan.)
   bool _writeInFlight = false;
+  bool _statusNeedsRefresh = false;
 
   /// The result of the last write, so the console can report what actually
   /// happened instead of assuming the tap worked.
@@ -57,20 +58,37 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
       _loadError = null;
     });
     try {
-      // Three reads: the incident, its append-only history, and the public
-      // report list used to expand the evidence ids. The report list is a
-      // convenience — if it fails the incident still renders.
+      // Incident evidence stores durable report ids. Resolve those ids through
+      // the persisted detail endpoint, not the age-limited active map feed.
       final incident = await widget.api.getIncident(widget.incidentId);
       final history = await widget.api.history(widget.incidentId);
 
-      Map<int, CitizenReport> reportsById = const {};
-      String? reportsError;
-      try {
-        final reports = await widget.api.listReports();
-        reportsById = {for (final report in reports) report.id: report};
-      } on ApiException catch (error) {
-        reportsError = error.message;
+      final reportsById = <int, CitizenReport>{};
+      final reportErrors = <String>[];
+      final reportIds = incident.evidenceReportIds.toSet().toList(growable: false);
+      const reportLookupConcurrency = 5;
+      for (var start = 0; start < reportIds.length; start += reportLookupConcurrency) {
+        final batch = reportIds.skip(start).take(reportLookupConcurrency);
+        final results = await Future.wait<MapEntry<int, CitizenReport?>>(
+          batch.map((id) async {
+            try {
+              return MapEntry<int, CitizenReport?>(
+                id,
+                await widget.api.getReport(id),
+              );
+            } catch (error) {
+              final message = error is ApiException ? error.message : error.toString();
+              reportErrors.add('Report #$id: $message');
+              return MapEntry<int, CitizenReport?>(id, null);
+            }
+          }),
+        );
+        for (final result in results) {
+          final report = result.value;
+          if (report != null) reportsById[result.key] = report;
+        }
       }
+      final reportsError = reportErrors.isEmpty ? null : reportErrors.join(' · ');
 
       if (!mounted) return;
       setState(() {
@@ -78,6 +96,7 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
         _history = history;
         _reportsById = reportsById;
         _reportsError = reportsError;
+        _statusNeedsRefresh = false;
         _loading = false;
       });
     } on ApiException catch (error) {
@@ -123,10 +142,13 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
     } on ApiException catch (error) {
       if (!mounted) return;
       setState(() => _writeError = error);
-      // A refusal usually means this console's idea of the status is behind the
-      // server's (another responder moved it). Re-read so the buttons match.
-      if (error.isConflict || error.isNotFound) {
-        await _refreshHistory();
+      // A refusal usually means another responder moved the incident. A
+      // transport/5xx failure is also uncertain: the write may have committed
+      // before the response was lost. In both cases refresh the projection and
+      // history together before offering another status action.
+      if (error.isConflict || error.isNotFound || error.retryable) {
+        setState(() => _statusNeedsRefresh = true);
+        await _refreshIncidentAndHistory();
       }
     } finally {
       if (mounted) setState(() => _writeInFlight = false);
@@ -140,6 +162,30 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
       setState(() => _history = history);
     } on ApiException {
       // History already loaded once; a failed refresh must not blank it.
+    }
+  }
+
+  Future<void> _refreshIncidentAndHistory() async {
+    try {
+      final values = await Future.wait([
+        widget.api.getIncident(widget.incidentId),
+        widget.api.history(widget.incidentId),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _incident = values[0] as Incident;
+        _history = values[1] as List<IncidentEvent>;
+        _statusNeedsRefresh = false;
+      });
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _statusNeedsRefresh = true;
+        if (error.isNotFound) {
+          _incident = null;
+          _loadError = error;
+        }
+      });
     }
   }
 
@@ -197,6 +243,11 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
   }
 
   Widget _buildActions(Incident incident) {
+    if (_statusNeedsRefresh) {
+      return const Text(
+        'The latest status could not be confirmed. Refresh this incident before taking another action.',
+      );
+    }
     if (incident.status == null) {
       return const Text('This incident reports a status this console does not recognise, so it '
           'offers no actions for it.');

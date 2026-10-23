@@ -93,6 +93,8 @@ def _result_values(result: PredictionResult) -> dict:
         "lower_pm25": result.lower_pm25,
         "upper_pm25": result.upper_pm25,
         "pdi": result.pdi,
+        "pdi_factors": dict(result.pdi_factors) if result.pdi_factors is not None else None,
+        "confidence": result.confidence,
         "prediction_method": result.prediction_method,
         "model_version": result.model_version,
         "feature_schema_version": result.feature_schema_version,
@@ -130,6 +132,8 @@ def _row_to_result(row: Row) -> PredictionResult:
         lower_pm25=row.lower_pm25,
         upper_pm25=row.upper_pm25,
         pdi=row.pdi,
+        pdi_factors=row.pdi_factors,
+        confidence=row.confidence,
         prediction_method=row.prediction_method,
         model_version=row.model_version,
         feature_schema_version=row.feature_schema_version,
@@ -192,6 +196,7 @@ def _alert_candidates_stmt(
     run_id: str,
     threshold_pm25: float,
     *,
+    h3_cell: str | None = None,
     limit: int | None = None,
     offset: int = 0,
 ) -> Select:
@@ -204,7 +209,7 @@ def _alert_candidates_stmt(
             forecast.c.valid_at,
             forecast.c.predicted_pm25,
             current.c.predicted_pm25.label("current_pm25"),
-            forecast.c.quality,
+            forecast.c.confidence,
             forecast.c.synthetic,
         )
         .select_from(
@@ -220,11 +225,13 @@ def _alert_candidates_stmt(
             forecast.c.horizon_hours > 0,
             forecast.c.predicted_pm25 >= threshold_pm25,
         )
-        .order_by(
-            forecast.c.predicted_pm25.desc(),
-            forecast.c.horizon_hours,
-            forecast.c.h3_cell,
-        )
+    )
+    if h3_cell is not None:
+        stmt = stmt.where(forecast.c.h3_cell == h3_cell)
+    stmt = stmt.order_by(
+        forecast.c.predicted_pm25.desc(),
+        forecast.c.horizon_hours,
+        forecast.c.h3_cell,
     )
     if limit is not None:
         stmt = stmt.limit(limit)
@@ -303,11 +310,18 @@ class SqlPredictionPublicationRepository:
         run_id: str,
         *,
         threshold_pm25: float,
+        h3_cell: str | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[AlertCandidate]:
         rows = self._session.execute(
-            _alert_candidates_stmt(run_id, threshold_pm25, limit=limit, offset=offset)
+            _alert_candidates_stmt(
+                run_id,
+                threshold_pm25,
+                h3_cell=h3_cell,
+                limit=limit,
+                offset=offset,
+            )
         ).all()
         return [
             AlertCandidate(
@@ -316,7 +330,7 @@ class SqlPredictionPublicationRepository:
                 valid_at=row.valid_at,
                 predicted_pm25=row.predicted_pm25,
                 current_pm25=row.current_pm25,
-                confidence=(row.quality or {}).get("coverage_fraction"),
+                confidence=row.confidence,
                 synthetic=row.synthetic,
             )
             for row in rows

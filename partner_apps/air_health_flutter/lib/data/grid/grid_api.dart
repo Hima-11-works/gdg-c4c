@@ -255,7 +255,10 @@ abstract class GridApiClient {
     String? runId,
   });
 
-  Future<GridEnvelope<List<AlertDto>>> alerts({String? runId});
+  Future<GridEnvelope<List<AlertDto>>> alerts({
+    String? runId,
+    String? h3Cell,
+  });
 }
 
 /// Dio-backed [GridApiClient]. [dio]'s base URL is the API origin
@@ -361,10 +364,15 @@ class DioGridApiClient implements GridApiClient {
   }
 
   @override
-  Future<GridEnvelope<List<AlertDto>>> alerts({String? runId}) async {
+  Future<GridEnvelope<List<AlertDto>>> alerts({
+    String? runId,
+    String? h3Cell,
+  }) async {
+    final query = <String, dynamic>{};
+    if (h3Cell != null) query['h3_cell'] = h3Cell;
     final json = await _getPinned(
       '$_apiPrefix/alerts',
-      const <String, dynamic>{},
+      query,
       runId: runId,
     );
     return _parseEnvelope(

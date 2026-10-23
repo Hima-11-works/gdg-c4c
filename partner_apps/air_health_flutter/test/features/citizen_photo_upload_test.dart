@@ -66,5 +66,43 @@ void main() {
       expect(saved.photoBytes, photo);
       expect(saved.photoFilename, 'fire_evidence.jpg');
     });
+
+    test('persists pending upload state and supports durable retry or removal',
+        () async {
+      final photo = Uint8List.fromList([1, 2, 3, 4]);
+      final pending = FireReport(
+        id: 123,
+        h3Cell: '8828308281fffff',
+        latitude: 26.8467,
+        longitude: 80.9462,
+        kind: FireKind.buildingFire,
+        smokeIntensity: 4,
+        durationHours: 1,
+        reportedAt: DateTime.utc(2026, 9, 21, 12),
+        photoBytes: photo,
+        photoFilename: 'evidence.jpg',
+        photoUploadPending: true,
+      );
+
+      await CitizenReportsStore().saveReport(pending);
+      final afterRestart = (await CitizenReportsStore().getAllReports()).single;
+      expect(afterRestart.id, pending.id);
+      expect(afterRestart.photoUploadPending, isTrue);
+      expect(afterRestart.photoBytes, orderedEquals(photo));
+
+      await CitizenReportsStore()
+          .saveReport(afterRestart.copyWith(photoUploadPending: false));
+      final uploaded = (await CitizenReportsStore().getAllReports()).single;
+      expect(uploaded.photoUploadPending, isFalse);
+      expect(uploaded.hasPhoto, isTrue);
+
+      await CitizenReportsStore().saveReport(
+        uploaded.copyWith(clearPhoto: true, photoUploadPending: false),
+      );
+      final removed = (await CitizenReportsStore().getAllReports()).single;
+      expect(removed.photoUploadPending, isFalse);
+      expect(removed.hasPhoto, isFalse);
+      expect(removed.photoFilename, isNull);
+    });
   });
 }

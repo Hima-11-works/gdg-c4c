@@ -76,7 +76,11 @@ final exactAlarmsProvider = FutureProvider<bool>((ref) {
 /// "Upcoming alarms" row. Read directly from the metadata store — the OS
 /// holds the alarms themselves, this is what *we* remember scheduling.
 final upcomingAlarmsProvider = FutureProvider<List<ScheduledAlarm>>((ref) {
-  return ref.read(forecastAlarmStoreProvider).readAll();
+  return ref.read(forecastAlarmStoreProvider).readAll().then(
+        (alarms) => alarms
+            .where((alarm) => alarm.fireAt.isAfter(DateTime.now()))
+            .toList(growable: false),
+      );
 });
 
 /// Dedup state for the alert engine — persisted across evaluations.
@@ -100,11 +104,34 @@ class AlertCoordinator {
   AlertCoordinator(this._ref);
 
   final Ref _ref;
+  int _evaluationGeneration = 0;
+
+  /// Update alert preferences in one place so disabling delivery invalidates
+  /// in-flight evaluations before cancelling their OS alarms.
+  Future<void> updateAlertPreferences(UserAlertPreferences preferences) async {
+    final disablesAlarms =
+        !preferences.alertsEnabled || !preferences.forecastAlarmsEnabled;
+    // Invalidate before persisting: a refresh using the previous preference
+    // snapshot must not dispatch or enqueue a new alarm after this point.
+    _evaluationGeneration++;
+    if (disablesAlarms) {
+      await _ref.read(forecastAlarmSchedulerProvider).cancelAll();
+      _ref.invalidate(upcomingAlarmsProvider);
+    }
+    await _ref
+        .read(userProfileProvider.notifier)
+        .updateFields(preferences: preferences);
+    if (disablesAlarms) {
+      return;
+    }
+    await refreshAndEvaluate();
+  }
 
   /// Refresh the data the engine depends on, then run the engine and act on
   /// its decisions. Returns the engine result, or null when there is no
   /// profile yet (e.g. before onboarding) or nothing to evaluate.
   Future<AlertEngineResult?> refreshAndEvaluate() async {
+    final generation = ++_evaluationGeneration;
     // Force fresh reads so a periodic tick actually pulls new data. Riverpod
     // keeps the previous value visible during the refresh, so screens don't
     // flash a loading state.
@@ -116,6 +143,7 @@ class AlertCoordinator {
     _ref.invalidate(nearbyAreasProvider);
 
     final profile = await _ref.read(userProfileProvider.future);
+    if (generation != _evaluationGeneration) return null;
     if (profile == null) {
       // A missing profile means onboarding or a reset: nothing here can be
       // trusted to represent the user, so any OS-level alarms left over from
@@ -125,6 +153,7 @@ class AlertCoordinator {
     }
 
     final location = await _ref.read(currentLocationProvider.future);
+    if (generation != _evaluationGeneration) return null;
     if (location.isFallback) {
       // A city demo fallback is not the user's position. Do not deliver a
       // location-specific AQI alert or leave an old forecast alarm active.
@@ -152,6 +181,7 @@ class AlertCoordinator {
       events = await _ref.read(pollutionEventsProvider.future);
       freshness = await _ref.read(dataFreshnessProvider.future);
     } catch (_) {
+      if (generation != _evaluationGeneration) return null;
       // Do not leave a previously scheduled alarm to fire against a failed
       // or unavailable refresh. Screens surface the underlying data error.
       try {
@@ -160,15 +190,23 @@ class AlertCoordinator {
       return null;
     }
 
+    if (generation != _evaluationGeneration) return null;
+    final activeProfile = _ref.read(userProfileProvider).valueOrNull ?? profile;
+    if (!activeProfile.preferences.alertsEnabled) {
+      await _ref.read(forecastAlarmSchedulerProvider).cancelAll();
+      _ref.invalidate(upcomingAlarmsProvider);
+      return null;
+    }
+
     // Build the sensitivity profile for the engine, carrying the user's
     // persisted alert preferences (master switch, quiet hours, severity floor,
     // recovery alerts) rather than defaults.
     final sensitivityProfile = UserSensitivityProfile(
-      healthContext: profile.healthContext,
-      sensitivity: profile.sensitivity,
-      customRules: profile.customRules,
-      preferences: profile.preferences,
-      diseaseSeverity: profile.diseaseSeverity,
+      healthContext: activeProfile.healthContext,
+      sensitivity: activeProfile.sensitivity,
+      customRules: activeProfile.customRules,
+      preferences: activeProfile.preferences,
+      diseaseSeverity: activeProfile.diseaseSeverity,
     );
 
     final engine = _ref.read(alertEngineProvider);
@@ -184,15 +222,18 @@ class AlertCoordinator {
     );
 
     if (result.decisions.isNotEmpty) {
+      if (generation != _evaluationGeneration) return null;
       // Dispatch notifications (lock-screen-safe messages only).
       final delivered = await _ref
           .read(alertNotificationDispatcherProvider)
           .dispatch(
             decisions: result.decisions,
-            sensitivity: profile.sensitivity,
-            healthContext: profile.healthContext,
-            diseaseSeverity: profile.diseaseSeverity,
+            sensitivity: activeProfile.sensitivity,
+            healthContext: activeProfile.healthContext,
+            diseaseSeverity: activeProfile.diseaseSeverity,
           );
+
+      if (generation != _evaluationGeneration) return null;
 
       // Keep a decision eligible while OS notifications are denied. The alert
       // history remains visible in-app, and granting permission later can
@@ -221,10 +262,25 @@ class AlertCoordinator {
     // every cycle — not only when a decision fires — because a forecast
     // revision, a preference change, or a reboot all need this sync.
     try {
+      if (generation != _evaluationGeneration) return result;
+      final latestProfile =
+          _ref.read(userProfileProvider).valueOrNull ?? activeProfile;
+      if (!latestProfile.preferences.alertsEnabled) {
+        await _ref.read(forecastAlarmSchedulerProvider).cancelAll();
+        _ref.invalidate(upcomingAlarmsProvider);
+        return result;
+      }
+      final latestSensitivityProfile = UserSensitivityProfile(
+        healthContext: latestProfile.healthContext,
+        sensitivity: latestProfile.sensitivity,
+        customRules: latestProfile.customRules,
+        preferences: latestProfile.preferences,
+        diseaseSeverity: latestProfile.diseaseSeverity,
+      );
       await _ref.read(forecastAlarmSchedulerProvider).reconcile(
             forecast: forecast,
-            rules: SensitivityRules.forProfile(sensitivityProfile),
-            preferences: profile.preferences,
+            rules: SensitivityRules.forProfile(latestSensitivityProfile),
+            preferences: latestProfile.preferences,
             freshness: freshness,
           );
     } catch (_) {

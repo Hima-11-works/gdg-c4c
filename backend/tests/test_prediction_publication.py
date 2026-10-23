@@ -5,7 +5,9 @@ from types import SimpleNamespace
 
 import h3
 import pytest
+from fastapi.testclient import TestClient
 
+from app.api.deps import get_prediction_query_service
 from app.domain.features import (
     CellFeatureVector,
     DataMode,
@@ -15,6 +17,7 @@ from app.domain.features import (
     InputKind,
 )
 from app.domain.prediction import AlertCandidate, PredictionResult, PredictionRun
+from app.main import create_app
 from app.services.prediction_publication import (
     PredictionPublicationService,
     assert_live_snapshots_available,
@@ -28,6 +31,7 @@ class MemoryPublicationRepository:
         self.result_values = list(results or [])
         self.published = 0
         self.result_queries = []
+        self.alert_queries = []
 
     def publish(self, run, results):
         self.run_value = run
@@ -61,8 +65,13 @@ class MemoryPublicationRepository:
             {item.h3_cell for item in self.result_values if item.run_id == run_id}
         )
 
-    def list_alert_candidates(self, run_id, *, threshold_pm25, limit=None, offset=0):
+    def list_alert_candidates(
+        self, run_id, *, threshold_pm25, h3_cell=None, limit=None, offset=0
+    ):
+        self.alert_queries.append(h3_cell)
         rows = [item for item in self.result_values if item.run_id == run_id]
+        if h3_cell is not None:
+            rows = [item for item in rows if item.h3_cell == h3_cell]
         current = {item.h3_cell: item for item in rows if item.horizon_hours == 0}
         candidates = [
             AlertCandidate(
@@ -72,7 +81,7 @@ class MemoryPublicationRepository:
                 predicted_pm25=item.predicted_pm25,
                 current_pm25=(current[item.h3_cell].predicted_pm25
                               if item.h3_cell in current else None),
-                confidence=item.quality.coverage_fraction,
+                confidence=item.confidence,
                 synthetic=item.synthetic,
             )
             for item in rows
@@ -134,6 +143,10 @@ def test_publication_carries_baseline_and_rejects_synthetic_live_inputs():
         generated_at=now,
         snapshots=[current, forecast],
         baseline_by_cell_horizon={(forecast.h3_cell, 1.0): 25.0},
+        confidence_by_cell_horizon={
+            (current.h3_cell, 0.0): 0.91,
+            (forecast.h3_cell, 1.0): 0.74,
+        },
     )
     assert run.mode is DataMode.DEMO
     assert repository.published == 1
@@ -141,6 +154,88 @@ def test_publication_carries_baseline_and_rejects_synthetic_live_inputs():
     assert rows[1].predicted_pm25 == 25.0
     assert rows[1].prediction_method == "deterministic-dispersion-baseline"
     assert rows[1].synthetic is True
+    assert rows[0].confidence == 0.91
+    assert rows[1].confidence == 0.74
+
+
+def test_modeled_current_snapshot_keeps_interpolated_value_and_provenance():
+    now = datetime(2026, 9, 22, tzinfo=UTC)
+    cell = "8861892e0dfffff"
+    ref = DatasetRef(
+        dataset_id="idw-grid-nowcast-v1",
+        source="Air Health grid computation",
+        product="current interpolated PM2.5 grid",
+        version="1",
+        kind=InputKind.MODELED,
+        region="india",
+        attribution="Computed from current station readings",
+        license="Project-generated model output",
+    )
+    station_ref = DatasetRef(
+        dataset_id="openaq-pm25-v3",
+        source="OpenAQ API v3",
+        product="PM2.5 station readings",
+        version="v3",
+        kind=InputKind.OBSERVED,
+        region="india",
+        attribution="OpenAQ",
+        license="upstream provider terms",
+    )
+    repository = MemoryPublicationRepository()
+    _run, rows = PredictionPublicationService(repository).publish(
+        run_id="live-nowcast",
+        feature_run_id="features-nowcast",
+        region="india",
+        mode=DataMode.LIVE,
+        generated_at=now,
+        snapshots=[_snapshot(cell, 0, now, pm25=42.0, refs=[ref, station_ref])],
+    )
+
+    assert rows[0].predicted_pm25 == 42.0
+    assert rows[0].input_kind is InputKind.MODELED
+    assert rows[0].prediction_method == "modeled-current-nowcast"
+
+
+def test_publication_keeps_pdi_score_and_factor_explanation():
+    now = datetime(2026, 9, 22, tzinfo=UTC)
+    cell = "8861892e0dfffff"
+    station_ref = DatasetRef(
+        dataset_id="openaq-pm25-v3",
+        source="OpenAQ API v3",
+        product="PM2.5 station readings",
+        version="v3",
+        kind=InputKind.OBSERVED,
+        region="india",
+        attribution="OpenAQ",
+        license="upstream provider terms",
+    )
+    modeled_ref = DatasetRef(
+        dataset_id="idw-grid-nowcast-v1",
+        source="Air Health grid computation",
+        product="current interpolated PM2.5 grid",
+        version="1",
+        kind=InputKind.MODELED,
+        region="india",
+        attribution="Air Health",
+        license="Project-generated model output",
+    )
+    repository = MemoryPublicationRepository()
+
+    _run, rows = PredictionPublicationService(repository).publish(
+        run_id="pdi-run",
+        feature_run_id="pdi-features",
+        region="india",
+        mode=DataMode.LIVE,
+        generated_at=now,
+        snapshots=[_snapshot(cell, 0, now, refs=[station_ref, modeled_ref])],
+        pdi_by_cell={cell: 67.0},
+        pdi_factors_by_cell={cell: {"pm25": 0.5, "fire_pressure": 0.25}},
+        confidence_by_cell_horizon={(cell, 0.0): 0.73},
+    )
+
+    assert rows[0].pdi == 67.0
+    assert rows[0].pdi_factors == {"pm25": 0.5, "fire_pressure": 0.25}
+    assert rows[0].confidence == 0.73
 
 
 def test_demo_fallback_run_id_resolves_on_a_fresh_service():
@@ -170,6 +265,14 @@ def test_live_publication_fails_when_observed_current_input_is_unavailable():
         vector=snapshot.vector,
         quality=FeatureQuality(coverage_fraction=0.0, observed_station_count=0),
     )
+
+    with pytest.raises(ValueError, match="live publication unavailable"):
+        assert_live_snapshots_available(DataMode.LIVE, [snapshot])
+
+
+def test_live_publication_requires_explicit_openaq_provenance():
+    now = datetime(2026, 9, 22, tzinfo=UTC)
+    snapshot = _snapshot("8861892e0dfffff", 0, now, pm25=42.0)
 
     with pytest.raises(ValueError, match="live publication unavailable"):
         assert_live_snapshots_available(DataMode.LIVE, [snapshot])
@@ -257,6 +360,8 @@ def test_h3_parent_aggregation_keeps_partial_coverage_and_separate_exposure():
             predicted_pm25=value,
             prediction_method="observed-current",
             input_kind=InputKind.OBSERVED,
+            pdi_factors={"pm25": 0.2 if cell == child_cells[0] else 0.8},
+            confidence=0.9 if cell == child_cells[0] else 0.3,
             feature_vector={"population_count": population},
             dataset_refs=(population_ref,),
         )
@@ -285,6 +390,67 @@ def test_h3_parent_aggregation_keeps_partial_coverage_and_separate_exposure():
     assert view.exposure.residents_above_threshold == 300.0
     assert view.exposure.covered_population == 400.0
     assert view.exposure.unknown_population == 0
+    assert view.pdi_factors == {"pm25": pytest.approx(0.5)}
+    assert view.confidence == pytest.approx(0.6)
+
+
+def test_aggregation_uses_one_resolution_tier_for_overlapping_cells():
+    now = datetime(2026, 9, 22, tzinfo=UTC)
+    parent = h3.latlng_to_cell(28.6, 77.1, 7)
+    child = sorted(h3.cell_to_children(parent, 8))[0]
+    run = PredictionRun(
+        run_id="mixed-resolution-1",
+        generated_at=now,
+        published_at=now,
+        region="india",
+        mode=DataMode.LIVE,
+        feature_run_id="features-1",
+        feature_schema_version="environmental-v1",
+    )
+    rows = [
+        PredictionResult(
+            run_id=run.run_id,
+            h3_cell=parent,
+            horizon_hours=0,
+            valid_at=now,
+            baseline_pm25=10.0,
+            predicted_pm25=10.0,
+            prediction_method="coarse-observed-current",
+            input_kind=InputKind.OBSERVED,
+            feature_vector={"population_count": 700.0},
+        ),
+        PredictionResult(
+            run_id=run.run_id,
+            h3_cell=child,
+            horizon_hours=0,
+            valid_at=now,
+            baseline_pm25=100.0,
+            predicted_pm25=100.0,
+            prediction_method="fine-observed-current",
+            input_kind=InputKind.OBSERVED,
+            feature_vector={"population_count": 100.0},
+        ),
+    ]
+    service = PredictionQueryService(
+        MemoryPublicationRepository(run, rows), native_resolution=8, region="india"
+    )
+
+    [coarse_view] = service.aggregate(
+        run, target_cells=[parent], resolution=7, horizon=0
+    )
+    fine_source_cells = service.source_cells_for_targets(run, [child], resolution=8)
+    [fine_view] = service.aggregate(
+        run,
+        target_cells=[child],
+        resolution=8,
+        horizon=0,
+        source_cells=fine_source_cells,
+    )
+
+    assert coarse_view.pm25 == 10.0
+    assert coarse_view.exposure.covered_population == 700.0
+    assert coarse_view.spatial_coverage_fraction == pytest.approx(1.0)
+    assert fine_view.pm25 == 100.0
 
 
 def test_published_run_is_not_upscaled_to_finer_display_resolution():
@@ -487,6 +653,7 @@ def test_alert_candidates_are_thresholded_and_include_current_context():
             prediction_method="residual-ridge",
             input_kind=InputKind.MODELED,
             quality=FeatureQuality(coverage_fraction=0.8),
+            confidence=0.62,
         ),
         PredictionResult(
             run_id=run.run_id,
@@ -519,9 +686,33 @@ def test_alert_candidates_are_thresholded_and_include_current_context():
     )
     assert queries.alert_candidates(run, threshold_pm25=60, limit=1, offset=2) == []
 
+    [cell_candidate] = queries.alert_candidates(
+        run, threshold_pm25=60, h3_cell=cell
+    )
+
     assert highest.predicted_pm25 == 110
     assert candidate.h3_cell == cell
     assert candidate.horizon_hours == 1
     assert candidate.predicted_pm25 == 75
     assert candidate.current_pm25 == 18
-    assert candidate.confidence == pytest.approx(0.8)
+    assert candidate.confidence == pytest.approx(0.62)
+    assert cell_candidate.h3_cell == cell
+    assert cell_candidate.predicted_pm25 == 75
+    assert repository.alert_queries[-1] == cell
+
+    app = create_app()
+    app.dependency_overrides[get_prediction_query_service] = lambda: queries
+    api = TestClient(app)
+    response = api.get(
+        "/api/v2/alerts",
+        params={"run_id": run.run_id, "h3_cell": cell},
+    )
+    assert response.status_code == 200
+    assert [item["h3_cell"] for item in response.json()["data"]] == [cell]
+    assert repository.alert_queries[-1] == cell
+
+    invalid_cell_response = api.get(
+        "/api/v2/alerts",
+        params={"run_id": run.run_id, "h3_cell": "zzzzzzzzzzzzzzz"},
+    )
+    assert invalid_cell_response.status_code == 422

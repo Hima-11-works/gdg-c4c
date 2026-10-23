@@ -15,15 +15,27 @@ import type { DataMode, Envelope, ForecastOut } from './types'
 
 export interface FrameState {
   status: 'loading' | 'success' | 'error'
+  /** Requested timeline position; `displayedMinutes` identifies the data. */
+  requestedMinutes: number
+  displayedMinutes?: number
+  isStale: boolean
+  isLoading: boolean
+  error?: string
   /** The requested frame's data, or the most recently loaded frame's data
-   * while the requested one is still loading (stale-while-revalidate).
-   * Undefined only on first load or after a failure with no prior data. */
+   * while the requested one is loading or has failed. */
   data: ForecastOut[] | undefined
   isDemo: boolean
   runId?: string
   mode?: DataMode
   generatedAt?: string
   message?: string
+}
+
+export function forecastFrameLabel(minutes: number): string {
+  if (minutes <= 0) return 'current conditions'
+  const hours = Math.floor(minutes / 60)
+  const remainder = minutes % 60
+  return `+${hours > 0 ? `${hours}h` : ''}${remainder > 0 ? `${remainder}m` : ''} forecast`
 }
 
 export interface GridCellProgress {
@@ -34,6 +46,9 @@ export interface GridCellProgress {
 
 const MAX_MINUTES = 360
 const DEFAULT_HORIZONS_HOURS = [1, 3, 6]
+const MAX_CACHED_FRAMES = 48
+const MAX_TRACKED_PROGRESS = 48
+const MAX_FAILED_FRAMES = 48
 
 function keyframesFor(horizonsHours: number[] = DEFAULT_HORIZONS_HOURS): number[] {
   const maxMinutes = Math.max(
@@ -76,6 +91,48 @@ function cacheKey(minutes: number, queryKey: string): string {
   return `${minutes}:${queryKey}`
 }
 
+/** Read a frame and mark it recently used for the bounded cache. */
+function readCachedFrame(key: string): Envelope<ForecastOut[]> | undefined {
+  const envelope = cache.get(key)
+  if (envelope) {
+    cache.delete(key)
+    cache.set(key, envelope)
+  }
+  return envelope
+}
+
+function storeCachedFrame(key: string, envelope: Envelope<ForecastOut[]>): void {
+  cache.delete(key)
+  cache.set(key, envelope)
+  while (cache.size > MAX_CACHED_FRAMES) {
+    const oldest = cache.keys().next().value
+    if (oldest === undefined) break
+    cache.delete(oldest)
+    progressByFrame.delete(oldest)
+    failed.delete(oldest)
+  }
+}
+
+function storeProgress(key: string, progress: GridCellProgress): void {
+  progressByFrame.delete(key)
+  progressByFrame.set(key, progress)
+  while (progressByFrame.size > MAX_TRACKED_PROGRESS) {
+    const oldest = progressByFrame.keys().next().value
+    if (oldest === undefined) break
+    progressByFrame.delete(oldest)
+  }
+}
+
+function markFrameFailed(key: string): void {
+  failed.delete(key)
+  failed.add(key)
+  while (failed.size > MAX_FAILED_FRAMES) {
+    const oldest = failed.values().next().value
+    if (oldest === undefined) break
+    failed.delete(oldest)
+  }
+}
+
 /** Start a fetch for this frame if it isn't cached or in flight. Returns a
  *  promise that settles when the frame is cached (or the fetch fails). */
 export function ensureForecastFrame(
@@ -85,26 +142,25 @@ export function ensureForecastFrame(
   runId?: string,
 ): Promise<void> {
   const key = cacheKey(minutes, queryKey)
-  if (cache.has(key)) return Promise.resolve()
+  if (readCachedFrame(key)) return Promise.resolve()
   const existing = inFlight.get(key)
   if (existing) return existing.promise
   failed.delete(key)
   const controller = new AbortController()
-  progressByFrame.set(key, { loaded: 0, total: 0, complete: false })
+  storeProgress(key, { loaded: 0, total: 0, complete: false })
   const request: InFlightForecast = {
     queryKey,
     controller,
     promise: Promise.resolve(),
   }
   request.promise = fetchGridForecast(minutes, query, runId, controller.signal, (loaded, total) => {
-    progressByFrame.set(key, { loaded, total, complete: false })
+    storeProgress(key, { loaded, total, complete: false })
     notify()
   })
     .then((envelope) => {
       if (controller.signal.aborted || inFlight.get(key) !== request) return
-      cache.set(key, envelope)
-      const total = envelope.coverage?.requested_cells ?? envelope.data.length
-      progressByFrame.set(key, { loaded: total, total, complete: true })
+      storeCachedFrame(key, envelope)
+      progressByFrame.delete(key)
       inFlight.delete(key)
       failed.delete(key)
       notify()
@@ -113,12 +169,13 @@ export function ensureForecastFrame(
       if (inFlight.get(key) !== request) return
       inFlight.delete(key)
       if (!controller.signal.aborted) {
-        failed.add(key)
+        markFrameFailed(key)
         progressByFrame.delete(key)
       }
       notify()
     })
   inFlight.set(key, request)
+  notify()
   return request.promise
 }
 
@@ -184,7 +241,7 @@ export function warmForecastWindow(
     replacedWarmup = true
   }
 
-  const missing = targets.filter((minutes) => !cache.has(cacheKey(minutes, queryKey)))
+  const missing = targets.filter((minutes) => !readCachedFrame(cacheKey(minutes, queryKey)))
   if (missing.length === 0) {
     if (replacedWarmup) notify()
     return
@@ -226,11 +283,11 @@ export function useForecastWarming(queryKey: string): boolean {
 export function useForecastProgress(minutes: number, queryKey: string): GridCellProgress | null {
   const key = cacheKey(minutes, queryKey)
   const [progress, setProgress] = useState<GridCellProgress | null>(
-    () => progressByFrame.get(key) ?? completedProgress(cache.get(key)),
+    () => progressByFrame.get(key) ?? completedProgress(readCachedFrame(key)),
   )
   useEffect(() => {
     const update = () =>
-      setProgress(progressByFrame.get(key) ?? completedProgress(cache.get(key)))
+      setProgress(progressByFrame.get(key) ?? completedProgress(readCachedFrame(key)))
     listeners.add(update)
     update()
     return () => {
@@ -251,7 +308,7 @@ export function peekForecastFrame(
   minutes: number,
   queryKey: string,
 ): Envelope<ForecastOut[]> | undefined {
-  return cache.get(cacheKey(minutes, queryKey))
+  return readCachedFrame(cacheKey(minutes, queryKey))
 }
 
 /** Prefetch the next `depth` frames after `currentMinutes`. */
@@ -273,9 +330,13 @@ export function prefetchUpcoming(
   }
 }
 
-function stateFromEnvelope(envelope: Envelope<ForecastOut[]>): FrameState {
+function stateFromEnvelope(envelope: Envelope<ForecastOut[]>, minutes: number): FrameState {
   return {
     status: 'success',
+    requestedMinutes: minutes,
+    displayedMinutes: minutes,
+    isStale: false,
+    isLoading: false,
     data: envelope.data,
     isDemo: envelope.is_demo,
     runId: envelope.run_id,
@@ -308,15 +369,22 @@ export function useForecastFrame(
   // it across publication ids or spatial query keys.
   const [latest, setLatest] = useState<{ queryKey: string; frame: FrameState }>(() => ({
     queryKey,
-    frame: { status: 'loading', data: undefined, isDemo: false },
+    frame: {
+      status: 'loading',
+      requestedMinutes: minutes,
+      isStale: false,
+      isLoading: true,
+      data: undefined,
+      isDemo: false,
+    },
   }))
 
   useEffect(() => {
     if (!enabled) return
     const key = cacheKey(minutes, queryKey)
-    const cached = cache.get(key)
+    const cached = readCachedFrame(key)
     if (cached) {
-      setLatest({ queryKey, frame: stateFromEnvelope(cached) })
+      setLatest({ queryKey, frame: stateFromEnvelope(cached, minutes) })
       return
     }
     // Not cached: keep showing whatever was last loaded (stale-while-
@@ -329,22 +397,74 @@ export function useForecastFrame(
     if (!enabled) return
     const onNotify = () => {
       const key = cacheKey(minutes, queryKey)
-      const cached = cache.get(key)
+      const cached = readCachedFrame(key)
       if (cached) {
-        setLatest({ queryKey, frame: stateFromEnvelope(cached) })
+        setLatest({ queryKey, frame: stateFromEnvelope(cached, minutes) })
+      } else if (inFlight.has(key)) {
+        setLatest((previous) =>
+          previous.queryKey === queryKey && previous.frame.data
+            ? {
+                queryKey,
+                frame: {
+                  ...previous.frame,
+                  requestedMinutes: minutes,
+                  isStale: previous.frame.displayedMinutes !== minutes,
+                  isLoading: true,
+                  error: undefined,
+                },
+              }
+            : {
+                queryKey,
+                frame: {
+                  status: 'loading',
+                  requestedMinutes: minutes,
+                  isStale: false,
+                  isLoading: true,
+                  data: undefined,
+                  isDemo: false,
+                },
+              },
+        )
       } else if (!inFlight.has(key) && failed.has(key)) {
-        // A fetch failed with no prior data for this frame.
         setLatest((previous) => {
+          if (
+            previous.queryKey === queryKey &&
+            previous.frame.data &&
+            previous.frame.displayedMinutes === minutes
+          ) {
+            return {
+              queryKey,
+              frame: {
+                ...previous.frame,
+                requestedMinutes: minutes,
+                isStale: false,
+                isLoading: false,
+                error: undefined,
+              },
+            }
+          }
           if (previous.queryKey === queryKey && previous.frame.data) {
-            return previous // keep stale data while remaining within one pinned view
+            return {
+              queryKey,
+              frame: {
+                ...previous.frame,
+                requestedMinutes: minutes,
+                isStale: previous.frame.displayedMinutes !== minutes,
+                isLoading: false,
+                error: `Could not load ${forecastFrameLabel(minutes)}.`,
+              },
+            }
           }
           return {
             queryKey,
             frame: {
               status: 'error',
+              requestedMinutes: minutes,
+              isStale: false,
+              isLoading: false,
               data: undefined,
               isDemo: false,
-              message: 'Could not load forecast frame',
+              error: `Could not load ${forecastFrameLabel(minutes)}.`,
             },
           }
         })
@@ -356,7 +476,51 @@ export function useForecastFrame(
     }
   }, [minutes, queryKey, enabled])
 
-  return latest.queryKey === queryKey
-    ? latest.frame
-    : { status: 'loading', data: undefined, isDemo: false }
+  const requestedFrame = readCachedFrame(cacheKey(minutes, queryKey))
+  if (requestedFrame) return stateFromEnvelope(requestedFrame, minutes)
+
+  if (latest.queryKey !== queryKey) {
+    return {
+      status: 'loading',
+      requestedMinutes: minutes,
+      isStale: false,
+      isLoading: true,
+      data: undefined,
+      isDemo: false,
+    }
+  }
+
+  if (latest.frame.displayedMinutes === minutes && !latest.frame.error) {
+    return { ...latest.frame, requestedMinutes: minutes, isStale: false, isLoading: false }
+  }
+
+  const requestFailed = failed.has(cacheKey(minutes, queryKey))
+  if (latest.frame.data) {
+    return {
+      ...latest.frame,
+      requestedMinutes: minutes,
+      isStale: latest.frame.displayedMinutes !== minutes,
+      isLoading: enabled && !requestFailed,
+      error: requestFailed ? `Could not load ${forecastFrameLabel(minutes)}.` : undefined,
+    }
+  }
+  if (requestFailed) {
+    return {
+      status: 'error',
+      requestedMinutes: minutes,
+      isStale: false,
+      isLoading: false,
+      data: undefined,
+      isDemo: false,
+      error: `Could not load ${forecastFrameLabel(minutes)}.`,
+    }
+  }
+  return {
+    status: 'loading',
+    requestedMinutes: minutes,
+    isStale: false,
+    isLoading: enabled,
+    data: undefined,
+    isDemo: false,
+  }
 }
