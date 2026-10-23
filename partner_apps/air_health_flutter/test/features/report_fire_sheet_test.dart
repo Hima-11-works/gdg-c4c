@@ -5,6 +5,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:air_health_flutter/domain/models/fire_report.dart';
 import 'package:air_health_flutter/domain/models/location_point.dart';
+import 'package:air_health_flutter/providers/prefs_providers.dart';
+import 'package:air_health_flutter/storage/prefs_store.dart';
 import 'package:air_health_flutter/features/reports/report_fire_sheet.dart';
 import 'package:air_health_flutter/providers/data_providers.dart';
 import 'package:air_health_flutter/providers/location_providers.dart';
@@ -67,6 +69,9 @@ Future<void> pumpSheet(
         fireReportApiClientProvider.overrideWithValue(client),
         currentLocationProvider.overrideWith((ref) async => location),
         resolvedLocationProvider.overrideWithValue(location),
+        appLanguageProvider.overrideWith(
+          (ref) => AppLanguageNotifier(PrefsStore()),
+        ),
       ],
       child: const MaterialApp(
         home: Scaffold(body: ReportFireSheet()),
@@ -154,5 +159,33 @@ void main() {
       find.textContaining('device location is unavailable'),
       findsOneWidget,
     );
+  });
+
+  testWidgets('accepts manually entered coordinates when GPS is unavailable',
+      (tester) async {
+    final client = _RecordingFireReportApiClient();
+    await pumpSheet(tester, client, fallbackTestLocation);
+
+    await tester.ensureVisible(find.byKey(const ValueKey('manual-latitude')));
+    await tester.enterText(find.byKey(const ValueKey('manual-latitude')), '26.8467');
+    await tester.ensureVisible(find.byKey(const ValueKey('manual-longitude')));
+    await tester.enterText(find.byKey(const ValueKey('manual-longitude')), '80.9462');
+    await tester.ensureVisible(find.text('Submit report'));
+    await tester.tap(find.text('Submit report'));
+    await tester.pumpAndSettle();
+
+    expect(client.submitted, hasLength(1));
+    expect(client.submitted.single.latitude, 26.8467);
+    expect(client.submitted.single.longitude, 80.9462);
+  });
+
+  testWidgets('shows the reporting flow in the saved Hindi language',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({'app_language': 'hi'});
+    await pumpSheet(tester, _RecordingFireReportApiClient());
+
+    expect(find.text('धुएँ या आग की सूचना दें'), findsOneWidget);
+    expect(find.text('क्या जल रहा है?'), findsOneWidget);
+    expect(find.text('रिपोर्ट भेजें'), findsOneWidget);
   });
 }

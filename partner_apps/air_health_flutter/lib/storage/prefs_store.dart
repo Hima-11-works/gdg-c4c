@@ -21,11 +21,24 @@ class PrefsStore {
     await (await prefs).setBool('onboarding_done', value);
   }
 
+  Future<String> getAppLanguage() async {
+    final code = (await prefs).getString('app_language') ?? 'en';
+    return const {'en', 'hi', 'pa'}.contains(code) ? code : 'en';
+  }
+
+  Future<void> setAppLanguage(String code) async {
+    if (!const {'en', 'hi', 'pa'}.contains(code)) {
+      throw ArgumentError.value(code, 'code', 'unsupported app language');
+    }
+    await (await prefs).setString('app_language', code);
+  }
+
   // ── Reset ──────────────────────────────────────────────────────────
 
   Future<void> resetAll() async {
     final p = await prefs;
     await p.remove('onboarding_done');
+    await p.remove('app_language');
     // Defensive: clear any legacy UI-preference keys from older installs.
     await p.remove('units');
     await p.remove('dark_mode');

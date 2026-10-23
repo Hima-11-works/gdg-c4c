@@ -1,15 +1,20 @@
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:permission_handler/permission_handler.dart';
 
+import '../../core/citizen_copy.dart';
 import '../../domain/models/fire_report.dart';
 import '../../providers/alert_providers.dart';
 import '../../providers/data_providers.dart';
 import '../../providers/location_providers.dart';
+import '../../providers/prefs_providers.dart';
 import '../../services/location_service.dart';
+import '../../services/voice_input.dart';
 import '../../storage/citizen_reports_store.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
@@ -34,12 +39,17 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
   double _durationHours = FireDurationOption.justStarted.hours;
   final _notesController = TextEditingController();
   final _regionController = TextEditingController();
+  final _latitudeController = TextEditingController();
+  final _longitudeController = TextEditingController();
   final _imagePicker = ImagePicker();
   Uint8List? _photoBytes;
   String? _photoFilename;
   bool _photoConsent = false;
   FireReport? _submittedReport;
   bool _submitting = false;
+  bool _voiceLoading = false;
+
+  CitizenCopy get _copy => CitizenCopy(ref.read(appLanguageProvider));
 
   @override
   void initState() {
@@ -54,6 +64,8 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
   void dispose() {
     _regionController.dispose();
     _notesController.dispose();
+    _latitudeController.dispose();
+    _longitudeController.dispose();
     super.dispose();
   }
 
@@ -67,7 +79,7 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
     try {
       result = await ref.read(locationServiceProvider).requestAndLocate();
     } catch (_) {
-      _showMessage('Could not check location permission. Please try again.');
+      _showMessage(_copy.text('permission_error'));
       return;
     }
     if (!mounted) return;
@@ -80,10 +92,48 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
       } catch (_) {}
     } else {
       _showMessage(switch (result) {
-        LocationDenied() => 'Location permission was denied. Enable it in Settings to report your actual location.',
-        LocationPermanentlyDenied() => 'Location is blocked. Enable it in system settings to report your actual location.',
-        _ => 'Could not get your current location. Please try again.',
+        LocationDenied() => _copy.text('location_denied'),
+        LocationPermanentlyDenied() => _copy.text('location_blocked'),
+        _ => _copy.text('location_error'),
       });
+    }
+  }
+
+  Future<void> _addVoiceNote() async {
+    if (_voiceLoading) return;
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      _showMessage(_copy.text('voice_unavailable'));
+      return;
+    }
+    setState(() => _voiceLoading = true);
+    try {
+      final permission = await Permission.microphone.request();
+      if (!permission.isGranted) {
+        _showMessage(_copy.text('voice_permission'));
+        return;
+      }
+      final localeId = switch (ref.read(appLanguageProvider)) {
+        'hi' => 'hi-IN',
+        'pa' => 'pa-IN',
+        _ => 'en-IN',
+      };
+      final transcript = await const VoiceInputClient().recognize(localeId: localeId);
+      if (!mounted || transcript == null || transcript.trim().isEmpty) return;
+      final spoken = transcript.trim();
+      final existing = _notesController.text.trim();
+      final combined = existing.isEmpty ? spoken : '$existing $spoken';
+      _notesController.value = TextEditingValue(
+        text: combined,
+        selection: TextSelection.collapsed(offset: combined.length),
+      );
+    } on PlatformException catch (error) {
+      _showMessage(error.code == 'unavailable'
+          ? _copy.text('voice_unavailable')
+          : _copy.text('voice_failed'));
+    } catch (_) {
+      _showMessage(_copy.text('voice_failed'));
+    } finally {
+      if (mounted) setState(() => _voiceLoading = false);
     }
   }
 
@@ -91,25 +141,42 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
     if (_submitting) return;
 
     if (_photoBytes != null && !_photoConsent) {
-      _showMessage('Please consent before attaching the photo.');
+      _showMessage(_copy.text('photo_consent_required'));
       return;
     }
 
     final location = ref.read(resolvedLocationProvider);
     if (location.isFallback) {
-      _showMessage('Your device location is unavailable. Enable location and refresh before submitting a hotspot report.');
-      return;
+      final latitude = double.tryParse(_latitudeController.text.trim());
+      final longitude = double.tryParse(_longitudeController.text.trim());
+      if (latitude == null || longitude == null) {
+        _showMessage(_copy.text('manual_coordinates_required'));
+        return;
+      }
+      if (!latitude.isFinite || !longitude.isFinite ||
+          latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+        _showMessage(_copy.text('manual_coordinates_invalid'));
+        return;
+      }
     }
+    final reportLatitude = location.isFallback
+        ? double.parse(_latitudeController.text.trim())
+        : location.latitude;
+    final reportLongitude = location.isFallback
+        ? double.parse(_longitudeController.text.trim())
+        : location.longitude;
     final regionText = _regionController.text.trim().isNotEmpty
         ? _regionController.text.trim()
-        : (location.label ?? 'Nearby area');
+        : location.isFallback
+            ? _copy.text('manual_region_default')
+            : (location.label ?? 'Nearby area');
 
     FireReportDraft? draft;
     if (_submittedReport == null) {
       try {
         draft = FireReportDraft.create(
-          latitude: location.latitude,
-          longitude: location.longitude,
+          latitude: reportLatitude,
+          longitude: reportLongitude,
           kind: _kind,
           smokeIntensity: _smokeIntensity,
           durationHours: _durationHours,
@@ -162,8 +229,8 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
         report = FireReport(
           id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
           h3Cell: 'citizen_cell',
-          latitude: location.latitude,
-          longitude: location.longitude,
+          latitude: reportLatitude,
+          longitude: reportLongitude,
           kind: _kind,
           smokeIntensity: _smokeIntensity,
           durationHours: _durationHours,
@@ -183,8 +250,8 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
       if (!mounted) return;
       setState(() => _submitting = false);
       _showMessage(_submittedReport == null
-          ? 'Could not send the report — check your connection and try again.'
-          : 'Your report was saved, but the photo could not be uploaded. Retry or remove the photo.');
+          ? _copy.text('submit_failed')
+          : _copy.text('photo_upload_failed'));
     }
   }
 
@@ -198,12 +265,12 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
       );
       if (photo == null || !mounted) return;
       if (await photo.length() > _maxPhotoBytes) {
-        _showMessage('Choose an image no larger than 4 MB.');
+        _showMessage(_copy.text('photo_too_large'));
         return;
       }
       final bytes = await photo.readAsBytes();
       if (bytes.isEmpty) {
-        _showMessage('The selected image is empty. Choose another photo.');
+        _showMessage(_copy.text('photo_empty'));
         return;
       }
       final codec = await ui.instantiateImageCodec(bytes);
@@ -220,7 +287,7 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
         _photoConsent = false;
       });
     } catch (_) {
-      _showMessage('Could not open the photo picker. Check app permissions and try again.');
+      _showMessage(_copy.text('photo_picker_failed'));
     }
   }
 
@@ -243,6 +310,7 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final location = ref.watch(resolvedLocationProvider);
+    final copy = CitizenCopy(ref.watch(appLanguageProvider));
 
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
@@ -254,74 +322,117 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Report a fire',
+            Text(copy.text('report_title'),
                 style: AppTypography.headlineSmall.copyWith(color: cs.onSurface)),
             const SizedBox(height: AppSpacing.sm),
             Text(
-              'Tell us about smoke or burning near you. The model treats it '
-              'as an active source at this spot and picks it up on its next '
-              'update cycle.',
+              copy.text('report_help'),
               style: AppTypography.bodyMedium.copyWith(color: cs.onSurfaceVariant),
             ),
             const SizedBox(height: AppSpacing.lg),
-            _SectionLabel('Where is it happening?'),
+            _SectionLabel(copy.text('where')),
             const SizedBox(height: AppSpacing.xs),
             _LocationRow(
+              copy: copy,
               label: location.isFallback
-                  ? 'Fallback · ${location.label ?? "Bhubaneswar"}'
+                  ? '${copy.text('fallback')} · ${location.label ?? "Bhubaneswar"}'
                   : location.label,
               latitude: location.latitude,
               longitude: location.longitude,
               onRefresh: _refreshLocation,
             ),
+            if (location.isFallback) ...[
+              const SizedBox(height: AppSpacing.sm),
+              Text(copy.text('manual_location'),
+                  style: AppTypography.bodySmall.copyWith(color: cs.onSurfaceVariant)),
+              const SizedBox(height: AppSpacing.xs),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      key: const ValueKey('manual-latitude'),
+                      controller: _latitudeController,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+                      decoration: InputDecoration(labelText: copy.text('latitude')),
+                    ),
+                  ),
+                  const SizedBox(width: AppSpacing.md),
+                  Expanded(
+                    child: TextField(
+                      key: const ValueKey('manual-longitude'),
+                      controller: _longitudeController,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+                      decoration: InputDecoration(labelText: copy.text('longitude')),
+                    ),
+                  ),
+                ],
+              ),
+            ],
             const SizedBox(height: AppSpacing.sm),
             TextField(
               controller: _regionController,
-              decoration: const InputDecoration(
-                labelText: 'City / Region name',
-                hintText: 'e.g. Lucknow, LKO, Hazratganj',
+              decoration: InputDecoration(
+                labelText: copy.text('region'),
+                hintText: copy.text('region_hint'),
                 prefixIcon: Icon(Icons.location_city_outlined),
               ),
             ),
             const SizedBox(height: AppSpacing.lg),
-            _SectionLabel('What is burning?'),
+            _SectionLabel(copy.text('what_burning')),
             const SizedBox(height: AppSpacing.xs),
             _KindChips(
               selected: _kind,
+              copy: copy,
               onSelected: (kind) => setState(() => _kind = kind),
             ),
             const SizedBox(height: AppSpacing.lg),
-            _SectionLabel('How much smoke?'),
+            _SectionLabel(copy.text('smoke_amount')),
             const SizedBox(height: AppSpacing.xs),
             _SmokeSlider(
               value: _smokeIntensity,
+              copy: copy,
               onChanged: (value) => setState(() => _smokeIntensity = value),
             ),
             const SizedBox(height: AppSpacing.lg),
-            _SectionLabel('How long has it been going?'),
+            _SectionLabel(copy.text('duration_question')),
             const SizedBox(height: AppSpacing.xs),
             _DurationChips(
               selectedHours: _durationHours,
+              copy: copy,
               onSelected: (hours) => setState(() => _durationHours = hours),
             ),
             const SizedBox(height: AppSpacing.lg),
-            _SectionLabel('Anything else? (optional)'),
+            _SectionLabel(copy.text('other_optional')),
             const SizedBox(height: AppSpacing.xs),
             TextField(
               controller: _notesController,
               maxLines: 2,
               maxLength: FireReportDraft.maxNotesLength,
-              decoration: const InputDecoration(
-                hintText: 'e.g. crop stubble, smoke drifting toward the road',
+              decoration: InputDecoration(
+                hintText: copy.text('notes_hint'),
                 counterText: '',
+                suffixIcon: IconButton(
+                  tooltip: copy.text('voice_input'),
+                  onPressed: _submitting || _voiceLoading ? null : _addVoiceNote,
+                  icon: _voiceLoading
+                      ? const SizedBox.square(
+                          dimension: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.mic_none),
+                ),
               ),
             ),
-            const SizedBox(height: AppSpacing.lg),
-            _SectionLabel('Add a photo (optional)'),
             const SizedBox(height: AppSpacing.xs),
             Text(
-              'A photo can help responders assess smoke or burning. Photos are stored privately; '
-              'reviewers see a metadata-stripped copy.',
+              copy.text('voice_privacy'),
+              style: AppTypography.bodySmall.copyWith(color: cs.onSurfaceVariant),
+            ),
+            const SizedBox(height: AppSpacing.lg),
+            _SectionLabel(copy.text('photo_optional')),
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              copy.text('photo_help'),
               style: AppTypography.bodySmall.copyWith(color: cs.onSurfaceVariant),
             ),
             const SizedBox(height: AppSpacing.sm),
@@ -332,12 +443,12 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
                   OutlinedButton.icon(
                     onPressed: _submitting ? null : () => _pickPhoto(ImageSource.camera),
                     icon: const Icon(Icons.camera_alt_outlined),
-                    label: const Text('Take photo'),
+                    label: Text(copy.text('take_photo')),
                   ),
                   OutlinedButton.icon(
                     onPressed: _submitting ? null : () => _pickPhoto(ImageSource.gallery),
                     icon: const Icon(Icons.photo_library_outlined),
-                    label: const Text('Choose photo'),
+                    label: Text(copy.text('choose_photo')),
                   ),
                 ],
               )
@@ -349,9 +460,9 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
                   height: 160,
                   width: double.infinity,
                   fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => const SizedBox(
+                  errorBuilder: (_, __, ___) => SizedBox(
                     height: 80,
-                    child: Center(child: Text('Photo selected')),
+                    child: Center(child: Text(copy.text('photo_selected'))),
                   ),
                 ),
               ),
@@ -360,7 +471,7 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
                 child: TextButton.icon(
                   onPressed: _submitting ? null : _removePhoto,
                   icon: const Icon(Icons.delete_outline),
-                  label: const Text('Remove photo'),
+                  label: Text(copy.text('remove_photo')),
                 ),
               ),
               CheckboxListTile(
@@ -369,9 +480,7 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
                 onChanged: _submitting
                     ? null
                     : (value) => setState(() => _photoConsent = value ?? false),
-                title: const Text(
-                  'I consent to storing this photo with my report, and agree that an authorized reviewer may send the sanitized image to Gemini for visual analysis.',
-                ),
+                title: Text(copy.text('photo_consent')),
                 controlAffinity: ListTileControlAffinity.leading,
               ),
             ],
@@ -389,10 +498,10 @@ class _ReportFireSheetState extends ConsumerState<ReportFireSheet> {
                     : const Icon(Icons.send),
                 label: Text(
                   _submitting
-                      ? 'Sending…'
+                      ? copy.text('sending')
                       : _submittedReport != null && _photoBytes != null
-                          ? 'Retry photo upload'
-                          : 'Submit report',
+                          ? copy.text('retry_photo')
+                          : copy.text('submit'),
                 ),
               ),
             ),
@@ -420,12 +529,14 @@ class _SectionLabel extends StatelessWidget {
 
 class _LocationRow extends StatelessWidget {
   const _LocationRow({
+    required this.copy,
     required this.label,
     required this.latitude,
     required this.longitude,
     required this.onRefresh,
   });
 
+  final CitizenCopy copy;
   final String? label;
   final double latitude;
   final double longitude;
@@ -449,7 +560,7 @@ class _LocationRow extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  label ?? 'Current position',
+                  label ?? copy.text('location_current'),
                   style: AppTypography.titleMedium.copyWith(color: cs.onSurface),
                 ),
                 Text(
@@ -462,7 +573,7 @@ class _LocationRow extends StatelessWidget {
             ),
           ),
           IconButton(
-            tooltip: 'Use my location',
+            tooltip: copy.text('use_location'),
             onPressed: onRefresh,
             icon: const Icon(Icons.refresh),
           ),
@@ -473,9 +584,10 @@ class _LocationRow extends StatelessWidget {
 }
 
 class _KindChips extends StatelessWidget {
-  const _KindChips({required this.selected, required this.onSelected});
+  const _KindChips({required this.selected, required this.copy, required this.onSelected});
 
   final FireKind selected;
+  final CitizenCopy copy;
   final ValueChanged<FireKind> onSelected;
 
   @override
@@ -486,7 +598,7 @@ class _KindChips extends StatelessWidget {
       children: [
         for (final kind in FireKind.values)
           ChoiceChip(
-            label: Text(kind.label),
+            label: Text(copy.fireKind(kind.value)),
             selected: kind == selected,
             onSelected: (_) => onSelected(kind),
           ),
@@ -496,12 +608,11 @@ class _KindChips extends StatelessWidget {
 }
 
 class _SmokeSlider extends StatelessWidget {
-  const _SmokeSlider({required this.value, required this.onChanged});
+  const _SmokeSlider({required this.value, required this.copy, required this.onChanged});
 
   final int value;
+  final CitizenCopy copy;
   final ValueChanged<int> onChanged;
-
-  static const _labels = ['Low', 'Moderate', 'High', 'Very high', 'Extreme'];
 
   @override
   Widget build(BuildContext context) {
@@ -513,12 +624,12 @@ class _SmokeSlider extends StatelessWidget {
           min: FireReportDraft.minIntensity.toDouble(),
           max: FireReportDraft.maxIntensity.toDouble(),
           divisions: FireReportDraft.maxIntensity - FireReportDraft.minIntensity,
-          label: _labels[value - 1],
+          label: copy.smoke(value),
           activeColor: _colorFor(context),
           onChanged: (v) => onChanged(v.round()),
         ),
         Text(
-          _labels[value - 1],
+          copy.smoke(value),
           style: AppTypography.labelLarge.copyWith(color: _colorFor(context)),
         ),
       ],
@@ -538,9 +649,10 @@ class _SmokeSlider extends StatelessWidget {
 }
 
 class _DurationChips extends StatelessWidget {
-  const _DurationChips({required this.selectedHours, required this.onSelected});
+  const _DurationChips({required this.selectedHours, required this.copy, required this.onSelected});
 
   final double selectedHours;
+  final CitizenCopy copy;
   final ValueChanged<double> onSelected;
 
   @override
@@ -551,7 +663,7 @@ class _DurationChips extends StatelessWidget {
       children: [
         for (final option in FireDurationOption.all)
           ChoiceChip(
-            label: Text(option.label),
+            label: Text(copy.duration(option.hours)),
             selected: option.hours == selectedHours,
             onSelected: (_) => onSelected(option.hours),
           ),

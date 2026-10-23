@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/formatters.dart';
+import '../../core/citizen_copy.dart';
 import '../../domain/models/models.dart';
 import '../../features/reports/citizen_sensor_sheet.dart';
 import '../../features/reports/report_fire_sheet.dart';
@@ -10,6 +11,7 @@ import '../../providers/alert_providers.dart';
 import '../../providers/data_providers.dart';
 import '../../providers/home_providers.dart';
 import '../../providers/profile_providers.dart';
+import '../../providers/prefs_providers.dart';
 import '../../storage/citizen_reports_store.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_spacing.dart';
@@ -42,6 +44,7 @@ class HomeScreen extends ConsumerWidget {
     final trend = ref.watch(trendProvider);
     final crossing = ref.watch(nextCategoryCrossingProvider);
     final profile = ref.watch(userProfileProvider);
+    final copy = CitizenCopy(ref.watch(appLanguageProvider));
     final cs = Theme.of(context).colorScheme;
 
     return Scaffold(
@@ -49,7 +52,7 @@ class HomeScreen extends ConsumerWidget {
         title: const Text('Air Health'),
         actions: [
           IconButton(
-            tooltip: 'Citizen Hotspot & Photo Report',
+            tooltip: copy.text('report_title'),
             icon: const Icon(Icons.add_a_photo_outlined),
             onPressed: () => _openReportSheet(context),
           ),
@@ -67,7 +70,7 @@ class HomeScreen extends ConsumerWidget {
                   heroTag: 'report-fire',
                   onPressed: () => _openReportSheet(context),
                   icon: const Icon(Icons.local_fire_department),
-                  label: const Text('Report fire'),
+            label: Text(copy.text('report_cta')),
                 ),
                 const SizedBox(height: 12),
                 FloatingActionButton.extended(

@@ -124,10 +124,10 @@ class FireReportDraft {
         : trimmedNotes;
     final clientId = clientReportId?.trim();
 
-    if (latitude < -90 || latitude > 90) {
+    if (!latitude.isFinite || latitude < -90 || latitude > 90) {
       throw ArgumentError.value(latitude, 'latitude', 'must be within [-90, 90]');
     }
-    if (longitude < -180 || longitude > 180) {
+    if (!longitude.isFinite || longitude < -180 || longitude > 180) {
       throw ArgumentError.value(
           longitude, 'longitude', 'must be within [-180, 180]');
     }

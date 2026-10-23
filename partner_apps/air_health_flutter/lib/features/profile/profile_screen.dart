@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/app_info.dart';
+import '../../core/citizen_copy.dart';
 import '../../core/formatters.dart';
 import '../../domain/models/models.dart';
 import '../../domain/sensitivity_rules.dart';
@@ -39,6 +40,8 @@ class ProfileScreen extends ConsumerWidget {
         ),
         data: (profile) {
           final prefs = profile?.preferences ?? const UserAlertPreferences();
+          final languageCode = ref.watch(appLanguageProvider);
+          final copy = CitizenCopy(languageCode);
           final location = ref.watch(resolvedLocationProvider);
           final notificationPermission =
               ref.watch(notificationPermissionProvider);
@@ -51,6 +54,13 @@ class ProfileScreen extends ConsumerWidget {
           return ListView(
             padding: const EdgeInsets.only(bottom: AppSpacing.xxxxl),
             children: [
+              _SectionHeader(copy.text('accessibility')),
+              _SettingsTile(
+                icon: Icons.translate,
+                title: copy.text('language'),
+                subtitle: _languageName(languageCode),
+                onTap: () => _selectAppLanguage(context, ref, languageCode),
+              ),
               // ── Location ──────────────────────────────────────────
               _SectionHeader('Location'),
               _SettingsTile(
@@ -247,6 +257,44 @@ class ProfileScreen extends ConsumerWidget {
             ],
           );
         },
+      ),
+    );
+  }
+
+  String _languageName(String code) => switch (code) {
+        'hi' => 'हिन्दी',
+        'pa' => 'ਪੰਜਾਬੀ',
+        _ => 'English',
+      };
+
+  void _selectAppLanguage(
+    BuildContext context,
+    WidgetRef ref,
+    String currentLanguage,
+  ) {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final option in const [
+              ('en', 'English'),
+              ('hi', 'हिन्दी'),
+              ('pa', 'ਪੰਜਾਬੀ'),
+            ])
+              ListTile(
+                title: Text(option.$2),
+                trailing: currentLanguage == option.$1
+                    ? const Icon(Icons.check)
+                    : null,
+                onTap: () async {
+                  await ref.read(appLanguageProvider.notifier).setLanguage(option.$1);
+                  if (sheetContext.mounted) Navigator.pop(sheetContext);
+                },
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -643,6 +691,7 @@ class ProfileScreen extends ConsumerWidget {
           TextButton(
             onPressed: () async {
               await ref.read(prefsStoreProvider).resetAll();
+              ref.read(appLanguageProvider.notifier).resetLanguage();
               await ref.read(userProfileProvider.notifier).resetProfile();
               if (context.mounted) {
                 Navigator.pop(dialogContext);

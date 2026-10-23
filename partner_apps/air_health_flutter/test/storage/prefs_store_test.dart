@@ -22,6 +22,18 @@ void main() {
       });
     });
 
+    group('app language', () {
+      test('defaults to English and persists a supported locale', () async {
+        expect(await store.getAppLanguage(), 'en');
+        await store.setAppLanguage('hi');
+        expect(await store.getAppLanguage(), 'hi');
+      });
+
+      test('rejects unsupported locales', () async {
+        await expectLater(store.setAppLanguage('xx'), throwsArgumentError);
+      });
+    });
+
     group('resetAll', () {
       test('clears onboarding and any legacy keys', () async {
         SharedPreferences.setMockInitialValues({
@@ -29,6 +41,7 @@ void main() {
           'units': 'imperial',
           'dark_mode': true,
           'reduced_motion': true,
+          'app_language': 'pa',
         });
         final seeded = PrefsStore();
 
@@ -39,6 +52,7 @@ void main() {
         expect(prefs.getString('units'), isNull);
         expect(prefs.getBool('dark_mode'), isNull);
         expect(prefs.getBool('reduced_motion'), isNull);
+        expect(await seeded.getAppLanguage(), 'en');
       });
     });
   });

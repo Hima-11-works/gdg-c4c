@@ -106,6 +106,29 @@ void main() {
       );
     });
 
+    test('rejects non-finite coordinates', () {
+      expect(
+        () => FireReportDraft.create(
+          latitude: double.nan,
+          longitude: 0,
+          kind: FireKind.other,
+          smokeIntensity: 3,
+          durationHours: 1,
+        ),
+        throwsArgumentError,
+      );
+      expect(
+        () => FireReportDraft.create(
+          latitude: 0,
+          longitude: double.infinity,
+          kind: FireKind.other,
+          smokeIntensity: 3,
+          durationHours: 1,
+        ),
+        throwsArgumentError,
+      );
+    });
+
     test('rejects notes over 280 characters', () {
       expect(
         () => FireReportDraft.create(

@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 import '../core/app_info.dart';
 import '../mocks/dev_simulator_panel.dart';
 import '../providers/alert_providers.dart';
+import '../providers/prefs_providers.dart';
 import '../routing/app_router.dart';
 import '../theme/app_theme.dart';
 import '../theme/app_colors.dart';
@@ -76,9 +77,12 @@ class _AirHealthAppState extends ConsumerState<AirHealthApp>
   @override
   Widget build(BuildContext context) {
     final router = ref.watch(routerProvider);
+    final languageCode = ref.watch(appLanguageProvider);
 
     return MaterialApp.router(
       title: AppInfo.name,
+      locale: Locale(languageCode),
+      supportedLocales: const [Locale('en'), Locale('hi'), Locale('pa')],
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
       darkTheme: AppTheme.dark,
