@@ -18,7 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.domain.repositories import DuplicateReadingError
-from app.domain.types import SensorReading
+from app.domain.types import BoundingBox, SensorReading
 from app.models.tables import sensor_reading as sensor_reading_table
 
 # geom is derived and write-only (see app.models.tables); every read
@@ -74,13 +74,25 @@ def _insert_stmt(reading: SensorReading) -> Insert:
 
 
 def _list_since_stmt(
-    since: datetime, pollutant: str | None, source: str | None = None
+    since: datetime,
+    pollutant: str | None,
+    source: str | None = None,
+    *,
+    through: datetime | None = None,
+    bbox: BoundingBox | None = None,
 ) -> Select:
     stmt = select(*_COLUMNS).where(sensor_reading_table.c.measured_at >= since)
+    if through is not None:
+        stmt = stmt.where(sensor_reading_table.c.measured_at <= through)
     if pollutant is not None:
         stmt = stmt.where(sensor_reading_table.c.pollutant == pollutant)
     if source is not None:
         stmt = stmt.where(sensor_reading_table.c.source == source)
+    if bbox is not None:
+        stmt = stmt.where(
+            sensor_reading_table.c.latitude.between(bbox.min_lat, bbox.max_lat),
+            sensor_reading_table.c.longitude.between(bbox.min_lon, bbox.max_lon),
+        )
     return stmt.order_by(sensor_reading_table.c.measured_at)
 
 
@@ -157,8 +169,12 @@ class SqlSensorReadingRepository:
         *,
         pollutant: str | None = None,
         source: str | None = None,
+        through: datetime | None = None,
+        bbox: BoundingBox | None = None,
     ) -> list[SensorReading]:
-        rows = self._session.execute(_list_since_stmt(since, pollutant, source)).all()
+        rows = self._session.execute(
+            _list_since_stmt(since, pollutant, source, through=through, bbox=bbox)
+        ).all()
         return [_row_to_domain(row) for row in rows]
 
     def list_latest(self) -> list[SensorReading]:

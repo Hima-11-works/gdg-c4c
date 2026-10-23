@@ -44,6 +44,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 
 import httpx
+import h3
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
@@ -63,6 +64,7 @@ from app.db.repositories import (
 )
 from app.db.session import get_session_factory
 from app.domain.features import DataMode, DatasetRef, FeatureSnapshot, InputKind, WeatherFeature
+from app.domain.hotspots import FireSignal, StationSignal
 from app.domain.prediction import DEFAULT_REGION
 from app.domain.types import BoundingBox, Forecast, GridState, SensorReading, WeatherReading
 from app.ingestion.demo_reports import demo_fire_reports
@@ -79,7 +81,12 @@ from app.services.fire_gradient import PlumeFireGradientModel
 from app.services.forecasting import ForecastingService
 from app.services.geospatial import GeospatialService
 from app.services.grid_computation import GridComputationService
-from app.services.hotspot_detection import DetectorConfig, HotspotDetector, build_store
+from app.services.hotspot_detection import (
+    DetectorConfig,
+    HotspotDetector,
+    build_store,
+    fire_signal_from_hotspot,
+)
 from app.services.ingestion import SensorIngestionService, WeatherIngestionService
 from app.services.national_overview import INDIA_OVERVIEW_BBOX, build_national_overview
 from app.services.pdi import HeuristicPDIModel
@@ -823,12 +830,21 @@ async def _scan_live_satellite_hotspots(
             product_id = artifact.artifact_id.removeprefix("cdse-s5p:")
             case_id = _sentinel5p_case_id(product_id)
             evaluated_at = max(now, artifact.available_at)
+            fires, stations = _hotspot_supporting_signals(
+                session,
+                settings,
+                bbox,
+                evaluated_at,
+                artifact.h3_resolution,
+            )
             scan = HotspotDetector(detector_config).detect(
                 case_id=case_id,
                 case_title=artifact.product,
                 h3_resolution=artifact.h3_resolution,
                 evaluated_at=evaluated_at,
                 imagery=artifact,
+                fires=fires,
+                stations=stations,
             )
             scan = replace(
                 scan,
@@ -877,6 +893,95 @@ async def _scan_live_satellite_hotspots(
             error_summary=str(exc)[:500],
         )
         return StageOutcome("satellite_hotspot_scanning", False, message[:500])
+
+
+def _hotspot_supporting_signals(
+    session: Session,
+    settings: Settings,
+    bbox: BoundingBox,
+    evaluated_at: datetime,
+    h3_resolution: int,
+) -> tuple[tuple[FireSignal, ...], tuple[StationSignal, ...]]:
+    """Load bounded, real FIRMS/OpenAQ evidence for a live satellite scan.
+
+    Community submissions live in their own review table and are never read
+    here. Only the explicitly allowlisted OpenAQ provider can corroborate a
+    scan; source filtering is repeated in Python as a defense in depth.
+    """
+    source_bbox = _expand_bbox(bbox=bbox, distance_km=FIRE_FEATURE_MAX_DISTANCE_KM)
+    signal_since = evaluated_at - timedelta(hours=settings.hotspot_signal_max_age_hours)
+
+    fire_rows = SqlFireHotspotRepository(session).list_for_window(
+        acquired_from=signal_since,
+        acquired_to=evaluated_at,
+        available_by=evaluated_at,
+        bbox=source_bbox,
+    )
+    fires = tuple(
+        replace(
+            fire_signal_from_hotspot(row),
+            h3_cell=h3.latlng_to_cell(row.latitude, row.longitude, h3_resolution),
+        )
+        for row in fire_rows
+        if row.source.strip().lower() == "nasa-firms"
+    )
+
+    readings = SqlSensorReadingRepository(session).list_since(
+        signal_since,
+        pollutant="pm25",
+        source="openaq",
+        through=evaluated_at,
+        bbox=source_bbox,
+    )
+    latest_by_station: dict[str, tuple[SensorReading, float]] = {}
+    for reading in readings:
+        if (
+            reading.source.strip().lower() != "openaq"
+            or reading.pollutant.strip().lower() != "pm25"
+            or reading.measured_at > evaluated_at
+        ):
+            continue
+        value_ugm3 = _pm25_value_ugm3(reading.value, reading.unit)
+        if value_ugm3 is None:
+            continue
+        previous = latest_by_station.get(reading.external_sensor_id)
+        if previous is None or reading.measured_at > previous[0].measured_at:
+            latest_by_station[reading.external_sensor_id] = (reading, value_ugm3)
+
+    stations = tuple(
+        StationSignal(
+            station_id=reading.external_sensor_id,
+            h3_cell=h3.latlng_to_cell(reading.latitude, reading.longitude, h3_resolution),
+            latitude=reading.latitude,
+            longitude=reading.longitude,
+            measured_at=reading.measured_at,
+            # SensorReading has no ingestion timestamp. The row is known to
+            # exist by this pipeline evaluation, which is the conservative
+            # availability timestamp available from the current schema.
+            available_at=evaluated_at,
+            pm25_ugm3=value_ugm3,
+            source=reading.source,
+            verified=True,
+        )
+        for reading, value_ugm3 in latest_by_station.values()
+    )
+    return fires, stations
+
+
+def _pm25_value_ugm3(value: float, unit: str) -> float | None:
+    """Convert recognized PM2.5 units; reject negative or ambiguous values."""
+    normalized = (
+        unit.strip().lower().replace("µ", "u").replace("μ", "u").replace("³", "3")
+    )
+    normalized = normalized.replace(" ", "")
+    if not math.isfinite(value) or value < 0:
+        return None
+    if normalized in {"ug/m3", "ugm-3"}:
+        return value
+    if normalized in {"mg/m3", "mgm-3"}:
+        converted = value * 1000.0
+        return converted if math.isfinite(converted) else None
+    return None
 
 
 def _expand_bbox(*, bbox: BoundingBox, distance_km: float) -> BoundingBox:

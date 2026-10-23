@@ -20,7 +20,7 @@ from app.domain.environmental_observations import FireHotspot
 from app.domain.features import InputKind
 from app.domain.hotspots import ImageryArtifact, ImageryTile
 from app.domain.scenario import DatasetVersion
-from app.domain.types import BoundingBox
+from app.domain.types import BoundingBox, SensorReading
 from app.pipeline.run import (
     PipelineReport,
     StageOutcome,
@@ -423,15 +423,72 @@ async def test_live_satellite_scan_records_provenanced_uvai_candidates(
         async def fetch_new_artifacts(self, **kwargs):
             return [artifact]
 
+    fire = FireHotspot(
+        detection_id="firms-live-1",
+        h3_cell=h3.latlng_to_cell(28.6, 77.2, 5),
+        dataset_id="firms:run-test",
+        ingestion_run_id="run-test",
+        source="nasa-firms",
+        product="VIIRS_NOAA21_NRT",
+        product_version="2.0",
+        satellite="NOAA-21",
+        instrument="VIIRS",
+        latitude=28.6,
+        longitude=77.2,
+        acquired_at=now - timedelta(minutes=10),
+        available_at=now - timedelta(minutes=5),
+        frp_mw=8.0,
+        confidence_raw="n",
+        confidence_class="nominal",
+    )
+    station_reading = SensorReading(
+        source="openaq",
+        external_sensor_id="station-1",
+        latitude=28.6,
+        longitude=77.2,
+        pollutant="pm25",
+        value=82.0,
+        unit="µg/m³",
+        measured_at=now - timedelta(minutes=15),
+    )
+    citizen_reading = SensorReading(
+        source="citizen-sensor",
+        external_sensor_id="citizen-1",
+        latitude=28.6,
+        longitude=77.2,
+        pollutant="pm25",
+        value=400.0,
+        unit="µg/m³",
+        measured_at=now - timedelta(minutes=2),
+    )
+    sensor_query: dict[str, object] = {}
+
+    class _FireRepo:
+        def __init__(self, session) -> None:
+            pass
+
+        def list_for_window(self, **kwargs):
+            return [fire]
+
+    class _SensorRepo:
+        def __init__(self, session) -> None:
+            pass
+
+        def list_since(self, since, **kwargs):
+            sensor_query.update(kwargs)
+            return [station_reading, citizen_reading]
+
     health: list[dict[str, object]] = []
     monkeypatch.setattr("app.pipeline.run.CopernicusSentinel5PProvider", _Provider)
+    monkeypatch.setattr("app.pipeline.run.SqlFireHotspotRepository", _FireRepo)
+    monkeypatch.setattr("app.pipeline.run.SqlSensorReadingRepository", _SensorRepo)
     monkeypatch.setattr(
         "app.pipeline.run._record_source_health",
         lambda session, **kwargs: health.append(kwargs),
     )
 
     outcome = await _scan_live_satellite_hotspots(
-        None,  # type: ignore[arg-type]
+        object(),  # type: ignore[arg-type]
         settings,
         DELHI_BBOX,
         now,
@@ -448,3 +505,13 @@ async def test_live_satellite_scan_records_provenanced_uvai_candidates(
     assert scan["imagery"]["source"] == "Copernicus Data Space Ecosystem"
     assert scan["config"]["sentinel5p_uvai_threshold_raw"] == 1.0
     assert scan["candidates"][0]["evidence"][0]["raw_index_value"] == 2.6
+    assert scan["candidates"][0]["supporting_sources"] == [
+        "satellite_imagery",
+        "firms",
+        "station",
+    ]
+    assert scan["signal_counts"]["stations_supplied"] == 1
+    assert sensor_query["source"] == "openaq"
+    assert sensor_query["pollutant"] == "pm25"
+    assert sensor_query["through"] >= station_reading.measured_at
+    assert sensor_query["bbox"].min_lat < DELHI_BBOX.min_lat

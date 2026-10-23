@@ -30,6 +30,7 @@ from app.domain.training import ModelStatus, ModelVersion
 from app.domain.types import (
     Alert,
     AlertSeverity,
+    BoundingBox,
     FireKind,
     FireReport,
     Forecast,
@@ -81,6 +82,18 @@ def test_sensor_reading_statements() -> None:
     assert "sensor_reading.pollutant" in select_sql
     source_sql = _sql(sensor_reading_repo._list_since_stmt(NOW, "pm25", "openaq"))
     assert "sensor_reading.source =" in source_sql
+    bounded_sql = _sql(
+        sensor_reading_repo._list_since_stmt(
+            NOW,
+            "pm25",
+            "openaq",
+            through=LATER,
+            bbox=BoundingBox(min_lat=37.0, min_lon=-123.0, max_lat=38.0, max_lon=-122.0),
+        )
+    )
+    assert "sensor_reading.measured_at <=" in bounded_sql
+    assert "sensor_reading.latitude BETWEEN" in bounded_sql
+    assert "sensor_reading.longitude BETWEEN" in bounded_sql
 
     latest_sql = _sql(sensor_reading_repo._list_latest_stmt())
     assert "DISTINCT ON" in latest_sql

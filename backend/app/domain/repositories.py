@@ -57,7 +57,13 @@ class SensorReadingRepository(Protocol):
         ...
 
     def list_since(
-        self, since: datetime, *, pollutant: str | None = None, source: str | None = None
+        self,
+        since: datetime,
+        *,
+        pollutant: str | None = None,
+        source: str | None = None,
+        through: datetime | None = None,
+        bbox: BoundingBox | None = None,
     ) -> list[SensorReading]: ...
 
     def list_latest(self) -> list[SensorReading]:
