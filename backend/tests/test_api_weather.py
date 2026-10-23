@@ -34,6 +34,7 @@ def test_list_weather_uses_demo_data_only_when_demo_mode_is_explicit(
         "temperature",
         "humidity",
         "measured_at",
+        "received_at",
     }
 
 

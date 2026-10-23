@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 import h3
 
 from app.domain.features import CellStaticFeatures, WeatherFeature
-from app.domain.types import Coordinate, PM25, SensorReading
+from app.domain.types import PM25, Coordinate, SensorReading
 from app.services.features import FeatureBuilder, feature_snapshot_to_dict
 
 NOW = datetime(2025, 1, 15, 12, tzinfo=UTC)
@@ -49,17 +49,27 @@ def _static(*, population: float | None = 1200.0) -> CellStaticFeatures:
     )
 
 
-def _reading(value: float, measured_at: datetime) -> SensorReading:
+def _reading(
+    value: float,
+    measured_at: datetime,
+    *,
+    source: str = "test",
+    external_sensor_id: str = "station-1",
+    canonical_station_id: str | None = None,
+    received_at: datetime | None = None,
+) -> SensorReading:
     latitude, longitude = h3.cell_to_latlng(CELL)
     return SensorReading(
-        source="test",
-        external_sensor_id="station-1",
+        source=source,
+        external_sensor_id=external_sensor_id,
         latitude=latitude,
         longitude=longitude,
         pollutant=PM25,
         value=value,
         unit="ug/m3",
         measured_at=measured_at,
+        canonical_station_id=canonical_station_id,
+        received_at=received_at,
     )
 
 
@@ -258,6 +268,103 @@ def test_future_weather_is_allowed_only_when_issued_before_the_cutoff() -> None:
 
     assert snapshot.vector.rain_1h_mm == 2.0
     assert snapshot.valid_at == future_valid
+
+
+def test_future_weather_with_unknown_issue_and_receipt_times_is_not_used() -> None:
+    future_valid = NOW + timedelta(hours=3)
+    unversioned = WeatherFeature(
+        h3_cell=CELL,
+        issued_at=None,
+        valid_at=future_valid,
+        precipitation_mm=2.0,
+    )
+
+    snapshot = FeatureBuilder().build(
+        cells=[CELL],
+        issued_at=NOW,
+        valid_at=future_valid,
+        horizon_hours=3,
+        weather_features=[unversioned],
+    )[0]
+
+    assert snapshot.vector.wind_speed_ms is None
+    assert snapshot.vector.rain_1h_mm is None
+    assert "weather" in snapshot.quality.missing_fields
+
+
+def test_max_observation_age_does_not_include_weather_valid_time_age() -> None:
+    old_weather = WeatherFeature(
+        h3_cell=CELL,
+        issued_at=NOW - timedelta(hours=50),
+        valid_at=NOW - timedelta(hours=50),
+        wind_speed_ms=2.0,
+    )
+    snapshot = FeatureBuilder().build(
+        cells=[CELL],
+        issued_at=NOW,
+        valid_at=NOW,
+        sensor_readings=[_reading(30.0, NOW - timedelta(hours=1))],
+        weather_features=[old_weather],
+    )[0]
+
+    assert snapshot.quality.max_observation_age_hours == 1.0
+    assert "weather_stale" in snapshot.quality.warnings
+
+
+def test_canonical_station_count_deduplicates_across_sources() -> None:
+    snapshot = FeatureBuilder().build(
+        cells=[CELL],
+        issued_at=NOW,
+        valid_at=NOW,
+        sensor_readings=[
+            _reading(
+                20.0,
+                NOW - timedelta(minutes=10),
+                source="openaq",
+                external_sensor_id="openaq-id",
+                canonical_station_id="shared-station-1",
+            ),
+            _reading(
+                21.0,
+                NOW - timedelta(minutes=5),
+                source="cpcb",
+                external_sensor_id="cpcb-id",
+                canonical_station_id="shared-station-1",
+            ),
+        ],
+    )[0]
+
+    assert snapshot.quality.observed_station_count == 1
+
+
+def test_duplicate_canonical_station_observation_is_not_double_weighted() -> None:
+    measured_at = NOW - timedelta(minutes=10)
+    snapshot = FeatureBuilder().build(
+        cells=[CELL],
+        issued_at=NOW,
+        valid_at=NOW,
+        sensor_readings=[
+            _reading(
+                10.0,
+                measured_at,
+                source="openaq",
+                external_sensor_id="openaq-id",
+                canonical_station_id="shared-station-1",
+                received_at=NOW - timedelta(minutes=8),
+            ),
+            _reading(
+                30.0,
+                measured_at,
+                source="cpcb",
+                external_sensor_id="cpcb-id",
+                canonical_station_id="shared-station-1",
+                received_at=NOW - timedelta(minutes=2),
+            ),
+            _reading(20.0, NOW - timedelta(minutes=5)),
+        ],
+    )[0]
+
+    assert snapshot.vector.pm25_mean_6h == 25.0
 
 
 def _fire(*, longitude: float, available_at: datetime | None = NOW) -> dict[str, object]:

@@ -9,19 +9,19 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.api.routes.predictions_v2 import _forecast_limitations, _metadata
 from app.api.schemas_v2 import (
     ForecastV2Out,
     GridCurrentV2Out,
     MetaV2Out,
     V2Envelope,
 )
-from app.api.routes.predictions_v2 import _forecast_limitations
 from app.domain.features import (
     FEATURE_SCHEMA_VERSION,
     CellFeatureVector,
     CellStaticFeatures,
-    DatasetRef,
     DataMode,
+    DatasetRef,
     FeatureQuality,
     FeatureSnapshot,
     InputKind,
@@ -117,6 +117,31 @@ def test_persistence_forecast_discloses_that_it_repeats_current_value() -> None:
     )
 
     assert any("carried forward unchanged" in item for item in limitations)
+
+
+def test_prediction_metadata_exposes_observation_receipt_time() -> None:
+    observed_at = datetime(2025, 1, 1, tzinfo=UTC)
+    received_at = datetime(2025, 1, 1, 0, 5, tzinfo=UTC)
+    quality = FeatureQuality(
+        latest_observation_at=observed_at,
+        observation_received_at=received_at,
+    )
+    view = SimpleNamespace(
+        input_kind=InputKind.OBSERVED,
+        prediction_method="observed-current",
+        model_version=None,
+        feature_schema_version=FEATURE_SCHEMA_VERSION,
+        dataset_refs=(),
+        quality=quality,
+        valid_at=observed_at,
+        synthetic=False,
+        horizon_hours=0.0,
+    )
+
+    metadata = _metadata(SimpleNamespace(), view)
+
+    assert metadata.observed_at == observed_at
+    assert metadata.received_at == received_at
 
 
 def test_dummy_manifests_are_json_and_have_required_contract_fields() -> None:

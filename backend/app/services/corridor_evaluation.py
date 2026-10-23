@@ -263,7 +263,7 @@ def _labels_for(
                 measured_at=reading.measured_at,
                 value=reading.value,
                 source=reading.source,
-                external_sensor_id=reading.external_sensor_id,
+                external_sensor_id=reading.station_identity,
                 synthetic=False,
             )
         )
@@ -291,7 +291,7 @@ def _slice_metrics(
         if forecast is None:
             continue
         errors.append(forecast - label.value)
-        stations.add((label.source, label.external_sensor_id))
+        stations.add(label.external_sensor_id)
         if label.value >= threshold:
             observed_above += 1
             if forecast >= threshold:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from geoalchemy2.elements import WKTElement
 from psycopg.errors import UniqueViolation
@@ -33,6 +33,7 @@ _COLUMNS = (
     weather_reading_table.c.temperature,
     weather_reading_table.c.humidity,
     weather_reading_table.c.measured_at,
+    weather_reading_table.c.received_at,
 )
 
 
@@ -54,6 +55,7 @@ def _row_to_domain(row: Row) -> WeatherReading:
         temperature=row.temperature,
         humidity=row.humidity,
         measured_at=row.measured_at,
+        received_at=row.received_at,
     )
 
 
@@ -73,6 +75,7 @@ def _insert_stmt(reading: WeatherReading) -> Insert:
             temperature=reading.temperature,
             humidity=reading.humidity,
             measured_at=reading.measured_at,
+            received_at=reading.received_at or datetime.now(UTC),
         )
         .returning(*_COLUMNS)
     )
@@ -171,6 +174,7 @@ class SqlWeatherReadingRepository:
                     "temperature": reading.temperature,
                     "humidity": reading.humidity,
                     "measured_at": reading.measured_at,
+                    "received_at": reading.received_at or datetime.now(UTC),
                 }
             )
 

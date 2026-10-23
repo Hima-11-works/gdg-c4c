@@ -56,12 +56,14 @@ class SensorReadingOut(BaseModel):
 
     source: str
     external_sensor_id: str
+    canonical_station_id: str | None = None
     latitude: float
     longitude: float
     pollutant: str
     value: float
     unit: str
     measured_at: datetime
+    received_at: datetime | None = None
 
 
 class WeatherReadingOut(BaseModel):
@@ -77,6 +79,7 @@ class WeatherReadingOut(BaseModel):
     temperature: float | None
     humidity: float | None
     measured_at: datetime
+    received_at: datetime | None = None
 
 
 class GridStateOut(BaseModel):

@@ -144,6 +144,8 @@ prediction_run = Table(
     Column("model_versions", JSONB, nullable=False),
     Column("scenario_id", String(120), nullable=True),
     Column("dataset_refs", JSONB, nullable=False),
+    Column("source_health_run_id", String(120), nullable=True),
+    Column("input_quality", JSONB, nullable=True),
     CheckConstraint("published_at >= generated_at", name="ck_prediction_run_publish_order"),
     CheckConstraint("mode IN ('live', 'demo', 'mixed')", name="ck_prediction_run_mode"),
     Index("ix_prediction_run_region_published", "region", "published_at"),
@@ -203,6 +205,8 @@ sensor_reading = Table(
     Column("value", Float, nullable=False),
     Column("unit", String(20), nullable=False),
     Column("measured_at", DateTime(timezone=True), nullable=False),
+    Column("canonical_station_id", String(120), nullable=True),
+    Column("received_at", DateTime(timezone=True), nullable=True),
     CheckConstraint("latitude BETWEEN -90 AND 90", name="ck_sensor_reading_latitude"),
     CheckConstraint("longitude BETWEEN -180 AND 180", name="ck_sensor_reading_longitude"),
     # Lets ingestion re-run safely: inserting the same reading twice is a
@@ -216,6 +220,7 @@ sensor_reading = Table(
     ),
     Index("ix_sensor_reading_measured_at", "measured_at"),
     Index("ix_sensor_reading_pollutant_measured_at", "pollutant", "measured_at"),
+    Index("ix_sensor_reading_canonical_station", "source", "canonical_station_id"),
     Index("ix_sensor_reading_geom", "geom", postgresql_using="gist"),
 )
 
@@ -272,6 +277,7 @@ weather_reading = Table(
     Column("temperature", Float, nullable=True),
     Column("humidity", Float, nullable=True),
     Column("measured_at", DateTime(timezone=True), nullable=False),
+    Column("received_at", DateTime(timezone=True), nullable=True),
     CheckConstraint("wind_speed >= 0", name="ck_weather_reading_wind_speed"),
     CheckConstraint(
         "wind_direction >= 0 AND wind_direction < 360", name="ck_weather_reading_wind_direction"

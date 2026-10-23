@@ -111,6 +111,7 @@ class _LatestItem(BaseModel):
     value: float
     coordinates: _Coordinates | None = None
     sensor_id: int = Field(alias="sensorsId")
+    location_id: int | None = Field(default=None, alias="locationsId")
 
 
 class _LatestResponse(BaseModel):
@@ -312,6 +313,7 @@ class OpenAQProvider:
                 value=item.value,
                 unit=sensor.parameter.units,
                 measured_at=item.measured_at.utc,
+                canonical_station_id=f"openaq-location:{location.id}",
             )
         except ValueError as exc:
             # e.g. out-of-range coordinates — a bad upstream record, not our bug.
@@ -420,6 +422,11 @@ class OpenAQNationalOverviewProvider:
                         value=item.value,
                         unit="µg/m³",
                         measured_at=measured_at,
+                        canonical_station_id=(
+                            f"openaq-location:{item.location_id}"
+                            if item.location_id is not None
+                            else None
+                        ),
                     )
             if len(parsed.results) < self.PAGE_SIZE:
                 break

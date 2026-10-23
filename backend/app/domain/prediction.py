@@ -24,6 +24,34 @@ DEFAULT_REGION = "india"
 
 
 @dataclass(frozen=True, slots=True)
+class PredictionInputQuality:
+    """Compact input freshness and station-support summary pinned to a run."""
+
+    supported_cells: int
+    expected_cells: int
+    max_observation_age_hours: float | None = None
+    unavailable_reasons: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.expected_cells < 0 or self.supported_cells < 0:
+            raise ValueError("input cell counts must be nonnegative")
+        if self.supported_cells > self.expected_cells:
+            raise ValueError("supported cells cannot exceed expected cells")
+        if self.max_observation_age_hours is not None:
+            _require_finite(self.max_observation_age_hours, "max_observation_age_hours")
+            if self.max_observation_age_hours < 0:
+                raise ValueError("max_observation_age_hours must be >= 0")
+        if any(not reason.strip() for reason in self.unavailable_reasons):
+            raise ValueError("unavailable reasons must not be empty")
+
+    @property
+    def completeness_fraction(self) -> float:
+        if self.expected_cells == 0:
+            return 0.0
+        return self.supported_cells / self.expected_cells
+
+
+@dataclass(frozen=True, slots=True)
 class PredictionRun:
     run_id: str
     generated_at: datetime
@@ -35,12 +63,16 @@ class PredictionRun:
     scenario_id: str | None = None
     dataset_refs: tuple[DatasetRef, ...] = ()
     published_at: datetime | None = None
+    source_health_run_id: str | None = None
+    input_quality: PredictionInputQuality | None = None
 
     def __post_init__(self) -> None:
         for name in ("run_id", "region", "feature_run_id", "feature_schema_version"):
             if not getattr(self, name).strip():
                 raise ValueError(f"{name} must not be empty")
         _require_utc(self.generated_at, "generated_at")
+        if self.source_health_run_id is not None and not self.source_health_run_id.strip():
+            raise ValueError("source_health_run_id must not be empty when supplied")
         if self.published_at is not None:
             _require_utc(self.published_at, "published_at")
             if self.published_at < self.generated_at:

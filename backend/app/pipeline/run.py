@@ -136,8 +136,11 @@ def _weather_features(
     return [
         WeatherFeature(
             h3_cell=reading.h3_cell,
-            issued_at=reading.measured_at,
+            # Open-Meteo does not expose the forecast/model issue cycle here.
+            # Keep it unknown instead of relabeling collection time as issue time.
+            issued_at=None,
             valid_at=reading.measured_at,
+            received_at=reading.received_at,
             wind_u_ms=round(
                 -reading.wind_speed * math.sin(math.radians(reading.wind_direction)), 4
             ),
@@ -433,6 +436,7 @@ def _publish_inner(
                 for forecast in forecasts
             },
         },
+        source_health_run_id=pipeline_run_id,
     )
 
     # Distinct cells, not snapshots: the coarse count includes one snapshot per
@@ -960,21 +964,19 @@ def _hotspot_supporting_signals(
         value_ugm3 = _pm25_value_ugm3(reading.value, reading.unit)
         if value_ugm3 is None:
             continue
-        previous = latest_by_station.get(reading.external_sensor_id)
+        station_id = reading.station_identity
+        previous = latest_by_station.get(station_id)
         if previous is None or reading.measured_at > previous[0].measured_at:
-            latest_by_station[reading.external_sensor_id] = (reading, value_ugm3)
+            latest_by_station[station_id] = (reading, value_ugm3)
 
     stations = tuple(
         StationSignal(
-            station_id=reading.external_sensor_id,
+            station_id=reading.station_identity,
             h3_cell=h3.latlng_to_cell(reading.latitude, reading.longitude, h3_resolution),
             latitude=reading.latitude,
             longitude=reading.longitude,
             measured_at=reading.measured_at,
-            # SensorReading has no ingestion timestamp. The row is known to
-            # exist by this pipeline evaluation, which is the conservative
-            # availability timestamp available from the current schema.
-            available_at=evaluated_at,
+            available_at=reading.received_at or evaluated_at,
             pm25_ugm3=value_ugm3,
             source=reading.source,
             verified=True,
@@ -1440,11 +1442,11 @@ async def run_pipeline(bbox: BoundingBox, *, timestamp: datetime) -> PipelineRep
             True,
             "deferred to the independent satellite-hotspot-scan scheduled job",
         )
-        # FIRMS's available_at is the fetch completion time. Issue the forecast
-        # after that time so only data already fetched can enter its features.
-        issue_timestamp = (
-            max(timestamp, datetime.now(UTC)) if fire_feed_available else timestamp
-        )
+        # Inputs record application receipt time. Stamp the publication after
+        # all collection stages so data fetched during this run is eligible at
+        # issue time, while as-of feature construction still excludes any
+        # records received later.
+        issue_timestamp = max(timestamp, datetime.now(UTC))
         grid_outcome, current_states, sensor_readings = _compute_grid(
             session, settings, bbox, issue_timestamp
         )

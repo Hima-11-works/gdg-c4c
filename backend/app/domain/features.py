@@ -15,7 +15,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Mapping
 
-from app.domain.types import _require_utc, _require_finite
+from app.domain.types import _require_finite, _require_utc
 
 FEATURE_SCHEMA_VERSION = "environmental-v2"
 
@@ -73,6 +73,11 @@ class FeatureQuality:
     coverage_fraction: float = 1.0
     observed_station_count: int = 0
     max_observation_age_hours: float | None = None
+    latest_observation_at: datetime | None = None
+    observation_received_at: datetime | None = None
+    weather_issued_at: datetime | None = None
+    weather_valid_at: datetime | None = None
+    weather_received_at: datetime | None = None
     missing_fields: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
 
@@ -84,6 +89,16 @@ class FeatureQuality:
             _require_finite(self.max_observation_age_hours, "max_observation_age_hours")
             if self.max_observation_age_hours < 0:
                 raise ValueError("max_observation_age_hours must be >= 0")
+        for name in (
+            "latest_observation_at",
+            "observation_received_at",
+            "weather_issued_at",
+            "weather_valid_at",
+            "weather_received_at",
+        ):
+            value = getattr(self, name)
+            if value is not None:
+                _require_utc(value, name)
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,8 +154,9 @@ class WeatherFeature:
     """Issue-specific weather input; valid time is distinct from issue time."""
 
     h3_cell: str
-    issued_at: datetime
+    issued_at: datetime | None
     valid_at: datetime
+    received_at: datetime | None = None
     wind_u_ms: float | None = None
     wind_v_ms: float | None = None
     wind_speed_ms: float | None = None
@@ -154,10 +170,13 @@ class WeatherFeature:
     def __post_init__(self) -> None:
         if not self.h3_cell.strip():
             raise ValueError("h3_cell must not be empty")
-        _require_utc(self.issued_at, "issued_at")
+        if self.issued_at is not None:
+            _require_utc(self.issued_at, "issued_at")
         _require_utc(self.valid_at, "valid_at")
-        if self.valid_at < self.issued_at:
+        if self.issued_at is not None and self.valid_at < self.issued_at:
             raise ValueError("valid_at must not precede issued_at")
+        if self.received_at is not None:
+            _require_utc(self.received_at, "received_at")
         for name in (
             "wind_u_ms",
             "wind_v_ms",

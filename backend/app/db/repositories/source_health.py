@@ -24,7 +24,12 @@ from typing import Protocol
 from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
 
-from app.models.tables import ingestion_source_health as health_table
+from app.models.tables import (
+    ingestion_source_health as health_table,
+)
+from app.models.tables import (
+    scheduled_job,
+)
 
 #: The five states, in the order an operator triages them. `failed` first
 #: because it is the one that needs a human.
@@ -49,6 +54,16 @@ class SourceHealth:
     latency_ms: int | None
     fetched_at: datetime | None
     error_summary: str | None
+    next_expected_collection_at: datetime | None = None
+
+
+_JOB_KEYS_BY_DATASET = {
+    "openaq": "environmental-pipeline",
+    "openaq-national-overview": "environmental-pipeline",
+    "nasa-firms": "environmental-pipeline",
+    "open-meteo": "environmental-pipeline",
+    "copernicus-sentinel5p-aer-ai": "satellite-hotspot-scan",
+}
 
 
 def classify(
@@ -87,7 +102,9 @@ _COLUMNS = (
 )
 
 
-def _row_to_domain(row) -> SourceHealth:
+def _row_to_domain(
+    row, *, next_expected_collection_at: datetime | None = None
+) -> SourceHealth:
     return SourceHealth(
         dataset_id=row.dataset_id,
         status=row.status,
@@ -95,6 +112,13 @@ def _row_to_domain(row) -> SourceHealth:
         latency_ms=row.latency_ms,
         fetched_at=row.fetched_at,
         error_summary=row.error_summary,
+        next_expected_collection_at=next_expected_collection_at,
+    )
+
+
+def _scheduled_next_times_stmt() -> Select:
+    return select(scheduled_job.c.job_key, scheduled_job.c.next_run_at).where(
+        scheduled_job.c.enabled.is_(True)
     )
 
 
@@ -182,6 +206,8 @@ def _list_latest_run_stmt() -> Select:
 class SourceHealthRepository(Protocol):
     """Only what the read service needs, so a test can pass a two-line stub."""
 
+    def list_for_run(self, pipeline_run_id: str) -> list[SourceHealth]: ...
+
     def list_latest_run(self) -> list[SourceHealth]: ...
 
 
@@ -219,14 +245,36 @@ class SqlSourceHealthRepository:
         return _row_to_domain(row)
 
     def list_for_run(self, pipeline_run_id: str) -> list[SourceHealth]:
-        return [_row_to_domain(row) for row in self._session.execute(
-            _list_for_run_stmt(pipeline_run_id)
-        ).all()]
+        rows = self._session.execute(_list_for_run_stmt(pipeline_run_id)).all()
+        next_times = self._scheduled_next_times()
+        return [
+            _row_to_domain(
+                row,
+                next_expected_collection_at=next_times.get(
+                    _JOB_KEYS_BY_DATASET.get(row.dataset_id, "")
+                ),
+            )
+            for row in rows
+        ]
 
     def list_latest_run(self) -> list[SourceHealth]:
-        return [_row_to_domain(row) for row in self._session.execute(
-            _list_latest_run_stmt()
-        ).all()]
+        rows = self._session.execute(_list_latest_run_stmt()).all()
+        next_times = self._scheduled_next_times()
+        return [
+            _row_to_domain(
+                row,
+                next_expected_collection_at=next_times.get(
+                    _JOB_KEYS_BY_DATASET.get(row.dataset_id, "")
+                ),
+            )
+            for row in rows
+        ]
+
+    def _scheduled_next_times(self) -> dict[str, datetime]:
+        return {
+            row.job_key: row.next_run_at
+            for row in self._session.execute(_scheduled_next_times_stmt()).all()
+        }
 
 
 __all__ = [

@@ -43,6 +43,10 @@ def _parse_datetime(value: datetime | str) -> datetime:
     return parsed.astimezone(UTC)
 
 
+def _optional_datetime(value: datetime | str | None) -> datetime | None:
+    return None if value is None else _parse_datetime(value)
+
+
 def _dedupe_refs(refs: Sequence[DatasetRef]) -> tuple[DatasetRef, ...]:
     result: list[DatasetRef] = []
     seen: set[str] = set()
@@ -53,12 +57,38 @@ def _dedupe_refs(refs: Sequence[DatasetRef]) -> tuple[DatasetRef, ...]:
     return tuple(result)
 
 
+def _reading_preference(
+    reading: SensorReading,
+) -> tuple[bool, datetime, str, str]:
+    """Choose one provider copy for a station/pollutant/observation instant."""
+    return (
+        reading.received_at is not None,
+        reading.received_at or datetime.min.replace(tzinfo=UTC),
+        reading.source,
+        reading.external_sensor_id,
+    )
+
+
 def _mean(values: Sequence[float]) -> float | None:
     return None if not values else sum(values) / len(values)
 
 
 def _angular_distance(first: float, second: float) -> float:
     return abs((first - second + 180.0) % 360.0 - 180.0)
+
+
+def _weather_was_available(sample: WeatherFeature, issued_at: datetime) -> bool:
+    if sample.issued_at is not None and sample.issued_at > issued_at:
+        return False
+    if sample.received_at is not None:
+        return sample.received_at <= issued_at
+    if sample.issued_at is not None:
+        return True
+    # Legacy or manually supplied records without either an upstream issue
+    # time or an application receipt time can only be treated as available
+    # after their valid time. In particular, do not leak a future weather
+    # forecast into an older as-of snapshot.
+    return sample.valid_at <= issued_at
 
 
 def _vector_dict(vector: CellFeatureVector) -> dict[str, float | None]:
@@ -129,9 +159,18 @@ def _quality_dict(quality: FeatureQuality) -> dict[str, Any]:
         "coverage_fraction": quality.coverage_fraction,
         "observed_station_count": quality.observed_station_count,
         "max_observation_age_hours": quality.max_observation_age_hours,
+        "latest_observation_at": _serialize_datetime(quality.latest_observation_at),
+        "observation_received_at": _serialize_datetime(quality.observation_received_at),
+        "weather_issued_at": _serialize_datetime(quality.weather_issued_at),
+        "weather_valid_at": _serialize_datetime(quality.weather_valid_at),
+        "weather_received_at": _serialize_datetime(quality.weather_received_at),
         "missing_fields": list(quality.missing_fields),
         "warnings": list(quality.warnings),
     }
+
+
+def _serialize_datetime(value: datetime | None) -> str | None:
+    return value.isoformat().replace("+00:00", "Z") if value is not None else None
 
 
 def feature_snapshot_to_dict(snapshot: FeatureSnapshot) -> dict[str, Any]:
@@ -200,6 +239,11 @@ def feature_snapshot_from_dict(value: Mapping[str, Any]) -> FeatureSnapshot:
                 if quality.get("max_observation_age_hours") is not None
                 else None
             ),
+            latest_observation_at=_optional_datetime(quality.get("latest_observation_at")),
+            observation_received_at=_optional_datetime(quality.get("observation_received_at")),
+            weather_issued_at=_optional_datetime(quality.get("weather_issued_at")),
+            weather_valid_at=_optional_datetime(quality.get("weather_valid_at")),
+            weather_received_at=_optional_datetime(quality.get("weather_received_at")),
             missing_fields=tuple(quality.get("missing_fields", ())),
             warnings=tuple(quality.get("warnings", ())),
         ),
@@ -262,12 +306,27 @@ class FeatureBuilder:
             raise ValueError("valid_at must not precede issued_at")
         if horizon_hours < 0:
             raise ValueError("horizon_hours must be >= 0")
-        readings_by_cell: dict[str, list[SensorReading]] = {}
+        readings_by_cell: dict[
+            str, dict[tuple[str, str, datetime], SensorReading]
+        ] = defaultdict(dict)
         for reading in sensor_readings:
             cell = cell_for(reading.latitude, reading.longitude, resolution=self.resolution)
-            readings_by_cell.setdefault(cell, []).append(reading)
-        for readings in readings_by_cell.values():
-            readings.sort(key=lambda reading: reading.measured_at)
+            key = (reading.station_identity, reading.pollutant, reading.measured_at)
+            current = readings_by_cell[cell].get(key)
+            if current is None or _reading_preference(reading) > _reading_preference(current):
+                readings_by_cell[cell][key] = reading
+        ordered_readings_by_cell = {
+            cell: sorted(
+                readings.values(),
+                key=lambda reading: (
+                    reading.measured_at,
+                    reading.station_identity,
+                    reading.source,
+                    reading.external_sensor_id,
+                ),
+            )
+            for cell, readings in readings_by_cell.items()
+        }
         static_by_cell = {features.h3_cell: features for features in static_features}
         weather_index = _WeatherFeatureIndex(
             weather_features or (), max_distance_km=self.max_weather_distance_km
@@ -280,7 +339,7 @@ class FeatureBuilder:
                     issued_at=issued_at,
                     valid_at=valid_at,
                     horizon_hours=horizon_hours,
-                    readings=readings_by_cell.get(cell, ()),
+                    readings=ordered_readings_by_cell.get(cell, ()),
                     weather=weather_index,
                     static=static_by_cell.get(cell),
                     traffic=traffic_observations,
@@ -356,7 +415,6 @@ class FeatureBuilder:
             weather_age = (valid_at - current_weather.valid_at).total_seconds() / 3600
             if weather_age > self.max_observation_age_hours:
                 warnings.add("weather_stale")
-            ages.append(max(0.0, weather_age))
         rain_1h = self._rain_sum(weather_series, valid_at, 1)
         rain_6h = self._rain_sum(weather_series, valid_at, 6)
         rain_24h = self._rain_sum(weather_series, valid_at, 24)
@@ -435,9 +493,17 @@ class FeatureBuilder:
         quality = FeatureQuality(
             coverage_fraction=coverage,
             observed_station_count=len(
-                {reading.external_sensor_id for reading in eligible_readings}
+                {
+                    reading.station_identity
+                    for reading in eligible_readings
+                }
             ),
             max_observation_age_hours=max(ages) if ages else None,
+            latest_observation_at=latest.measured_at if latest else None,
+            observation_received_at=latest.received_at if latest else None,
+            weather_issued_at=current_weather.issued_at if current_weather else None,
+            weather_valid_at=current_weather.valid_at if current_weather else None,
+            weather_received_at=current_weather.received_at if current_weather else None,
             missing_fields=tuple(sorted(missing)),
             warnings=tuple(sorted(warnings)),
         )
@@ -469,7 +535,7 @@ class FeatureBuilder:
                 (
                     sample
                     for sample in weather.by_cell_time.get((cell, sample_valid_at), ())
-                    if sample.issued_at <= issued_at
+                    if _weather_was_available(sample, issued_at)
                 ),
                 None,
             )
@@ -490,7 +556,7 @@ class FeatureBuilder:
                             target_bucket[2] + dz,
                         )
                         for order, sample, point in buckets.get(bucket, ()):
-                            if sample.issued_at > issued_at:
+                            if not _weather_was_available(sample, issued_at):
                                 continue
                             distance = target.distance_km(point)
                             if distance > self.max_weather_distance_km:

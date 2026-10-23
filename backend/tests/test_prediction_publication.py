@@ -8,6 +8,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.deps import get_prediction_query_service
+from app.db.repositories.prediction_publication import (
+    _quality_from_values,
+    _quality_values,
+    _row_to_run,
+    _run_values,
+)
 from app.domain.features import (
     CellFeatureVector,
     DataMode,
@@ -16,7 +22,12 @@ from app.domain.features import (
     FeatureSnapshot,
     InputKind,
 )
-from app.domain.prediction import AlertCandidate, PredictionResult, PredictionRun
+from app.domain.prediction import (
+    AlertCandidate,
+    PredictionInputQuality,
+    PredictionResult,
+    PredictionRun,
+)
 from app.main import create_app
 from app.services.prediction_publication import (
     PredictionPublicationService,
@@ -160,6 +171,65 @@ def test_publication_carries_baseline_and_rejects_synthetic_live_inputs():
     assert rows[1].synthetic is True
     assert rows[0].confidence == 0.91
     assert rows[1].confidence == 0.74
+
+
+def test_input_quality_counts_supported_native_cells_only():
+    now = datetime(2026, 9, 22, tzinfo=UTC)
+    native = h3.latlng_to_cell(28.6, 77.1, 8)
+    other_native = h3.grid_disk(native, 1)[1]
+    coarse = h3.cell_to_parent(native, 7)
+    snapshots = [
+        _snapshot(native, 0, now),
+        _snapshot(other_native, 0, now, pm25=None),
+        _snapshot(coarse, 0, now),
+    ]
+
+    run, _rows = PredictionPublicationService(MemoryPublicationRepository()).publish(
+        run_id="input-quality",
+        feature_run_id="features-input-quality",
+        region="india",
+        mode=DataMode.DEMO,
+        generated_at=now,
+        snapshots=snapshots,
+    )
+
+    assert run.input_quality is not None
+    assert run.input_quality.supported_cells == 1
+    assert run.input_quality.expected_cells == 2
+    assert run.input_quality.completeness_fraction == 0.5
+
+
+def test_publication_storage_round_trips_input_evidence_and_timestamps():
+    now = datetime(2026, 9, 22, tzinfo=UTC)
+    quality = FeatureQuality(
+        latest_observation_at=now - timedelta(hours=2),
+        observation_received_at=now - timedelta(hours=1, minutes=50),
+        weather_issued_at=None,
+        weather_valid_at=now - timedelta(minutes=30),
+        weather_received_at=now - timedelta(minutes=20),
+    )
+    run = PredictionRun(
+        run_id="evidence-round-trip",
+        generated_at=now,
+        region="india",
+        mode=DataMode.LIVE,
+        feature_run_id="features-evidence",
+        feature_schema_version="environmental-v2",
+        source_health_run_id="pipeline-evidence",
+        input_quality=PredictionInputQuality(
+            supported_cells=8,
+            expected_cells=10,
+            max_observation_age_hours=2.0,
+            unavailable_reasons=("partial_current_pm25_source_support",),
+        ),
+    )
+
+    restored_run = _row_to_run(SimpleNamespace(**_run_values(run)))
+    restored_quality = _quality_from_values(_quality_values(quality))
+
+    assert restored_run.source_health_run_id == "pipeline-evidence"
+    assert restored_run.input_quality == run.input_quality
+    assert restored_quality == quality
 
 
 def test_modeled_current_snapshot_keeps_interpolated_value_and_provenance():

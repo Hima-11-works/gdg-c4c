@@ -180,9 +180,13 @@ class SensorReading:
     unit: str
     measured_at: datetime
     id: int | None = None
+    canonical_station_id: str | None = None
+    received_at: datetime | None = None
 
     def __post_init__(self) -> None:
         _require_utc(self.measured_at, "measured_at")
+        if self.received_at is not None:
+            _require_utc(self.received_at, "received_at")
         _require_finite(self.value, "value")
         if not -90 <= self.latitude <= 90:
             raise ValueError(f"latitude out of range: {self.latitude}")
@@ -190,6 +194,15 @@ class SensorReading:
             raise ValueError(f"longitude out of range: {self.longitude}")
         if not self.pollutant:
             raise ValueError("pollutant must not be empty")
+        if self.canonical_station_id is not None and not self.canonical_station_id.strip():
+            raise ValueError("canonical_station_id must not be empty when supplied")
+
+    @property
+    def station_identity(self) -> str:
+        """Stable cross-provider station key, with a source-scoped fallback."""
+        if self.canonical_station_id is not None:
+            return self.canonical_station_id
+        return f"{self.source}:{self.external_sensor_id}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,9 +221,12 @@ class WeatherReading:
     humidity: float | None = None
     id: int | None = None
     source: str = "open-meteo"
+    received_at: datetime | None = None
 
     def __post_init__(self) -> None:
         _require_utc(self.measured_at, "measured_at")
+        if self.received_at is not None:
+            _require_utc(self.received_at, "received_at")
         if not self.source.strip():
             raise ValueError("source must not be empty")
         _require_valid_weather_values(self.wind_speed, self.wind_direction, self.precipitation)

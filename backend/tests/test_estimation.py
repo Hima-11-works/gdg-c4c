@@ -37,6 +37,7 @@ def _sensor(
     *,
     measured_at: datetime = TIMESTAMP,
     source: str = "openaq",
+    canonical_station_id: str | None = None,
 ) -> SensorReading:
     return SensorReading(
         source=source,
@@ -47,6 +48,7 @@ def _sensor(
         value=value,
         unit="ug/m3",
         measured_at=measured_at,
+        canonical_station_id=canonical_station_id,
     )
 
 
@@ -185,6 +187,32 @@ def test_exactly_min_sensors_within_range_produces_a_value() -> None:
 
     assert result.pm25 is not None
     assert result.confidence > 0.0
+
+
+def test_canonical_station_reported_by_two_sources_counts_once() -> None:
+    sensors = [
+        _sensor(
+            "openaq-id",
+            _point_km_north(2.0),
+            10.0,
+            source="openaq",
+            canonical_station_id="shared-station-1",
+        ),
+        _sensor(
+            "cpcb-id",
+            _point_km_north(3.0),
+            20.0,
+            source="cpcb",
+            canonical_station_id="shared-station-1",
+        ),
+    ]
+
+    [result] = _idw(max_distance_km=20.0, min_sensors=2).estimate(
+        [CELL], sensors, timestamp=TIMESTAMP
+    )
+
+    assert result.pm25 is None
+    assert result.confidence == 0.0
 
 
 def test_sensor_exactly_at_max_distance_boundary_is_included() -> None:

@@ -7,7 +7,7 @@ can be compiled and asserted on in tests without a database connection
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from geoalchemy2.elements import WKTElement
 from psycopg.errors import UniqueViolation
@@ -34,6 +34,8 @@ _COLUMNS = (
     sensor_reading_table.c.value,
     sensor_reading_table.c.unit,
     sensor_reading_table.c.measured_at,
+    sensor_reading_table.c.canonical_station_id,
+    sensor_reading_table.c.received_at,
 )
 
 
@@ -52,6 +54,8 @@ def _row_to_domain(row: Row) -> SensorReading:
         value=row.value,
         unit=row.unit,
         measured_at=row.measured_at,
+        canonical_station_id=row.canonical_station_id,
+        received_at=row.received_at,
     )
 
 
@@ -68,6 +72,8 @@ def _insert_stmt(reading: SensorReading) -> Insert:
             value=reading.value,
             unit=reading.unit,
             measured_at=reading.measured_at,
+            canonical_station_id=reading.canonical_station_id,
+            received_at=reading.received_at or datetime.now(UTC),
         )
         .returning(*_COLUMNS)
     )
@@ -149,6 +155,8 @@ class SqlSensorReadingRepository:
                 "value": reading.value,
                 "unit": reading.unit,
                 "measured_at": reading.measured_at,
+                "canonical_station_id": reading.canonical_station_id,
+                "received_at": reading.received_at or datetime.now(UTC),
             }
             for reading in readings
         ]

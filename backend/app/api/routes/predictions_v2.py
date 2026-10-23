@@ -21,9 +21,9 @@ from app.api.schemas_v2 import (
     ForecastV2Out,
     GridCurrentV2Out,
     MetaV2Out,
-    SourceHealthOut,
     PredictionMetadataOut,
     QualityFlagsOut,
+    SourceHealthOut,
     StaticFeaturesV2Out,
     V2Envelope,
     WeatherV2Out,
@@ -34,13 +34,13 @@ from app.domain.h3_grid import assert_valid_cell
 from app.domain.prediction import PredictionRun
 from app.domain.published_alerts import PublishedAlertIdentity
 from app.domain.types import BoundingBox
+from app.services.grid_query import resolve_cells
 from app.services.prediction_queries import (
     DEFAULT_EXPOSURE_THRESHOLD_PM25,
     ExposureSummary,
     PredictionCellView,
     PredictionQueryService,
 )
-from app.services.grid_query import resolve_cells
 from app.services.published_alerts import ALERT_WARNING_PM25, classify_published_alert
 
 router = APIRouter(prefix="/api/v2", tags=["environmental predictions v2"])
@@ -102,6 +102,11 @@ def _quality(view: PredictionCellView) -> QualityFlagsOut:
         coverage_fraction=view.quality.coverage_fraction,
         observed_station_count=view.quality.observed_station_count,
         max_observation_age_hours=view.quality.max_observation_age_hours,
+        latest_observation_at=view.quality.latest_observation_at,
+        observation_received_at=view.quality.observation_received_at,
+        weather_issued_at=view.quality.weather_issued_at,
+        weather_valid_at=view.quality.weather_valid_at,
+        weather_received_at=view.quality.weather_received_at,
         missing_fields=list(view.quality.missing_fields),
         warnings=list(view.quality.warnings),
     )
@@ -153,9 +158,10 @@ def _metadata(run: PredictionRun, view: PredictionCellView) -> PredictionMetadat
         model_version=view.model_version,
         feature_schema_version=view.feature_schema_version,
         dataset_versions=_refs(view.dataset_refs),
-        observed_at=None,
-        issued_at=run.generated_at,
-        valid_at=view.valid_at,
+        observed_at=view.quality.latest_observation_at,
+        received_at=view.quality.observation_received_at,
+        issued_at=view.quality.weather_issued_at,
+        valid_at=view.quality.weather_valid_at or view.valid_at,
         synthetic=view.synthetic,
         quality=_quality(view),
         limitations=_forecast_limitations(view),
@@ -682,6 +688,13 @@ def get_meta_v2(
     service: PredictionQueryService = Depends(get_prediction_query_service),
 ) -> MetaV2Out:
     run = _run_or_404(service, run_id)
+    input_quality = run.input_quality
+    collector_health = service.collector_health()
+    scheduled_times = [
+        row.next_expected_collection_at
+        for row in collector_health
+        if row.next_expected_collection_at is not None
+    ]
     return MetaV2Out(
         region=run.region,
         latest_run_id=run.run_id,
@@ -709,6 +722,21 @@ def get_meta_v2(
         is_fallback=service.is_fallback(run),
         fallback_reason=service.fallback_reason(run),
         age_seconds=service.age_seconds(run),
+        max_input_observation_age_seconds=service.input_age_seconds(run),
+        source_support_fraction=(
+            input_quality.completeness_fraction if input_quality is not None else None
+        ),
+        supported_native_cells=(
+            input_quality.supported_cells if input_quality is not None else None
+        ),
+        expected_native_cells=(
+            input_quality.expected_cells if input_quality is not None else None
+        ),
+        unavailable_reasons=(
+            list(input_quality.unavailable_reasons) if input_quality is not None else []
+        ),
+        source_health_run_id=run.source_health_run_id,
+        next_expected_collection_at=min(scheduled_times) if scheduled_times else None,
         is_stale=service.is_stale(run),
         source_health=[
             SourceHealthOut(
@@ -718,7 +746,20 @@ def get_meta_v2(
                 latency_ms=row.latency_ms,
                 fetched_at=row.fetched_at,
                 error_summary=row.error_summary,
+                next_expected_collection_at=row.next_expected_collection_at,
             )
             for row in service.source_health(run)
+        ],
+        collector_health=[
+            SourceHealthOut(
+                dataset_id=row.dataset_id,
+                status=row.status,
+                item_count=row.item_count,
+                latency_ms=row.latency_ms,
+                fetched_at=row.fetched_at,
+                error_summary=row.error_summary,
+                next_expected_collection_at=row.next_expected_collection_at,
+            )
+            for row in collector_health
         ],
     )

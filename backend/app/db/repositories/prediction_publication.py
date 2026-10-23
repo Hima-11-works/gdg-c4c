@@ -11,7 +11,12 @@ from sqlalchemy.engine import Row
 from sqlalchemy.orm import Session
 
 from app.domain.features import DataMode, DatasetRef, FeatureQuality, InputKind
-from app.domain.prediction import AlertCandidate, PredictionResult, PredictionRun
+from app.domain.prediction import (
+    AlertCandidate,
+    PredictionInputQuality,
+    PredictionResult,
+    PredictionRun,
+)
 from app.models.tables import prediction_result, prediction_run
 
 _RESULT_CHUNK_SIZE = 2_000
@@ -47,27 +52,47 @@ def _refs_from_values(values: list[dict[str, str]]) -> tuple[DatasetRef, ...]:
 
 
 def _quality_values(quality: FeatureQuality) -> dict:
+    def timestamp(value: datetime | None) -> str | None:
+        return value.isoformat().replace("+00:00", "Z") if value is not None else None
+
     return {
         "coverage_fraction": quality.coverage_fraction,
         "observed_station_count": quality.observed_station_count,
         "max_observation_age_hours": quality.max_observation_age_hours,
+        "latest_observation_at": timestamp(quality.latest_observation_at),
+        "observation_received_at": timestamp(quality.observation_received_at),
+        "weather_issued_at": timestamp(quality.weather_issued_at),
+        "weather_valid_at": timestamp(quality.weather_valid_at),
+        "weather_received_at": timestamp(quality.weather_received_at),
         "missing_fields": list(quality.missing_fields),
         "warnings": list(quality.warnings),
     }
 
 
 def _quality_from_values(value: dict) -> FeatureQuality:
+    def timestamp(name: str) -> datetime | None:
+        raw = value.get(name)
+        if raw is None or isinstance(raw, datetime):
+            return raw
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+
     return FeatureQuality(
         coverage_fraction=value["coverage_fraction"],
         observed_station_count=value["observed_station_count"],
-        max_observation_age_hours=value["max_observation_age_hours"],
-        missing_fields=tuple(value["missing_fields"]),
-        warnings=tuple(value["warnings"]),
+        max_observation_age_hours=value.get("max_observation_age_hours"),
+        latest_observation_at=timestamp("latest_observation_at"),
+        observation_received_at=timestamp("observation_received_at"),
+        weather_issued_at=timestamp("weather_issued_at"),
+        weather_valid_at=timestamp("weather_valid_at"),
+        weather_received_at=timestamp("weather_received_at"),
+        missing_fields=tuple(value.get("missing_fields", ())),
+        warnings=tuple(value.get("warnings", ())),
     )
 
 
 def _run_values(run: PredictionRun) -> dict:
     published_at = run.published_at or datetime.now(UTC)
+    input_quality = run.input_quality
     return {
         "id": run.run_id,
         "generated_at": run.generated_at,
@@ -79,6 +104,17 @@ def _run_values(run: PredictionRun) -> dict:
         "model_versions": list(run.model_versions),
         "scenario_id": run.scenario_id,
         "dataset_refs": [_ref_values(ref) for ref in run.dataset_refs],
+        "source_health_run_id": run.source_health_run_id,
+        "input_quality": (
+            {
+                "supported_cells": input_quality.supported_cells,
+                "expected_cells": input_quality.expected_cells,
+                "max_observation_age_hours": input_quality.max_observation_age_hours,
+                "unavailable_reasons": list(input_quality.unavailable_reasons),
+            }
+            if input_quality is not None
+            else None
+        ),
     }
 
 
@@ -107,6 +143,17 @@ def _result_values(result: PredictionResult) -> dict:
 
 
 def _row_to_run(row: Row) -> PredictionRun:
+    input_quality_value = row.input_quality
+    input_quality = (
+        PredictionInputQuality(
+            supported_cells=int(input_quality_value["supported_cells"]),
+            expected_cells=int(input_quality_value["expected_cells"]),
+            max_observation_age_hours=input_quality_value.get("max_observation_age_hours"),
+            unavailable_reasons=tuple(input_quality_value.get("unavailable_reasons", ())),
+        )
+        if input_quality_value is not None
+        else None
+    )
     return PredictionRun(
         run_id=row.id,
         generated_at=row.generated_at,
@@ -118,6 +165,8 @@ def _row_to_run(row: Row) -> PredictionRun:
         model_versions=tuple(row.model_versions),
         scenario_id=row.scenario_id,
         dataset_refs=_refs_from_values(row.dataset_refs),
+        source_health_run_id=row.source_health_run_id,
+        input_quality=input_quality,
     )
 
 
@@ -269,6 +318,8 @@ class SqlPredictionPublicationRepository:
                     and existing_run.model_versions == run.model_versions
                     and existing_run.scenario_id == run.scenario_id
                     and existing_run.dataset_refs == run.dataset_refs
+                    and existing_run.source_health_run_id == run.source_health_run_id
+                    and existing_run.input_quality == run.input_quality
                 )
                 persisted = self.list_results(run.run_id)
                 def by_identity(rows):

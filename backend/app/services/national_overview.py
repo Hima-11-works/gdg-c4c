@@ -311,7 +311,15 @@ def _build_live_overview(
                 quality=FeatureQuality(
                     coverage_fraction=0.2,
                     observed_station_count=len(
-                        {reading.external_sensor_id for reading in readings}
+                        {
+                            reading.station_identity
+                            for reading in readings
+                        }
+                    ),
+                    latest_observation_at=max(reading.measured_at for reading in readings),
+                    observation_received_at=max(
+                        (reading.received_at for reading in readings if reading.received_at),
+                        default=None,
                     ),
                     max_observation_age_hours=max_age,
                     missing_fields=(

@@ -27,7 +27,7 @@ from app.db.repositories.source_health import (
     SourceHealth,
     classify,
 )
-from app.domain.prediction import DataMode, PredictionRun
+from app.domain.prediction import DataMode, PredictionInputQuality, PredictionRun
 from app.services.prediction_queries import (
     STALE_RUN_SECONDS,
     PredictionQueryService,
@@ -40,6 +40,8 @@ def _run(
     *,
     run_id: str = "run-20260101T0000Z",
     age_seconds: float = 0.0,
+    source_health_run_id: str | None = None,
+    input_quality: PredictionInputQuality | None = None,
 ) -> PredictionRun:
     return PredictionRun(
         run_id=run_id,
@@ -48,6 +50,8 @@ def _run(
         mode=DataMode.DEMO,
         feature_run_id="feat-1",
         feature_schema_version="1",
+        source_health_run_id=source_health_run_id,
+        input_quality=input_quality,
     )
 
 
@@ -65,10 +69,19 @@ class _StubPublicationRepo:
 
 
 class _StubHealthRepo:
-    """The two-line stub the repository protocol exists to allow."""
+    """In-memory pinned evidence and latest collector diagnostics."""
 
-    def __init__(self, rows: list[SourceHealth]) -> None:
+    def __init__(
+        self,
+        rows: list[SourceHealth],
+        *,
+        by_run: dict[str, list[SourceHealth]] | None = None,
+    ) -> None:
         self._rows = rows
+        self._by_run = by_run or {}
+
+    def list_for_run(self, pipeline_run_id: str) -> list[SourceHealth]:
+        return self._by_run.get(pipeline_run_id, self._rows)
 
     def list_latest_run(self) -> list[SourceHealth]:
         return self._rows
@@ -179,6 +192,33 @@ def test_stale_fallback_is_still_a_fallback() -> None:
     assert service.is_stale(old, now=NOW) is True
 
 
+def test_input_observation_age_is_added_to_publication_age() -> None:
+    service = PredictionQueryService(_StubPublicationRepo())
+    quality = PredictionInputQuality(
+        supported_cells=1,
+        expected_cells=1,
+        max_observation_age_hours=23.6,
+    )
+    run = _run(age_seconds=30 * 60, input_quality=quality)
+
+    assert service.input_age_seconds(run, now=NOW) == pytest.approx(24.1 * 3600)
+    assert service.is_stale(run, now=NOW) is True
+
+
+def test_receipt_of_an_old_observation_does_not_make_it_fresh() -> None:
+    service = PredictionQueryService(_StubPublicationRepo())
+    quality = PredictionInputQuality(
+        supported_cells=1,
+        expected_cells=1,
+        max_observation_age_hours=25,
+    )
+    run = _run(input_quality=quality)
+
+    # Receipt time is deliberately not part of the source observation age.
+    assert service.input_age_seconds(run, now=NOW) == pytest.approx(25 * 3600)
+    assert service.is_stale(run, now=NOW) is True
+
+
 # --- envelope: source health ---------------------------------------------
 
 
@@ -194,7 +234,8 @@ def test_source_health_is_passed_through_when_present() -> None:
     service = PredictionQueryService(
         _StubPublicationRepo(), source_health=_StubHealthRepo(rows)
     )
-    assert service.source_health() == rows
+    run = _run(source_health_run_id="pipeline-1")
+    assert service.source_health(run) == rows
 
 
 def test_a_failed_source_is_visible_rather_than_absent() -> None:
@@ -204,9 +245,21 @@ def test_a_failed_source_is_visible_rather_than_absent() -> None:
     service = PredictionQueryService(
         _StubPublicationRepo(), source_health=_StubHealthRepo(rows)
     )
-    [reported] = service.source_health()
+    [reported] = service.source_health(_run(source_health_run_id="pipeline-1"))
     assert reported.status == STATUS_FAILED
     assert reported.status != STATUS_MISSING
+
+
+def test_new_collector_failure_does_not_rewrite_pinned_run_evidence() -> None:
+    pinned = [_health("openaq", STATUS_PRESENT, 4)]
+    latest = [_health("openaq", STATUS_FAILED, 0)]
+    service = PredictionQueryService(
+        _StubPublicationRepo(),
+        source_health=_StubHealthRepo(latest, by_run={"pipeline-1": pinned}),
+    )
+
+    assert service.source_health(_run(source_health_run_id="pipeline-1")) == pinned
+    assert service.collector_health() == latest
 
 
 # --- pipeline resilience --------------------------------------------------
@@ -336,8 +389,8 @@ def test_run_ids_sort_chronologically() -> None:
 def test_alerts_are_pinned_to_the_run_that_raised_them() -> None:
     """An alert must name the run that produced it, or it cannot be traced."""
     from app.core.config import Settings
+    from app.domain.types import AlertSeverity, Forecast, GridState
     from app.services.alert_generation import AlertGenerationService
-    from app.domain.types import AlertSeverity, GridState, Forecast
 
     class _RecordingAlerts:
         def __init__(self) -> None:
@@ -387,8 +440,8 @@ def test_alerts_are_pinned_to_the_run_that_raised_them() -> None:
 def test_an_alert_raised_outside_a_run_is_unpinned_not_invented() -> None:
     """A null run_id is honest; a made-up one is a lie about provenance."""
     from app.core.config import Settings
-    from app.services.alert_generation import AlertGenerationService
     from app.domain.types import GridState
+    from app.services.alert_generation import AlertGenerationService
 
     class _RecordingAlerts:
         def __init__(self) -> None:

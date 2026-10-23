@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import fields
+from datetime import datetime
 
 from sqlalchemy import Select, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -19,6 +20,12 @@ from app.domain.features import (
 from app.models.tables import cell_feature_snapshot as feature_snapshot_table
 
 
+def _optional_datetime(value: datetime | str | None) -> datetime | None:
+    if value is None or isinstance(value, datetime):
+        return value
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
 def _vector_values(snapshot: FeatureSnapshot) -> dict[str, float | None]:
     return {
         field.name: getattr(snapshot.vector, field.name)
@@ -32,6 +39,31 @@ def _quality_values(snapshot: FeatureSnapshot) -> dict:
         "coverage_fraction": quality.coverage_fraction,
         "observed_station_count": quality.observed_station_count,
         "max_observation_age_hours": quality.max_observation_age_hours,
+        "latest_observation_at": (
+            quality.latest_observation_at.isoformat().replace("+00:00", "Z")
+            if quality.latest_observation_at
+            else None
+        ),
+        "observation_received_at": (
+            quality.observation_received_at.isoformat().replace("+00:00", "Z")
+            if quality.observation_received_at
+            else None
+        ),
+        "weather_issued_at": (
+            quality.weather_issued_at.isoformat().replace("+00:00", "Z")
+            if quality.weather_issued_at
+            else None
+        ),
+        "weather_valid_at": (
+            quality.weather_valid_at.isoformat().replace("+00:00", "Z")
+            if quality.weather_valid_at
+            else None
+        ),
+        "weather_received_at": (
+            quality.weather_received_at.isoformat().replace("+00:00", "Z")
+            if quality.weather_received_at
+            else None
+        ),
         "missing_fields": list(quality.missing_fields),
         "warnings": list(quality.warnings),
     }
@@ -120,7 +152,12 @@ def _row_to_domain(row: Row) -> FeatureSnapshot:
         quality=FeatureQuality(
             coverage_fraction=quality["coverage_fraction"],
             observed_station_count=quality["observed_station_count"],
-            max_observation_age_hours=quality["max_observation_age_hours"],
+            max_observation_age_hours=quality.get("max_observation_age_hours"),
+            latest_observation_at=_optional_datetime(quality.get("latest_observation_at")),
+            observation_received_at=_optional_datetime(quality.get("observation_received_at")),
+            weather_issued_at=_optional_datetime(quality.get("weather_issued_at")),
+            weather_valid_at=_optional_datetime(quality.get("weather_valid_at")),
+            weather_received_at=_optional_datetime(quality.get("weather_received_at")),
             missing_fields=tuple(quality["missing_fields"]),
             warnings=tuple(quality["warnings"]),
         ),

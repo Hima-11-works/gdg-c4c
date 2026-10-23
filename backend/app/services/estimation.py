@@ -72,13 +72,12 @@ class IDWPollutionEstimator:
         *,
         timestamp: datetime,
     ) -> list[GridState]:
-        latest_by_station: dict[tuple[str, str, str], SensorReading] = {}
+        latest_by_station: dict[tuple[str, str], SensorReading] = {}
         for reading in sensor_readings:
             if reading.measured_at > timestamp:
                 continue
             identity = (
-                reading.source,
-                reading.external_sensor_id,
+                reading.station_identity,
                 reading.pollutant,
             )
             previous = latest_by_station.get(identity)

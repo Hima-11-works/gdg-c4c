@@ -23,12 +23,14 @@ def test_list_sensors_uses_demo_data_only_when_demo_mode_is_explicit(
     assert set(first.keys()) == {
         "source",
         "external_sensor_id",
+        "canonical_station_id",
         "latitude",
         "longitude",
         "pollutant",
         "value",
         "unit",
         "measured_at",
+        "received_at",
     }
 
 
@@ -57,11 +59,13 @@ def test_list_sensors_returns_real_data_when_present(
         {
             "source": "openaq",
             "external_sensor_id": "station-1",
+            "canonical_station_id": None,
             "latitude": 1.0,
             "longitude": 2.0,
             "pollutant": "pm25",
             "value": 42.0,
             "unit": "ug/m3",
             "measured_at": "2026-01-01T00:00:00Z",
+            "received_at": None,
         }
     ]

@@ -9,8 +9,10 @@ from dataclasses import fields
 from datetime import datetime
 from pathlib import Path
 
+import h3
+
 from app.domain.features import DataMode, DatasetRef, FeatureSnapshot, InputKind
-from app.domain.prediction import PredictionResult, PredictionRun
+from app.domain.prediction import PredictionInputQuality, PredictionResult, PredictionRun
 from app.domain.repositories import ModelVersionRepository, PredictionPublicationRepository
 from app.domain.training import ModelStatus, ModelVersion
 from app.services.model_training import predict_residual, prediction_interval
@@ -115,6 +117,7 @@ class PredictionPublicationService:
         pdi_factors_by_cell: Mapping[str, Mapping[str, float]] | None = None,
         confidence_by_cell_horizon: Mapping[tuple[str, float], float] | None = None,
         scenario_id: str | None = None,
+        source_health_run_id: str | None = None,
     ) -> tuple[PredictionRun, list[PredictionResult]]:
         if not snapshots:
             raise ValueError("cannot publish a run without feature snapshots")
@@ -129,6 +132,49 @@ class PredictionPublicationService:
         pdi_by_cell = pdi_by_cell or {}
         pdi_factors_by_cell = pdi_factors_by_cell or {}
         confidence_by_cell_horizon = confidence_by_cell_horizon or {}
+        current_snapshots = [snapshot for snapshot in snapshots if snapshot.horizon_hours == 0]
+        if current_snapshots:
+            native_resolution = max(
+                h3.get_resolution(snapshot.h3_cell) for snapshot in current_snapshots
+            )
+            current_snapshots = [
+                snapshot
+                for snapshot in current_snapshots
+                if h3.get_resolution(snapshot.h3_cell) == native_resolution
+            ]
+        supported_cells = {
+            snapshot.h3_cell
+            for snapshot in current_snapshots
+            if snapshot.vector.current_pm25 is not None
+            and (
+                snapshot.quality.observed_station_count > 0
+                or confidence_by_cell_horizon.get((snapshot.h3_cell, 0.0), 0.0) > 0
+            )
+        }
+        max_input_age = max(
+            (
+                snapshot.quality.max_observation_age_hours
+                for snapshot in current_snapshots
+                if snapshot.quality.max_observation_age_hours is not None
+            ),
+            default=None,
+        )
+        unavailable_reasons = {
+            reason
+            for snapshot in current_snapshots
+            if snapshot.h3_cell not in supported_cells
+            for reason in snapshot.quality.missing_fields
+        }
+        if len(supported_cells) < len(current_snapshots):
+            unavailable_reasons.add("partial_current_pm25_source_support")
+        if current_snapshots and not supported_cells:
+            unavailable_reasons.add("no_supported_current_pm25_observations")
+        input_quality = PredictionInputQuality(
+            supported_cells=len(supported_cells),
+            expected_cells=len(current_snapshots),
+            max_observation_age_hours=max_input_age,
+            unavailable_reasons=tuple(sorted(unavailable_reasons)),
+        )
         available_models: dict[float, tuple[ModelVersion, dict] | None] = {}
         horizons = sorted({item.horizon_hours for item in snapshots if item.horizon_hours > 0})
         for horizon in horizons:
@@ -221,6 +267,8 @@ class PredictionPublicationService:
             model_versions=tuple(sorted(used_models)),
             scenario_id=scenario_id,
             dataset_refs=all_refs,
+            source_health_run_id=source_health_run_id,
+            input_quality=input_quality,
         )
         self._publication_repository.publish(run, result_rows)
         return run, result_rows

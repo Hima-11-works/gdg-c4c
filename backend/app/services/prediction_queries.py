@@ -112,22 +112,22 @@ class PredictionQueryService:
         self._health = source_health
 
     def source_health(self, run: PredictionRun | None = None) -> list[SourceHealth]:
-        """Per-source health behind the data being served.
+        """Per-source checks recorded for this prediction's input run."""
+        if self._health is None or run is None or run.source_health_run_id is None:
+            return []
+        try:
+            return self._health.list_for_run(run.source_health_run_id)
+        except Exception:
+            # Evidence diagnostics must not make a published read unavailable.
+            return []
 
-        Deliberately *not* run-pinned to `run`. An ingestion run and a
-        prediction run are separate records with no foreign key between them, so
-        correlating them by identity would be a fabrication. This returns the
-        most recent ingestion run's health and is presented as a diagnostic -
-        "was anything actually working when this data was produced" - rather
-        than as provenance for the run itself.
-        """
+    def collector_health(self) -> list[SourceHealth]:
+        """Most recent collector checks, separate from run-pinned evidence."""
         if self._health is None:
             return []
         try:
             return self._health.list_latest_run()
         except Exception:
-            # Health is diagnostic. A read must not fail because the diagnostic
-            # table is unavailable.
             return []
 
     def run(self, run_id: str | None = None) -> PredictionRun:
@@ -179,7 +179,7 @@ class PredictionQueryService:
         )
 
     def age_seconds(self, run: PredictionRun, *, now: datetime | None = None) -> float:
-        """Age of the run's data in seconds. Never negative.
+        """Age of the published prediction run in seconds. Never negative.
 
         Clamped at zero rather than allowed to go negative on a clock skew: a
         negative age would render as a staleness bug when it is really a time
@@ -188,6 +188,15 @@ class PredictionQueryService:
         """
         moment = now or datetime.now(UTC)
         return max(0.0, (moment - run.generated_at).total_seconds())
+
+    def input_age_seconds(
+        self, run: PredictionRun, *, now: datetime | None = None
+    ) -> float | None:
+        """Age of the oldest timestamped observation used by the run, if known."""
+        quality = run.input_quality
+        if quality is None or quality.max_observation_age_hours is None:
+            return None
+        return self.age_seconds(run, now=now) + quality.max_observation_age_hours * 3600
 
     def is_stale(
         self, run: PredictionRun, *, now: datetime | None = None
@@ -200,7 +209,9 @@ class PredictionQueryService:
         question had two implementations and a client could disagree with the
         API about whether data was stale.
         """
-        return self.age_seconds(run, now=now) > STALE_RUN_SECONDS
+        input_age = self.input_age_seconds(run, now=now)
+        age = self.age_seconds(run, now=now) if input_age is None else input_age
+        return age > STALE_RUN_SECONDS
 
     def results(
         self,
@@ -612,6 +623,27 @@ class PredictionQueryService:
                     ) if age is not None),
                     default=None,
                 ),
+                latest_observation_at=min(
+                    (observed_at for observed_at in (
+                        lower.quality.latest_observation_at,
+                        upper.quality.latest_observation_at,
+                    ) if observed_at is not None),
+                    default=None,
+                ),
+                observation_received_at=min(
+                    (received_at for received_at in (
+                        lower.quality.observation_received_at,
+                        upper.quality.observation_received_at,
+                    ) if received_at is not None),
+                    default=None,
+                ),
+                weather_issued_at=(
+                    lower.quality.weather_issued_at
+                    if lower.quality.weather_issued_at == upper.quality.weather_issued_at
+                    else None
+                ),
+                weather_valid_at=lower.quality.weather_valid_at,
+                weather_received_at=lower.quality.weather_received_at,
                 missing_fields=tuple(sorted(set(lower.quality.missing_fields) | set(upper.quality.missing_fields))),
                 warnings=tuple(sorted(
                     set(lower.quality.warnings)
@@ -851,6 +883,34 @@ class PredictionQueryService:
             max_observation_age_hours=max(
                 (row.quality.max_observation_age_hours or 0 for row in rows), default=0
             ) or None,
+            latest_observation_at=min(
+                (row.quality.latest_observation_at for row in rows
+                 if row.quality.latest_observation_at is not None),
+                default=None,
+            ),
+            observation_received_at=min(
+                (row.quality.observation_received_at for row in rows
+                 if row.quality.observation_received_at is not None),
+                default=None,
+            ),
+            weather_issued_at=(
+                rows[0].quality.weather_issued_at
+                if all(
+                    row.quality.weather_issued_at == rows[0].quality.weather_issued_at
+                    for row in rows
+                )
+                else None
+            ),
+            weather_valid_at=min(
+                (row.quality.weather_valid_at for row in rows
+                 if row.quality.weather_valid_at is not None),
+                default=None,
+            ),
+            weather_received_at=min(
+                (row.quality.weather_received_at for row in rows
+                 if row.quality.weather_received_at is not None),
+                default=None,
+            ),
             missing_fields=tuple(sorted({name for row in rows for name in row.quality.missing_fields})),
             warnings=tuple(warnings),
         )

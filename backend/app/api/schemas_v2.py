@@ -43,8 +43,21 @@ class QualityFlagsOut(BaseModel):
     coverage_fraction: float = Field(ge=0, le=1)
     observed_station_count: int = Field(ge=0)
     max_observation_age_hours: float | None = Field(default=None, ge=0)
+    latest_observation_at: datetime | None = None
+    observation_received_at: datetime | None = None
+    weather_issued_at: datetime | None = None
+    weather_valid_at: datetime | None = None
+    weather_received_at: datetime | None = None
     missing_fields: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+    _validate_times = field_validator(
+        "latest_observation_at",
+        "observation_received_at",
+        "weather_issued_at",
+        "weather_valid_at",
+        "weather_received_at",
+    )(_utc)
 
 
 class PredictionMetadataOut(BaseModel):
@@ -56,13 +69,16 @@ class PredictionMetadataOut(BaseModel):
     feature_schema_version: str = Field(min_length=1)
     dataset_versions: list[DatasetRefOut] = Field(default_factory=list)
     observed_at: datetime | None = None
+    received_at: datetime | None = None
     issued_at: datetime | None = None
     valid_at: datetime
     synthetic: bool
     quality: QualityFlagsOut
     limitations: list[str] = Field(default_factory=list)
 
-    _validate_observed_at = field_validator("observed_at", "issued_at", "valid_at")(_utc)
+    _validate_observed_at = field_validator(
+        "observed_at", "received_at", "issued_at", "valid_at"
+    )(_utc)
 
 
 class ExposureOut(BaseModel):
@@ -121,8 +137,9 @@ class WeatherV2Out(BaseModel):
     h3_cell: str = Field(min_length=1)
     latitude: float
     longitude: float
-    issued_at: datetime
+    issued_at: datetime | None
     valid_at: datetime
+    received_at: datetime | None = None
     wind_u_ms: float | None = None
     wind_v_ms: float | None = None
     wind_speed_ms: float | None = Field(default=None, ge=0)
@@ -134,7 +151,7 @@ class WeatherV2Out(BaseModel):
     input_kind: InputKind
     dataset_versions: list[DatasetRefOut] = Field(default_factory=list)
 
-    _validate_times = field_validator("issued_at", "valid_at")(_utc)
+    _validate_times = field_validator("issued_at", "valid_at", "received_at")(_utc)
 
 
 class StaticFeaturesV2Out(BaseModel):
@@ -222,6 +239,9 @@ class SourceHealthOut(BaseModel):
     latency_ms: int | None = None
     fetched_at: datetime | None = None
     error_summary: str | None = None
+    next_expected_collection_at: datetime | None = None
+
+    _validate_times = field_validator("fetched_at", "next_expected_collection_at")(_utc)
 
 
 class MetaV2Out(BaseModel):
@@ -261,8 +281,15 @@ class MetaV2Out(BaseModel):
     )
     age_seconds: float | None = Field(
         default=None,
-        description="How old the underlying data is. Null when unknown."
+        description="How long ago this prediction run was generated."
     )
+    max_input_observation_age_seconds: float | None = Field(default=None, ge=0)
+    source_support_fraction: float | None = Field(default=None, ge=0, le=1)
+    supported_native_cells: int | None = Field(default=None, ge=0)
+    expected_native_cells: int | None = Field(default=None, ge=0)
+    unavailable_reasons: list[str] = Field(default_factory=list)
+    source_health_run_id: str | None = None
+    next_expected_collection_at: datetime | None = None
     is_stale: bool = Field(
         description="True when the data is older than the staleness budget. "
         "Computed here so a client does not have to reimplement the rule and "
@@ -270,8 +297,13 @@ class MetaV2Out(BaseModel):
     )
     source_health: list[SourceHealthOut] = Field(
         default_factory=list,
-        description="Per-source health for the run this data came from. Empty "
-        "when no run has recorded any, which is itself the signal.",
+        description="Per-source health pinned to the prediction input run.",
+    )
+    collector_health: list[SourceHealthOut] = Field(
+        default_factory=list,
+        description="Most recent collector checks, separate from this publication's inputs.",
     )
 
-    _validate_generated_at = field_validator("generated_at")(_utc)
+    _validate_generated_at = field_validator(
+        "generated_at", "next_expected_collection_at"
+    )(_utc)

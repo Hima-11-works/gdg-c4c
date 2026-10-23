@@ -405,7 +405,7 @@ class CellSatelliteService:
                     value_ugm3 = _pm25_value_ugm3(reading)
                     if value_ugm3 is None:
                         continue
-                    key = (reading.source, reading.external_sensor_id)
+                    key = reading.station_identity
                     existing = latest_by_station.get(key)
                     if existing is None or reading.measured_at > existing[0].measured_at:
                         latest_by_station[key] = (reading, value_ugm3)
@@ -439,7 +439,7 @@ class CellSatelliteService:
                         value_ugm3=value_ugm3,
                         is_estimate=False,
                         source=f"Nearest station ({closest.source})",
-                        station_id=closest.external_sensor_id,
+                        station_id=closest.canonical_station_id or closest.external_sensor_id,
                         station_distance_km=round(dist_km, 2),
                         measured_at=closest.measured_at,
                         uncertainty_ugm3=None,
