@@ -86,6 +86,7 @@ from app.services.hotspot_detection import (
     load_case,
     run_case,
 )
+from app.services.impact_evidence import collect_impact_evidence
 from app.services.ingestion import IngestionResult, SensorIngestionService, WeatherIngestionService
 from app.services.media_storage import MediaStoreError, MediaStoreUnavailable, build_media_store
 from app.services.model_operations import (
@@ -1118,6 +1119,32 @@ async def _run_corridor_evaluate(args: argparse.Namespace) -> int:
     return 0 if evaluation.is_usable_as_real_world_evidence else 2
 
 
+async def _run_impact_report(args: argparse.Namespace) -> int:
+    """Write aggregate citizen-report and authority-workflow evidence."""
+    settings = get_settings()
+    end = datetime.now(UTC)
+    start = end - timedelta(days=args.days)
+    session = get_session_factory()()
+    try:
+        report = collect_impact_evidence(
+            session,
+            start=start,
+            end=end,
+            demo_mode=settings.demo_mode,
+        )
+    finally:
+        session.close()
+
+    output = json.dumps(report, indent=2, sort_keys=True)
+    print(output)
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(output + "\n", encoding="utf-8")
+        print(f"Impact evidence written to {out_path}", file=sys.stderr)
+    return 0
+
+
 def evaluation_label_geometry(corridor) -> str:
     return f"{corridor.geometry_source.value} — {corridor.geometry_note}"
 
@@ -1405,6 +1432,20 @@ def main(argv: list[str] | None = None) -> int:
     )
     corridor_parser.add_argument("--out", default=None, help="Write the JSON report here.")
     corridor_parser.set_defaults(func=_run_corridor_evaluate)
+
+    impact_parser = subparsers.add_parser(
+        "impact-report",
+        help="Export aggregate, privacy-safe citizen and authority workflow evidence.",
+    )
+    impact_parser.add_argument(
+        "--days",
+        type=int,
+        default=30,
+        choices=range(1, 3651),
+        help="Look-back window in UTC days (1-3650; default 30).",
+    )
+    impact_parser.add_argument("--out", default=None, help="Also write the JSON report here.")
+    impact_parser.set_defaults(func=_run_impact_report)
 
     federation_parser = subparsers.add_parser(
         "federation-demo",
