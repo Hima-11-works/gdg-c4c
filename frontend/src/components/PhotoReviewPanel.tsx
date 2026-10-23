@@ -47,7 +47,9 @@ export function PhotoReviewPanel({
   const [assessmentLoading, setAssessmentLoading] = useState(false)
   const [geminiInFlightKey, setGeminiInFlightKey] = useState<string | null>(null)
   const [geminiError, setGeminiError] = useState<string | null>(null)
-  const [geminiConsent, setGeminiConsent] = useState(true)
+  // Sending a citizen's photo to an external model requires an affirmative
+  // reviewer action for this evidence item; never pre-check the consent box.
+  const [geminiConsent, setGeminiConsent] = useState(false)
   const loadGeneration = useRef(0)
   const geminiRequestRef = useRef<{ key: string } | null>(null)
   const selectedGeminiKeyRef = useRef<string | null>(null)
