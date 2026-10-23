@@ -45,10 +45,12 @@ class _FakeModel:
     def __init__(self, forecasts: list[Forecast] | None = None, *, error: Exception | None = None):
         self._forecasts = forecasts if forecasts is not None else [_forecast(1), _forecast(3)]
         self._error = error
-        self.calls: list[tuple[list[GridState], list, tuple]] = []
+        self.calls: list[tuple[list[GridState], list, tuple, float]] = []
 
-    def forecast(self, current_state, weather, hours=(1, 3, 6), *, generated_at):
-        self.calls.append((current_state, weather, tuple(hours)))
+    def forecast(
+        self, current_state, weather, hours=(1, 3, 6), *, generated_at, step_minutes=60
+    ):
+        self.calls.append((current_state, weather, tuple(hours), step_minutes))
         if self._error is not None:
             raise self._error
         return ForecastResult(
@@ -94,10 +96,11 @@ def test_run_passes_current_state_and_weather_to_the_model() -> None:
     service.run(generated_at=GENERATED_AT, hours=(1, 3, 6))
 
     assert len(model.calls) == 1
-    current_state, weather, hours = model.calls[0]
+    current_state, weather, hours, step_minutes = model.calls[0]
     assert [state.h3_cell for state in current_state] == [CELL]
     assert weather == []
     assert hours == (1, 3, 6)
+    assert step_minutes == 60
 
 
 def test_run_uses_explicit_current_execution_inputs_without_global_latest_queries(
@@ -127,6 +130,7 @@ def test_run_uses_explicit_current_execution_inputs_without_global_latest_querie
         model, grid_repo, weather_repo, FakeForecastRepository()
     ).run(
         generated_at=GENERATED_AT,
+        step_minutes=15,
         current_states=[current],
         weather_readings=[weather],
     )
@@ -134,6 +138,7 @@ def test_run_uses_explicit_current_execution_inputs_without_global_latest_querie
     assert result.succeeded is True
     assert model.calls[0][0] == [current]
     assert model.calls[0][1] == [weather]
+    assert model.calls[0][3] == 15
 
 
 def test_run_with_no_current_state_is_a_reported_failure_not_an_exception() -> None:
