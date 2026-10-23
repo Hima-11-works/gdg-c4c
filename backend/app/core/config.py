@@ -166,8 +166,12 @@ class Settings(BaseSettings):
     # --- NASA FIRMS hotspot ingestion (app.ingestion.firms) ---
     firms_map_key: SecretStr | None = None
     firms_base_url: str = "https://firms.modaps.eosdis.nasa.gov/api/area/csv"
-    firms_source: str = Field(
-        default="VIIRS_NOAA21_NRT",
+    # Poll both active NOAA VIIRS feeds with one bounded area request each.
+    # FIRMS_SOURCE remains accepted as a legacy single-product override for
+    # deployments that have not yet renamed their environment variable.
+    firms_sources: str = "VIIRS_NOAA21_NRT,VIIRS_NOAA20_NRT"
+    firms_source: str | None = Field(
+        default=None,
         pattern=r"^VIIRS_(NOAA21|NOAA20|SNPP)_NRT$",
     )
     firms_region: str = "delhi-ncr"
@@ -532,6 +536,25 @@ class Settings(BaseSettings):
                 f">= REPORTS_RATE_LIMIT_PER_HOUR ({self.reports_rate_limit_per_hour}) — the "
                 "platform-wide cap below the per-source cap could never be reached."
             )
+        return self
+
+    @property
+    def firms_source_list(self) -> tuple[str, ...]:
+        """Validated FIRMS VIIRS products to poll, preserving configured order."""
+        raw = self.firms_source if self.firms_source is not None else self.firms_sources
+        sources = tuple(part.strip() for part in raw.split(",") if part.strip())
+        allowed = {"VIIRS_NOAA21_NRT", "VIIRS_NOAA20_NRT", "VIIRS_SNPP_NRT"}
+        if not sources:
+            raise ValueError("FIRMS_SOURCES must contain at least one VIIRS product")
+        if any(source not in allowed for source in sources):
+            raise ValueError("FIRMS_SOURCES contains an unsupported VIIRS product")
+        if len(sources) != len(set(sources)):
+            raise ValueError("FIRMS_SOURCES must not contain duplicate products")
+        return sources
+
+    @model_validator(mode="after")
+    def _check_firms_sources(self) -> "Settings":
+        _ = self.firms_source_list
         return self
 
     @model_validator(mode="after")

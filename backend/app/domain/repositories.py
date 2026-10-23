@@ -364,6 +364,10 @@ class FireHotspotRepository(Protocol):
         bbox: BoundingBox | None = None,
     ) -> list[FireHotspot]: ...
 
+    def get_by_detection_id(
+        self, detection_id: str, *, available_by: datetime
+    ) -> FireHotspot | None: ...
+
 
 class FederationRepository(Protocol):
     def save(self, run: FederationRun, participants: list[FederationParticipant]) -> None: ...

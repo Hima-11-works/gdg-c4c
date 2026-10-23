@@ -44,6 +44,9 @@ class _FakeIncidentApi extends IncidentApi {
 
   @override
   Future<List<Map<String, dynamic>>> listHotspotEvents() async => const [];
+
+  @override
+  Future<List<FireDetection>> listFireDetections({double sinceHours = 6}) async => const [];
 }
 
 Incident _incident(int id, ResponderRole role) => Incident(

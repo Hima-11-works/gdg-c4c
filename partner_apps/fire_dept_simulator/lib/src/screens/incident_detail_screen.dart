@@ -31,6 +31,8 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
   List<IncidentEvent> _history = const [];
   Map<int, CitizenReport> _reportsById = const {};
   String? _reportsError;
+  FireDetection? _fireDetection;
+  String? _fireDetectionError;
 
   bool _loading = true;
   ApiException? _loadError;
@@ -62,6 +64,17 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
       // the persisted detail endpoint, not the age-limited active map feed.
       final incident = await widget.api.getIncident(widget.incidentId);
       final history = await widget.api.history(widget.incidentId);
+
+      FireDetection? fireDetection;
+      String? fireDetectionError;
+      if (incident.sourceType == IncidentSourceType.firmsDetection &&
+          incident.sourceRef != null) {
+        try {
+          fireDetection = await widget.api.getFireDetection(incident.sourceRef!);
+        } catch (error) {
+          fireDetectionError = error is ApiException ? error.message : error.toString();
+        }
+      }
 
       final reportsById = <int, CitizenReport>{};
       final reportErrors = <String>[];
@@ -96,6 +109,8 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
         _history = history;
         _reportsById = reportsById;
         _reportsError = reportsError;
+        _fireDetection = fireDetection;
+        _fireDetectionError = fireDetectionError;
         _statusNeedsRefresh = false;
         _loading = false;
       });
@@ -486,6 +501,13 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
             reportsById: _reportsById,
             reportsError: _reportsError,
           ),
+          if (incident.sourceType == IncidentSourceType.firmsDetection) ...[
+            const SizedBox(height: 8),
+            FireDetectionEvidence(
+              detection: _fireDetection,
+              error: _fireDetectionError,
+            ),
+          ],
 
           const SizedBox(height: 16),
 

@@ -28,8 +28,8 @@ Three rules shape everything below:
 
 | Term | Meaning |
 | --- | --- |
-| **Source** | What the incident was created from: a `published_alert`, a persisted fire `alert`, a citizen `fire_report`, or a live `hotspot_event`. |
-| **Source key** | `(source_type, source_id)` for an alert/report, `(source_type, source_ref)` for a published alert or hotspot event. Unique across incidents, so one source can never create two incidents. |
+| **Source** | What the incident was created from: a `published_alert`, a persisted fire `alert`, a citizen `fire_report`, a live `hotspot_event`, or a persisted NASA FIRMS detection. |
+| **Source key** | `(source_type, source_id)` for an alert/report, `(source_type, source_ref)` for a published alert, hotspot event, or FIRMS detection. Unique across incidents, so one source can never create two incidents. |
 | **Status** | The incident's current response state. |
 | **Responder role** | Who may act: `fire_department` or `pollution_control`. |
 | **Actor** | An authenticated responder identity (`actor_id` + role + jurisdiction) resolved server-side. |
@@ -43,14 +43,19 @@ Three rules shape everything below:
 | --- | --- | --- |
 | `published_alert` | the named run/cell/horizon exists in a published v2 run **and** its forecast PM2.5 is ≥ `ALERT_WARNING_PM25` (91 µg/m³) | `pollution_control` |
 | `hotspot_event` | the named persisted event exists, is non-synthetic, and has been confirmed by a pollution-control responder | `pollution_control` |
+| `firms_detection` | the named persisted NASA FIRMS detection exists, is available, and is no older than `FIRMS_STALE_AFTER_HOURS` | `fire_department` |
 | `alert` (persisted v1) | severity is `warning` or `critical` (`watch` is informational) | `pollution_control` |
 | `report` with a fire `kind` (`building_fire`, `industrial_fire`, `forest_fire`, `crop_burning`) | — | `fire_department` |
 | `report` with `kind = other` | — | `pollution_control` |
 
 Severity defaults to the source's own: the published alert's classification
 (`critical` ≥ 250 µg/m³, `warning` ≥ 91), the persisted alert's severity, or a
-role-derived default for a report. A caller may override `severity`; on a retry
-a *different* severity is a conflict, not an update.
+role-derived default for a report. FIRMS detections default to `warning` for
+nominal/high confidence and `watch` for low/unknown confidence. A FIRMS incident
+is a satellite-only review candidate, never a ground confirmation or automatic
+dispatch. A caller may override `severity`; on a retry a *different* severity
+is a conflict, not an update. Its source row remains readable at
+`GET /api/v1/fires/{detection_id}` after it leaves the recent list window.
 
 A pollution-only incident is still assignable, and to `pollution_control`
 specifically — a role that may **not** act on a fire-department incident. This
@@ -172,10 +177,10 @@ curl -X POST localhost:8000/api/v1/incidents \
 
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `source_type` | `published_alert` \| `hotspot_event` \| `alert` \| `report` | yes | |
-| `source_ref` | string (≤200) | for `published_alert`/`hotspot_event` | The published alert identity or `hotspot-…` event id. Must **not** be sent for `alert`/`report`. |
+| `source_type` | `published_alert` \| `hotspot_event` \| `firms_detection` \| `alert` \| `report` | yes | |
+| `source_ref` | string (≤200) | for reference sources | The published alert identity, `hotspot-…` event id, or stable 64-character FIRMS detection id. Must **not** be sent for `alert`/`report`. |
 | `source_id` | integer | for `alert`/`report` | Must exist and be eligible. Must **not** be sent for reference sources. |
-| `severity` | `watch` \| `warning` \| `critical` | no | Defaults to the source's own severity. |
+| `severity` | `watch` \| `warning` \| `critical` | no | Defaults to the source's own severity or review band. |
 | `jurisdiction` | string (≤120) | no | Defaults to the creating actor's jurisdiction. |
 | `latitude` / `longitude` | float | no | Defaults to the source's location (the cell centre for a cell-level source). |
 | `linked_prediction_run_id` | string (≤120) | no | For a published alert this is **derived** from the identity and cannot be overridden. |

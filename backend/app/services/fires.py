@@ -44,6 +44,10 @@ class FireHotspotService:
     def __init__(self, repository: FireHotspotRepository) -> None:
         self._repository = repository
 
+    def get(self, detection_id: str) -> FireHotspot | None:
+        """Resolve one persisted detection without applying a recency cutoff."""
+        return self._repository.get_by_detection_id(detection_id, available_by=datetime.now(UTC))
+
     def list_recent(
         self, *, bbox: BoundingBox | None = None, since_hours: float = 24.0
     ) -> ServiceResult[list[FireHotspot]]:

@@ -47,6 +47,8 @@ String sourceLabel(IncidentSourceType? source) {
         return 'Published PM2.5 alert';
       case IncidentSourceType.hotspotEvent:
         return 'Hotspot event';
+    case IncidentSourceType.firmsDetection:
+      return 'NASA FIRMS satellite candidate';
     case null:
       return 'Unknown source';
   }

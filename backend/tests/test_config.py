@@ -27,6 +27,23 @@ def test_password_is_not_exposed_in_repr() -> None:
     assert "secret-value" not in repr(settings)
 
 
+def test_firms_defaults_to_active_noaa_products_and_accepts_legacy_override() -> None:
+    defaults = Settings(_env_file=None)
+    legacy = Settings(_env_file=None, firms_source="VIIRS_SNPP_NRT")
+
+    assert defaults.firms_source_list == ("VIIRS_NOAA21_NRT", "VIIRS_NOAA20_NRT")
+    assert legacy.firms_source_list == ("VIIRS_SNPP_NRT",)
+
+
+@pytest.mark.parametrize(
+    "sources",
+    ["", "VIIRS_NOAA20_NRT,VIIRS_NOAA20_NRT", "VIIRS_UNKNOWN_NRT"],
+)
+def test_invalid_firms_product_lists_are_rejected(sources: str) -> None:
+    with pytest.raises(ValidationError, match="FIRMS_SOURCES"):
+        Settings(_env_file=None, firms_sources=sources)
+
+
 def test_weather_resolution_coarser_than_grid_is_valid() -> None:
     settings = Settings(
         postgres_user="u",

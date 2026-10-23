@@ -27,6 +27,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 from app.core.config import get_settings
+from app.domain.environmental_observations import FireHotspot
 from app.domain.features import DataMode
 from app.domain.h3_grid import cell_center
 from app.domain.incidents import (
@@ -48,6 +49,7 @@ from app.domain.incidents import (
 from app.domain.published_alerts import PublishedAlertIdentityError
 from app.domain.repositories import (
     AlertRepository,
+    FireHotspotRepository,
     FireReportRepository,
     IncidentDeliveryRepository,
     IncidentRepository,
@@ -188,6 +190,7 @@ class IncidentService:
         webhook_delivery_repository: IncidentWebhookDeliveryRepository | None = None,
         published_alerts: PublishedAlertService,
         hotspot_store: HotspotScanStore | None = None,
+        fire_hotspots: FireHotspotRepository | None = None,
     ) -> None:
         self._incidents = incident_repository
         self._alerts = alert_repository
@@ -196,6 +199,7 @@ class IncidentService:
         self._webhook_deliveries = webhook_delivery_repository
         self._published_alerts = published_alerts
         self._hotspot_store = hotspot_store
+        self._fire_hotspots = fire_hotspots
 
     @property
     def webhook_dispatch_enabled(self) -> bool:
@@ -271,22 +275,25 @@ class IncidentService:
         evidence_report_ids: list[int] | None,
         now: datetime,
     ) -> CreateOutcome:
+        # Authorize this source before the idempotent early-return below. A
+        # previously opened FIRMS incident must not become readable through a
+        # create retry made by a responder with the wrong role.
+        if (
+            source_type is IncidentSourceType.FIRMS_DETECTION
+            and actor.role is not ResponderRole.FIRE_DEPARTMENT
+        ):
+            raise RoleMismatchError("only a fire-department responder may open a FIRMS detection")
         if source_type.uses_ref:
             if source_ref is None or not source_ref.strip():
-                raise InvalidIncidentError(
-                    "a published_alert incident requires source_ref "
-                    "('v2:<run_id>:<h3_cell>:<forecast_minutes>')"
-                )
+                raise InvalidIncidentError(f"a {source_type.value} incident requires source_ref")
             if source_id is not None:
                 raise InvalidIncidentError(
-                    "source_id must not be given for a published_alert source"
+                    f"source_id must not be given for a {source_type.value} source"
                 )
             key_ref: str | None = source_ref.strip()
         else:
             if source_id is None:
-                raise InvalidIncidentError(
-                    f"a {source_type.value} incident requires source_id"
-                )
+                raise InvalidIncidentError(f"a {source_type.value} incident requires source_id")
             if source_ref is not None:
                 raise InvalidIncidentError(
                     f"source_ref is not valid for a {source_type.value} source"
@@ -321,6 +328,12 @@ class IncidentService:
                 )
             role, default_severity, source_lat, source_lon, cell_id = (
                 self._resolve_hotspot_event(key_ref or "")
+            )
+            effective_run_id = linked_prediction_run_id
+            source_synthetic = False
+        elif source_type is IncidentSourceType.FIRMS_DETECTION:
+            role, default_severity, source_lat, source_lon, cell_id = self._resolve_firms_detection(
+                key_ref or "", now=now
             )
             effective_run_id = linked_prediction_run_id
             source_synthetic = False
@@ -437,6 +450,33 @@ class IncidentService:
             raise SourceNotEligibleError("hotspot event has no mappable H3 footprint")
         latitude, longitude = cell_center(cell_id)
         return ResponderRole.POLLUTION_CONTROL, "warning", latitude, longitude, cell_id
+
+    def _resolve_firms_detection(
+        self, detection_id: str, *, now: datetime
+    ) -> tuple[ResponderRole, str, float, float, str]:
+        """Resolve a recent persisted NASA detection as a review-only candidate."""
+        if self._fire_hotspots is None:
+            raise SourceNotEligibleError("FIRMS detection storage is not configured")
+        detection: FireHotspot | None = self._fire_hotspots.get_by_detection_id(
+            detection_id, available_by=now
+        )
+        if detection is None:
+            raise IncidentNotFoundError(f"FIRMS detection {detection_id!r} does not exist")
+        age_hours = (now - detection.acquired_at).total_seconds() / 3600
+        if age_hours < 0:
+            raise SourceNotEligibleError("future FIRMS detections cannot enter the response queue")
+        if age_hours > get_settings().firms_stale_after_hours:
+            raise SourceNotEligibleError("stale FIRMS detections cannot open new incidents")
+        # Confidence and FRP determine a review band only. Even a high-FRP,
+        # high-confidence satellite record never creates an emergency status.
+        severity = "warning" if detection.confidence_class in {"nominal", "high"} else "watch"
+        return (
+            ResponderRole.FIRE_DEPARTMENT,
+            severity,
+            detection.latitude,
+            detection.longitude,
+            detection.h3_cell,
+        )
 
     def _resolve_source(
         self, source_type: IncidentSourceType, source_id: int
@@ -786,6 +826,15 @@ class IncidentService:
             except Exception:
                 return False
             return event.get("synthetic") is not True and event.get("status") == "confirmed"
+        if incident.source_type is IncidentSourceType.FIRMS_DETECTION:
+            if self._fire_hotspots is None:
+                return False
+            return (
+                self._fire_hotspots.get_by_detection_id(
+                    incident.source_ref or "", available_by=datetime.now(UTC)
+                )
+                is not None
+            )
         return False
 
     def _source_is_synthetic(

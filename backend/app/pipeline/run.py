@@ -680,30 +680,34 @@ async def _ingest_fires(
             attach_request_budget(
                 client, provider="firms", budget=SqlProviderRequestBudget(get_session_factory())
             )
-            provider = FirmsProvider(
-                client,
-                map_key=settings.firms_map_key.get_secret_value(),
-                source=settings.firms_source,
-                base_url=settings.firms_base_url,
-                timeout_seconds=settings.firms_timeout_seconds,
-                max_retries=settings.firms_max_retries,
-                h3_resolution=settings.h3_resolution,
-                stale_after_hours=settings.firms_stale_after_hours,
-            )
-            service = EnvironmentalIngestionService(
-                fire_provider=provider,
-                fire_repository=SqlFireHotspotRepository(session),
-                traffic_repository=SqlTrafficObservationRepository(session),
-                dataset_repository=SqlDatasetVersionRepository(session),
-                run_repository=SqlIngestionRunRepository(session),
-            )
-            result = await service.ingest_firms(
-                _expand_bbox(bbox=bbox, distance_km=FIRE_FEATURE_MAX_DISTANCE_KM),
-                day_range=2,
-                region=settings.firms_region,
-                source=settings.firms_source,
-                stale_after_hours=settings.firms_stale_after_hours,
-            )
+            results = []
+            for source in settings.firms_source_list:
+                provider = FirmsProvider(
+                    client,
+                    map_key=settings.firms_map_key.get_secret_value(),
+                    source=source,
+                    base_url=settings.firms_base_url,
+                    timeout_seconds=settings.firms_timeout_seconds,
+                    max_retries=settings.firms_max_retries,
+                    h3_resolution=settings.h3_resolution,
+                    stale_after_hours=settings.firms_stale_after_hours,
+                )
+                service = EnvironmentalIngestionService(
+                    fire_provider=provider,
+                    fire_repository=SqlFireHotspotRepository(session),
+                    traffic_repository=SqlTrafficObservationRepository(session),
+                    dataset_repository=SqlDatasetVersionRepository(session),
+                    run_repository=SqlIngestionRunRepository(session),
+                )
+                results.append(
+                    await service.ingest_firms(
+                        _expand_bbox(bbox=bbox, distance_km=FIRE_FEATURE_MAX_DISTANCE_KM),
+                        day_range=2,
+                        region=settings.firms_region,
+                        source=source,
+                        stale_after_hours=settings.firms_stale_after_hours,
+                    )
+                )
     except Exception as exc:  # noqa: BLE001 - one upstream source must not abort baseline stages
         message = f"FIRMS ingestion setup failed: {type(exc).__name__}"
         logger.exception(message)
@@ -718,11 +722,16 @@ async def _ingest_fires(
         )
         return StageOutcome("fire_ingestion", False, message), False, None
 
-    metrics = result.run.metrics
-    fetched = int(metrics.get("fetched_records", 0))
-    fresh = int(metrics.get("fresh_records", 0))
-    succeeded = result.succeeded
-    errors = "; ".join(result.run.errors)
+    fetched = sum(int(result.run.metrics.get("fetched_records", 0)) for result in results)
+    fresh = sum(int(result.run.metrics.get("fresh_records", 0)) for result in results)
+    saved = sum(result.saved for result in results)
+    duplicates = sum(result.skipped_duplicates for result in results)
+    stale = sum(int(result.run.metrics.get("stale_records", 0)) for result in results)
+    succeeded = bool(results) and all(result.succeeded for result in results)
+    successful_sources = [result for result in results if result.succeeded]
+    errors = "; ".join(
+        f"{result.run.dataset_id}: {error}" for result in results for error in result.run.errors
+    )
     _record_source_health(
         session,
         pipeline_run_id=pipeline_run_id,
@@ -733,7 +742,7 @@ async def _ingest_fires(
         stale=fetched > 0 and fresh == 0,
         error_summary=errors[:500] if errors else None,
     )
-    if not succeeded:
+    if not successful_sources:
         return (
             StageOutcome(
                 "fire_ingestion", False, f"FIRMS feed failed: {errors or 'incomplete'}"
@@ -743,15 +752,17 @@ async def _ingest_fires(
         )
     feature_available = not (fetched > 0 and fresh == 0)
     summary = (
-        f"fetched={fetched} saved={result.saved} duplicates={result.skipped_duplicates} "
-        f"stale={metrics.get('stale_records', 0)}"
+        f"products={len(results)} successful={len(successful_sources)} fetched={fetched} "
+        f"saved={saved} duplicates={duplicates} stale={stale}"
     )
+    if not succeeded:
+        summary += f"; partial product failure: {errors or 'incomplete feed'}"
     if not feature_available:
         summary += "; stale-only feed leaves fire features unavailable"
     return (
-        StageOutcome("fire_ingestion", True, summary),
+        StageOutcome("fire_ingestion", succeeded, summary),
         feature_available,
-        result.run.dataset_id if feature_available else None,
+        successful_sources[0].run.dataset_id if feature_available else None,
     )
 
 

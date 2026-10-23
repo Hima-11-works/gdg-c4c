@@ -280,6 +280,55 @@ class EvidenceList extends StatelessWidget {
   }
 }
 
+/// Exact persisted FIRMS evidence referenced by a satellite-candidate
+/// incident, kept separate from citizen-submitted evidence.
+class FireDetectionEvidence extends StatelessWidget {
+  const FireDetectionEvidence({super.key, required this.detection, this.error});
+
+  final FireDetection? detection;
+  final String? error;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final row = detection;
+    if (row == null) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Text(
+            error == null
+                ? 'The incident references a FIRMS detection, but its persisted detail is unavailable.'
+                : 'Could not reload the FIRMS detection: $error',
+            style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
+        ),
+      );
+    }
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('NASA FIRMS detection · ${row.confidenceClass} confidence',
+                style: theme.textTheme.labelLarge),
+            const SizedBox(height: 4),
+            Text('${row.product} · ${row.satellite} · ${row.acquiredAt.toUtc()} UTC'),
+            Text('FRP ${row.frpMw.toStringAsFixed(1)} MW · H3 ${row.h3Cell}'),
+            const SizedBox(height: 4),
+            Text(
+              'Satellite-only candidate, not a confirmed ground fire. This record is not an '
+              'independent ground confirmation; verify with local responders before action.',
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 String sourceKindLabel(String kind) {
   switch (kind) {
     case 'building_fire':

@@ -1,8 +1,7 @@
 import { useState } from 'react'
-import { latLngToCell } from 'h3-js'
 import { fetchCellDetail } from '../lib/api'
 import { compassLabel, formatNumber, pdiFactorLabel } from '../lib/format'
-import { cellCenter, resolutionOfCell } from '../lib/h3Geometry'
+import { cellCenter } from '../lib/h3Geometry'
 import { regionTitle } from '../lib/regionName'
 import {
   FIRE_KIND_LABELS,
@@ -11,13 +10,13 @@ import {
   reportForCell,
   smokeLabel,
 } from '../lib/citizenReports'
-import { anomaliesInCell, priorityForSeverity, worstAnomalyInCell } from '../lib/fireAnomalies'
-import type { FireSeverity, ThermalAnomaly } from '../lib/fireAnomalies'
+import { priorityForSeverity } from '../lib/fireAnomalies'
+import type { FireSeverity } from '../lib/fireAnomalies'
 import { useApiResource, type AsyncResource } from '../hooks/useApiResource'
 import { useStateBoundaries } from '../hooks/useStateBoundaries'
 import { useMapUi } from '../state/MapUiContext'
 import type { CellDetailOut, FireReportWithStatus } from '../lib/types'
-import type { ActiveFire } from '../lib/activeFires'
+import { activeFiresInCell, type ActiveFire } from '../lib/activeFires'
 import { estimatePlumeDrift } from '../lib/transboundaryDrift'
 import { CellSatelliteContextPanel } from './CellSatelliteContextPanel'
 
@@ -63,26 +62,12 @@ function CitizenReportWidget({ report }: { report: FireReportWithStatus }) {
 }
 
 function SatelliteFireEvidence({
-  h3Cell,
+  matches,
   resource,
 }: {
-  h3Cell: string
+  matches: ActiveFire[]
   resource: AsyncResource<ActiveFire[]>
 }) {
-  let matches: ActiveFire[] = []
-  if (resource.status === 'success') {
-    const resolution = resolutionOfCell(h3Cell)
-    if (resolution !== undefined) {
-      matches = resource.data.filter((fire) => {
-        try {
-          return latLngToCell(fire.latitude, fire.longitude, resolution) === h3Cell
-        } catch {
-          return false
-        }
-      })
-    }
-  }
-
   return (
     <section className="cell-firms-evidence">
       <h3>Satellite thermal evidence</h3>
@@ -108,9 +93,10 @@ function SatelliteFireEvidence({
         <ul className="cell-firms-list">
           {matches.slice(0, 5).map((fire) => (
             <li key={fire.id}>
-              <strong>{fire.confidenceClass} confidence</strong>
+              <strong>{fire.confidenceClass} confidence · candidate for review</strong>
               <span>
-                {fire.satellite} · {fire.acquiredAt || 'acquisition time unavailable'}
+                {fire.product} · {fire.satellite} ·{' '}
+                {fire.acquiredAt || 'acquisition time unavailable'}
               </span>
               <span>
                 FRP {fire.frp === null ? 'not reported' : `${formatNumber(fire.frp)} MW`}
@@ -118,42 +104,57 @@ function SatelliteFireEvidence({
                 Brightness{' '}
                 {fire.brightness === null ? 'not reported' : `${formatNumber(fire.brightness)} K`}
               </span>
+              <span>Detection {fire.id}</span>
             </li>
           ))}
         </ul>
+      ) : null}
+      {resource.status === 'success' && matches.length > 1 ? (
+        <p className="muted">
+          These are {matches.length} satellite detection records. They are not independent ground
+          confirmations and may represent the same event.
+        </p>
       ) : null}
     </section>
   )
 }
 
-/** Triage priority of the clicked cell, from the thermal anomalies that
- *  fall inside it (lib/fireAnomalies). Cell-based matching on purpose: a
- *  detection is a point and the drawer's unit is a cell, so "in this cell"
- *  is the only claim that is actually true — no nearest-neighbour
- *  guessing. The detections behind it are hand-authored mocks, hence the
- *  "(illustrative)" note; severity counts up, priority counts down, so
- *  severity 3 is Priority 1. */
-function PriorityBadge({ h3Cell }: { h3Cell: string }) {
-  const anomalies = anomaliesInCell(h3Cell)
-  if (anomalies.length === 0) return null
+/** Priority is a rough review triage derived from the same live FIRMS rows
+ *  displayed in the map and evidence list. It is never a fire confirmation. */
+function PriorityBadge({ fires, resource }: { fires: ActiveFire[]; resource: AsyncResource<ActiveFire[]> }) {
+  if (resource.status === 'idle' || resource.status === 'loading') {
+    return <p className="muted">FIRMS review priority is loading.</p>
+  }
+  if (resource.status === 'error') {
+    return <p className="muted">FIRMS review priority is unavailable because the feed failed to load.</p>
+  }
+  if (fires.length === 0) return null
 
-  const worst = anomalies[0]
+  const ranked = [...fires].sort((a, b) => b.severity - a.severity)
+  const worst = ranked.find((fire) => fire.confidenceClass === 'high' || fire.confidenceClass === 'nominal')
+  if (!worst) {
+    return (
+      <div className="priority-badge" role="status">
+        Satellite candidate · review required — confidence is low or unknown.
+      </div>
+    )
+  }
+
   const priority = priorityForSeverity(worst.severity)
   const label =
     worst.severity === 3 ? 'Critical risk' : worst.severity === 2 ? 'Elevated' : 'Minor / localized'
-  const count =
-    anomalies.length === 1 ? '1 thermal anomaly' : `${anomalies.length} thermal anomalies`
-  const frp = anomalies.length === 1 ? 'FRP' : 'worst FRP'
+  const count = fires.length === 1 ? '1 satellite detection' : `${fires.length} satellite detections`
 
   return (
     <div className={`priority-badge priority-${worst.severity}`} role="status">
       <span className="priority-dot" aria-hidden="true" />
       <span>
         <strong>
-          Priority {priority}: {label}
+          Priority {priority} review triage: {label}
         </strong>{' '}
         <span className="muted">
-          — {count} in this cell ({frp} {worst.frp.toFixed(1)} MW, illustrative)
+          — {count} in this cell (FRP {formatNumber(worst.frp)} MW, {worst.confidenceClass} confidence).
+          Satellite-only candidate; no independent ground confirmation is linked.
         </span>
       </span>
     </div>
@@ -506,17 +507,29 @@ function GrapAssessmentNotice() {
 function InterventionActionBar({
   h3Cell,
   detail,
-  anomaly,
+  fires,
+  fireResource,
 }: {
   h3Cell: string
   detail: CellDetailOut
-  anomaly: ThermalAnomaly | null
+  fires: ActiveFire[]
+  fireResource: AsyncResource<ActiveFire[]>
 }) {
   const [status, setStatus] = useState<'idle' | 'copied' | 'logged' | 'failed'>('idle')
   const [wardCount, setWardCount] = useState(() => readWardLog().length)
 
-  const severity: FireSeverity | null = anomaly?.severity ?? null
-  const variant = severity === 3 ? 'escalate' : severity === 1 ? 'log' : 'inspect'
+  const worstSeverity: FireSeverity | null = fires.reduce<FireSeverity | null>(
+    (current, fire) =>
+      fire.confidenceClass !== 'high' && fire.confidenceClass !== 'nominal'
+        ? current
+        : current === null || fire.severity > current
+          ? fire.severity
+          : current,
+    null,
+  )
+  // Satellite evidence only creates an inspection note. It never escalates or
+  // dispatches a response by itself.
+  const variant = fires.length > 0 ? 'inspect' : 'log'
 
   const current = detail.current
   const observed = [
@@ -525,23 +538,38 @@ function InterventionActionBar({
     `PM2.5: ${current?.pm25 === null || current?.pm25 === undefined ? 'n/a' : `${formatNumber(current.pm25)} µg/m³`}`,
   ]
 
-  const detection =
-    anomaly === null
-      ? []
-      : [
-          `Thermal anomaly: FRP ${anomaly.frp.toFixed(1)} MW, detected ${anomaly.detectionMinutesAgo} mins ago, confidence ${Math.round(anomaly.confidence * 100)}% (illustrative mock detection, not a satellite feed)`,
-        ]
+  const detection = fires.map((fire) =>
+    [
+      `FIRMS detection ${fire.id}`,
+      `product ${fire.product}`,
+      `satellite ${fire.satellite}`,
+      `acquired ${fire.acquiredAt || 'time unavailable'} UTC`,
+      `FRP ${fire.frp === null ? 'not reported' : `${formatNumber(fire.frp)} MW`}`,
+      `confidence ${fire.confidenceClass} (${fire.confidenceLabel})`,
+    ].join(' · '),
+  )
+  const feedContext =
+    fireResource.status === 'error'
+      ? ['FIRMS evidence unavailable: the feed could not be loaded; absence of data is not evidence of no source.']
+      : fireResource.status !== 'success'
+        ? ['FIRMS evidence has not finished loading; current satellite evidence is unknown.']
+        : fires.length === 0
+          ? ['The FIRMS feed returned no detections in this cell for its current query window. This does not prove no source is present.']
+          : []
 
-  const note =
-    variant === 'escalate'
+  const note = [
+    'Air-quality inspection note (Air Health dashboard)',
+    ...observed,
+    ...feedContext,
+    ...detection,
+    ...(fires.length > 0
       ? [
-          'Escalation note (Air Health dashboard) - for the State Rapid Action Unit',
-          `Priority 1 of 3: critical thermal anomaly in this cell`,
-          ...observed,
-          ...detection,
-          'Reason for escalation: a critical-severity detection is inside a cell already under watch.',
-        ].join('\n')
-      : ['Air-quality inspection note (Air Health dashboard)', ...observed].join('\n')
+          `${fires.length} satellite detection record(s); these are not independent ground confirmations.`,
+          'Satellite detections are review candidates only. No automatic escalation or dispatch is triggered.',
+        ]
+      : []),
+    ...(worstSeverity === null ? [] : [`FRP-based review triage band: ${worstSeverity}/3 (heuristic only).`]),
+  ].join('\n')
 
   const runAction = async () => {
     if (variant === 'log') {
@@ -577,9 +605,7 @@ function InterventionActionBar({
       ? '✓ Note copied'
       : status === 'logged'
         ? '✓ Logged to ward list'
-        : variant === 'escalate'
-          ? 'Copy escalation note for the State Rapid Action Unit'
-          : variant === 'log'
+        : variant === 'log'
             ? 'Log to ward list (this device)'
             : 'Copy inspection note'
 
@@ -590,16 +616,12 @@ function InterventionActionBar({
         ? `Saved on this device only (${wardCount} ${wardCount === 1 ? 'entry' : 'entries'}). Nothing left this device.`
         : status === 'failed'
           ? 'Could not access local storage or the clipboard.'
-          : variant === 'escalate'
-            ? 'Nothing is sent automatically; this only prepares an escalation note.'
-            : variant === 'log'
+          : variant === 'log'
               ? 'Nothing is sent automatically; this only appends to a list on this device.'
               : 'Nothing is sent automatically; this only prepares a note.'
 
   const title =
-    variant === 'escalate'
-      ? 'Copy a plain-text escalation note for this cell, addressed to a State Rapid Action Unit'
-      : variant === 'log'
+    variant === 'log'
         ? 'Append this cell to a ward list kept in this browser only'
         : 'Copy a plain-text inspection note for this cell to the clipboard'
 
@@ -660,9 +682,8 @@ export function CellDetailPanel({
 
   const close = () => dispatch({ type: 'SELECT_CELL', cell: null })
 
-  // Worst thermal anomaly inside the clicked cell (if any) - drives both the
-  // triage badge and the severity of the action bar.
-  const anomaly = worstAnomalyInCell(selectedCell)
+  const matchingFires =
+    activeFires.status === 'success' ? activeFiresInCell(activeFires.data, selectedCell) : []
 
   return (
     <aside className="panel cell-detail" aria-label="Cell details">
@@ -682,7 +703,7 @@ export function CellDetailPanel({
         </button>
       </div>
 
-      <PriorityBadge h3Cell={selectedCell} />
+      <PriorityBadge fires={matchingFires} resource={activeFires} />
 
       {resource.status === 'success' && <GrapAssessmentNotice />}
 
@@ -707,7 +728,7 @@ export function CellDetailPanel({
       {resource.status === 'success' && (
         <>
           <CellSatelliteContextPanel h3Cell={selectedCell} resolution={resolution} />
-          <SatelliteFireEvidence h3Cell={selectedCell} resource={activeFires} />
+          <SatelliteFireEvidence matches={matchingFires} resource={activeFires} />
           <CellDetailContent
             detail={resource.data}
             isDemo={resource.isDemo}
@@ -720,7 +741,12 @@ export function CellDetailPanel({
                 : null
             }
           />
-          <InterventionActionBar h3Cell={selectedCell} detail={resource.data} anomaly={anomaly} />
+          <InterventionActionBar
+            h3Cell={selectedCell}
+            detail={resource.data}
+            fires={matchingFires}
+            fireResource={activeFires}
+          />
         </>
       )}
     </aside>

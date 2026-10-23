@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+from geoalchemy2 import WKTElement
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Row
 from sqlalchemy.orm import Session
-from geoalchemy2 import WKTElement
 
 from app.domain.environmental_observations import FireHotspot
 from app.domain.types import BoundingBox
@@ -83,6 +83,15 @@ class SqlFireHotspotRepository:
         self._session.commit()
         saved = len(inserted)
         return saved, len(hotspots) - saved
+
+    def get_by_detection_id(self, detection_id: str, *, available_by) -> FireHotspot | None:
+        row = self._session.execute(
+            select(fire_hotspot_table).where(
+                fire_hotspot_table.c.detection_id == detection_id,
+                fire_hotspot_table.c.available_at <= available_by,
+            )
+        ).first()
+        return None if row is None else _row_to_domain(row)
 
     def list_for_window(
         self,

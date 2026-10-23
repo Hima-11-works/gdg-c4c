@@ -285,6 +285,28 @@ class IncidentApi {
         .toList();
   }
 
+  /// Recent persisted FIRMS detections offered to fire responders as review
+  /// candidates. The feed endpoint is bounded by its since_hours parameter.
+  Future<List<FireDetection>> listFireDetections({double sinceHours = 6}) async {
+    final response = await _send(
+      'GET',
+      '/api/v1/fires',
+      query: {'since_hours': '$sinceHours'},
+    );
+    return (response.data as List)
+        .map((row) => FireDetection.fromJson(row as Map<String, dynamic>))
+        .toList(growable: false);
+  }
+
+  /// Resolves the exact immutable FIRMS row referenced by an incident.
+  Future<FireDetection> getFireDetection(String id) async {
+    final response = await _send(
+      'GET',
+      '/api/v1/fires/${Uri.encodeComponent(id)}',
+    );
+    return FireDetection.fromJson(response.data as Map<String, dynamic>);
+  }
+
   Future<void> reviewHotspotEvent({required String eventId, required String reviewState}) async {
     await _send(
       'POST',

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 
 from app.api.deps import get_bbox_query, get_fire_hotspot_service
 from app.api.schemas import Envelope, FireHotspotOut
@@ -61,4 +61,24 @@ def list_fires(
         generated_at=datetime.now(UTC),
         is_demo=result.is_demo,
         data=[FireHotspotOut.model_validate(hotspot) for hotspot in result.data],
+    )
+
+
+@router.get(
+    "/{detection_id}",
+    response_model=Envelope[FireHotspotOut],
+    summary="One persisted FIRMS detection",
+)
+def get_fire(
+    detection_id: str = Path(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"),
+    service: FireHotspotService = Depends(get_fire_hotspot_service),
+) -> Envelope[FireHotspotOut]:
+    """Return exact, immutable evidence for an incident's FIRMS source ref."""
+    hotspot = service.get(detection_id)
+    if hotspot is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="detection not found")
+    return Envelope(
+        generated_at=datetime.now(UTC),
+        is_demo=False,
+        data=FireHotspotOut.model_validate(hotspot),
     )

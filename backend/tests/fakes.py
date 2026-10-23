@@ -350,6 +350,18 @@ class FakeFireHotspotRepository:
             inserted += 1
         return inserted, len(hotspots) - inserted
 
+    def get_by_detection_id(
+        self, detection_id: str, *, available_by: datetime
+    ) -> FireHotspot | None:
+        return next(
+            (
+                hotspot
+                for hotspot in self.hotspots
+                if hotspot.detection_id == detection_id and hotspot.available_at <= available_by
+            ),
+            None,
+        )
+
     def list_for_window(
         self,
         *,

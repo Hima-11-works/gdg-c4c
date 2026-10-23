@@ -32,7 +32,7 @@ __all__ = [
 class IncidentCreateIn(BaseModel):
     source_type: IncidentSourceType
     # Exactly one of source_id / source_ref, decided by source_type: published
-    # alerts and hotspot events use stable references; stored rows use ids.
+    # alerts, hotspot events, and FIRMS detections use stable references.
     source_id: int | None = Field(default=None, ge=1)
     source_ref: str | None = Field(default=None, min_length=1, max_length=200)
     severity: str | None = Field(default=None, max_length=20)

@@ -9,10 +9,14 @@ same way the service does it.
 from datetime import UTC, datetime, timedelta
 
 import h3
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.core.config import get_settings
 from app.domain.environmental_observations import FireHotspot
+from app.api.routes.fires import get_fire
+from app.services.fires import FireHotspotService
 from app.services.fires import MAX_HOTSPOTS
 from tests.conftest import FakeRepos
 
@@ -84,6 +88,7 @@ def test_list_fires_exposes_the_popup_fields(
     assert set(row.keys()) == {
         "detection_id",
         "h3_cell",
+        "product",
         "latitude",
         "longitude",
         "frp_mw",
@@ -95,6 +100,7 @@ def test_list_fires_exposes_the_popup_fields(
         "daynight",
     }
     assert row["latitude"] == INSIDE_LAT
+    assert row["product"] == "active-fire-area-csv"
     assert row["longitude"] == INSIDE_LON
     assert row["frp_mw"] == 12.0
     assert row["brightness_ti4_k"] == 331.2
@@ -102,6 +108,39 @@ def test_list_fires_exposes_the_popup_fields(
     assert row["confidence_class"] == "high"
     assert row["satellite"] == "NOAA-21"
     assert row["daynight"] == "D"
+
+
+def test_get_fire_returns_exact_persisted_detection_without_recency_filter(
+    fake_repos: FakeRepos,
+) -> None:
+    now = datetime.now(UTC)
+    detection_id = "a" * 64
+    fake_repos.fire_hotspots.hotspots.append(
+        _hotspot(detection_id=detection_id, acquired_at=now - timedelta(hours=30))
+    )
+
+    response = get_fire(detection_id, FireHotspotService(fake_repos.fire_hotspots))
+
+    assert response.is_demo is False
+    assert response.data.detection_id == detection_id
+
+
+def test_get_fire_does_not_expose_not_yet_available_detection(
+    fake_repos: FakeRepos,
+) -> None:
+    now = datetime.now(UTC)
+    detection_id = "b" * 64
+    fake_repos.fire_hotspots.hotspots.append(
+        _hotspot(
+            detection_id=detection_id,
+            acquired_at=now - timedelta(hours=1),
+            available_at=now + timedelta(hours=1),
+        )
+    )
+
+    with pytest.raises(HTTPException) as error:
+        get_fire(detection_id, FireHotspotService(fake_repos.fire_hotspots))
+    assert error.value.status_code == 404
 
 
 def test_list_fires_excludes_detections_older_than_since_hours(

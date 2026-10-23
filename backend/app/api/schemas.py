@@ -377,6 +377,7 @@ class FireHotspotOut(BaseModel):
 
     detection_id: str = Field(description="Stable content-derived id — safe as a list key.")
     h3_cell: str = Field(description="The H3 cell this detection was snapped to at ingest time.")
+    product: str = Field(description="NASA FIRMS product queried for this detection.")
     latitude: float
     longitude: float
     frp_mw: float = Field(description="Fire Radiative Power, megawatts.")

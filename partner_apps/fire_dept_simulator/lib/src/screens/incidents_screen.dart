@@ -34,6 +34,8 @@ class _IncidentsScreenState extends State<IncidentsScreen>
 
   List<Incident> _incidents = const [];
   List<Map<String, dynamic>> _hotspotEvents = const [];
+  List<FireDetection> _fireDetections = const [];
+  String? _firmsError;
   String? _openingHotspotId;
   int _pendingAssignments = 0;
   bool _loading = true;
@@ -98,6 +100,8 @@ class _IncidentsScreenState extends State<IncidentsScreen>
     _queryGeneration++;
     _incidents = const [];
     _hotspotEvents = const [];
+    _fireDetections = const [];
+    _firmsError = null;
     _error = null;
     _loading = true;
     _loadingMore = false;
@@ -142,6 +146,17 @@ class _IncidentsScreenState extends State<IncidentsScreen>
       _loadingMore = append;
     });
     try {
+      // The FIRMS candidate feed is independent of the existing incident and
+      // hotspot reads; start all reads together to keep a slow provider from
+      // serially extending the queue refresh.
+      final Future<List<Map<String, dynamic>>> hotspotEventsFuture =
+          api.listHotspotEvents().catchError((Object _) => <Map<String, dynamic>>[]);
+      String? firmsReadError;
+      final Future<List<FireDetection>> fireDetectionsFuture =
+          api.listFireDetections(sinceHours: 6).catchError((Object error) {
+        firmsReadError = error is ApiException ? error.message : error.toString();
+        return <FireDetection>[];
+      });
       final results = await Future.wait([
         Future.wait(
           offsets.map(
@@ -158,14 +173,8 @@ class _IncidentsScreenState extends State<IncidentsScreen>
       final pages = results[0] as List<List<Incident>>;
       final fetchedIncidents = pages.expand((page) => page).toList(growable: false);
       final inbox = results[1] as List<IncidentInboxItem>;
-      List<Map<String, dynamic>> hotspotEvents;
-      try {
-        hotspotEvents = await api.listHotspotEvents();
-      } catch (_) {
-        // The incident queue remains available while the hotspot scanner is
-        // disabled, unconfigured, or returns an unexpected shape.
-        hotspotEvents = const [];
-      }
+      final hotspotEvents = await hotspotEventsFuture;
+      final fireDetections = await fireDetectionsFuture;
       if (!mounted) return;
       if (!_isCurrentQuery(
         generation: generation,
@@ -196,6 +205,8 @@ class _IncidentsScreenState extends State<IncidentsScreen>
             : fetchedIncidents;
         _hasMoreIncidents = pages.last.length == _incidentPageSize;
         _hotspotEvents = hotspotEvents;
+        _fireDetections = fireDetections;
+        _firmsError = firmsReadError;
         _pendingAssignments = inbox.length;
         _loading = false;
         _loadingMore = false;
@@ -361,6 +372,37 @@ class _IncidentsScreenState extends State<IncidentsScreen>
           content: Text(outcome.created
               ? 'Hotspot opened as pollution-control incident #${outcome.value.id}.'
               : 'Hotspot is already in incident #${outcome.value.id}.'),
+        ),
+      );
+      await _load();
+    } on ApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    } finally {
+      if (mounted) setState(() => _openingHotspotId = null);
+    }
+  }
+
+  Future<void> _openFireDetection(FireDetection detection) async {
+    if (widget.config.role != ResponderRole.fireDepartment) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Set the simulator role to fire department to review FIRMS candidates.')),
+      );
+      return;
+    }
+    setState(() => _openingHotspotId = detection.id);
+    try {
+      final outcome = await widget.api.createIncident(
+        sourceType: IncidentSourceType.firmsDetection,
+        sourceRef: detection.id,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(outcome.created
+              ? 'Satellite candidate added as incident #${outcome.value.id} for review.'
+              : 'Satellite candidate is already in incident #${outcome.value.id}.'),
         ),
       );
       await _load();
@@ -542,8 +584,13 @@ class _IncidentsScreenState extends State<IncidentsScreen>
           (event['status'] == 'potential' || event['status'] == 'confirmed') &&
           !_incidents.any((incident) => incident.sourceRef == eventId);
     }).toList(growable: false);
+    final openFireDetections = _fireDetections.where((fire) =>
+        !_incidents.any((incident) =>
+            incident.sourceType == IncidentSourceType.firmsDetection &&
+            incident.sourceRef == fire.id)).toList(growable: false);
 
-    if (_incidents.isEmpty && openHotspots.isEmpty && error == null) {
+    if (_incidents.isEmpty && openHotspots.isEmpty && openFireDetections.isEmpty &&
+        _firmsError == null && error == null) {
       return RefreshIndicator(
         onRefresh: _load,
         child: ListView(
@@ -580,6 +627,8 @@ class _IncidentsScreenState extends State<IncidentsScreen>
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
         itemCount: (error == null ? 0 : 1) +
+            (_firmsError == null ? 0 : 1) +
+            (openFireDetections.isEmpty ? 0 : openFireDetections.length + 1) +
             (openHotspots.isEmpty ? 0 : openHotspots.length + 1) +
             _incidents.length +
             (_hasMoreIncidents ? 1 : 0),
@@ -588,6 +637,39 @@ class _IncidentsScreenState extends State<IncidentsScreen>
           if (error != null) {
             if (itemIndex == 0) return _refreshErrorCard(error);
             itemIndex--;
+          }
+          if (_firmsError != null) {
+            if (itemIndex == 0) {
+              return Card(
+                child: ListTile(
+                  leading: const Icon(Icons.satellite_alt_outlined),
+                  title: const Text('NASA FIRMS candidates unavailable'),
+                  subtitle: Text('The feed could not be read; this does not mean there are no detections. $_firmsError'),
+                  trailing: IconButton(
+                    tooltip: 'Retry FIRMS read',
+                    onPressed: _load,
+                    icon: const Icon(Icons.refresh),
+                  ),
+                ),
+              );
+            }
+            itemIndex--;
+          }
+          if (openFireDetections.isNotEmpty) {
+            if (itemIndex == 0) {
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(4, 8, 4, 4),
+                child: Text(
+                  'Recent NASA FIRMS detections · review candidates only',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              );
+            }
+            itemIndex--;
+            if (itemIndex < openFireDetections.length) {
+              return _fireDetectionCard(openFireDetections[itemIndex]);
+            }
+            itemIndex -= openFireDetections.length;
           }
           if (openHotspots.isNotEmpty) {
             if (itemIndex == 0) {
@@ -671,6 +753,30 @@ class _IncidentsScreenState extends State<IncidentsScreen>
                         ),
                       ),
                   ],
+                )
+              : const Icon(Icons.lock_outline),
+        ),
+      );
+
+  Widget _fireDetectionCard(FireDetection detection) => Card(
+        child: ListTile(
+          leading: const Icon(Icons.satellite_alt_outlined),
+          title: Text(
+            '${detection.confidenceClass.toUpperCase()} confidence · '
+            'FRP ${detection.frpMw.toStringAsFixed(1)} MW',
+          ),
+          subtitle: Text(
+            '${detection.product} · ${detection.satellite} · '
+            '${detection.acquiredAt.toUtc()} UTC · ${detection.id}\n'
+            'Satellite-only candidate; no ground confirmation is linked.',
+          ),
+          isThreeLine: true,
+          trailing: widget.config.role == ResponderRole.fireDepartment
+              ? FilledButton(
+                  onPressed: _openingHotspotId == detection.id
+                      ? null
+                      : () => _openFireDetection(detection),
+                  child: Text(_openingHotspotId == detection.id ? 'Opening…' : 'Review'),
                 )
               : const Icon(Icons.lock_outline),
         ),

@@ -14,6 +14,7 @@
 
 import { severityForFrp } from './fireAnomalies'
 import type { FireSeverity } from './fireAnomalies'
+import { cellForPoint, resolutionOfCell } from './h3Geometry'
 import type { FireHotspotOut } from './types'
 import type { FeatureCollection, Point } from 'geojson'
 
@@ -41,6 +42,7 @@ export interface ActiveFire {
   acqDate: string
   acqTime: string
   satellite: string
+  product: string
   /** `D` (day) or `N` (night) overpass. */
   daynight: string
   severity: FireSeverity
@@ -87,9 +89,23 @@ export function activeFireFromHotspot(row: FireHotspotOut): ActiveFire {
     acqDate: iso.slice(0, 10),
     acqTime: iso.slice(11, 16).replace(':', ''),
     satellite: row.satellite,
+    product: row.product,
     daynight: row.daynight ?? '',
     severity: severityForFrp(row.frp_mw),
   }
+}
+
+/** FIRMS detections whose coordinates fall in the selected H3 cell. */
+export function activeFiresInCell(fires: ActiveFire[], h3Cell: string): ActiveFire[] {
+  const resolution = resolutionOfCell(h3Cell)
+  if (resolution === undefined) return []
+  return fires.filter((fire) => {
+    try {
+      return cellForPoint(fire.latitude, fire.longitude, resolution) === h3Cell
+    } catch {
+      return false
+    }
+  })
 }
 
 /** GeoJSON for the FIRMS circle layers. Only the properties the paint and
@@ -110,6 +126,7 @@ export function activeFiresFeatureCollection(
         acq_date: fire.acqDate,
         acq_time: fire.acqTime,
         satellite: fire.satellite,
+        product: fire.product,
         daynight: fire.daynight,
         severity: fire.severity,
       },
@@ -133,7 +150,7 @@ export function activeFirePopupHtml(props: Record<string, unknown>): string {
 
   return (
     `<strong>NASA FIRMS Active Fire</strong>` +
-    `<span class="fire-popup-source">${props.satellite ?? 'VIIRS'} · real satellite detection</span>` +
+    `<span class="fire-popup-source">${props.satellite ?? 'VIIRS'} · ${props.product ?? 'FIRMS'} · satellite candidate, not ground-confirmed</span>` +
     `<span>FRP (Fire Radiative Power): <b>${frp}</b></span>` +
     `<span>Brightness: <b>${brightness}</b></span>` +
     `<span>Confidence: <b>${confidence}</b></span>` +

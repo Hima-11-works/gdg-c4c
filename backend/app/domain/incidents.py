@@ -38,6 +38,7 @@ class IncidentSourceType(StrEnum):
     REPORT = "report"
     PUBLISHED_ALERT = "published_alert"
     HOTSPOT_EVENT = "hotspot_event"
+    FIRMS_DETECTION = "firms_detection"
 
     @property
     def uses_ref(self) -> bool:
@@ -45,6 +46,7 @@ class IncidentSourceType(StrEnum):
         return self in {
             IncidentSourceType.PUBLISHED_ALERT,
             IncidentSourceType.HOTSPOT_EVENT,
+            IncidentSourceType.FIRMS_DETECTION,
         }
 
 

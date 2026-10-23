@@ -338,47 +338,53 @@ async def _run_ingest_fires(args: argparse.Namespace) -> int:
         )
         return 1
     session = get_session_factory()()
+    results = []
     try:
         async with httpx.AsyncClient() as client:
             attach_request_budget(
                 client, provider="firms", budget=SqlProviderRequestBudget(get_session_factory())
             )
-            provider = FirmsProvider(
-                client,
-                map_key=settings.firms_map_key.get_secret_value(),
-                source=settings.firms_source,
-                base_url=settings.firms_base_url,
-                timeout_seconds=settings.firms_timeout_seconds,
-                max_retries=settings.firms_max_retries,
-                h3_resolution=settings.h3_resolution,
-                stale_after_hours=settings.firms_stale_after_hours,
-            )
-            service = EnvironmentalIngestionService(
-                fire_provider=provider,
-                fire_repository=SqlFireHotspotRepository(session),
-                traffic_repository=SqlTrafficObservationRepository(session),
-                dataset_repository=SqlDatasetVersionRepository(session),
-                run_repository=SqlIngestionRunRepository(session),
-            )
-            result = await service.ingest_firms(
-                _bbox_from_args(args),
-                day_range=args.days,
-                region=args.region,
-                source=settings.firms_source,
-                stale_after_hours=settings.firms_stale_after_hours,
-            )
+            for source in settings.firms_source_list:
+                provider = FirmsProvider(
+                    client,
+                    map_key=settings.firms_map_key.get_secret_value(),
+                    source=source,
+                    base_url=settings.firms_base_url,
+                    timeout_seconds=settings.firms_timeout_seconds,
+                    max_retries=settings.firms_max_retries,
+                    h3_resolution=settings.h3_resolution,
+                    stale_after_hours=settings.firms_stale_after_hours,
+                )
+                service = EnvironmentalIngestionService(
+                    fire_provider=provider,
+                    fire_repository=SqlFireHotspotRepository(session),
+                    traffic_repository=SqlTrafficObservationRepository(session),
+                    dataset_repository=SqlDatasetVersionRepository(session),
+                    run_repository=SqlIngestionRunRepository(session),
+                )
+                results.append(
+                    await service.ingest_firms(
+                        _bbox_from_args(args),
+                        day_range=args.days,
+                        region=args.region,
+                        source=source,
+                        stale_after_hours=settings.firms_stale_after_hours,
+                    )
+                )
     finally:
         session.close()
-    print(
-        "FIRMS ingestion "
-        f"{'complete' if result.succeeded else 'failed'}: run={result.run.run_id} "
-        f"fetched={result.run.metrics.get('fetched_records', 0)} saved={result.saved} "
-        f"duplicates={result.skipped_duplicates} stale={result.run.metrics.get('stale_records', 0)} "
-        f"complete_query={result.run.metrics.get('query_complete', False)}"
-    )
-    for error in result.run.errors:
-        print(f"  {error}", file=sys.stderr)
-    return 0 if result.succeeded else 1
+    for result in results:
+        print(
+            f"FIRMS {result.run.dataset_id} "
+            f"{'complete' if result.succeeded else 'failed'}: "
+            f"fetched={result.run.metrics.get('fetched_records', 0)} saved={result.saved} "
+            f"duplicates={result.skipped_duplicates} "
+            f"stale={result.run.metrics.get('stale_records', 0)} "
+            f"complete_query={result.run.metrics.get('query_complete', False)}"
+        )
+        for error in result.run.errors:
+            print(f"  {error}", file=sys.stderr)
+    return 0 if results and all(result.succeeded for result in results) else 1
 
 
 async def _run_collect_due(_args: argparse.Namespace) -> int:

@@ -485,6 +485,7 @@ export interface FireReportWithStatus extends FireReportOut {
  *  didn't say. */
 export interface FireHotspotOut {
   detection_id: string
+  product: string
   /** The H3 cell the detection was snapped to at ingest time. */
   h3_cell: string
   latitude: number

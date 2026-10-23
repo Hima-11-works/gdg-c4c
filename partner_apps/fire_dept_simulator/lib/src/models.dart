@@ -13,7 +13,7 @@ library;
 
 // --- enums, with their wire spellings kept explicit ---
 
-enum IncidentSourceType { alert, report, publishedAlert, hotspotEvent }
+enum IncidentSourceType { alert, report, publishedAlert, hotspotEvent, firmsDetection }
 
 enum IncidentStatus {
   reported,
@@ -53,6 +53,7 @@ const Map<IncidentSourceType, String> _sourceToWire = {
   IncidentSourceType.report: 'report',
   IncidentSourceType.publishedAlert: 'published_alert',
   IncidentSourceType.hotspotEvent: 'hotspot_event',
+  IncidentSourceType.firmsDetection: 'firms_detection',
 };
 
 String wireOfStatus(IncidentStatus value) => _statusToWire[value]!;
@@ -381,5 +382,49 @@ class CitizenReport {
         durationHours: (json['duration_hours'] as num?)?.toDouble() ?? 0,
         notes: json['notes'] as String?,
         reportedAt: DateTime.parse(json['reported_at'] as String),
+      );
+}
+
+/// One persisted NASA FIRMS VIIRS detection. This remains satellite evidence,
+/// not a verified ground fire or a second independent confirmation.
+class FireDetection {
+  const FireDetection({
+    required this.id,
+    required this.h3Cell,
+    required this.product,
+    required this.latitude,
+    required this.longitude,
+    required this.frpMw,
+    required this.confidenceRaw,
+    required this.confidenceClass,
+    required this.acquiredAt,
+    required this.satellite,
+    this.brightnessTi4K,
+  });
+
+  final String id;
+  final String h3Cell;
+  final String product;
+  final double latitude;
+  final double longitude;
+  final double frpMw;
+  final double? brightnessTi4K;
+  final String confidenceRaw;
+  final String confidenceClass;
+  final DateTime acquiredAt;
+  final String satellite;
+
+  factory FireDetection.fromJson(Map<String, dynamic> json) => FireDetection(
+        id: json['detection_id'] as String,
+        h3Cell: (json['h3_cell'] as String?) ?? '',
+        product: (json['product'] as String?) ?? 'NASA FIRMS',
+        latitude: (json['latitude'] as num).toDouble(),
+        longitude: (json['longitude'] as num).toDouble(),
+        frpMw: (json['frp_mw'] as num).toDouble(),
+        brightnessTi4K: (json['brightness_ti4_k'] as num?)?.toDouble(),
+        confidenceRaw: (json['confidence_raw'] as String?) ?? 'unknown',
+        confidenceClass: (json['confidence_class'] as String?) ?? 'unknown',
+        acquiredAt: DateTime.parse(json['acquired_at'] as String),
+        satellite: (json['satellite'] as String?) ?? 'unknown satellite',
       );
 }

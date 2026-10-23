@@ -92,7 +92,9 @@ void main() {
       expect(wireOfRole(ResponderRole.pollutionControl), 'pollution_control');
       expect(roleFromWire('pollution_control'), ResponderRole.pollutionControl);
       expect(wireOfSource(IncidentSourceType.report), 'report');
+      expect(wireOfSource(IncidentSourceType.firmsDetection), 'firms_detection');
       expect(sourceTypeFromWire('alert'), IncidentSourceType.alert);
+      expect(sourceTypeFromWire('firms_detection'), IncidentSourceType.firmsDetection);
     });
 
     test('an unrecognised value is not invented', () {
