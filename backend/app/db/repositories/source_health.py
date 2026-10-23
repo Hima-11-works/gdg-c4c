@@ -63,6 +63,8 @@ _JOB_KEYS_BY_DATASET = {
     "nasa-firms": "environmental-pipeline",
     "open-meteo": "weather-collection",
     "copernicus-sentinel5p-aer-ai": "satellite-hotspot-scan",
+    "copernicus-sentinel5p": "satellite-hotspot-scan",
+    "copernicus-sentinel5p-no2": "satellite-hotspot-scan",
 }
 
 

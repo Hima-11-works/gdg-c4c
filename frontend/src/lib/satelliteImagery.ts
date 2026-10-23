@@ -8,16 +8,10 @@
 // the browser only ever talks to our API: the backend holds any credential,
 // caches upstream tiles, and can point at a mirror without a frontend change.
 //
-// The product is a DAILY composite, addressed by its UTC date in
-// YYYY-MM-DD. Two facts drive the date logic below:
-//
-//  1. The imagery is processed with a lag, so *today's* tiles are
-//     frequently missing or only partially populated (the classic
-//     "half the map is black" bug). Yesterday's composite is reliably
-//     complete, so that is the default date. The date travels as a query
-//     parameter rather than a path segment, so this module stays the one
-//     place that rule lives.
-//  2. Each GIBS product publishes its own tile pyramid, and asking for a
+// Each product is addressed by its UTC date in YYYY-MM-DD. The backend
+// selects that date from the product's WMTS time dimension and checks
+// representative tiles for the current viewport. Each GIBS product also
+// publishes its own tile pyramid, and asking for a
 //     level it doesn't have is a 400 upstream. True Color goes to zoom 9
 //     (`GoogleMapsCompatible_Level9`); Deep Blue AOD only to 6, so the AOD
 //     source caps at 6 and MapLibre overzooms the level-6 tiles past that.
@@ -26,6 +20,7 @@
 //     them.
 
 import { API_BASE_URL } from './api'
+import type { BoundingBox, GibsLayerAvailability } from './types'
 
 /** The most zoomed-in GIBS tile matrix for the True Color product. */
 export const GIBS_MAX_ZOOM = 9
@@ -49,20 +44,13 @@ export function gibsDateString(date: Date = new Date()): string {
   return `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())}`
 }
 
-/** Yesterday (UTC) — the newest GIBS daily composite that is reliably
- *  complete. Pass `now` for a deterministic value in tests. */
-export function latestImageryDate(now: Date = new Date()): Date {
-  const date = new Date(now.getTime())
-  date.setUTCDate(date.getUTCDate() - 1)
-  return date
-}
-
 /** The XYZ tile template the proxy is asked for, with the composite date as a
  *  query parameter. Note the `{z}/{y}/{x}` order: GIBS' WMTS REST convention
  *  is row-then-column, and MapLibre honours whatever order the placeholders
  *  appear in — swapping to `{x}/{y}` would request the wrong tiles. */
-export function gibsTrueColorTileUrl(date: Date = latestImageryDate()): string {
-  return `${GIBS_PROXY}/truecolor/{z}/{y}/{x}?date=${gibsDateString(date)}`
+export function gibsTrueColorTileUrl(date?: Date): string {
+  const query = date ? `?date=${gibsDateString(date)}` : ''
+  return `${GIBS_PROXY}/truecolor/{z}/{y}/{x}${query}`
 }
 
 // ---------------------------------------------------------------------------
@@ -84,8 +72,28 @@ export const GIBS_AOD_ATTRIBUTION = 'Aerosol: NASA GIBS / EOSDIS (VIIRS S-NPP De
  *  way. The upstream product name lives on the backend (the `aod` key in
  *  app.services.tiles.GIBS_LAYERS) now that the browser no longer builds
  *  GIBS URLs itself. */
-export function gibsAerosolTileUrl(date: Date = latestImageryDate()): string {
-  return `${GIBS_PROXY}/aod/{z}/{y}/{x}?date=${gibsDateString(date)}`
+export function gibsAerosolTileUrl(date?: Date): string {
+  const query = date ? `?date=${gibsDateString(date)}` : ''
+  return `${GIBS_PROXY}/aod/{z}/{y}/{x}${query}`
+}
+
+/** Ask the backend to select the newest advertised product date with usable
+ *  representative tiles for this map viewport. The reported fraction is a
+ *  tile-response sample, not pixel-level quality or area coverage. */
+export async function fetchGibsAvailability(
+  layer: 'truecolor' | 'aod',
+  bbox: BoundingBox,
+  signal?: AbortSignal,
+): Promise<GibsLayerAvailability> {
+  const query = new URLSearchParams({
+    min_lat: String(bbox.minLat),
+    min_lon: String(bbox.minLon),
+    max_lat: String(bbox.maxLat),
+    max_lon: String(bbox.maxLon),
+  })
+  const response = await fetch(`${GIBS_PROXY}/${layer}/availability?${query}`, { signal })
+  if (!response.ok) throw new Error(`GIBS availability request failed (${response.status})`)
+  return (await response.json()) as GibsLayerAvailability
 }
 
 // ---------------------------------------------------------------------------

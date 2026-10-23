@@ -82,7 +82,7 @@ export function LayerToggle() {
         <div className="layer-toggle-extra" role="group" aria-label="Signal layers">
           <label
             className="layer-toggle-option"
-            title="NASA GIBS VIIRS Suomi-NPP True Color daily satellite imagery, drawn as a raster basemap under the hex grid (yesterday's UTC composite, real imagery)"
+            title="NASA GIBS VIIRS Suomi-NPP True Color daily satellite imagery. The backend selects the newest date with usable map tiles for the current viewport."
           >
             <input
               type="checkbox"
@@ -91,6 +91,9 @@ export function LayerToggle() {
             />
             Live Satellite Imagery (VIIRS)
           </label>
+          <span className="layer-sub-hint">
+            {availabilityHint('True color', state.satelliteImageryAvailability)}
+          </span>
 
           <div className="layer-toggle-group-item">
             <label
@@ -150,10 +153,13 @@ export function LayerToggle() {
             />
             Seasonal Smog (Aerosol Optical Depth)
           </label>
+          <span className="layer-sub-hint">
+            {availabilityHint('Aerosol optical depth', state.satelliteImageryAvailability, true)}
+          </span>
 
           <label
             className="layer-toggle-option"
-            title="Copernicus Sentinel-5P tropospheric NO2 via WMS. Inert until VITE_NO2_WMS_URL is set to a GetMap endpoint - no fabricated data is shown in the meantime."
+            title="Copernicus Sentinel-5P tropospheric NO2 via WMS. Inert until the backend NO2_WMS_URL is set to a GetMap endpoint - no fabricated data is shown in the meantime."
           >
             <input
               type="checkbox"
@@ -208,4 +214,20 @@ export function LayerToggle() {
       </div>
     </SidePanel>
   )
+}
+
+function availabilityHint(
+  label: string,
+  availability: ReturnType<typeof useMapUi>['state']['satelliteImageryAvailability'],
+  aod = false,
+): string {
+  if (availability === null || availability.status === 'loading') {
+    return `Checking newest ${label.toLowerCase()} date…`
+  }
+  if (availability.status === 'error') return `${label} date availability could not be checked.`
+  const layer = aod ? availability.aod : availability.truecolor
+  if (!layer?.date) return `No ${label.toLowerCase()} tile is available in the sampled area.`
+  const percent =
+    layer.coverage_fraction === null ? '' : ` (${Math.round(layer.coverage_fraction * 100)}% of sampled tiles)`
+  return `${label} product date ${layer.date}${percent}. HTTP tile sample, not pixel-level QA.`
 }

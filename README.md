@@ -272,6 +272,7 @@ To enable configured external source ingestion, populate the following credentia
 DEMO_MODE=false
 OPENAQ_API_KEY=your_openaq_api_key
 CDSE_REFRESH_TOKEN=your_copernicus_data_space_token
+CDSE_SECRET_ENCRYPTION_KEY=your_fernet_key_from_cryptography_fernet_Fernet_generate_key
 FIRMS_MAP_KEY=your_nasa_firms_map_key
 INGEST_BBOX_MIN_LAT=28.40
 INGEST_BBOX_MIN_LON=76.80
@@ -279,7 +280,8 @@ INGEST_BBOX_MAX_LAT=28.90
 INGEST_BBOX_MAX_LON=77.50
 ```
 
-- **Hourly Automation**: An automated workflow in [`.github/workflows/pipeline.yml`](.github/workflows/pipeline.yml) triggers hourly ingestion, updating H3 grid states, advection forecasts, and alert registries.
+- **Scheduled collection**: The workflow in [`.github/workflows/pipeline.yml`](.github/workflows/pipeline.yml) wakes due collector jobs every five minutes; GitHub may delay scheduled runs, and satellite coverage still depends on overpass and product publication.
+- **Satellite credentials**: Generate `CDSE_SECRET_ENCRYPTION_KEY` with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` and store it with `CDSE_REFRESH_TOKEN` as a deployment secret. The database stores rotated refresh tokens only as Fernet ciphertext. Keep the same key available to the worker and API; re-encrypt stored credentials with the old key before changing it.
 - **Manual Pipeline Trigger**:
   ```bash
   docker compose exec api python -m app.pipeline.run
@@ -379,7 +381,9 @@ python -m app.federation_client --participant region-b --aggregator-url http://l
 | `GET /api/v1/incidents` | Backend incident workflow queue used by the simulator | [Incidents Contract](docs/api/incidents.md) |
 | `POST /api/v1/incidents` | Instantiate incident from published alert, fire report, or hotspot | [Incidents Contract](docs/api/incidents.md) |
 | `POST /api/v1/incidents/{id}/transition` | Progress incident state (`ACKNOWLEDGED` → `EN ROUTE` → `ON SCENE` → `RESOLVED`) | [Incidents Contract](docs/api/incidents.md) |
-| `GET /api/v1/tiles/{layer}/{z}/{x}/{y}.png` | Satellite raster tile proxy (NASA GIBS TrueColor, GIBS Deep Blue AOD, Sentinel-5P NO2) | [Source Inventory](docs/ENVIRONMENTAL_SOURCE_INVENTORY.md) |
+| `GET /api/v1/tiles/gibs/{layer}/availability?min_lat=&min_lon=&max_lat=&max_lon=` | Newest GIBS date with responding sample tiles for the visible map area | [Source Inventory](docs/ENVIRONMENTAL_SOURCE_INVENTORY.md) |
+| `GET /api/v1/tiles/gibs/{layer}/{z}/{y}/{x}?date=` | NASA GIBS TrueColor or Deep Blue AOD raster tile; defaults to the latest WMTS-advertised date | [Source Inventory](docs/ENVIRONMENTAL_SOURCE_INVENTORY.md) |
+| `GET /api/v1/tiles/no2/{z}/{y}/{x}` | Proxied Sentinel-5P NO2 WMS tile when a backend endpoint is configured | [Source Inventory](docs/ENVIRONMENTAL_SOURCE_INVENTORY.md) |
 | `GET /api/v1/federation/status` | Recorded status for the configured federation demonstration | [Federation Contract](docs/api/federation.md) |
 
 ---

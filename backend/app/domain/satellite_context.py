@@ -55,6 +55,10 @@ class SatelliteIndicatorContext(BaseModel):
     valid_pixels: int | None = None
     source: str
     product_version: str | None = None
+    product_id: str | None = None
+    product_name: str | None = None
+    sampled_pixels: int | None = None
+    coverage_note: str | None = None
     disclaimer: str = "satellite indicator — not ground-level concentration"
 
 

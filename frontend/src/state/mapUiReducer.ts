@@ -14,6 +14,7 @@ import type { MapScope } from '../lib/scope'
 import type { MapTheme } from '../lib/mapTheme'
 import type { LocationKind } from '../lib/locations'
 import type { BoundingBox } from '../lib/types'
+import type { SatelliteImageryAvailability } from '../lib/types'
 import type { FreightCorridorProperties } from '../lib/freightCorridors'
 
 /** How the pollution field is drawn: discrete H3 hexagons, or a smooth
@@ -87,6 +88,8 @@ export interface MapUiState {
    * tier). MapPage only fetches once this is in the shape `lod` needs —
    * see its `viewportReady` check. */
   bbox: BoundingBox | null
+  /** GIBS product dates and representative tile availability for the map area. */
+  satelliteImageryAvailability: SatelliteImageryAvailability | null
 }
 
 export type MapUiAction =
@@ -120,6 +123,7 @@ export type MapUiAction =
   | { type: 'TOGGLE_CELL'; cell: string; generalized?: boolean }
   | { type: 'SELECT_CORRIDOR'; corridor: FreightCorridorProperties | null }
   | { type: 'SET_VIEWPORT'; zoom: number; bbox: BoundingBox }
+  | { type: 'SET_SATELLITE_IMAGERY_AVAILABILITY'; value: SatelliteImageryAvailability | null }
 
 // The app opens fitted to all of India (see MapView's INDIA_BOUNDS), so
 // this matches lodForZoom's own country-tier default rather than
@@ -153,6 +157,7 @@ export const initialMapUiState: MapUiState = {
   selectedCorridor: null,
   lod: { tier: 'country', level: 1, resolution: 3, scopedToViewport: false },
   bbox: null,
+  satelliteImageryAvailability: null,
 }
 
 /** Selection state with the cell's own resolution derived from the cell
@@ -315,6 +320,8 @@ export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState
       const lod = lodForZoom(action.zoom)
       return { ...state, zoom: action.zoom, lod, bbox: lod.scopedToViewport ? action.bbox : null }
     }
+    case 'SET_SATELLITE_IMAGERY_AVAILABILITY':
+      return { ...state, satelliteImageryAvailability: action.value }
     default:
       return state
   }

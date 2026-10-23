@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime, timedelta
 
 import h5py
@@ -84,6 +85,9 @@ def test_parser_applies_scale_and_qa_and_records_raw_index(tmp_path) -> None:
     assert tile.quality_value == pytest.approx((0.95 + 0.90 + 0.85) / 3)
     assert tile.cloud_fraction is None
     assert tile.raw_index_unit.startswith("unitless UV aerosol index")
+    assert tile.valid_pixel_count == 3
+    assert tile.sampled_pixel_count == 6
+    assert artifact.provider_product_name == path.name
     assert "2 in-bounds pixels rejected by QA" in artifact.notes
     assert "not PM2.5" in artifact.notes
 
@@ -137,3 +141,55 @@ async def test_download_refreshes_token_and_does_not_forward_it_to_object_store(
         path.unlink(missing_ok=True)
 
     assert seen_authorization == ["Bearer short-lived-token", None]
+
+
+def test_access_token_refresh_persists_rotated_refresh_token_and_respects_expiry() -> None:
+    requests: list[dict[str, str]] = []
+    persisted: list[str] = []
+    responses = iter(("access-one", "access-two"))
+
+    class ImmediateClient:
+        async def request(self, method: str, url: str, **kwargs: object) -> httpx.Response:
+            assert method == "POST"
+            assert url == (
+                "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/"
+                "protocol/openid-connect/token"
+            )
+            data = kwargs["data"]
+            assert isinstance(data, dict)
+            requests.append(data)
+            access = next(responses)
+            return httpx.Response(
+                200,
+                json={
+                    "access_token": access,
+                    "expires_in": 600,
+                    "refresh_token": f"rotated-{len(requests)}",
+                },
+            )
+
+    async def persist(token: str) -> None:
+        persisted.append(token)
+
+    def finish(coroutine):
+        try:
+            coroutine.send(None)
+        except StopIteration as completed:
+            return completed.value
+        raise AssertionError(
+            "the immediate credential test unexpectedly yielded to an event loop"
+        )
+
+    provider = CopernicusSentinel5PProvider(
+        ImmediateClient(),  # type: ignore[arg-type]
+        refresh_token="seed-token",
+        persist_refresh_token=persist,
+    )
+    assert finish(provider._get_access_token()) == "access-one"
+    provider._access_token_expires_at = time.monotonic() - 1
+    assert finish(provider._get_access_token()) == "access-two"
+    assert [request["refresh_token"] for request in requests] == [
+        "seed-token",
+        "rotated-1",
+    ]
+    assert persisted == ["rotated-1", "rotated-2"]

@@ -16,7 +16,9 @@ import math
 import random
 import re
 import tempfile
+import time
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -185,6 +187,70 @@ def _parse_time(value: object, *, fallback: datetime | None = None) -> datetime:
     return fallback.astimezone(UTC)
 
 
+def _aggregate_product_cells(
+    *,
+    latitude: np.ndarray,
+    longitude: np.ndarray,
+    values: np.ndarray,
+    quality: np.ndarray,
+    bbox: BoundingBox,
+    h3_resolution: int,
+    min_quality: float,
+    max_tiles: int,
+) -> dict[str, tuple[float, float, int, int]]:
+    """Return QA-qualified mean, mean QA, valid samples, and geolocated samples by cell."""
+    in_footprint = (
+        np.isfinite(latitude)
+        & np.isfinite(longitude)
+        & (latitude >= bbox.min_lat)
+        & (latitude <= bbox.max_lat)
+        & (longitude >= bbox.min_lon)
+        & (longitude <= bbox.max_lon)
+    )
+    footprint_rows, footprint_columns = np.nonzero(in_footprint)
+    if not len(footprint_rows):
+        return {}
+
+    sampled_counts: dict[str, int] = {}
+    for row, column in zip(footprint_rows.tolist(), footprint_columns.tolist(), strict=True):
+        cell = h3.latlng_to_cell(
+            float(latitude[row, column]),
+            float(longitude[row, column]),
+            h3_resolution,
+        )
+        sampled_counts[cell] = sampled_counts.get(cell, 0) + 1
+    if len(sampled_counts) > max_tiles:
+        raise ValueError(
+            f"swath produced {len(sampled_counts)} H3 cells, above the {max_tiles} cell limit"
+        )
+
+    valid = (
+        in_footprint
+        & np.isfinite(values)
+        & np.isfinite(quality)
+        # Source QA is commonly float32; keep the strict cutoff stable across
+        # its representation instead of admitting a rounded equality value.
+        & (quality > min_quality + _QA_THRESHOLD_EPSILON)
+    )
+    rows, columns = np.nonzero(valid)
+    aggregates: dict[str, list[float]] = {}
+    for row, column in zip(rows.tolist(), columns.tolist(), strict=True):
+        cell = h3.latlng_to_cell(
+            float(latitude[row, column]),
+            float(longitude[row, column]),
+            h3_resolution,
+        )
+        aggregate = aggregates.setdefault(cell, [0.0, 0.0, 0.0])
+        aggregate[0] += float(values[row, column])
+        aggregate[1] += float(quality[row, column])
+        aggregate[2] += 1.0
+
+    return {
+        cell: (totals[0], totals[1], int(totals[2]), sampled_counts[cell])
+        for cell, totals in aggregates.items()
+    }
+
+
 def parse_product(
     path: Path | str,
     *,
@@ -228,37 +294,32 @@ def parse_product(
             raise ValueError("Sentinel-5P geolocation, aerosol index, and QA shapes differ")
         version = _product_version(handle, product_name)
 
-    valid = (
-        np.isfinite(latitude)
-        & np.isfinite(longitude)
-        & np.isfinite(uvai)
-        & np.isfinite(quality)
-        # Source QA is commonly stored as float32; decimal values such as
-        # 0.8 decode a few ulps above 0.8. Keep the documented strict cutoff
-        # stable across that representation instead of admitting equality.
-        & (quality > min_quality + _QA_THRESHOLD_EPSILON)
-        & (latitude >= bbox.min_lat)
-        & (latitude <= bbox.max_lat)
-        & (longitude >= bbox.min_lon)
-        & (longitude <= bbox.max_lon)
+    aggregates = _aggregate_product_cells(
+        latitude=latitude,
+        longitude=longitude,
+        values=uvai,
+        quality=quality,
+        bbox=bbox,
+        h3_resolution=h3_resolution,
+        min_quality=min_quality,
+        max_tiles=max_tiles,
     )
-    rows, columns = np.nonzero(valid)
-    aggregates: dict[str, list[float]] = {}
-    for row, column in zip(rows.tolist(), columns.tolist(), strict=True):
-        lat = float(latitude[row, column])
-        lon = float(longitude[row, column])
-        cell = h3.latlng_to_cell(lat, lon, h3_resolution)
-        aggregate = aggregates.setdefault(cell, [0.0, 0.0, 0.0])
-        aggregate[0] += float(uvai[row, column])
-        aggregate[1] += float(quality[row, column])
-        aggregate[2] += 1.0
-    if len(aggregates) > max_tiles:
-        raise ValueError(
-            f"swath produced {len(aggregates)} H3 cells, above the {max_tiles} cell limit"
+    excluded_quality = int(
+        np.count_nonzero(
+            np.isfinite(latitude)
+            & np.isfinite(longitude)
+            & np.isfinite(uvai)
+            & np.isfinite(quality)
+            & (quality <= min_quality + _QA_THRESHOLD_EPSILON)
+            & (latitude >= bbox.min_lat)
+            & (latitude <= bbox.max_lat)
+            & (longitude >= bbox.min_lon)
+            & (longitude <= bbox.max_lon)
         )
+    )
 
     tiles = []
-    for cell, (uvai_sum, quality_sum, count) in sorted(aggregates.items()):
+    for cell, (uvai_sum, quality_sum, count, sampled_count) in sorted(aggregates.items()):
         raw_uvai = uvai_sum / count
         mean_quality = quality_sum / count
         lat, lon = h3.cell_to_latlng(cell)
@@ -274,20 +335,10 @@ def parse_product(
                 raw_index_value=raw_uvai,
                 raw_index_unit=UVAI_UNIT,
                 quality_value=mean_quality,
+                valid_pixel_count=count,
+                sampled_pixel_count=sampled_count,
             )
         )
-
-    excluded_quality = int(np.count_nonzero(
-        np.isfinite(latitude)
-        & np.isfinite(longitude)
-        & np.isfinite(uvai)
-        & np.isfinite(quality)
-        & (quality <= min_quality + _QA_THRESHOLD_EPSILON)
-        & (latitude >= bbox.min_lat)
-        & (latitude <= bbox.max_lat)
-        & (longitude >= bbox.min_lon)
-        & (longitude <= bbox.max_lon)
-    ))
     return ImageryArtifact(
         artifact_id=f"cdse-s5p:{product_id}",
         source="Copernicus Data Space Ecosystem",
@@ -302,10 +353,13 @@ def parse_product(
         acquired_at=acquired_at,
         available_at=available_at,
         synthetic=False,
+        provider_product_name=product_name,
         notes=(
             f"CDSE OData product {product_name}; {len(tiles)} H3 cells from "
-            f"{len(rows)} QA-qualified pixels (qa_value > {min_quality:g}); "
-            f"{excluded_quality} in-bounds pixels rejected by QA. Cell values are means. "
+            f"{sum(tile.valid_pixel_count for tile in tiles)} QA-qualified pixels "
+            f"(qa_value > {min_quality:g}); {excluded_quality} in-bounds pixels rejected by QA; "
+            "per-cell sample support is retained. "
+            "Cell values are means. "
             "Cloud fraction is not supplied by this product. UVAI highlights UV-absorbing "
             "aerosols such as smoke and dust; it is not PM2.5 and does not identify a source. "
             "Operational raw UVAI thresholds are recorded in scan config and require local "
@@ -357,34 +411,32 @@ def parse_no2_product(
             raise ValueError("Sentinel-5P geolocation, NO2 column, and QA shapes differ")
         version = _product_version(handle, product_name)
 
-    valid = (
-        np.isfinite(latitude)
-        & np.isfinite(longitude)
-        & np.isfinite(no2)
-        & np.isfinite(quality)
-        & (quality > min_quality + _QA_THRESHOLD_EPSILON)
-        & (latitude >= bbox.min_lat)
-        & (latitude <= bbox.max_lat)
-        & (longitude >= bbox.min_lon)
-        & (longitude <= bbox.max_lon)
+    aggregates = _aggregate_product_cells(
+        latitude=latitude,
+        longitude=longitude,
+        values=no2,
+        quality=quality,
+        bbox=bbox,
+        h3_resolution=h3_resolution,
+        min_quality=min_quality,
+        max_tiles=max_tiles,
     )
-    rows, columns = np.nonzero(valid)
-    aggregates: dict[str, list[float]] = {}
-    for row, column in zip(rows.tolist(), columns.tolist(), strict=True):
-        lat = float(latitude[row, column])
-        lon = float(longitude[row, column])
-        cell = h3.latlng_to_cell(lat, lon, h3_resolution)
-        aggregate = aggregates.setdefault(cell, [0.0, 0.0, 0.0])
-        aggregate[0] += float(no2[row, column])
-        aggregate[1] += float(quality[row, column])
-        aggregate[2] += 1.0
-    if len(aggregates) > max_tiles:
-        raise ValueError(
-            f"swath produced {len(aggregates)} H3 cells, above the {max_tiles} cell limit"
+    excluded_quality = int(
+        np.count_nonzero(
+            np.isfinite(latitude)
+            & np.isfinite(longitude)
+            & np.isfinite(no2)
+            & np.isfinite(quality)
+            & (quality <= min_quality + _QA_THRESHOLD_EPSILON)
+            & (latitude >= bbox.min_lat)
+            & (latitude <= bbox.max_lat)
+            & (longitude >= bbox.min_lon)
+            & (longitude <= bbox.max_lon)
         )
+    )
 
     tiles = []
-    for cell, (no2_sum, quality_sum, count) in sorted(aggregates.items()):
+    for cell, (no2_sum, quality_sum, count, sampled_count) in sorted(aggregates.items()):
         raw_no2 = no2_sum / count
         mean_quality = quality_sum / count
         lat, lon = h3.cell_to_latlng(cell)
@@ -402,20 +454,10 @@ def parse_no2_product(
                 raw_index_value=raw_no2,
                 raw_index_unit=NO2_UNIT,
                 quality_value=mean_quality,
+                valid_pixel_count=count,
+                sampled_pixel_count=sampled_count,
             )
         )
-
-    excluded_quality = int(np.count_nonzero(
-        np.isfinite(latitude)
-        & np.isfinite(longitude)
-        & np.isfinite(no2)
-        & np.isfinite(quality)
-        & (quality <= min_quality + _QA_THRESHOLD_EPSILON)
-        & (latitude >= bbox.min_lat)
-        & (latitude <= bbox.max_lat)
-        & (longitude >= bbox.min_lon)
-        & (longitude <= bbox.max_lon)
-    ))
     return ImageryArtifact(
         artifact_id=f"cdse-s5p-no2:{product_id}",
         source="Copernicus Data Space Ecosystem",
@@ -428,10 +470,12 @@ def parse_no2_product(
         acquired_at=acquired_at,
         available_at=available_at,
         synthetic=False,
+        provider_product_name=product_name,
         notes=(
             f"CDSE OData product {product_name}; {len(tiles)} H3 cells from "
-            f"{len(rows)} QA-qualified pixels (qa_value > {min_quality:g}); "
-            f"{excluded_quality} in-bounds pixels rejected by QA. "
+            f"{sum(tile.valid_pixel_count for tile in tiles)} QA-qualified pixels "
+            f"(qa_value > {min_quality:g}); {excluded_quality} in-bounds pixels rejected by QA; "
+            "per-cell sample support is retained. "
             f"Cell values are means in {NO2_UNIT}. "
             "Satellite tropospheric NO2 column density is a column total and not ground-level "
             "concentration or CPCB AQI."
@@ -452,6 +496,7 @@ class CopernicusSentinel5PProvider:
         max_product_bytes: int = 150_000_000,
         max_tiles: int = 20_000,
         request_budget: RequestBudget | None = None,
+        persist_refresh_token: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         if not refresh_token.strip():
             raise ValueError("CDSE refresh token is required")
@@ -462,12 +507,16 @@ class CopernicusSentinel5PProvider:
         self.max_product_bytes = max_product_bytes
         self.max_tiles = max_tiles
         self.request_budget = request_budget
+        self.persist_refresh_token = persist_refresh_token
+        self._refresh_token = refresh_token
         self._access_token: str | None = None
+        self._access_token_expires_at = 0.0
+        self._token_lock = asyncio.Lock()
 
     async def _reserve(self, url: str, *, bytes_reserved: int = 0) -> int | None:
         if self.request_budget is None:
             return None
-        key_hash = hashlib.sha256(f"cdse\0{url}".encode("utf-8")).hexdigest()
+        key_hash = hashlib.sha256(f"cdse\0{url}".encode()).hexdigest()
         reservation = await self.request_budget.reserve_request(
             provider="cdse",
             request_key_hash=key_hash,
@@ -525,27 +574,54 @@ class CopernicusSentinel5PProvider:
                     bytes_used=len(response.content),
                 )
 
-    async def _get_access_token(self) -> str:
-        if self._access_token:
-            return self._access_token
-        response = await self._request(
-            "POST",
-            IDENTITY_TOKEN_URL,
-            data={
-                "grant_type": "refresh_token",
-                "refresh_token": self.refresh_token,
-                "client_id": "cdse-public",
-            },
-            timeout=self.timeout_seconds,
-        )
-        if response.status_code != 200:
-            raise RuntimeError(f"CDSE token refresh failed (HTTP {response.status_code})")
-        payload = response.json()
-        token = payload.get("access_token")
-        if not isinstance(token, str) or not token:
-            raise RuntimeError("CDSE token response did not contain an access token")
-        self._access_token = token
-        return token
+    async def _get_access_token(self, *, force_refresh: bool = False) -> str:
+        async with self._token_lock:
+            if (
+                not force_refresh
+                and self._access_token is not None
+                and time.monotonic() < self._access_token_expires_at
+            ):
+                return self._access_token
+            response = await self._request(
+                "POST",
+                IDENTITY_TOKEN_URL,
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": self._refresh_token,
+                    "client_id": "cdse-public",
+                },
+                timeout=self.timeout_seconds,
+            )
+            if response.status_code != 200:
+                raise RuntimeError(f"CDSE token refresh failed (HTTP {response.status_code})")
+            payload = response.json()
+            token = payload.get("access_token")
+            if not isinstance(token, str) or not token:
+                raise RuntimeError("CDSE token response did not contain an access token")
+            try:
+                expires_in = max(0.0, float(payload.get("expires_in", 600)))
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("CDSE token response contained invalid expiry metadata") from exc
+            if expires_in <= 1:
+                raise RuntimeError("CDSE access token expires too soon to use safely")
+
+            rotated_refresh_token = payload.get("refresh_token")
+            if isinstance(rotated_refresh_token, str) and rotated_refresh_token:
+                if rotated_refresh_token != self._refresh_token:
+                    if self.persist_refresh_token is None:
+                        raise RuntimeError(
+                            "CDSE rotated its refresh token but no secure persistence is configured"
+                        )
+                    # Persist before replacing the in-memory credential. A
+                    # scheduled process must be able to resume with this value.
+                    await self.persist_refresh_token(rotated_refresh_token)
+                    self._refresh_token = rotated_refresh_token
+
+            self._access_token = token
+            # Refresh before upstream expiry, with enough headroom for a large
+            # product download and small clock skew between provider/app.
+            self._access_token_expires_at = time.monotonic() + max(expires_in - 60, 1)
+            return token
 
     async def list_products(
         self,
@@ -553,12 +629,20 @@ class CopernicusSentinel5PProvider:
         bbox: BoundingBox,
         since: datetime,
         until: datetime,
+        product_type: str = PRODUCT_TYPE,
     ) -> list[dict[str, object]]:
+        if product_type not in {PRODUCT_TYPE, NO2_PRODUCT_TYPE}:
+            raise ValueError(f"unsupported Sentinel-5P product type: {product_type}")
+        catalog_filter = (
+            build_no2_catalog_filter(bbox=bbox, since=since, until=until)
+            if product_type == NO2_PRODUCT_TYPE
+            else build_catalog_filter(bbox=bbox, since=since, until=until)
+        )
         response = await self._request(
             "GET",
             CATALOG_URL,
             params={
-                "$filter": build_catalog_filter(bbox=bbox, since=since, until=until),
+                "$filter": catalog_filter,
                 "$orderby": "ContentDate/Start desc",
                 "$top": self.max_products * 4,
                 "$expand": "Attributes",
@@ -680,10 +764,42 @@ class CopernicusSentinel5PProvider:
         processed_ids: set[str],
         h3_resolution: int = 6,
         min_quality: float = 0.8,
+        product_type: str | None = PRODUCT_TYPE,
+        no2_min_quality: float = NO2_MIN_QUALITY_DEFAULT,
     ) -> list[ImageryArtifact]:
-        products = await self.list_products(bbox=bbox, since=since, until=until)
+        if product_type is None:
+            uvai_products = await self.list_products(
+                bbox=bbox,
+                since=since,
+                until=until,
+                product_type=PRODUCT_TYPE,
+            )
+            no2_products = await self.list_products(
+                bbox=bbox,
+                since=since,
+                until=until,
+                product_type=NO2_PRODUCT_TYPE,
+            )
+            products = [
+                *((product, PRODUCT_TYPE) for product in uvai_products),
+                *((product, NO2_PRODUCT_TYPE) for product in no2_products),
+            ]
+            products.sort(
+                key=lambda item: str(item[0].get("PublicationDate", "")),
+                reverse=True,
+            )
+        else:
+            products = [
+                (product, product_type)
+                for product in await self.list_products(
+                    bbox=bbox,
+                    since=since,
+                    until=until,
+                    product_type=product_type,
+                )
+            ]
         artifacts: list[ImageryArtifact] = []
-        for product in products:
+        for product, current_product_type in products:
             product_id = str(product.get("Id", ""))
             product_name = str(product.get("Name", ""))
             if not product_id or not product_name:
@@ -705,8 +821,10 @@ class CopernicusSentinel5PProvider:
             )
             path = await self._download(product_id)
             try:
+                is_no2 = current_product_type == NO2_PRODUCT_TYPE
+                parser = parse_no2_product if is_no2 else parse_product
                 artifact = await asyncio.to_thread(
-                    parse_product,
+                    parser,
                     path,
                     product_id=product_id,
                     product_name=product_name,
@@ -714,7 +832,7 @@ class CopernicusSentinel5PProvider:
                     available_at=max(available_at, acquired_at),
                     bbox=bbox,
                     h3_resolution=h3_resolution,
-                    min_quality=min_quality,
+                    min_quality=no2_min_quality if is_no2 else min_quality,
                     max_tiles=self.max_tiles,
                 )
             finally:

@@ -186,8 +186,12 @@ class Settings(BaseSettings):
     # scanner queries NRT Level-2 AER_AI swaths, filters qa_value, and stores
     # raw UVAI separately from its normalized detector input.
     cdse_refresh_token: SecretStr | None = None
+    # Fernet key held in the deployment secret store. Only the encrypted,
+    # rotated CDSE refresh token is persisted in PostgreSQL.
+    cdse_secret_encryption_key: SecretStr | None = None
     hotspot_sentinel5p_max_age_hours: float = Field(default=30.0, gt=0)
     hotspot_sentinel5p_min_quality: float = Field(default=0.8, ge=0, le=1)
+    hotspot_sentinel5p_no2_min_quality: float = Field(default=0.5, ge=0, le=1)
     # Initial review-screening thresholds in raw dimensionless UVAI units;
     # these are operational knobs, not validated detection probabilities.
     hotspot_sentinel5p_uvai_threshold: float = Field(default=1.0, ge=-1, le=5)

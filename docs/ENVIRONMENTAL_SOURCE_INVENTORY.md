@@ -14,6 +14,8 @@ units, spatial support, attribution, and retention terms are recorded in a
 | Roads and land-use activity | OpenStreetMap regional extract | Static activity proxies | Road length by class and major-road distance per H3 cell | Road geometry is a proxy, not traffic volume |
 | Land cover | ESA WorldCover | Built-up, vegetation and bare-soil features | Versioned raster fractions per H3 cell | Store product year/version and covered fraction |
 | Satellite fires | NASA FIRMS | Upwind fire feature and map evidence | Near-real-time detections; aggregate age, FRP and confidence | Keep separate from citizen reports; do not double count |
+| Satellite column indicators | Copernicus Sentinel-5P TROPOMI NRTI UVAI and tropospheric NO2 | UVAI supports human-reviewed aerosol screening; NO2 is cell context | QA-qualified source pixels aggregated to H3; retain native units, support counts, acquisition/publication times and product version | Column indicators are not ground-level PM2.5 or statutory AQI; UVAI alone does not identify a source |
+| Satellite map context | NASA GIBS VIIRS True Color and Deep Blue AOD | Human visual context and regional aerosol overlay | Daily product date comes from WMTS capabilities; backend probes a bounded set of representative tiles for the current map area | Sampled HTTP tile availability is not pixel-level QA or geographic-area coverage |
 | Traffic | Future approved traffic provider | Time-varying road activity proxy | Selected corridors first; store speed/free-flow/confidence | Missing traffic is unknown, never zero |
 | Optional regional background | CAMS via a compatible provider | Coarse modeled prior/fallback | Native model resolution must be exposed | Never present as fine-scale ground truth |
 
@@ -62,6 +64,8 @@ shown in the v2 response or dashboard metadata when the source contributes:
 | OpenStreetMap | `© OpenStreetMap contributors` / ODbL |
 | ESA WorldCover | `ESA WorldCover` / product terms |
 | NASA FIRMS | `NASA FIRMS` / NASA Earth data terms |
+| Copernicus Sentinel-5P | `Contains modified Copernicus Sentinel data, processed by ESA` / `CC BY-SA 3.0 IGO` |
+| NASA GIBS | `NASA GIBS / EOSDIS` / product-specific NASA data terms |
 | Traffic provider | Provider-specific attribution and retention terms, required before live activation |
 
 The repository's source adapters must fail visibly when a required source is

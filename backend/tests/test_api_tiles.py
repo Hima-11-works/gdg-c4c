@@ -11,7 +11,8 @@ mapping, that a second identical request is served from cache, and that the
 NO2 token never appears in a response.
 """
 
-from datetime import UTC, date, datetime, timedelta
+import asyncio
+from datetime import date
 
 import httpx
 import pytest
@@ -21,11 +22,33 @@ from pydantic import SecretStr
 from app.api.deps import get_tile_service
 from app.core.config import get_settings
 from app.main import create_app
-from app.services.tiles import GIBS_LAYERS, TileService, tile_bbox_3857
+from app.services.tiles import (
+    GIBS_LAYERS,
+    TileService,
+    _time_values_from_capabilities,
+    tile_bbox_3857,
+)
 
 TOKEN = "super-secret-token-value"
 GIBS_BASE = "https://gibs.test/wmts/epsg3857/best"
 NO2_URL = "https://no2.test/wms"
+GIBS_CAPABILITIES = b"""<?xml version="1.0" encoding="UTF-8"?>
+<Capabilities xmlns="http://www.opengis.net/wmts/1.0">
+  <Contents>
+    <Layer>
+      <Identifier>VIIRS_SNPP_CorrectedReflectance_TrueColor</Identifier>
+      <Dimension><Identifier>Time</Identifier><Default>2026-10-23</Default>
+        <Value>2026-10-22</Value><Value>2026-10-23</Value>
+      </Dimension>
+    </Layer>
+    <Layer>
+      <Identifier>VIIRS_SNPP_AOD_Deep_Blue_Land_Ocean</Identifier>
+      <Dimension><Identifier>Time</Identifier><Default>2026-10-23</Default>
+        <Value>2026-10-22</Value><Value>2026-10-23</Value>
+      </Dimension>
+    </Layer>
+  </Contents>
+</Capabilities>"""
 
 
 class _Upstream:
@@ -40,6 +63,12 @@ class _Upstream:
         self.requests.append(request)
         if self._respond is not None:
             return self._respond(request)
+        if request.url.path.endswith("WMTSCapabilities.xml"):
+            return httpx.Response(
+                200,
+                content=GIBS_CAPABILITIES,
+                headers={"content-type": "application/xml"},
+            )
         return httpx.Response(200, content=b"tile-bytes", headers={"content-type": "image/png"})
 
     @property
@@ -79,7 +108,7 @@ def test_gibs_true_color_tile_is_proxied_with_the_requested_date(
     assert response.status_code == 200
     assert response.content == b"tile-bytes"
     assert response.headers["content-type"] == "image/jpeg"
-    assert "max-age=86400" in response.headers["cache-control"]
+    assert "max-age=3600" in response.headers["cache-control"]
     assert upstream.urls == [
         f"{GIBS_BASE}/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/"
         f"2026-09-20/GoogleMapsCompatible_Level9/7/45/88.jpg"
@@ -99,13 +128,94 @@ def test_gibs_aod_tile_uses_the_aerosol_product_and_png(upstream: _Upstream) -> 
     ]
 
 
-def test_gibs_date_defaults_to_yesterday_utc(upstream: _Upstream) -> None:
-    yesterday = (datetime.now(UTC) - timedelta(days=1)).date().isoformat()
-
+def test_gibs_date_defaults_to_latest_wmts_advertised_date(upstream: _Upstream) -> None:
     response = _client(upstream).get("/api/v1/tiles/gibs/truecolor/3/2/5")
 
     assert response.status_code == 200
-    assert f"/default/{yesterday}/" in upstream.urls[0]
+    assert len(upstream.requests) == 2
+    assert upstream.urls[0].endswith("/1.0.0/WMTSCapabilities.xml")
+    assert "/default/2026-10-23/" in upstream.urls[1]
+
+
+def test_gibs_capabilities_expand_daily_time_ranges_for_fallback() -> None:
+    xml = b"""<Capabilities><Layer>
+      <Identifier>VIIRS_SNPP_CorrectedReflectance_TrueColor</Identifier>
+      <Dimension><Identifier>Time</Identifier>
+        <Value>2026-10-20/2026-10-23/P1D</Value>
+      </Dimension>
+    </Layer></Capabilities>"""
+
+    assert _time_values_from_capabilities(
+        xml,
+        GIBS_LAYERS["truecolor"].product,
+    ) == [
+        date(2026, 10, 23),
+        date(2026, 10, 22),
+        date(2026, 10, 21),
+        date(2026, 10, 20),
+    ]
+
+
+def test_gibs_availability_uses_latest_date_with_a_responding_tile(
+    upstream: _Upstream,
+) -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("WMTSCapabilities.xml"):
+            return httpx.Response(200, content=GIBS_CAPABILITIES)
+        if "/default/2026-10-23/" in request.url.path:
+            return httpx.Response(404, content=b"not rendered yet")
+        return httpx.Response(
+            200,
+            content=b"tile-bytes",
+            headers={"content-type": "image/jpeg"},
+        )
+
+    upstream._respond = respond
+    response = _client(upstream).get(
+        "/api/v1/tiles/gibs/truecolor/availability"
+        "?min_lat=28.4&min_lon=76.8&max_lat=28.9&max_lon=77.5"
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["date"] == "2026-10-22"
+    assert payload["status"] == "available"
+    assert payload["available_tiles"] == payload["sampled_tiles"] == 1
+    assert payload["coverage_fraction"] == 1.0
+    assert "not pixel QA" in payload["coverage_method"]
+
+
+async def test_gibs_availability_does_not_serialize_different_map_areas() -> None:
+    active_tiles = 0
+    max_active_tiles = 0
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        nonlocal active_tiles, max_active_tiles
+        if request.url.path.endswith("WMTSCapabilities.xml"):
+            return httpx.Response(200, content=GIBS_CAPABILITIES)
+        active_tiles += 1
+        max_active_tiles = max(max_active_tiles, active_tiles)
+        await asyncio.sleep(0.02)
+        active_tiles -= 1
+        return httpx.Response(200, content=b"tile-bytes", headers={"content-type": "image/jpeg"})
+
+    settings = get_settings().model_copy(update={"gibs_base_url": GIBS_BASE})
+    service = TileService(
+        settings,
+        client_factory=lambda **kwargs: httpx.AsyncClient(
+            transport=httpx.MockTransport(respond), **kwargs
+        ),
+    )
+    delhi = (28.4, 76.8, 28.9, 77.5)
+    assam = (26.0, 91.5, 27.0, 92.5)
+
+    results = await asyncio.gather(
+        service.gibs_availability(layer="truecolor", bbox=delhi),
+        service.gibs_availability(layer="truecolor", bbox=assam),
+    )
+
+    assert [result["date"] for result in results] == ["2026-10-23", "2026-10-23"]
+    assert max_active_tiles == 2
 
 
 def test_unknown_gibs_layer_is_404(upstream: _Upstream) -> None:

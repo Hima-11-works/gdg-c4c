@@ -5,6 +5,7 @@ import {
   Map as MapLibreMap,
   NavigationControl,
   Popup,
+  RasterTileSource,
   setWorkerUrl,
 } from 'maplibre-gl'
 import { cellToBoundary } from 'h3-js'
@@ -44,6 +45,7 @@ import {
   GIBS_MAX_ZOOM,
   GIBS_TILE_SIZE,
   NO2_ATTRIBUTION,
+  fetchGibsAvailability,
   gibsAerosolTileUrl,
   gibsTrueColorTileUrl,
   no2Available,
@@ -1638,6 +1640,46 @@ export function MapView({
     map.setLayoutProperty(LAYER_FREIGHT_GLOW, 'visibility', visibility)
     map.setLayoutProperty(LAYER_FREIGHT_LINE, 'visibility', visibility)
   }, [mapReady, state.showFreightCorridors])
+
+  // Select the newest GIBS acquisition date that has usable representative
+  // tiles for the current map area; the backend reports partial tile coverage
+  // instead of assuming yesterday is always the newest available composite.
+  useEffect(() => {
+    if (!mapReady) return
+    const controller = new AbortController()
+    const bbox = state.bbox ?? INDIA_BBOX
+    dispatch({
+      type: 'SET_SATELLITE_IMAGERY_AVAILABILITY',
+      value: { status: 'loading', truecolor: null, aod: null },
+    })
+    void Promise.allSettled([
+      fetchGibsAvailability('truecolor', bbox, controller.signal),
+      fetchGibsAvailability('aod', bbox, controller.signal),
+    ])
+      .then(([colorResult, aodResult]) => {
+        if (controller.signal.aborted) return
+        const truecolor = colorResult.status === 'fulfilled' ? colorResult.value : null
+        const aod = aodResult.status === 'fulfilled' ? aodResult.value : null
+        dispatch({
+          type: 'SET_SATELLITE_IMAGERY_AVAILABILITY',
+          value: {
+            status: truecolor || aod ? 'ready' : 'error',
+            truecolor,
+            aod,
+          },
+        })
+        const map = mapRef.current
+        const colorSource = map?.getSource(SOURCE_GIBS)
+        if (colorSource instanceof RasterTileSource && truecolor?.date) {
+          colorSource.setTiles([gibsTrueColorTileUrl(new Date(`${truecolor.date}T00:00:00Z`))])
+        }
+        const aerosolSource = map?.getSource(SOURCE_AOD)
+        if (aerosolSource instanceof RasterTileSource && aod?.date) {
+          aerosolSource.setTiles([gibsAerosolTileUrl(new Date(`${aod.date}T00:00:00Z`))])
+        }
+      })
+    return () => controller.abort()
+  }, [mapReady, state.bbox, dispatch])
 
   // Citizen report pins toggle — visibility-based hiding.
   useEffect(() => {

@@ -1162,3 +1162,76 @@ cell_satellite_interpretation = Table(
     Index("ix_cell_satellite_interpretation_lookup", "h3_cell", "window_start", "window_end"),
     Index("ix_cell_satellite_interpretation_expiry", "expires_at"),
 )
+
+# QA-qualified native Sentinel-5P samples are kept independently from the
+# hotspot detector output so the cell-context API can report actual product
+# values, timestamps, QA, and sample support even when no hotspot is found.
+satellite_product = Table(
+    "satellite_product",
+    metadata,
+    Column("product_id", String(36), primary_key=True),
+    Column("product_type", String(32), nullable=False),
+    Column("product_name", String(255), nullable=False),
+    Column("product_version", String(80), nullable=False),
+    Column("source", String(120), nullable=False),
+    Column("license", String(255), nullable=False),
+    Column("acquired_at", DateTime(timezone=True), nullable=False),
+    Column("available_at", DateTime(timezone=True), nullable=False),
+    Column("processed_at", DateTime(timezone=True), nullable=False),
+    Column("observation_count", Integer, nullable=False),
+    CheckConstraint("observation_count >= 0", name="ck_satellite_product_observation_count"),
+    CheckConstraint("available_at >= acquired_at", name="ck_satellite_product_availability"),
+)
+
+satellite_cell_observation = Table(
+    "satellite_cell_observation",
+    metadata,
+    Column("observation_id", String(300), primary_key=True),
+    Column(
+        "product_id",
+        String(36),
+        ForeignKey("satellite_product.product_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("indicator", String(16), nullable=False),
+    Column("h3_cell", String(H3_CELL_LENGTH), nullable=False),
+    Column("h3_resolution", SmallInteger, nullable=False),
+    Column("value", Float, nullable=False),
+    Column("unit", String(80), nullable=False),
+    Column("qa_score", Float, nullable=False),
+    Column("coverage_fraction", Float, nullable=False),
+    Column("valid_pixels", Integer, nullable=False),
+    Column("sampled_pixels", Integer, nullable=False),
+    Column("acquired_at", DateTime(timezone=True), nullable=False),
+    Column("available_at", DateTime(timezone=True), nullable=False),
+    UniqueConstraint(
+        "product_id", "indicator", "h3_cell", name="uq_satellite_observation_product_cell"
+    ),
+    CheckConstraint("indicator IN ('no2', 'uvai')", name="ck_satellite_observation_indicator"),
+    CheckConstraint("h3_resolution BETWEEN 0 AND 15", name="ck_satellite_observation_resolution"),
+    CheckConstraint("qa_score >= 0 AND qa_score <= 1", name="ck_satellite_observation_qa"),
+    CheckConstraint(
+        "coverage_fraction >= 0 AND coverage_fraction <= 1",
+        name="ck_satellite_observation_coverage",
+    ),
+    CheckConstraint("valid_pixels > 0", name="ck_satellite_observation_valid_pixels"),
+    CheckConstraint("sampled_pixels >= valid_pixels", name="ck_satellite_observation_sampled_pixels"),
+    CheckConstraint("available_at >= acquired_at", name="ck_satellite_observation_availability"),
+    Index(
+        "ix_satellite_observation_cell_indicator_time",
+        "h3_cell",
+        "indicator",
+        "acquired_at",
+    ),
+    Index("ix_satellite_observation_product", "product_id"),
+)
+
+# CDSE may rotate a refresh token. Store only Fernet ciphertext here; the
+# encryption key stays in the deployment secret manager/environment.
+provider_secret_state = Table(
+    "provider_secret_state",
+    metadata,
+    Column("secret_name", String(80), primary_key=True),
+    Column("encrypted_value", String(4096), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)

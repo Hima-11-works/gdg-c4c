@@ -16,10 +16,12 @@ worse than an empty layer, which is what the toggle already looks like.
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
+from xml.etree import ElementTree
 
 import httpx
 
@@ -37,10 +39,10 @@ NO2_MAX_ZOOM = 12
 #: EPSG:3857's half-extent in metres - the Web Mercator world is +/- this.
 _WEB_MERCATOR_HALF_WORLD = 20037508.342789244
 
-#: How long a browser or CDN may reuse a proxied tile. GIBS tiles are
-#: addressed by date, so they never change; an NO2 GetMap answers "latest",
-#: so it gets a much shorter life.
-GIBS_CACHE_CONTROL = "public, max-age=86400, immutable"
+#: Date-addressed tiles use a bounded shared CDN cache and short browser cache;
+#: imagery providers may still publish corrections for a recent daily product.
+GIBS_CACHE_CONTROL = "public, max-age=3600, s-maxage=21600, stale-while-revalidate=86400"
+GIBS_AVAILABILITY_CACHE_CONTROL = "public, max-age=300, s-maxage=900, stale-while-revalidate=3600"
 NO2_CACHE_CONTROL = "public, max-age=900"
 
 
@@ -113,14 +115,6 @@ class _InFlightTile:
     users: int = 0
 
 
-def _yesterday_utc() -> date:
-    """The newest GIBS daily composite that is reliably complete. Today's is
-    still being written (the classic half-black-map), so the default is
-    yesterday - the same rule the frontend's own date helper uses
-    (frontend/src/lib/satelliteImagery.ts's latestImageryDate)."""
-    return (datetime.now(UTC) - timedelta(days=1)).date()
-
-
 def _assert_tile_coords(z: int, y: int, x: int, *, max_zoom: int) -> None:
     """Range-check a slippy-map tile address. Raises ValueError, which the
     route turns into a 422 - the same handling grid/weather give a bad query.
@@ -143,6 +137,83 @@ def tile_bbox_3857(z: int, y: int, x: int) -> tuple[float, float, float, float]:
     min_x = -_WEB_MERCATOR_HALF_WORLD + x * span
     max_y = _WEB_MERCATOR_HALF_WORLD - y * span
     return (min_x, max_y - span, min_x + span, max_y)
+
+
+def _time_values_from_capabilities(xml: bytes, product: str) -> list[date]:
+    """Read GIBS' advertised Time dimension for one allow-listed WMTS layer."""
+    try:
+        root = ElementTree.fromstring(xml)
+    except ElementTree.ParseError as exc:
+        raise TileUpstreamError("GIBS returned invalid WMTS capabilities") from exc
+
+    def local_name(element: ElementTree.Element) -> str:
+        return element.tag.rsplit("}", maxsplit=1)[-1]
+
+    for layer in root.iter():
+        if local_name(layer) != "Layer":
+            continue
+        identifiers = [
+            child.text.strip()
+            for child in layer
+            if local_name(child) == "Identifier" and child.text and child.text.strip()
+        ]
+        if product not in identifiers:
+            continue
+        values: set[date] = set()
+        for dimension in layer:
+            if local_name(dimension) != "Dimension":
+                continue
+            children = list(dimension)
+            name = next(
+                (
+                    child.text.strip().lower()
+                    for child in children
+                    if local_name(child) == "Identifier" and child.text
+                ),
+                "",
+            )
+            if name != "time":
+                continue
+            for child in children:
+                if local_name(child) not in {"Value", "Default"} or not child.text:
+                    continue
+                value = child.text.strip()
+                try:
+                    if value.count("/") == 2:
+                        start_text, end_text, period = value.split("/")
+                        start_day = date.fromisoformat(start_text[:10])
+                        end_day = date.fromisoformat(end_text[:10])
+                        if period.upper() in {"P1D", "PT24H"} and start_day <= end_day:
+                            # Expand only the small recent window used by the
+                            # availability probe; GIBS capabilities may encode
+                            # hundreds of daily values as one range.
+                            current = end_day
+                            for _ in range(100):
+                                if current < start_day:
+                                    break
+                                values.add(current)
+                                current -= timedelta(days=1)
+                        else:
+                            values.add(end_day)
+                    else:
+                        values.add(date.fromisoformat(value[:10]))
+                except ValueError:
+                    continue
+        return sorted(values, reverse=True)
+    return []
+
+
+def _tile_for_lon_lat(longitude: float, latitude: float, zoom: int) -> tuple[int, int]:
+    limit = 1 << zoom
+    lat = min(85.05112878, max(-85.05112878, latitude))
+    x = int(math.floor((longitude + 180.0) / 360.0 * limit))
+    lat_radians = math.radians(lat)
+    y = int(
+        math.floor(
+            (1.0 - math.asinh(math.tan(lat_radians)) / math.pi) / 2.0 * limit
+        )
+    )
+    return min(limit - 1, max(0, x)), min(limit - 1, max(0, y))
 
 
 class _TileCache:
@@ -204,6 +275,13 @@ class TileService:
             ttl_seconds=settings.tile_cache_ttl_seconds,
         )
         self._in_flight: dict[tuple, _InFlightTile] = {}
+        self._availability_cache: OrderedDict[
+            tuple, tuple[float, dict[str, object]]
+        ] = OrderedDict()
+        self._availability_lock = asyncio.Lock()
+        self._availability_in_flight: dict[
+            tuple, asyncio.Task[dict[str, object]]
+        ] = {}
 
     async def gibs_tile(
         self, *, layer: str, z: int, y: int, x: int, day: date | None = None
@@ -216,7 +294,7 @@ class TileService:
             raise TileNotFoundError(f"unknown GIBS layer {layer!r}; known layers: {known}")
         _assert_tile_coords(z, y, x, max_zoom=spec.max_zoom)
 
-        resolved = day or _yesterday_utc()
+        resolved = day or await self.latest_gibs_date(layer)
         key = ("gibs", layer, resolved.isoformat(), z, y, x)
         url = (
             f"{self._settings.gibs_base_url.rstrip('/')}/{spec.product}/default/"
@@ -228,6 +306,155 @@ class TileService:
             cache_control=GIBS_CACHE_CONTROL,
             fetch=lambda: self._fetch(url, params={}, provider="gibs"),
         )
+
+    async def latest_gibs_date(self, layer: str) -> date:
+        """Return the newest date GIBS advertises for the allow-listed layer."""
+        spec = GIBS_LAYERS.get(layer)
+        if spec is None:
+            known = ", ".join(sorted(GIBS_LAYERS))
+            raise TileNotFoundError(f"unknown GIBS layer {layer!r}; known layers: {known}")
+        dates = await self._gibs_dates(spec)
+        if not dates:
+            raise TileNotFoundError(f"GIBS advertises no dates for {layer}")
+        return dates[0]
+
+    async def gibs_availability(
+        self,
+        *,
+        layer: str,
+        bbox: tuple[float, float, float, float],
+    ) -> dict[str, object]:
+        """Choose the newest advertised date with a usable tile in this map area.
+
+        The returned fraction is based on a small, deterministic set of tile
+        requests. It measures responding sample tiles, not per-pixel QA or the
+        fraction of the geographic area covered by valid observations.
+        """
+        spec = GIBS_LAYERS.get(layer)
+        if spec is None:
+            known = ", ".join(sorted(GIBS_LAYERS))
+            raise TileNotFoundError(f"unknown GIBS layer {layer!r}; known layers: {known}")
+        min_lat, min_lon, max_lat, max_lon = bbox
+        if not (-90 <= min_lat < max_lat <= 90 and -180 <= min_lon < max_lon <= 180):
+            raise ValueError("bbox must have ordered latitude/longitude bounds")
+        zoom = min(3, spec.max_zoom)
+        sample_tiles = self._sample_tiles(bbox, zoom)
+        cache_key = (layer, zoom, *sample_tiles)
+        async with self._availability_lock:
+            cached = self._availability_cache.get(cache_key)
+            if cached is not None and time.monotonic() < cached[0]:
+                self._availability_cache.move_to_end(cache_key)
+                return dict(cached[1])
+            task = self._availability_in_flight.get(cache_key)
+            if task is None:
+                task = asyncio.create_task(
+                    self._probe_and_cache_availability(
+                        cache_key,
+                        layer=layer,
+                        spec=spec,
+                        zoom=zoom,
+                        sample_tiles=sample_tiles,
+                    )
+                )
+                # A caller may cancel while shielded work is still running.
+                # Consume a later task exception even if no caller remains.
+                task.add_done_callback(
+                    lambda completed: None
+                    if completed.cancelled()
+                    else completed.exception()
+                )
+                self._availability_in_flight[cache_key] = task
+        return dict(await asyncio.shield(task))
+
+    async def _probe_and_cache_availability(
+        self,
+        cache_key: tuple,
+        *,
+        layer: str,
+        spec: GibsLayer,
+        zoom: int,
+        sample_tiles: list[tuple[int, int]],
+    ) -> dict[str, object]:
+        task = asyncio.current_task()
+        try:
+            dates = await self._gibs_dates(spec)
+            result: dict[str, object] = {
+                "layer": layer,
+                "product": spec.product,
+                "date": None,
+                "status": "unavailable",
+                "available_tiles": 0,
+                "sampled_tiles": len(sample_tiles),
+                "coverage_fraction": 0.0 if sample_tiles else None,
+                "coverage_method": "HTTP availability of representative map tiles; not pixel QA",
+                "reason": "no dates advertised" if not dates else "no usable tiles in sampled area",
+            }
+            # Checking a bounded recent window still finds older usable
+            # products when the newest acquisitions have not rendered. Each
+            # tile is cached by exact layer/date/z/x/y, and concurrent requests
+            # for the same sampled tiles are coalesced above.
+            for candidate in dates[:7]:
+                available = 0
+                for x, y in sample_tiles:
+                    try:
+                        tile = await self.gibs_tile(
+                            layer=layer,
+                            z=zoom,
+                            y=y,
+                            x=x,
+                            day=candidate,
+                        )
+                    except TileNotFoundError:
+                        continue
+                    if tile.content:
+                        available += 1
+                if available:
+                    result.update(
+                        {
+                            "date": candidate.isoformat(),
+                            "status": "available",
+                            "available_tiles": available,
+                            "coverage_fraction": available / len(sample_tiles),
+                            "reason": None,
+                        }
+                    )
+                    break
+
+            ttl = min(900.0, max(60.0, self._settings.tile_cache_ttl_seconds))
+            async with self._availability_lock:
+                self._availability_cache[cache_key] = (time.monotonic() + ttl, dict(result))
+                self._availability_cache.move_to_end(cache_key)
+                while len(self._availability_cache) > 128:
+                    self._availability_cache.popitem(last=False)
+                if self._availability_in_flight.get(cache_key) is task:
+                    self._availability_in_flight.pop(cache_key, None)
+            return result
+        except BaseException:
+            async with self._availability_lock:
+                if self._availability_in_flight.get(cache_key) is task:
+                    self._availability_in_flight.pop(cache_key, None)
+            raise
+
+    @staticmethod
+    def _sample_tiles(
+        bbox: tuple[float, float, float, float],
+        zoom: int,
+    ) -> list[tuple[int, int]]:
+        min_lat, min_lon, max_lat, max_lon = bbox
+        center_lat = (min_lat + max_lat) / 2
+        center_lon = (min_lon + max_lon) / 2
+        locations = ((min_lon, min_lat), (max_lon, max_lat), (center_lon, center_lat))
+        return sorted({_tile_for_lon_lat(lon, lat, zoom) for lon, lat in locations})
+
+    async def _gibs_dates(self, spec: GibsLayer) -> list[date]:
+        url = f"{self._settings.gibs_base_url.rstrip('/')}/1.0.0/WMTSCapabilities.xml"
+        tile = await self._get_or_fetch(
+            ("gibs-capabilities",),
+            media_type="application/xml",
+            cache_control="public, max-age=3600, s-maxage=21600",
+            fetch=lambda: self._fetch(url, params={}, provider="gibs"),
+        )
+        return _time_values_from_capabilities(tile.content, spec.product)
 
     async def no2_tile(self, *, z: int, y: int, x: int) -> Tile:
         """One Sentinel-5P NO2 tile, via a WMS GetMap passthrough.

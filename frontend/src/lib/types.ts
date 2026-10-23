@@ -26,6 +26,24 @@ export interface Envelope<T> {
 export type DataMode = 'live' | 'demo' | 'mixed'
 export type InputKind = 'observed' | 'modeled' | 'synthetic' | 'derived'
 
+export interface GibsLayerAvailability {
+  layer: 'truecolor' | 'aod'
+  product: string
+  date: string | null
+  status: 'available' | 'unavailable'
+  available_tiles: number
+  sampled_tiles: number
+  coverage_fraction: number | null
+  coverage_method: string
+  reason: string | null
+}
+
+export interface SatelliteImageryAvailability {
+  status: 'loading' | 'ready' | 'error'
+  truecolor: GibsLayerAvailability | null
+  aod: GibsLayerAvailability | null
+}
+
 export interface DatasetRefOut {
   dataset_id: string
   source: string
@@ -670,6 +688,10 @@ export interface SatelliteIndicatorContext {
   valid_pixels: number | null
   source: string
   product_version: string | null
+  product_id: string | null
+  product_name: string | null
+  sampled_pixels: number | null
+  coverage_note: string | null
   disclaimer: string
 }
 

@@ -120,7 +120,10 @@ workflow** after configuring:
 | Variable | `PIPELINE_DEMO_MODE` | `true` for demo/synthetic inputs; `false` for live ingestion |
 | Secret | `OPENAQ_API_KEY` | Required when `PIPELINE_DEMO_MODE=false` |
 | Secret | `FIRMS_MAP_KEY` | Optional NASA FIRMS corroboration |
-| Secret | `CDSE_REFRESH_TOKEN` | Optional Sentinel-5P imagery access |
+| Secret | `CDSE_REFRESH_TOKEN` | Sentinel-5P imagery access; can seed the database credential on the first run |
+| Secret | `CDSE_SECRET_ENCRYPTION_KEY` | Fernet key for encrypted, rotating CDSE refresh-token storage |
+
+Generate the encryption key with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` and store it as a deployment secret. Keep the same key available to the pipeline and API deployment; changing it requires decrypting and re-encrypting the stored token first.
 
 The default pipeline mode is demo. Keep the UI’s **DEMO SIM** label visible for
 synthetic data. Live inputs are not a guarantee of complete coverage or an

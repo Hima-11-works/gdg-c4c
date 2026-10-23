@@ -38,6 +38,7 @@ from app.services.ingestion import IngestionResult
 GENERATED_AT = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 BBOX = BoundingBox(min_lat=37.6, min_lon=-122.6, max_lat=37.9, max_lon=-122.1)
 DELHI_BBOX = BoundingBox(min_lat=28.4, min_lon=76.8, max_lat=28.9, max_lon=77.5)
+TEST_FERNET_KEY = "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
 
 
 def _settings(**overrides) -> Settings:
@@ -372,7 +373,7 @@ def test_firms_request_bounds_include_a_50_km_source_neighborhood() -> None:
     assert -180 <= expanded.min_lon < expanded.max_lon <= 180
 
 
-async def test_live_satellite_scan_is_non_blocking_when_cdse_is_not_configured(
+async def test_live_satellite_scan_is_non_blocking_without_token_encryption_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = _settings(demo_mode=False, cdse_refresh_token=None)
@@ -392,9 +393,9 @@ async def test_live_satellite_scan_is_non_blocking_when_cdse_is_not_configured(
 
     assert outcome.succeeded is True
     assert outcome.name == "satellite_hotspot_scanning"
-    assert "CDSE_REFRESH_TOKEN" in outcome.summary
+    assert "CDSE_SECRET_ENCRYPTION_KEY" in outcome.summary
     assert health[0]["called"] is False
-    assert health[0]["dataset_id"] == "copernicus-sentinel5p-aer-ai"
+    assert health[0]["dataset_id"] == "copernicus-sentinel5p"
 
 
 async def test_live_satellite_scan_records_provenanced_uvai_candidates(
@@ -404,6 +405,7 @@ async def test_live_satellite_scan_records_provenanced_uvai_candidates(
     settings = _settings(
         demo_mode=False,
         cdse_refresh_token="refresh-token-test",
+        cdse_secret_encryption_key=TEST_FERNET_KEY,
         hotspot_scan_dir=str(tmp_path),
     )
     now = datetime.now(UTC)
@@ -440,6 +442,34 @@ async def test_live_satellite_scan_records_provenanced_uvai_candidates(
 
         async def fetch_new_artifacts(self, **kwargs):
             return [artifact]
+
+    class _Credentials:
+        def __init__(self, session, encryption_key) -> None:
+            pass
+
+        def get(self, name):
+            assert name == "cdse_refresh_token"
+            return None
+
+        def put(self, name, value):
+            raise AssertionError("the fake provider does not rotate credentials")
+
+    class _SatelliteRepo:
+        def __init__(self, session) -> None:
+            pass
+
+        def processed_product_ids(self):
+            return set()
+
+        def persist_artifact(self, received):
+            assert received is artifact
+
+    class _SessionContext:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
 
     fire = FireHotspot(
         detection_id="firms-live-1",
@@ -498,6 +528,9 @@ async def test_live_satellite_scan_records_provenanced_uvai_candidates(
 
     health: list[dict[str, object]] = []
     monkeypatch.setattr("app.pipeline.run.CopernicusSentinel5PProvider", _Provider)
+    monkeypatch.setattr("app.pipeline.run.SqlProviderCredentialRepository", _Credentials)
+    monkeypatch.setattr("app.pipeline.run.SqlSatelliteObservationRepository", _SatelliteRepo)
+    monkeypatch.setattr("app.pipeline.run.get_session_factory", lambda: _SessionContext)
     monkeypatch.setattr("app.pipeline.run.SqlFireHotspotRepository", _FireRepo)
     monkeypatch.setattr("app.pipeline.run.SqlSensorReadingRepository", _SensorRepo)
     monkeypatch.setattr(
@@ -514,7 +547,7 @@ async def test_live_satellite_scan_records_provenanced_uvai_candidates(
     )
 
     assert outcome.succeeded is True
-    assert "new_swaths=1 candidates=1" in outcome.summary
+    assert "new_swaths=1 (UVAI=1, NO2=0) candidates=1" in outcome.summary
     assert health[0]["item_count"] == 1
     from app.services.hotspot_detection import HotspotScanStore
 

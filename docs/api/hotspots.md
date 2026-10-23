@@ -111,29 +111,33 @@ its own input.
 
 ### Live Sentinel-5P source
 
-The pipeline now searches Copernicus Data Space for recent Sentinel-5P TROPOMI
-Level-2 AER_AI NRTI products intersecting the configured ingestion bounding box.
-It downloads at most `HOTSPOT_SENTINEL5P_MAX_PRODUCTS` new swaths per run, skips
-products already recorded, decodes NetCDF/HDF5 scale and offset metadata, drops
-pixels with `qa_value` at or below `HOTSPOT_SENTINEL5P_MIN_QUALITY`, and averages
-retained pixels into H3 resolution 6 cells by default. The raw 340/380 nm UV
-aerosol index and mean QA remain visible in candidate evidence. The detector's
-0–1 input is the documented UVAI range [-1, 5] linearly normalized to [0, 1]; the
-raw trigger and strong thresholds are stored in the scan's provenance notes.
+The pipeline searches Copernicus Data Space for recent Sentinel-5P TROPOMI
+Level-2 AER_AI (UVAI) and NO2 NRTI products intersecting the configured
+ingestion bounding box. It downloads at most `HOTSPOT_SENTINEL5P_MAX_PRODUCTS`
+new products per run, skips products already recorded, decodes NetCDF/HDF5 scale
+and offset metadata, applies product QA thresholds, and aggregates qualifying
+samples into H3 resolution 6 cells by default. Versioned product records and
+native-unit per-cell values, QA, sample counts, acquisition time, and publication
+time are persisted for the cell satellite-context API. Only UVAI feeds the
+hotspot detector; NO2 is contextual evidence. The detector's 0–1 input is the
+documented UVAI range [-1, 5] linearly normalized to [0, 1]; the raw trigger and
+strong thresholds are stored in the scan's provenance notes.
 
 Sentinel-5P is a daily swath source, not continuous monitoring. NRT availability
 depends on product publication and a run only sees a new pass once it is
 published. Positive UVAI indicates UV-absorbing aerosols such as smoke or dust;
 it is not PM2.5, does not cover every pollutant, and cannot identify the source.
 The default UVAI thresholds are initial triage settings that still need local
-validation against reviewed events. A CDSE account and refresh token are needed
-to download products; without one the pipeline reports the scan stage as skipped.
-The scheduled GitHub Actions worker reads `CDSE_REFRESH_TOKEN` and stores scan
-records in Postgres by default. Configure the same `HOTSPOT_SCAN_BACKEND=database`
+validation against reviewed events. A CDSE refresh token and
+`CDSE_SECRET_ENCRYPTION_KEY` are needed to download products; without them the
+pipeline reports the scan stage as skipped. The scheduled GitHub Actions worker
+can seed from `CDSE_REFRESH_TOKEN`, then encrypts any rotated refresh token in
+Postgres. Configure the same `HOTSPOT_SCAN_BACKEND=database`
 setting on the deployed API so it can serve those records, and set
 `PIPELINE_DEMO_MODE=false` to enable live sources. Migration
-`0022_persistent_hotspot_scans` creates the shared scan and event tables. Local
-development keeps the filesystem store by default.
+`0036_satellite_observations_and_credentials` creates the satellite cell and
+encrypted credential tables (in addition to the earlier scan/event migrations).
+Local development keeps the filesystem store by default.
 
 Pollution-control responders can review recorded events with
 `POST /api/v1/hotspots/events/{event_id}/review`, sending
@@ -364,8 +368,10 @@ supporting signals that might have "explained" either cell created nothing.
 | `HOTSPOT_MAX_TILES` | `20000` | tiles per scan; more is refused |
 | `HOTSPOT_MAX_CANDIDATES` | `500` | candidates per scan; excess dropped worst-first and recorded |
 | `CDSE_REFRESH_TOKEN` | unset | Copernicus Data Space refresh token; required for downloads |
+| `CDSE_SECRET_ENCRYPTION_KEY` | unset | Fernet key for encrypted storage of rotated refresh tokens |
 | `HOTSPOT_SENTINEL5P_MAX_AGE_HOURS` | `30.0` | maximum satellite acquisition age |
 | `HOTSPOT_SENTINEL5P_MIN_QUALITY` | `0.8` | minimum pixel QA score; pixels at or below it are excluded |
+| `HOTSPOT_SENTINEL5P_NO2_MIN_QUALITY` | `0.5` | minimum NO2 pixel QA score; pixels at or below it are excluded |
 | `HOTSPOT_SENTINEL5P_UVAI_THRESHOLD` | `1.0` | raw UV aerosol-index candidate trigger; initial triage setting |
 | `HOTSPOT_SENTINEL5P_UVAI_STRONG_THRESHOLD` | `2.0` | raw UV aerosol-index strong-evidence threshold |
 | `HOTSPOT_SENTINEL5P_H3_RESOLUTION` | `6` | H3 resolution for satellite pixels |
@@ -374,9 +380,10 @@ supporting signals that might have "explained" either cell created nothing.
 
 ## 10. Limits, and what is not wired
 
-- **Live satellite source is narrow.** The wired provider screens UV-absorbing
-  aerosol plumes only and runs from the main data pipeline. It does not produce
-  continuous coverage; detections depend on Sentinel-5P overpass and NRT publication.
+- **Live satellite source is narrow.** UVAI is used to screen UV-absorbing
+  aerosol plumes; NO2 is persisted as contextual evidence. Ingestion runs from
+  the main data pipeline and does not produce continuous coverage. Both products
+  depend on Sentinel-5P overpass and NRT publication.
 - **No live FIRMS/station adapter.** `fire_signal_from_hotspot` maps the stored
   FIRMS rows, but no pipeline stage calls it yet, and no station repository is read
   here.

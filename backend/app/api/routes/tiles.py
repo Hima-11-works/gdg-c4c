@@ -18,10 +18,16 @@ import re
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi.responses import JSONResponse
 
 from app.api.deps import get_tile_service
 from app.core.config import Settings, get_settings
-from app.services.tiles import TileNotFoundError, TileService, TileUpstreamError
+from app.services.tiles import (
+    GIBS_AVAILABILITY_CACHE_CONTROL,
+    TileNotFoundError,
+    TileService,
+    TileUpstreamError,
+)
 
 router = APIRouter(prefix="/tiles", tags=["tiles"])
 
@@ -30,9 +36,8 @@ _DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _DATE_QUERY = Query(
     None,
     description=(
-        "GIBS composite date as YYYY-MM-DD (UTC). Defaults to yesterday, the "
-        "newest daily composite that is reliably complete. Only used by the "
-        "GIBS routes; the NO2 passthrough always asks for the latest."
+        "GIBS composite date as YYYY-MM-DD (UTC). Defaults to the latest date "
+        "advertised by that layer's WMTS capabilities. Only used by GIBS routes."
     ),
 )
 
@@ -55,6 +60,35 @@ def _parse_date(value: str | None) -> date | None:
 def get_no2_status(settings: Settings = Depends(get_settings)) -> dict[str, bool]:
     """Report availability without asking the browser to decode an error tile."""
     return {"available": bool(settings.no2_wms_url and settings.no2_wms_url.strip())}
+
+
+@router.get(
+    "/gibs/{layer}/availability",
+    summary="Find the newest usable NASA GIBS date for a map area",
+)
+async def get_gibs_availability(
+    layer: str,
+    min_lat: float,
+    min_lon: float,
+    max_lat: float,
+    max_lon: float,
+    service: TileService = Depends(get_tile_service),
+) -> JSONResponse:
+    try:
+        result = await service.gibs_availability(
+            layer=layer,
+            bbox=(min_lat, min_lon, max_lat, max_lon),
+        )
+    except TileNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except TileUpstreamError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+    return JSONResponse(result, headers={"Cache-Control": GIBS_AVAILABILITY_CACHE_CONTROL})
 
 
 @router.get(

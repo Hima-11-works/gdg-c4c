@@ -251,20 +251,32 @@ export function CellSatelliteContextPanel({ h3Cell, resolution }: CellSatelliteC
               <td>
                 <strong>Sentinel-5P NO₂</strong>
                 <span className="muted sub-label">Tropospheric column</span>
+                {no2.product_id && (
+                  <span className="muted sub-label">
+                    {no2.product_name ?? no2.product_id} · v{no2.product_version ?? 'unreported'}
+                  </span>
+                )}
               </td>
               <td>
-                {no2.status === 'available' && no2.value !== null ? (
+                {(no2.status === 'available' || no2.status === 'stale') && no2.value !== null ? (
                   <span>
                     {(no2.value * 1e6).toFixed(1)} µmol/m²{' '}
                     <span className="muted">
-                      ({no2.value.toExponential(2)} {no2.unit})
+                      ({no2.value.toExponential(2)} {no2.unit}){no2.status === 'stale' ? ' · stale' : ''}
                     </span>
                   </span>
                 ) : (
                   <span className="muted">{no2.status}</span>
                 )}
               </td>
-              <td>{no2.qa_score !== null ? `${Math.round(no2.qa_score * 100)}% QA` : '—'}</td>
+              <td>
+                {no2.qa_score !== null ? `${Math.round(no2.qa_score * 100)}% QA` : '—'}
+                {no2.valid_pixels !== null && no2.sampled_pixels !== null && (
+                  <span className="muted sub-label">
+                    {no2.valid_pixels}/{no2.sampled_pixels} QA-valid samples
+                  </span>
+                )}
+              </td>
               <td className="muted">
                 {no2.observed_at
                   ? new Date(no2.observed_at).toLocaleTimeString([], {
@@ -278,17 +290,32 @@ export function CellSatelliteContextPanel({ h3Cell, resolution }: CellSatelliteC
               <td>
                 <strong>Sentinel-5P UVAI</strong>
                 <span className="muted sub-label">Aerosol absorption</span>
+                {uvai.product_id && (
+                  <span className="muted sub-label">
+                    {uvai.product_name ?? uvai.product_id} · v{uvai.product_version ?? 'unreported'}
+                  </span>
+                )}
               </td>
               <td>
-                {uvai.status === 'available' && uvai.value !== null ? (
+                {(uvai.status === 'available' || uvai.status === 'stale') && uvai.value !== null ? (
                   <span>
-                    {formatNumber(uvai.value, 2)} <span className="muted">(index)</span>
+                    {formatNumber(uvai.value, 2)}{' '}
+                    <span className="muted">
+                      (index){uvai.status === 'stale' ? ' · stale' : ''}
+                    </span>
                   </span>
                 ) : (
                   <span className="muted">{uvai.status}</span>
                 )}
               </td>
-              <td>{uvai.qa_score !== null ? `${Math.round(uvai.qa_score * 100)}% QA` : '—'}</td>
+              <td>
+                {uvai.qa_score !== null ? `${Math.round(uvai.qa_score * 100)}% QA` : '—'}
+                {uvai.valid_pixels !== null && uvai.sampled_pixels !== null && (
+                  <span className="muted sub-label">
+                    {uvai.valid_pixels}/{uvai.sampled_pixels} QA-valid samples
+                  </span>
+                )}
+              </td>
               <td className="muted">
                 {uvai.observed_at
                   ? new Date(uvai.observed_at).toLocaleTimeString([], {
@@ -300,6 +327,10 @@ export function CellSatelliteContextPanel({ h3Cell, resolution }: CellSatelliteC
             </tr>
           </tbody>
         </table>
+        <p className="muted sub-label">
+          Sample counts describe retrieved geolocated pixels, not percentage of H3 area. Satellite
+          columns and aerosol indices are not ground-level concentrations.
+        </p>
       </div>
 
       {/* Corroborating Signals (FIRMS, Baseline & Weather) */}

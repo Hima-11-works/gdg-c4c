@@ -37,6 +37,7 @@ from app.db.repositories import (
     SqlWeatherForecastRepository,
     SqlWeatherReadingRepository,
 )
+from app.db.repositories.satellite_observation import SqlSatelliteObservationRepository
 from app.db.session import get_db
 from app.domain.incidents import IncidentActor
 from app.domain.types import BoundingBox
@@ -281,6 +282,7 @@ def get_cell_satellite_service(
         sensor_repo=SqlSensorReadingRepository(session),
         weather_repo=SqlWeatherReadingRepository(session),
         fire_repo=SqlFireHotspotRepository(session),
+        satellite_repo=SqlSatelliteObservationRepository(session),
         grid_repo=SqlGridStateRepository(session),
         interpretation_repo=SqlCellSatelliteInterpretationRepository(session),
     )

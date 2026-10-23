@@ -189,6 +189,48 @@ def test_evidence_bundle_contains_native_satellite_units_and_cpcb_gate() -> None
     assert "CPCB" in bundle.cpcb_aqi.reason
 
 
+def test_cell_evidence_bundle_exposes_persisted_sentinel_products() -> None:
+    class SatelliteRepo:
+        def latest_for_cell(self, h3_cell: str, *, indicator: str, available_by: datetime):
+            assert h3_cell == DELHI_CELL
+            assert available_by == NOW
+            acquired_at = NOW - timedelta(hours=1 if indicator == "no2" else 40)
+            return {
+                "value": 0.00012 if indicator == "no2" else 1.8,
+                "unit": (
+                    "mol/m²"
+                    if indicator == "no2"
+                    else "unitless UV aerosol index (340/380 nm)"
+                ),
+                "qa_score": 0.96,
+                "coverage_fraction": 0.7,
+                "valid_pixels": 7,
+                "sampled_pixels": 10,
+                "acquired_at": acquired_at,
+                "available_at": acquired_at + timedelta(minutes=10),
+                "h3_resolution": 6,
+                "product_id": "b0f9e574-73d2-4c8a-96d1-2f679e9717a7",
+                "product_name": f"S5P_NRTI_L2__{indicator}",
+                "product_version": "02.06.00",
+                "source": "Copernicus Data Space Ecosystem",
+            }
+
+    service = CellSatelliteService(
+        settings=Settings(demo_mode=False),
+        satellite_repo=SatelliteRepo(),
+    )
+    bundle = service.assemble_bundle(DELHI_CELL, now=NOW)
+
+    assert bundle.satellite_no2.status == "available"
+    assert bundle.satellite_no2.value == pytest.approx(0.00012)
+    assert bundle.satellite_no2.product_version == "02.06.00"
+    assert bundle.satellite_no2.sampled_pixels == 10
+    assert "not percent of the cell's land area" in bundle.satellite_no2.coverage_note
+    assert bundle.satellite_uvai.status == "stale"
+    assert bundle.satellite_uvai.value == pytest.approx(1.8)
+    assert "S5P_NRTI_L2__no2" in bundle.data_provenance["satellite_context"]
+
+
 def test_thumbnail_rendering_produces_valid_png() -> None:
     png = render_cell_thumbnail(
         DELHI_CELL,

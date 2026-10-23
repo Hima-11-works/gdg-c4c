@@ -188,6 +188,8 @@ class ImageryTile:
     raw_index_value: float | None = None
     raw_index_unit: str | None = None
     quality_value: float | None = None
+    valid_pixel_count: int = 1
+    sampled_pixel_count: int = 1
 
     def __post_init__(self) -> None:
         if not self.tile_id.strip() or not self.h3_cell.strip():
@@ -205,6 +207,10 @@ class ImageryTile:
             raise ValueError("raw_index_unit is required with raw_index_value")
         if self.quality_value is not None:
             _require_fraction(self.quality_value, "quality_value")
+        if self.valid_pixel_count < 1:
+            raise ValueError("valid_pixel_count must be >= 1 for a QA-qualified imagery tile")
+        if self.sampled_pixel_count < self.valid_pixel_count:
+            raise ValueError("sampled_pixel_count must be >= valid_pixel_count")
 
     def to_dict(self) -> dict:
         payload = {
@@ -215,6 +221,8 @@ class ImageryTile:
             "acquired_at": self.acquired_at.isoformat(),
             "index_value": self.index_value,
             "cloud_fraction": self.cloud_fraction,
+            "valid_pixel_count": self.valid_pixel_count,
+            "sampled_pixel_count": self.sampled_pixel_count,
         }
         if self.raw_index_value is not None:
             payload["raw_index_value"] = self.raw_index_value
@@ -245,6 +253,7 @@ class ImageryArtifact:
     available_at: datetime
     synthetic: bool = False
     notes: str = ""
+    provider_product_name: str | None = None
 
     def __post_init__(self) -> None:
         for name in (
@@ -259,6 +268,8 @@ class ImageryArtifact:
                 raise ValueError(f"{name} must not be empty")
         if not 0 <= self.h3_resolution <= 15:
             raise ValueError(f"h3_resolution must be within [0, 15], got {self.h3_resolution}")
+        if self.provider_product_name is not None and not self.provider_product_name.strip():
+            raise ValueError("provider_product_name must not be blank when supplied")
         # An artifact with no eligible pixels is meaningful: the scan records
         # that the satellite looked but QA masking left no usable measurements.
         _require_utc(self.acquired_at, "imagery acquired_at")
@@ -283,6 +294,7 @@ class ImageryArtifact:
             "artifact_id": self.artifact_id,
             "source": self.source,
             "product": self.product,
+            "provider_product_name": self.provider_product_name,
             "product_version": self.product_version,
             "index_name": self.index_name,
             "license": self.license,

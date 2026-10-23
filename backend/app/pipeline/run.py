@@ -62,6 +62,10 @@ from app.db.repositories import (
     SqlTrafficObservationRepository,
     SqlWeatherReadingRepository,
 )
+from app.db.repositories.satellite_observation import (
+    SqlProviderCredentialRepository,
+    SqlSatelliteObservationRepository,
+)
 from app.db.repositories.weather_forecast import SqlWeatherForecastRepository
 from app.db.session import get_session_factory
 from app.domain.features import DataMode, DatasetRef, FeatureSnapshot, InputKind, WeatherFeature
@@ -79,7 +83,10 @@ from app.ingestion.demo_reports import demo_fire_reports
 from app.ingestion.factory import build_pollution_provider, build_weather_provider
 from app.ingestion.firms import FirmsProvider
 from app.ingestion.http import attach_request_budget
-from app.ingestion.sentinel5p import CopernicusSentinel5PProvider, normalized_threshold
+from app.ingestion.sentinel5p import (
+    CopernicusSentinel5PProvider,
+    normalized_threshold,
+)
 from app.services.alert_generation import AlertGenerationService
 from app.services.dispersion import DeterministicH3DispersionModel
 from app.services.environmental_ingestion import EnvironmentalIngestionService
@@ -779,7 +786,7 @@ async def _scan_live_satellite_hotspots(
     pipeline_run_id: str,
 ) -> StageOutcome:
     """Fetch new Sentinel-5P NRT swaths and record QA-filtered candidates."""
-    dataset_id = "copernicus-sentinel5p-aer-ai"
+    dataset_id = "copernicus-sentinel5p"
     if settings.demo_mode:
         _record_source_health(
             session,
@@ -794,7 +801,32 @@ async def _scan_live_satellite_hotspots(
             True,
             "skipped in demo mode; live satellite imagery is not mixed with scenario data",
         )
-    if settings.cdse_refresh_token is None:
+    if settings.cdse_secret_encryption_key is None:
+        _record_source_health(
+            session,
+            pipeline_run_id=pipeline_run_id,
+            dataset_id=dataset_id,
+            called=False,
+            failed=False,
+            item_count=0,
+        )
+        return StageOutcome(
+            "satellite_hotspot_scanning",
+            True,
+            "skipped: CDSE_SECRET_ENCRYPTION_KEY is not configured for token rotation",
+        )
+
+    encryption_key = settings.cdse_secret_encryption_key.get_secret_value()
+    session_factory = get_session_factory()
+    with session_factory() as credential_session:
+        credential_repository = SqlProviderCredentialRepository(
+            credential_session,
+            encryption_key,
+        )
+        refresh_token = credential_repository.get("cdse_refresh_token")
+    if refresh_token is None and settings.cdse_refresh_token is not None:
+        refresh_token = settings.cdse_refresh_token.get_secret_value()
+    if refresh_token is None:
         _record_source_health(
             session,
             pipeline_run_id=pipeline_run_id,
@@ -808,13 +840,11 @@ async def _scan_live_satellite_hotspots(
         )
 
     store = build_store(settings, session=session)
-    summaries = store.summaries()
-    product_ids = {
-        case_id.removeprefix("live-s5p-")
-        for summary in summaries
-        if isinstance(case_id := summary.get("case_id"), str)
-        and case_id.startswith("live-s5p-")
-    }
+    # The satellite-product ledger is the source of truth for retrieval. Do
+    # not use scan summaries here: filesystem scan writes and the SQL
+    # observation transaction cannot be committed atomically, so an orphaned
+    # scan must not suppress retrying its observation persistence.
+    product_ids = SqlSatelliteObservationRepository(session).processed_product_ids()
     # Release the read transaction before catalogue requests and large file
     # transfers; database writes begin again after the source work completes.
     if hasattr(session, "rollback"):
@@ -823,16 +853,24 @@ async def _scan_live_satellite_hotspots(
     now = max(timestamp, datetime.now(UTC))
     since = now - timedelta(hours=settings.hotspot_sentinel5p_max_age_hours)
     try:
+        async def persist_refresh_token(rotated_token: str) -> None:
+            with session_factory() as token_session:
+                SqlProviderCredentialRepository(token_session, encryption_key).put(
+                    "cdse_refresh_token",
+                    rotated_token,
+                )
+
         async with httpx.AsyncClient(
             timeout=settings.hotspot_sentinel5p_timeout_seconds
         ) as client:
             provider = CopernicusSentinel5PProvider(
                 client,
-                refresh_token=settings.cdse_refresh_token.get_secret_value(),
+                refresh_token=refresh_token,
                 timeout_seconds=settings.hotspot_sentinel5p_timeout_seconds,
                 max_products=settings.hotspot_sentinel5p_max_products,
                 max_tiles=settings.hotspot_max_tiles,
                 request_budget=SqlProviderRequestBudget(get_session_factory()),
+                persist_refresh_token=persist_refresh_token,
             )
             artifacts = await provider.fetch_new_artifacts(
                 bbox=bbox,
@@ -841,7 +879,20 @@ async def _scan_live_satellite_hotspots(
                 processed_ids=product_ids,
                 h3_resolution=settings.hotspot_sentinel5p_h3_resolution,
                 min_quality=settings.hotspot_sentinel5p_min_quality,
+                no2_min_quality=settings.hotspot_sentinel5p_no2_min_quality,
+                product_type=None,
             )
+
+        uvai_artifacts = [
+            artifact
+            for artifact in artifacts
+            if artifact.artifact_id.startswith("cdse-s5p:")
+        ]
+        no2_artifacts = [
+            artifact
+            for artifact in artifacts
+            if artifact.artifact_id.startswith("cdse-s5p-no2:")
+        ]
 
         base_config = DetectorConfig.from_settings(settings)
         detector_config = replace(
@@ -856,6 +907,9 @@ async def _scan_live_satellite_hotspots(
         )
         candidates = 0
         for artifact in artifacts:
+            if artifact.artifact_id.startswith("cdse-s5p-no2:"):
+                SqlSatelliteObservationRepository(session).persist_artifact(artifact)
+                continue
             product_id = artifact.artifact_id.removeprefix("cdse-s5p:")
             case_id = _sentinel5p_case_id(product_id)
             evaluated_at = max(now, artifact.available_at)
@@ -892,6 +946,7 @@ async def _scan_live_satellite_hotspots(
                 },
             )
             store.write(scan)
+            SqlSatelliteObservationRepository(session).persist_artifact(artifact)
             candidates += len(scan.candidates)
 
         _record_source_health(
@@ -905,7 +960,8 @@ async def _scan_live_satellite_hotspots(
         return StageOutcome(
             "satellite_hotspot_scanning",
             True,
-            f"new_swaths={len(artifacts)} candidates={candidates} "
+            f"new_swaths={len(artifacts)} (UVAI={len(uvai_artifacts)}, "
+            f"NO2={len(no2_artifacts)}) candidates={candidates} "
             f"(UVAI trigger={settings.hotspot_sentinel5p_uvai_threshold:g}, "
             f"quality>{settings.hotspot_sentinel5p_min_quality:g})",
         )

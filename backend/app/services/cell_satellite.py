@@ -263,6 +263,7 @@ class CellSatelliteService:
         sensor_repo: object | None = None,
         weather_repo: object | None = None,
         fire_repo: object | None = None,
+        satellite_repo: object | None = None,
         grid_repo: object | None = None,
         interpretation_repo: object | None = None,
         analyzer: SatelliteAnalyzer | None = None,
@@ -271,6 +272,7 @@ class CellSatelliteService:
         self._sensor_repo = sensor_repo
         self._weather_repo = weather_repo
         self._fire_repo = fire_repo
+        self._satellite_repo = satellite_repo
         self._grid_repo = grid_repo
         self._interpretation_repo = interpretation_repo
         self._analyzer = analyzer or GeminiSatelliteVisionAnalyzer(self._settings)
@@ -308,10 +310,10 @@ class CellSatelliteService:
         cpcb_context = self._get_cpcb_aqi()
 
         # 3. Satellite NO2 Column Density
-        no2_context = self._get_satellite_no2()
+        no2_context = self._get_satellite_no2(h3_cell, moment)
 
         # 4. Satellite UV Aerosol Index
-        uvai_context = self._get_satellite_uvai()
+        uvai_context = self._get_satellite_uvai(h3_cell, moment)
 
         # 5. Nearby Thermal Anomalies (FIRMS)
         firms_context = self._get_thermal_anomalies(
@@ -340,9 +342,7 @@ class CellSatelliteService:
             weather=weather_context,
             baseline_anomaly=baseline_context,
             data_provenance={
-                "satellite_context": (
-                    "unavailable: Sentinel-5P cell observations are not persisted for this endpoint"
-                ),
+                "satellite_context": self._satellite_provenance(no2_context, uvai_context),
                 "firms_source": "NASA FIRMS NRT VIIRS",
                 "cpcb_method": "CPCB AQI withheld unless a colocated station has valid averaging windows",
                 "data_mode": "demo" if self.is_demo else "live",
@@ -469,33 +469,125 @@ class CellSatelliteService:
             ),
         )
 
-    def _get_satellite_no2(self) -> SatelliteIndicatorContext:
-        return SatelliteIndicatorContext(
+    def _get_satellite_no2(
+        self, h3_cell: str, now: datetime
+    ) -> SatelliteIndicatorContext:
+        return self._get_satellite_indicator(
+            h3_cell,
+            now,
+            indicator="no2",
             name="Tropospheric NO₂ column",
-            status="unavailable",
-            value=None,
-            unit="mol/m²",
-            observed_at=None,
-            qa_score=None,
-            coverage_fraction=None,
-            valid_pixels=None,
-            source="Copernicus Sentinel-5P (no persisted cell observation)",
-            product_version=None,
+            default_unit="mol/m²",
         )
 
-    def _get_satellite_uvai(self) -> SatelliteIndicatorContext:
-        return SatelliteIndicatorContext(
+    def _get_satellite_uvai(
+        self, h3_cell: str, now: datetime
+    ) -> SatelliteIndicatorContext:
+        return self._get_satellite_indicator(
+            h3_cell,
+            now,
+            indicator="uvai",
             name="UV Aerosol Index",
+            default_unit="dimensionless UVAI (340/380 nm)",
+        )
+
+    def _get_satellite_indicator(
+        self,
+        h3_cell: str,
+        now: datetime,
+        *,
+        indicator: str,
+        name: str,
+        default_unit: str,
+    ) -> SatelliteIndicatorContext:
+        unavailable = SatelliteIndicatorContext(
+            name=name,
             status="unavailable",
             value=None,
-            unit="dimensionless UVAI (340/380 nm)",
+            unit=default_unit,
             observed_at=None,
             qa_score=None,
             coverage_fraction=None,
             valid_pixels=None,
-            source="Copernicus Sentinel-5P (no persisted cell observation)",
+            source="Copernicus Sentinel-5P (no QA-qualified cell observation)",
             product_version=None,
         )
+        if self._satellite_repo is None or not hasattr(self._satellite_repo, "latest_for_cell"):
+            return unavailable
+        try:
+            row = self._satellite_repo.latest_for_cell(
+                h3_cell,
+                indicator=indicator,
+                available_by=now,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Error querying Sentinel-5P %s for cell %s: %s",
+                indicator,
+                h3_cell,
+                exc,
+            )
+            return unavailable
+        if row is None:
+            return unavailable
+
+        acquired_at = row.get("acquired_at")
+        if not isinstance(acquired_at, datetime) or acquired_at.tzinfo is None or acquired_at > now:
+            return unavailable
+        value = row.get("value")
+        if not isinstance(value, (int, float)):
+            return unavailable
+        max_age = timedelta(hours=self._settings.hotspot_sentinel5p_max_age_hours)
+        return SatelliteIndicatorContext(
+            name=name,
+            status="stale" if acquired_at < now - max_age else "available",
+            value=float(value),
+            unit=str(row.get("unit") or default_unit),
+            observed_at=acquired_at,
+            qa_score=float(row["qa_score"]) if row.get("qa_score") is not None else None,
+            coverage_fraction=(
+                float(row["coverage_fraction"])
+                if row.get("coverage_fraction") is not None
+                else None
+            ),
+            valid_pixels=int(row["valid_pixels"]) if row.get("valid_pixels") is not None else None,
+            source=str(row.get("source") or "Copernicus Data Space Ecosystem"),
+            product_version=(
+                str(row["product_version"]) if row.get("product_version") is not None else None
+            ),
+            product_id=str(row["product_id"]) if row.get("product_id") is not None else None,
+            product_name=(
+                str(row["product_name"]) if row.get("product_name") is not None else None
+            ),
+            sampled_pixels=(
+                int(row["sampled_pixels"]) if row.get("sampled_pixels") is not None else None
+            ),
+            coverage_note=(
+                "QA-valid samples divided by geolocated samples in this H3 cell; "
+                "this is not percent of the cell's land area."
+            ),
+        )
+
+    @staticmethod
+    def _satellite_provenance(
+        no2: SatelliteIndicatorContext,
+        uvai: SatelliteIndicatorContext,
+    ) -> str:
+        def describe(indicator: SatelliteIndicatorContext) -> str:
+            if indicator.product_id is None:
+                return f"{indicator.name}: {indicator.status}"
+            acquired = (
+                indicator.observed_at.isoformat()
+                if indicator.observed_at is not None
+                else "unknown"
+            )
+            return (
+                f"{indicator.name}: product {indicator.product_id} "
+                f"({indicator.product_name or 'name unavailable'}), "
+                f"version {indicator.product_version or 'unreported'}, acquired {acquired}"
+            )
+
+        return "; ".join((describe(no2), describe(uvai)))
 
     def _get_thermal_anomalies(
         self,
