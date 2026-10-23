@@ -258,8 +258,10 @@ async def attach_evidence(
 )
 def list_evidence(
     report_id: int,
+    response: Response,
     service: EvidenceService = Depends(get_evidence_service),
 ) -> Envelope[list[EvidenceOut]]:
+    response.headers["Cache-Control"] = "private, no-store"
     try:
         service.require_enabled()
         rows = service.list_for_report(report_id)
@@ -309,7 +311,7 @@ def get_derivative(
     return Response(
         content=data,
         media_type="image/jpeg",
-        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
     )
 
 
@@ -321,11 +323,13 @@ def get_derivative(
 def get_gemini_analysis(
     report_id: int,
     evidence_id: int,
+    response: Response,
     x_reviewer_key: str | None = Header(default=None, alias="X-Reviewer-Key"),
     service: GeminiAssessmentService = Depends(get_gemini_assessment_service),
     reports: FireReportService = Depends(get_fire_report_service),
 ) -> Envelope[EvidenceAssessmentOut]:
     _require_reviewer(x_reviewer_key, reports)
+    response.headers["Cache-Control"] = "private, no-store"
     try:
         row = service.get(report_id=report_id, evidence_id=evidence_id)
     except (EvidenceNotFound, GeminiAssessmentNotFound, SQLAlchemyError) as exc:
@@ -346,11 +350,13 @@ def analyze_evidence(
     report_id: int,
     evidence_id: int,
     payload: GeminiAnalysisIn,
+    response: Response,
     x_reviewer_key: str | None = Header(default=None, alias="X-Reviewer-Key"),
     service: GeminiAssessmentService = Depends(get_gemini_assessment_service),
     reports: FireReportService = Depends(get_fire_report_service),
 ) -> Envelope[EvidenceAssessmentOut]:
     _require_reviewer(x_reviewer_key, reports)
+    response.headers["Cache-Control"] = "private, no-store"
     try:
         row = service.analyze(
             report_id=report_id,

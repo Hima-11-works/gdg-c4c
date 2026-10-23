@@ -73,6 +73,8 @@ class GridPublication {
     required this.mode,
     required this.isDemo,
     required this.supportedForecastMinutes,
+    this.isStale = false,
+    this.ageSeconds,
   });
 
   final String runId;
@@ -80,6 +82,8 @@ class GridPublication {
   final String mode;
   final bool isDemo;
   final List<int> supportedForecastMinutes;
+  final bool isStale;
+  final double? ageSeconds;
 }
 
 /// One cell's current state (`/grid/current`).
@@ -271,19 +275,55 @@ class DioGridApiClient implements GridApiClient {
   static const _apiPrefix = '/api/v2';
   GridPublication? _cachedPublication;
   DateTime? _publicationFetchedAt;
+  String? _publicationEtag;
   Future<GridPublication>? _publicationRequest;
+  final Map<String, Map<String, dynamic>> _pinnedCache = {};
 
   @override
   Future<GridPublication> latestPublication() async {
     final fetchedAt = _publicationFetchedAt;
     if (_cachedPublication != null &&
         fetchedAt != null &&
-        DateTime.now().difference(fetchedAt) < const Duration(minutes: 5)) {
+        DateTime.now().difference(fetchedAt) < const Duration(seconds: 30)) {
       return _cachedPublication!;
     }
     final pending = _publicationRequest;
     if (pending != null) return pending;
-    final request = _get('$_apiPrefix/meta', const <String, dynamic>{}).then((json) {
+    final request = _fetchPublication();
+    _publicationRequest = request;
+    try {
+      return await request;
+    } finally {
+      _publicationRequest = null;
+    }
+  }
+
+  Future<GridPublication> _fetchPublication() async {
+    try {
+      final headers = <String, dynamic>{};
+      if (_publicationEtag != null) {
+        headers['If-None-Match'] = _publicationEtag;
+      }
+      final response = await _dio.get<Map<String, dynamic>>(
+        '$_apiPrefix/meta',
+        options: Options(
+          headers: headers.isEmpty ? null : headers,
+          validateStatus: (status) =>
+              status != null && ((status >= 200 && status < 300) || status == 304),
+        ),
+      );
+
+      if (response.statusCode == 304 && _cachedPublication != null) {
+        _publicationFetchedAt = DateTime.now();
+        return _cachedPublication!;
+      }
+
+      final json = response.data!;
+      final etag = response.headers.value('etag');
+      if (etag != null && etag.isNotEmpty) {
+        _publicationEtag = etag;
+      }
+
       final forecastMinutes = (json['supported_horizons_hours'] as List<dynamic>)
           .map((hours) => ((hours as num).toDouble() * 60).round())
           .toSet()
@@ -295,16 +335,27 @@ class DioGridApiClient implements GridApiClient {
         mode: (json['data_mode'] as String).toLowerCase(),
         isDemo: json['data_mode'] == 'demo',
         supportedForecastMinutes: List<int>.unmodifiable(forecastMinutes),
+        isStale: false,
+        ageSeconds: (json['age_seconds'] as num?)?.toDouble(),
       );
       _cachedPublication = publication;
       _publicationFetchedAt = DateTime.now();
       return publication;
-    });
-    _publicationRequest = request;
-    try {
-      return await request;
-    } finally {
-      _publicationRequest = null;
+    } catch (_) {
+      if (_cachedPublication != null) {
+        final ageSec =
+            DateTime.now().difference(_cachedPublication!.generatedAt).inSeconds.toDouble();
+        return GridPublication(
+          runId: _cachedPublication!.runId,
+          generatedAt: _cachedPublication!.generatedAt,
+          mode: _cachedPublication!.mode,
+          isDemo: _cachedPublication!.isDemo,
+          supportedForecastMinutes: _cachedPublication!.supportedForecastMinutes,
+          isStale: true,
+          ageSeconds: ageSec,
+        );
+      }
+      rethrow;
     }
   }
 
@@ -400,7 +451,15 @@ class DioGridApiClient implements GridApiClient {
     String? runId,
   }) async {
     final pinnedRunId = runId ?? (await latestPublication()).runId;
-    return _get(path, <String, dynamic>{...query, 'run_id': pinnedRunId});
+    final fullQuery = <String, dynamic>{...query, 'run_id': pinnedRunId};
+    final sortedKeys = fullQuery.keys.toList()..sort();
+    final cacheKey = '$path?${sortedKeys.map((k) => '$k=${fullQuery[k]}').join('&')}';
+    if (_pinnedCache.containsKey(cacheKey)) {
+      return _pinnedCache[cacheKey]!;
+    }
+    final response = await _get(path, fullQuery);
+    _pinnedCache[cacheKey] = response;
+    return response;
   }
 
   static Map<String, dynamic> _query(GeoBounds? bounds, int? resolution) {

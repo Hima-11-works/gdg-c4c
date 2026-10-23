@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import UTC, datetime
 
-logger = logging.getLogger(__name__)
-
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.deps import get_cell_satellite_service, get_cell_service
@@ -31,6 +30,8 @@ from app.services.gemini_assessment import (
     GeminiProviderTimeout,
     GeminiQuotaExceeded,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/cells", tags=["cells"])
 
@@ -132,10 +133,12 @@ def get_cell(
     summary="Backend-owned satellite indicators, surface PM2.5, CPCB AQI, and cached AI advisory",
 )
 def get_cell_satellite_context(
+    request: Request,
+    response: Response,
     h3_cell: str,
     resolution: int | None = Query(None, ge=0, le=15),
     service: CellSatelliteService = Depends(get_cell_satellite_service),
-) -> Envelope[CellSatelliteAnalysisOut]:
+) -> Envelope[CellSatelliteAnalysisOut] | Response:
     try:
         analysis = service.analyze_cell(h3_cell, resolution=resolution, reanalyze=False)
     except ValueError as exc:
@@ -144,6 +147,20 @@ def get_cell_satellite_context(
         ) from exc
     except GeminiAssessmentError as exc:
         raise _map_satellite_error(exc) from exc
+
+    pm25_val = analysis.evidence_bundle.surface_pm25.value_ugm3
+    window_end = analysis.evidence_bundle.window_end.isoformat()
+    etag_raw = f"{h3_cell}:{resolution}:{pm25_val}:{window_end}:{service.is_demo}"
+    etag = f'"{hashlib.sha256(etag_raw.encode("utf-8")).hexdigest()[:16]}"'
+    cache_control = "public, max-age=300"
+    if_none_match = request.headers.get("if-none-match")
+    if if_none_match and if_none_match.strip() == etag:
+        return Response(
+            status_code=status.HTTP_304_NOT_MODIFIED,
+            headers={"ETag": etag, "Cache-Control": cache_control},
+        )
+    response.headers["ETag"] = etag
+    response.headers["Cache-Control"] = cache_control
 
     return Envelope(
         generated_at=datetime.now(UTC),

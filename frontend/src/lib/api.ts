@@ -154,26 +154,71 @@ async function apiGet<T>(
 }
 
 let cachedPublishedMeta: MetaV2Out | null = null
+let cachedPublishedMetaEtag: string | null = null
 let publishedRunExpiresAt = 0
 let publishedRunRequest: Promise<MetaV2Out> | null = null
 
+const v2PinnedCache = new Map<string, unknown>()
+
+/** Clear in-memory caches (useful for testing or manual reset). */
+export function clearApiCaches(): void {
+  cachedPublishedMeta = null
+  cachedPublishedMetaEtag = null
+  publishedRunExpiresAt = 0
+  publishedRunRequest = null
+  v2PinnedCache.clear()
+}
+
 /** Resolve one published run id for all map and cell reads. Refreshing the
- * pointer every few minutes lets hourly publications appear without allowing
- * independently-polled resources to jump between runs mid-refresh. */
-async function publishedMeta(): Promise<MetaV2Out> {
+ * pointer every 30-60s with ETags lets hourly publications appear without
+ * redundant downloads. If refresh fails, retains dated stale views. */
+async function publishedMeta(signal?: AbortSignal): Promise<MetaV2Out> {
   if (cachedPublishedMeta !== null && Date.now() < publishedRunExpiresAt) {
     return cachedPublishedMeta
   }
   if (publishedRunRequest !== null) return publishedRunRequest
-  publishedRunRequest = apiGet<MetaV2Out>('/api/v2/meta')
-    .then((meta) => {
+
+  publishedRunRequest = (async () => {
+    try {
+      const headers: Record<string, string> = {}
+      if (cachedPublishedMetaEtag) {
+        headers['If-None-Match'] = cachedPublishedMetaEtag
+      }
+      const response = await fetch(`${API_BASE_URL}/api/v2/meta`, {
+        signal,
+        headers,
+      })
+      if (response.status === 304 && cachedPublishedMeta !== null) {
+        publishedRunExpiresAt = Date.now() + 30 * 1000
+        return cachedPublishedMeta
+      }
+      if (!response.ok) {
+        if (cachedPublishedMeta !== null) {
+          return { ...cachedPublishedMeta, is_stale: true }
+        }
+        const body = (await response.json().catch(() => null)) as ErrorResponseBody | null
+        throw new ApiError(
+          response.status,
+          body?.error?.code ?? 'http_error',
+          body?.error?.message ?? `Request failed with status ${response.status}`,
+        )
+      }
+      const etag = response.headers.get('ETag')
+      if (etag) cachedPublishedMetaEtag = etag
+      const meta = (await response.json()) as MetaV2Out
       cachedPublishedMeta = meta
-      publishedRunExpiresAt = Date.now() + 5 * 60 * 1000
+      publishedRunExpiresAt = Date.now() + 30 * 1000
       return meta
-    })
-    .finally(() => {
+    } catch (error) {
+      if (cachedPublishedMeta !== null && !signal?.aborted) {
+        return { ...cachedPublishedMeta, is_stale: true }
+      }
+      throw error
+    } finally {
       publishedRunRequest = null
-    })
+    }
+  })()
+
   return publishedRunRequest
 }
 
@@ -181,8 +226,8 @@ async function publishedRunId(): Promise<string> {
   return (await publishedMeta()).latest_run_id
 }
 
-export async function fetchPublishedMeta(): Promise<Envelope<MetaV2Out>> {
-  const meta = await publishedMeta()
+export async function fetchPublishedMeta(signal?: AbortSignal): Promise<Envelope<MetaV2Out>> {
+  const meta = await publishedMeta(signal)
   return {
     generated_at: meta.generated_at,
     is_demo: meta.data_mode === 'demo',
@@ -202,7 +247,15 @@ async function apiGetV2<T>(
   const [pathname, queryString] = path.split('?', 2)
   const query = new URLSearchParams(queryString ?? '')
   query.set('run_id', runId)
-  return apiGet<V2Envelope<T>>(`${pathname}?${query.toString()}`, signal)
+  const cacheKey = `${pathname}?${query.toString()}`
+
+  if (v2PinnedCache.has(cacheKey)) {
+    return v2PinnedCache.get(cacheKey) as V2Envelope<T>
+  }
+
+  const result = await apiGet<V2Envelope<T>>(`${pathname}?${query.toString()}`, signal)
+  v2PinnedCache.set(cacheKey, result)
+  return result
 }
 
 type GridLoadProgress = (loaded: number, total: number) => void

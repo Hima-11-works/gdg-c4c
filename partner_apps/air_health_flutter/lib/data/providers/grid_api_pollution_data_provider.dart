@@ -60,6 +60,7 @@ class GridApiPollutionDataProvider implements PollutionDataProvider {
   bool _lastIsDemo = false;
   String? _lastMode;
   String? _lastRunId;
+  bool _lastIsStale = false;
 
   /// Whether the most recent response was backend demo data. Surfaced for
   /// callers that want to reflect it.
@@ -238,18 +239,16 @@ class GridApiPollutionDataProvider implements PollutionDataProvider {
 
   @override
   Future<DataFreshness> getDataFreshness() async {
-    if (_lastGeneratedAt == null) {
-      // No location argument, and we haven't fetched anything yet. The
-      // publication metadata already carries freshness and provenance.
-      final publication = await _client.latestPublication();
-      _lastGeneratedAt = publication.generatedAt;
-      _lastIsDemo = publication.isDemo;
-      _lastMode = publication.mode;
-      _lastRunId = publication.runId;
-    }
+    final publication = await _client.latestPublication();
+    _lastGeneratedAt = publication.generatedAt;
+    _lastIsDemo = publication.isDemo;
+    _lastMode = publication.mode;
+    _lastRunId = publication.runId;
+    _lastIsStale = publication.isStale;
+
     return DataFreshness(
       retrievedAt: _lastGeneratedAt!,
-      quality: DataQuality.full,
+      quality: _lastIsStale ? DataQuality.stale : DataQuality.full,
       isDemo: _lastIsDemo,
       mode: _lastMode,
       runId: _lastRunId,
@@ -264,6 +263,7 @@ class GridApiPollutionDataProvider implements PollutionDataProvider {
     GridPublication? publication,
   }) async {
     final pinnedPublication = publication ?? await _client.latestPublication();
+    _lastIsStale = pinnedPublication.isStale;
     final bounds = GeoBounds.around(location, cellRadiusDeg);
     final current = await _client.current(
       bounds: bounds,

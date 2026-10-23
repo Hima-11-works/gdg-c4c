@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from collections.abc import Callable, Iterator
 
 import h3
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 
@@ -45,6 +46,25 @@ from app.services.published_alerts import ALERT_WARNING_PM25, classify_published
 
 router = APIRouter(prefix="/api/v2", tags=["environmental predictions v2"])
 _RESOLUTION_QUERY = Query(None, ge=0, le=15)
+
+
+def _handle_conditional_etag(
+    request: Request,
+    response: Response,
+    etag_key: str,
+    *,
+    cache_control: str,
+) -> Response | None:
+    etag = f'"{hashlib.sha256(etag_key.encode("utf-8")).hexdigest()[:16]}"'
+    if_none_match = request.headers.get("if-none-match")
+    if if_none_match and if_none_match.strip() == etag:
+        return Response(
+            status_code=status.HTTP_304_NOT_MODIFIED,
+            headers={"ETag": etag, "Cache-Control": cache_control},
+        )
+    response.headers["ETag"] = etag
+    response.headers["Cache-Control"] = cache_control
+    return None
 
 
 def _run_or_404(service: PredictionQueryService, run_id: str | None) -> PredictionRun:
@@ -350,14 +370,23 @@ def _static_features(view: PredictionCellView) -> StaticFeaturesV2Out:
 
 @router.get("/grid/current", response_model=V2Envelope[list[GridCurrentV2Out]])
 def get_current_grid_v2(
+    request: Request,
+    response: Response,
     resolution: int | None = _RESOLUTION_QUERY,
     bbox: BoundingBox | None = Depends(get_bbox_query),
     run_id: str | None = Query(None),
     threshold_pm25: float = Query(DEFAULT_EXPOSURE_THRESHOLD_PM25, ge=0),
     service: PredictionQueryService = Depends(get_prediction_query_service),
-) -> V2Envelope[list[GridCurrentV2Out]]:
+) -> V2Envelope[list[GridCurrentV2Out]] | Response:
     run = _run_or_404(service, run_id)
     display_resolution, cells = _target_cells(service, run, resolution=resolution, bbox=bbox)
+    bbox_str = f"{bbox.min_lat}:{bbox.min_lon}:{bbox.max_lat}:{bbox.max_lon}" if bbox else "all"
+    etag_key = f"{run.run_id}:current:{display_resolution}:{bbox_str}:{threshold_pm25}"
+    conditional = _handle_conditional_etag(
+        request, response, etag_key, cache_control="public, max-age=300, stale-while-revalidate=600"
+    )
+    if conditional is not None:
+        return conditional
     views = service.aggregate(
         run,
         target_cells=cells,
@@ -399,13 +428,15 @@ def stream_current_grid_v2(
 
 @router.get("/grid/forecast", response_model=V2Envelope[list[ForecastV2Out]])
 def get_forecast_grid_v2(
+    request: Request,
+    response: Response,
     hours: float = Query(1, gt=0, le=6),
     resolution: int | None = _RESOLUTION_QUERY,
     bbox: BoundingBox | None = Depends(get_bbox_query),
     run_id: str | None = Query(None),
     threshold_pm25: float = Query(DEFAULT_EXPOSURE_THRESHOLD_PM25, ge=0),
     service: PredictionQueryService = Depends(get_prediction_query_service),
-) -> V2Envelope[list[ForecastV2Out]]:
+) -> V2Envelope[list[ForecastV2Out]] | Response:
     run = _run_or_404(service, run_id)
     anchors = service.horizons(run)
     max_horizon = max(anchors, default=0.0)
@@ -418,6 +449,13 @@ def get_forecast_grid_v2(
             ),
         )
     display_resolution, cells = _target_cells(service, run, resolution=resolution, bbox=bbox)
+    bbox_str = f"{bbox.min_lat}:{bbox.min_lon}:{bbox.max_lat}:{bbox.max_lon}" if bbox else "all"
+    etag_key = f"{run.run_id}:forecast:{hours}:{display_resolution}:{bbox_str}:{threshold_pm25}"
+    conditional = _handle_conditional_etag(
+        request, response, etag_key, cache_control="public, max-age=300, stale-while-revalidate=600"
+    )
+    if conditional is not None:
+        return conditional
     views = service.aggregate(
         run,
         target_cells=cells,
@@ -471,18 +509,26 @@ def stream_forecast_grid_v2(
 
 @router.get("/cells/{h3_cell}", response_model=V2Envelope[CellDetailV2Out])
 def get_cell_v2(
+    request: Request,
+    response: Response,
     h3_cell: str,
     resolution: int | None = Query(None, ge=0, le=15),
     run_id: str | None = Query(None),
     threshold_pm25: float = Query(DEFAULT_EXPOSURE_THRESHOLD_PM25, ge=0),
     service: PredictionQueryService = Depends(get_prediction_query_service),
-) -> V2Envelope[CellDetailV2Out]:
+) -> V2Envelope[CellDetailV2Out] | Response:
     display_resolution = resolution if resolution is not None else get_settings().h3_resolution
     try:
         assert_valid_cell(h3_cell, resolution=display_resolution)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     run = _run_or_404(service, run_id)
+    etag_key = f"{run.run_id}:cell:{h3_cell}:{display_resolution}:{threshold_pm25}"
+    conditional = _handle_conditional_etag(
+        request, response, etag_key, cache_control="public, max-age=300, stale-while-revalidate=600"
+    )
+    if conditional is not None:
+        return conditional
     if display_resolution > service.native_resolution:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="upscaling is not supported")
     source_cells = (
@@ -546,16 +592,25 @@ def get_cell_v2(
 
 @router.get("/weather", response_model=V2Envelope[list[WeatherV2Out]])
 def get_weather_v2(
+    request: Request,
+    response: Response,
     resolution: int | None = _RESOLUTION_QUERY,
     bbox: BoundingBox | None = Depends(get_bbox_query),
     hours: float = Query(0, ge=0, le=6),
     run_id: str | None = Query(None),
     service: PredictionQueryService = Depends(get_prediction_query_service),
-) -> V2Envelope[list[WeatherV2Out]]:
+) -> V2Envelope[list[WeatherV2Out]] | Response:
     run = _run_or_404(service, run_id)
     if hours not in ({0.0} | set(service.horizons(run))):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="unsupported weather horizon")
     display_resolution, cells = _target_cells(service, run, resolution=resolution, bbox=bbox)
+    bbox_str = f"{bbox.min_lat}:{bbox.min_lon}:{bbox.max_lat}:{bbox.max_lon}" if bbox else "all"
+    etag_key = f"{run.run_id}:weather:{display_resolution}:{bbox_str}:{hours}"
+    conditional = _handle_conditional_etag(
+        request, response, etag_key, cache_control="public, max-age=300, stale-while-revalidate=600"
+    )
+    if conditional is not None:
+        return conditional
     views = service.aggregate(run, target_cells=cells, resolution=display_resolution, horizon=hours)
     return V2Envelope(
         generated_at=run.generated_at,
@@ -570,18 +625,26 @@ def get_weather_v2(
 
 @router.get("/alerts", response_model=V2Envelope[list[AlertV2Out]])
 def get_alerts_v2(
+    request: Request,
+    response: Response,
     run_id: str | None = Query(None),
     h3_cell: str | None = Query(None, min_length=15, max_length=15),
     limit: int | None = Query(None, ge=1, le=500),
     offset: int = Query(0, ge=0),
     service: PredictionQueryService = Depends(get_prediction_query_service),
-) -> V2Envelope[list[AlertV2Out]]:
+) -> V2Envelope[list[AlertV2Out]] | Response:
     if h3_cell is not None and not h3.is_valid_cell(h3_cell):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="h3_cell must be a valid H3 cell",
         )
     run = _run_or_404(service, run_id)
+    etag_key = f"{run.run_id}:alerts:{h3_cell or ''}:{limit}:{offset}"
+    conditional = _handle_conditional_etag(
+        request, response, etag_key, cache_control="public, max-age=300, stale-while-revalidate=600"
+    )
+    if conditional is not None:
+        return conditional
     candidates = service.alert_candidates(
         run,
         threshold_pm25=ALERT_WARNING_PM25,
@@ -623,13 +686,15 @@ def get_alerts_v2(
 
 @router.get("/exposure", response_model=V2Envelope[ExposureOut])
 def get_exposure_v2(
+    request: Request,
+    response: Response,
     resolution: int | None = _RESOLUTION_QUERY,
     bbox: BoundingBox | None = Depends(get_bbox_query),
     hours: float = Query(0, ge=0, le=6),
     threshold_pm25: float = Query(DEFAULT_EXPOSURE_THRESHOLD_PM25, ge=0),
     run_id: str | None = Query(None),
     service: PredictionQueryService = Depends(get_prediction_query_service),
-) -> V2Envelope[ExposureOut]:
+) -> V2Envelope[ExposureOut] | Response:
     run = _run_or_404(service, run_id)
     anchors = service.horizons(run)
     max_horizon = max(anchors, default=0.0)
@@ -639,6 +704,13 @@ def get_exposure_v2(
             detail="exposure horizon must be a 15-minute step inside the published anchor window",
         )
     display_resolution, cells = _target_cells(service, run, resolution=resolution, bbox=bbox)
+    bbox_str = f"{bbox.min_lat}:{bbox.min_lon}:{bbox.max_lat}:{bbox.max_lon}" if bbox else "all"
+    etag_key = f"{run.run_id}:exposure:{hours}:{display_resolution}:{bbox_str}:{threshold_pm25}"
+    conditional = _handle_conditional_etag(
+        request, response, etag_key, cache_control="public, max-age=300, stale-while-revalidate=600"
+    )
+    if conditional is not None:
+        return conditional
     views = service.aggregate(
         run, target_cells=cells, resolution=display_resolution, horizon=hours, threshold_pm25=threshold_pm25
     )
@@ -684,9 +756,11 @@ def _weighted_population_mean(views: list[PredictionCellView]) -> float | None:
 
 @router.get("/meta", response_model=MetaV2Out)
 def get_meta_v2(
+    request: Request,
+    response: Response,
     run_id: str | None = Query(None),
     service: PredictionQueryService = Depends(get_prediction_query_service),
-) -> MetaV2Out:
+) -> MetaV2Out | Response:
     run = _run_or_404(service, run_id)
     input_quality = run.input_quality
     collector_health = service.collector_health()
@@ -695,6 +769,19 @@ def get_meta_v2(
         for row in collector_health
         if row.next_expected_collection_at is not None
     ]
+    max_collector_fetch = max(
+        (row.fetched_at for row in collector_health if row.fetched_at is not None),
+        default=None,
+    )
+    etag_key = (
+        f"{run.run_id}:{run.generated_at.isoformat()}:{run.mode}:"
+        f"{service.is_stale(run)}:{max_collector_fetch.isoformat() if max_collector_fetch else ''}"
+    )
+    conditional = _handle_conditional_etag(
+        request, response, etag_key, cache_control="public, max-age=30, must-revalidate"
+    )
+    if conditional is not None:
+        return conditional
     return MetaV2Out(
         region=run.region,
         latest_run_id=run.run_id,

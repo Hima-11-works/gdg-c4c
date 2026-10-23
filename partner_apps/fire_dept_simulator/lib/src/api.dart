@@ -252,10 +252,81 @@ class IncidentApi {
     return CitizenReport.fromJson(response.data as Map<String, dynamic>);
   }
 
+  PublicationMeta? _cachedPublicationMeta;
+  String? _publicationMetaEtag;
+  DateTime? _publicationMetaFetchedAt;
+  final Map<String, dynamic> _pinnedCache = {};
+
+  /// Resolves the current publication pointer (`/api/v2/meta`) using ETags
+  /// for conditional requests and short TTL (30s) while foregrounded.
+  Future<PublicationMeta> getPublicationMeta({bool force = false}) async {
+    final fetchedAt = _publicationMetaFetchedAt;
+    if (!force &&
+        _cachedPublicationMeta != null &&
+        fetchedAt != null &&
+        DateTime.now().difference(fetchedAt) < const Duration(seconds: 30)) {
+      return _cachedPublicationMeta!;
+    }
+
+    try {
+      final request = await _client.openUrl('GET', _uri('/api/v2/meta')).timeout(timeout);
+      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+      if (_publicationMetaEtag != null) {
+        request.headers.set(HttpHeaders.ifNoneMatchHeader, _publicationMetaEtag!);
+      }
+      final response = await request.close().timeout(timeout);
+      if (response.statusCode == 304 && _cachedPublicationMeta != null) {
+        _publicationMetaFetchedAt = DateTime.now();
+        await response.drain<void>();
+        return _cachedPublicationMeta!;
+      }
+
+      final text = await response.transform(utf8.decoder).join().timeout(timeout);
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final etag = response.headers.value(HttpHeaders.etagHeader);
+        if (etag != null && etag.isNotEmpty) {
+          _publicationMetaEtag = etag;
+        }
+        final decoded = jsonDecode(text) as Map<String, dynamic>;
+        final meta = PublicationMeta.fromJson(decoded);
+        _cachedPublicationMeta = meta;
+        _publicationMetaFetchedAt = DateTime.now();
+        return meta;
+      } else {
+        throw ApiException(
+          status: response.statusCode,
+          code: 'http_error',
+          message: 'Failed to read publication metadata (HTTP ${response.statusCode}).',
+        );
+      }
+    } catch (e) {
+      if (_cachedPublicationMeta != null) {
+        final ageSec =
+            DateTime.now().difference(_cachedPublicationMeta!.generatedAt).inSeconds.toDouble();
+        return PublicationMeta(
+          latestRunId: _cachedPublicationMeta!.latestRunId,
+          generatedAt: _cachedPublicationMeta!.generatedAt,
+          dataMode: _cachedPublicationMeta!.dataMode,
+          isDemo: _cachedPublicationMeta!.isDemo,
+          isStale: true,
+          ageSeconds: ageSec,
+        );
+      }
+      if (e is ApiException) rethrow;
+      throw ApiException.network(e.toString());
+    }
+  }
+
   /// Current run's PM2.5 alerts, which the operator can select to open a
   /// persistent response incident. Alert ids are stable across retries.
-  Future<List<PublishedAlert>> listPublishedAlerts() async {
-    final response = await _send('GET', '/api/v2/alerts');
+  Future<List<PublishedAlert>> listPublishedAlerts({String? runId}) async {
+    final effectiveRunId = runId ?? (await getPublicationMeta()).latestRunId;
+    final cacheKey = '/api/v2/alerts?run_id=$effectiveRunId';
+    if (_pinnedCache.containsKey(cacheKey)) {
+      return _pinnedCache[cacheKey] as List<PublishedAlert>;
+    }
+
+    final response = await _send('GET', '/api/v2/alerts', query: {'run_id': effectiveRunId});
     final alerts = (response.data as List)
         .map((row) => PublishedAlert.fromJson(row as Map<String, dynamic>))
         .toList();
@@ -264,7 +335,9 @@ class IncidentApi {
       if (severity != 0) return severity;
       return a.forecastHours.compareTo(b.forecastHours);
     });
-    return alerts.take(50).toList();
+    final result = alerts.take(50).toList();
+    _pinnedCache[cacheKey] = result;
+    return result;
   }
 
   /// Live candidate events that a pollution-control responder can open for review.

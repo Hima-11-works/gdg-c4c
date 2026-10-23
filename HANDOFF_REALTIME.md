@@ -3,10 +3,33 @@
 ## Current state
 
 - Continue on branch `beta`, tracking `origin/beta`.
-- RT08 is complete and tested (`feat(pipeline): bound publication volume and preserve live evaluation evidence`). RT01–RT07 are also present in the branch history.
+- RT09 is complete and tested (`feat(client): apply live-data behavior consistently across all clients`). RT01–RT08 are also present in the branch history.
 - The detailed scope and decisions remain in `docs/REAL_TIME_DATA_IMPLEMENTATION_PLAN.md`.
 - Before editing, inspect `git status`. Preserve the existing untracked `docs/BUG_AUDIT.md` and `docs/REAL_TIME_DATA_IMPLEMENTATION_PLAN.md`; do not stage them as part of later steps.
 - Complete one RT step at a time. Quickly verify the step, make one commit for it, push to `origin/beta`, and only then start the next step. Do not combine speculative work from future steps into a commit.
+
+## RT09 delivered
+
+RT09 applies consistent live-data behavior, lightweight foreground pointer polling, conditional requests, run-pinned response caching, and stale view retention across the web dashboard, Flutter citizen app, and responder simulator:
+
+- **Pointer Polling & Conditional Requests:** All clients read the publication pointer (`/api/v2/meta`) every 30 seconds while foregrounded using HTTP `If-None-Match` conditional requests, receiving HTTP 304 Not Modified when the publication run has not changed.
+- **Run-Pinned Response Caching:** Clients fetch run-pinned endpoints (`/grid/current`, `/grid/forecast`, `/weather`, `/alerts`, `/exposure`, `/cells/{cell}`) only when run ID, resolution, bounding box, or forecast horizon changes. In-memory response caches in `frontend/src/lib/api.ts`, `air_health_flutter/lib/data/grid/grid_api.dart`, and `fire_dept_simulator/lib/src/api.dart` prevent redundant network downloads for identical parameters.
+- **Shared Source-Age & Quality Flags:** Common source-age, data mode (`live`/`demo`), and quality flags are surfaced across current conditions, nearby areas, forecasts, satellite context, and alerts.
+- **Stale Retention & Alert Suppression:** On network or refresh failures, clients retain dated stale views and display clear stale indicators. New automatic alerts from expired or unsupported evidence are suppressed across `AlertEngine` (`DataFreshness.isStaleAt`) and simulator dispatch guards.
+- **Backend Cache-Control & Private Evidence Protection:** Added `_handle_conditional_etag` helper generating deterministic SHA-256 ETags and returning HTTP 304 on match. Pointer TTL is set to `public, max-age=30, must-revalidate`, run-pinned endpoints to `public, max-age=300, stale-while-revalidate=600`, and cell satellite context to `public, max-age=300`. Enforced `Cache-Control: private, no-store` on all report evidence endpoints (`/reports/{id}/evidence`) to prevent intermediaries from publicly caching private reviewer evidence.
+- **Local GeoNames & Boundaries:** Preserved local place name resolution and boundaries.
+
+RT09 verification completed:
+- Backend test suite: 64 passed (including 5 new tests in `test_api_v2_caching.py`).
+- Frontend production build (`npm run build`) passed cleanly.
+- `air_health_flutter` test suite: 12/12 passed (`test/data/grid_api_provider_test.dart`).
+- `fire_dept_simulator` test suite: 28/28 passed (`api_test.dart`, `models_test.dart`, `incidents_screen_test.dart`).
+- Ruff checks on modified backend files passed; `git diff --check` passed cleanly.
+
+Operational limits to preserve:
+- Pointer polling remains foreground-only with 30s TTL; clients do not loop in the background.
+- Pinned datasets are immutable per `run_id`; caching keys must include run ID and query parameters.
+- Private reviewer evidence must always carry `Cache-Control: private, no-store`.
 
 ## RT08 delivered
 
@@ -48,18 +71,6 @@ Operational limits to preserve:
 - A live deployment must supply a valid initial `CDSE_REFRESH_TOKEN` and deployment-held `CDSE_SECRET_ENCRYPTION_KEY`. Verify unattended account/authentication behavior in the actual deployment before relying on token rotation.
 
 ## Remaining work
-
-### RT08 — Bound publication volume and preserve live evaluation evidence
-
-Review `pipeline/run.py`, publication and forecast services/repositories, model tables, retention tooling, and pinned-run handling. Separate source checks from new publications; cap active cells and horizons; add compatible retention/compaction before raising cadence. Preserve compact issue-time forecasts and later observed labels for evaluation, including independent station/time holdouts. Keep deterministic baselines clearly identified while real labels accumulate and retain existing model-promotion guards. Preserve last-good live data, reject unavailable/unsupported current cells, and prevent expired predictions from creating future-spike alerts.
-
-**Acceptance:** unchanged checks do not create a dense publication snapshot; live storage and compute remain within measured limits; retention keeps active pins and audit/evaluation evidence.
-
-### RT09 — Apply live-data behavior consistently to all clients
-
-Update the dashboard, both Flutter clients, and responder simulator to read the publication pointer every 30–60 seconds while foregrounded, using ETags/conditional requests. Fetch run-pinned datasets only when run, location, or horizon changes. Apply shared source-age and quality flags across current conditions, nearby data, forecasts, satellite context, and alerts. On refresh failure, retain dated stale views and suppress new automatic alerts from expired/unsupported evidence. Add appropriate response caching keyed by run ID, resolution, bbox, and horizon; keep pointer TTL short and never publicly cache private reviewer evidence. Preserve local GeoNames and administrative boundaries, and confirm basemap provider terms before production reliance.
-
-**Acceptance:** refreshes do not multiply upstream station/weather calls; all clients agree on mode, run, and source age; viewer count does not multiply external collection.
 
 ### RT10 — Add optional context only within measured free budgets
 

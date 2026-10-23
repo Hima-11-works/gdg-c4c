@@ -38,6 +38,7 @@ class _IncidentsScreenState extends State<IncidentsScreen>
   String? _firmsError;
   String? _openingHotspotId;
   int _pendingAssignments = 0;
+  PublicationMeta? _publicationMeta;
   bool _loading = true;
   bool _loadingMore = false;
   bool _hasLoadedSnapshot = false;
@@ -108,6 +109,7 @@ class _IncidentsScreenState extends State<IncidentsScreen>
     _hasLoadedSnapshot = false;
     _hasMoreIncidents = true;
     _pendingAssignments = 0;
+    _publicationMeta = null;
   }
 
   void _changeQueueFilter({bool? roleOnly, bool? archiveOnly}) {
@@ -146,9 +148,8 @@ class _IncidentsScreenState extends State<IncidentsScreen>
       _loadingMore = append;
     });
     try {
-      // The FIRMS candidate feed is independent of the existing incident and
-      // hotspot reads; start all reads together to keep a slow provider from
-      // serially extending the queue refresh.
+      // The FIRMS candidate feed and publication pointer are independent of the
+      // existing incident and hotspot reads; start all reads together.
       final Future<List<Map<String, dynamic>>> hotspotEventsFuture =
           api.listHotspotEvents().catchError((Object _) => <Map<String, dynamic>>[]);
       String? firmsReadError;
@@ -157,6 +158,9 @@ class _IncidentsScreenState extends State<IncidentsScreen>
         firmsReadError = error is ApiException ? error.message : error.toString();
         return <FireDetection>[];
       });
+      final Future<PublicationMeta?> publicationMetaFuture =
+          api.getPublicationMeta().then<PublicationMeta?>((m) => m).catchError((Object _) => null);
+
       final results = await Future.wait([
         Future.wait(
           offsets.map(
@@ -175,6 +179,7 @@ class _IncidentsScreenState extends State<IncidentsScreen>
       final inbox = results[1] as List<IncidentInboxItem>;
       final hotspotEvents = await hotspotEventsFuture;
       final fireDetections = await fireDetectionsFuture;
+      final publicationMeta = await publicationMetaFuture;
       if (!mounted) return;
       if (!_isCurrentQuery(
         generation: generation,
@@ -208,6 +213,7 @@ class _IncidentsScreenState extends State<IncidentsScreen>
         _fireDetections = fireDetections;
         _firmsError = firmsReadError;
         _pendingAssignments = inbox.length;
+        _publicationMeta = publicationMeta ?? _publicationMeta;
         _loading = false;
         _loadingMore = false;
         _hasLoadedSnapshot = true;
@@ -232,6 +238,16 @@ class _IncidentsScreenState extends State<IncidentsScreen>
         _error = error is ApiException
             ? error
             : ApiException.network(error.toString());
+        if (_publicationMeta != null) {
+          _publicationMeta = PublicationMeta(
+            latestRunId: _publicationMeta!.latestRunId,
+            generatedAt: _publicationMeta!.generatedAt,
+            dataMode: _publicationMeta!.dataMode,
+            isDemo: _publicationMeta!.isDemo,
+            isStale: true,
+            ageSeconds: DateTime.now().difference(_publicationMeta!.generatedAt).inSeconds.toDouble(),
+          );
+        }
         _loading = false;
         _loadingMore = false;
       });
@@ -289,6 +305,15 @@ class _IncidentsScreenState extends State<IncidentsScreen>
     if (widget.config.role != ResponderRole.pollutionControl) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Set the simulator role to pollution control to open PM2.5 alerts.')),
+      );
+      return;
+    }
+    final meta = _publicationMeta ?? await widget.api.getPublicationMeta().catchError((_) => null);
+    if (meta != null && meta.isStale) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Cannot dispatch alerts: latest publication data is stale or unreachable. Refresh once backend publication is restored.'),
+        ),
       );
       return;
     }
@@ -500,6 +525,39 @@ class _IncidentsScreenState extends State<IncidentsScreen>
       body: Column(
         children: [
           const SimulationBanner(),
+          if (_publicationMeta != null)
+            Container(
+              width: double.infinity,
+              color: _publicationMeta!.isStale
+                  ? Colors.amber.shade900
+                  : Theme.of(context).colorScheme.surfaceVariant,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              child: Row(
+                children: [
+                  Icon(
+                    _publicationMeta!.isStale ? Icons.warning_amber_rounded : Icons.sensors_outlined,
+                    size: 16,
+                    color: _publicationMeta!.isStale
+                        ? Colors.white
+                        : Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _publicationMeta!.isStale
+                          ? 'Live data stale / offline · Retaining dated snapshot · Auto-dispatch paused'
+                          : 'Publication: ${_publicationMeta!.dataMode.toUpperCase()} · Run: ${_publicationMeta!.latestRunId.length > 8 ? _publicationMeta!.latestRunId.substring(0, 8) : _publicationMeta!.latestRunId}${_publicationMeta!.ageSeconds != null ? ' · Age: ${(_publicationMeta!.ageSeconds! / 60).round()}m' : ''}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: _publicationMeta!.isStale
+                            ? Colors.white
+                            : Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           if (!widget.api.canWrite)
             Container(
               width: double.infinity,

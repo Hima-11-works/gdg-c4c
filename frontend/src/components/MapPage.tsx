@@ -110,7 +110,7 @@ export function MapPage() {
   const query: LodQuery = lodQueryFor(lod, bbox)
   const viewKey = lodKey(query)
   const publishedMeta = useApiResource(fetchPublishedMeta, [], {
-    pollIntervalMs: 5 * 60 * 1000,
+    pollIntervalMs: 30_000,
   })
   const corridors = useApiResource(fetchCorridors, [])
   const supportedHours =
@@ -131,7 +131,6 @@ export function MapPage() {
     (signal, onProgress) => fetchGridCurrent(query, publishedRunId, signal, onProgress),
     [viewKey, publishedRunId],
     {
-      pollIntervalMs: POLL_INTERVAL_MS,
       enabled:
         !viewportMoving &&
         viewportReady &&
@@ -153,7 +152,6 @@ export function MapPage() {
       fetchGridCurrent(overviewQuery, publishedRunId, signal, onProgress),
     [lodKey(overviewQuery), publishedRunId],
     {
-      pollIntervalMs: POLL_INTERVAL_MS,
       enabled: demoMode && publishedRunId !== undefined,
       onProgress: (loaded, total) =>
         setGridProgress({ key: overviewGridProgressKey, loaded, total }),
@@ -165,7 +163,6 @@ export function MapPage() {
     (signal) => fetchGridCurrent(parentQuery, publishedRunId, signal),
     [lodKey(parentQuery), publishedRunId],
     {
-      pollIntervalMs: POLL_INTERVAL_MS,
       enabled:
         !viewportMoving &&
         demoMode &&
@@ -270,7 +267,6 @@ export function MapPage() {
     (signal) => fetchWeather(weatherQuery, publishedRunId, signal),
     [lodKey(weatherQuery), publishedRunId],
     {
-      pollIntervalMs: POLL_INTERVAL_MS,
       enabled: !viewportMoving && viewportReady && publishedRunId !== undefined,
     },
   )

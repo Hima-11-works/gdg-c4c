@@ -428,3 +428,31 @@ class FireDetection {
         satellite: (json['satellite'] as String?) ?? 'unknown satellite',
       );
 }
+
+/// Publication metadata and source-freshness pointer (`GET /api/v2/meta`).
+class PublicationMeta {
+  const PublicationMeta({
+    required this.latestRunId,
+    required this.generatedAt,
+    required this.dataMode,
+    required this.isDemo,
+    this.isStale = false,
+    this.ageSeconds,
+  });
+
+  final String latestRunId;
+  final DateTime generatedAt;
+  final String dataMode;
+  final bool isDemo;
+  final bool isStale;
+  final double? ageSeconds;
+
+  factory PublicationMeta.fromJson(Map<String, dynamic> json) => PublicationMeta(
+        latestRunId: (json['latest_run_id'] as String?) ?? '',
+        generatedAt: DateTime.parse(json['generated_at'] as String),
+        dataMode: (json['data_mode'] as String?) ?? 'demo',
+        isDemo: json['data_mode'] == 'demo',
+        isStale: json['is_stale'] as bool? ?? false,
+        ageSeconds: (json['age_seconds'] as num?)?.toDouble(),
+      );
+}
