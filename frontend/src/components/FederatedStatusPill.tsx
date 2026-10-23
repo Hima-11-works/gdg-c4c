@@ -12,7 +12,6 @@ import {
   syntheticOnly,
   usableAsEvidence,
 } from '../lib/federation'
-import { STATE_FEDERATED_NODES } from '../lib/federationNodes'
 import { formatCount, formatNumber, relativeTime } from '../lib/format'
 import type { AsyncResource } from '../hooks/useApiResource'
 import type { FederationStatusOut, FederationWorkflowStatusOut } from '../lib/types'
@@ -34,7 +33,7 @@ function when(iso: string | null | undefined): string {
 
 export function FederatedStatusPill() {
   const [open, setOpen] = useState(false)
-  const [activeTab, setActiveTab] = useState<'workflow' | 'partition' | 'nodes'>('workflow')
+  const [activeTab, setActiveTab] = useState<'workflow' | 'partition'>('workflow')
   const { resource, refetch } = useApiResource(fetchFederationStatus, [], {
     pollIntervalMs: POLL_INTERVAL_MS,
   })
@@ -129,123 +128,7 @@ export function FederatedStatusPill() {
             >
               Single-process partition demo
             </button>
-            <button
-              type="button"
-              className={`federated-tab-btn ${activeTab === 'nodes' ? 'active' : ''}`}
-              onClick={() => setActiveTab('nodes')}
-            >
-              Illustrative nodes
-            </button>
           </div>
-
-          {activeTab === 'nodes' && (
-            <div className="federated-nodes-view">
-              <p className="federated-demo-notice" role="note">
-                Illustrative mock data only. Node status, station counts, sensor hours, weights,
-                privacy methods, and hashes are examples—not live measurements or verified privacy
-                controls. The aggregator tab is the only endpoint-backed status.
-              </p>
-              <div className="federated-weights-card">
-                <div className="federated-weights-label">
-                  <span>Example aggregation weights</span>
-                  <span className="federated-mono">illustrative</span>
-                </div>
-                <div className="federated-weight-bar">
-                  {STATE_FEDERATED_NODES.map((node) => (
-                    <div
-                      key={node.id}
-                      className="federated-weight-segment"
-                      style={{
-                        width: `${node.aggregationWeight * 100}%`,
-                        backgroundColor: node.color,
-                      }}
-                      title={`${node.code}: ${(node.aggregationWeight * 100).toFixed(0)}%`}
-                    >
-                      <span className="federated-segment-text">{node.code}</span>
-                    </div>
-                  ))}
-                </div>
-                <div className="federated-weights-legend">
-                  {STATE_FEDERATED_NODES.map((node) => (
-                    <div key={node.id} className="federated-legend-item">
-                      <span
-                        className="federated-legend-dot"
-                        style={{ backgroundColor: node.color }}
-                      />
-                      <span className="federated-legend-code">{node.code}</span>
-                      <span className="muted">{(node.aggregationWeight * 100).toFixed(0)}%</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="federated-nodes-list">
-                {STATE_FEDERATED_NODES.map((node) => (
-                  <div key={node.id} className="federated-node-card">
-                    <div className="federated-node-header">
-                      <div className="federated-node-title-group">
-                        <span
-                          className="federated-state-badge"
-                          style={{ borderColor: `${node.color}66`, color: node.color }}
-                        >
-                          {node.code}
-                        </span>
-                        <div>
-                          <div className="federated-node-name">{node.name}</div>
-                          <div className="federated-node-agency muted">{node.agency}</div>
-                        </div>
-                      </div>
-                      <span className="federated-status-tag">
-                        Example round {node.currentRound}/{node.totalRounds} · not live
-                      </span>
-                    </div>
-
-                    <div className="federated-node-jurisdiction">
-                      <span className="muted">Jurisdiction:</span> {node.jurisdiction}
-                    </div>
-
-                    <div className="federated-node-focus">
-                      <span className="muted">Monitoring Target:</span> {node.focusArea}
-                    </div>
-
-                    <div className="federated-node-metrics">
-                      <div className="federated-node-metric-cell">
-                        <div className="federated-metric-val">{node.stationCount}</div>
-                        <div className="muted federated-metric-lbl">Sample stations</div>
-                      </div>
-                      <div className="federated-node-metric-cell">
-                        <div className="federated-metric-val">
-                          {formatCount(node.localSensorHours)}
-                        </div>
-                        <div className="muted federated-metric-lbl">Sample sensor hours</div>
-                      </div>
-                      <div className="federated-node-metric-cell">
-                        <div className="federated-metric-val">
-                          {(node.aggregationWeight * 100).toFixed(0)}%
-                        </div>
-                        <div className="muted federated-metric-lbl">Sample model weight</div>
-                      </div>
-                    </div>
-
-                    <div className="federated-node-footer">
-                      <div className="federated-privacy-note">
-                        <span className="federated-shield-icon" aria-hidden="true">
-                          ⓘ
-                        </span>
-                        <span>Example only; not verified: {node.privacyProtocol}</span>
-                      </div>
-                      <div
-                        className="federated-mono federated-hash-text"
-                        title="Illustrative placeholder hash, not from a live node"
-                      >
-                        Sample hash: {node.lastWeightHash}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
 
           {activeTab === 'workflow' && (
             <div className="federated-aggregator-view">
