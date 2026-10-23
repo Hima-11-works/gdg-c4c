@@ -25,9 +25,9 @@ Built for Google's **Code for Communities (GDG C4C)** Hackathon.
 > **An AI-Powered, Federated Climate Action Platform**  
 > Build an interoperable climate action platform that combines citizen-sourced data (geotagged photos, local low-cost sensor readings) with satellite imagery and meteorological data. It must detect hidden pollution hotspots, forecast air quality spikes across major economic corridors, and alert relevant authorities for rapid intervention — designed for interoperability so Indian cities and states can share predictive models and coordinate emergency resources.
 
-### 💡 How This Platform Solves the Challenge
+### 💡 How This Prototype Addresses the Challenge
 
-| Challenge Requirement | How Our Platform Implements It | Shipped Artifacts & Systems |
+| Challenge Requirement | How Our Prototype Addresses It | Shipped Artifacts & Systems |
 |---|---|---|
 | **Citizen Reports** | Flutter reporting flow for smoke/fire observations and optional photos. Backend image processing removes metadata before review. Sensitivity settings adjust general exposure-alert thresholds; they are not clinical advice. | Flutter Mobile App ([`air_health_flutter`](partner_apps/air_health_flutter/)), Photo Evidence API ([`docs/api/citizen-photos.md`](docs/api/citizen-photos.md)) |
 | **Environmental Inputs** | Source adapters cover Copernicus Sentinel-5P, NASA FIRMS, OpenAQ, and Open-Meteo; availability and freshness depend on configuration and each source's cadence. Satellite products are not surface PM2.5 measurements. | Ingestion Pipeline (`app.ingestion`), Source Inventory ([`ENVIRONMENTAL_SOURCE_INVENTORY.md`](docs/ENVIRONMENTAL_SOURCE_INVENTORY.md)) |
@@ -49,9 +49,9 @@ Built for Google's **Code for Communities (GDG C4C)** Hackathon.
 - [Quick Start](#quick-start)
 - [Live Pipeline & Scheduled Ingestion](#live-pipeline--scheduled-ingestion)
 - [CLI Tooling & Operational Commands](#cli-tooling--operational-commands)
-- [Federation & Inter-Agency Workflows](#federation--inter-agency-workflows)
+- [Experimental Federation Demonstration](#experimental-federation-demonstration)
 - [API Index & Contracts](#api-index--contracts)
-- [Google Stack Integration Roadmap](#google-stack-integration-roadmap)
+- [Google AI Integration](#google-ai-integration)
 - [Development & Testing](#development--testing)
 - [Limits & Operational Roadmap](#limits--operational-roadmap)
 - [Repository Guide](#repository-guide)
@@ -80,7 +80,7 @@ flowchart TB
         CP["Citizen Photo Evidence<br/>EXIF-stripped & Pillow Re-encoded"]
         CR["Citizen Smoke/Fire Reports<br/>India Geofenced & Clustered"]
         CS["Local Low-Cost Sensors<br/>Community PM2.5 Ingestion"]
-        AQ["OpenAQ / CPCB CAAQMS<br/>Official Ground Monitors"]
+        AQ["OpenAQ<br/>Available Ground-Monitor Observations"]
     end
 
     subgraph SPACE["2. Spaceborne & Meteorological Inputs"]
@@ -94,25 +94,25 @@ flowchart TB
         DB[("PostgreSQL 16 + PostGIS<br/>Sensor, Weather & Grid State")]
         H3["Uber H3 Hexagonal Grid<br/>Multi-resolution L3–L8"]
         IDW["IDW Nowcasting Engine<br/>Min-sensor Guarded"]
-        PDI["Heuristic Pollution<br/>Development Index (PDI)"]
+        PDI["Heuristic Pollution<br/>Development Index (advanced detail)"]
         DISP["Advection-Dispersion Model<br/>1h, 3h, 6h Forecasts"]
     end
 
-    subgraph ENGINES["4. Action & Decision Engines"]
+    subgraph ENGINES["4. Analysis & Workflow Services"]
         HOT["Hidden Hotspot Engine<br/>Candidate Screening & Corroboration"]
-        CORR["Economic Corridor Engine<br/>Delhi-Kanpur, DMIC, EDFC"]
+        CORR["Corridor Forecast Inspection<br/>Configured Geometry & Published Runs"]
         ALERTS["Rule-Based Alert Engine<br/>NAQI Bands & Rate-of-Change"]
-        INC["Incident Lifecycle Manager<br/>Assignment & Status Transitions"]
+        INC["Incident Workflow Demo<br/>Assignment & Status Transitions"]
     end
 
-    subgraph FED["5. Interoperable Federation Layer"]
+    subgraph FED["5. Experimental Federation Demonstration"]
         FED_CLI["Local Demo Clients<br/>Training & Parameter Updates"]
         FED_AGG["Prototype Aggregator<br/>Experimental Parameter Exchange"]
     end
 
-    subgraph APPS["6. Client & Authority Interfaces"]
-        WEB["React 19 + MapLibre Web Map<br/>Interactive Multi-Layer Console"]
-        CIT_APP["Air Health Flutter App<br/>Citizen Companion & Field Reporting"]
+    subgraph APPS["6. Citizen & Review Interfaces"]
+        WEB["React 19 + MapLibre Web Map<br/>Prototype Map & Review Views"]
+        CIT_APP["Air Health Flutter App<br/>Exposure Awareness & Field Reporting"]
         AUTH_APP["Fire Dept Simulator<br/>Persistent Demo Incident Workflow"]
     end
 
@@ -122,10 +122,10 @@ flowchart TB
     H3 --> IDW
     H3 --> PDI
     IDW --> DISP
-    PDI --> DISP
     DISP --> HOT
     DISP --> CORR
     DISP --> ALERTS
+    PDI --> ALERTS
     ALERTS --> INC
     
     DB <--> FED_CLI
@@ -175,6 +175,7 @@ The web application uses the **Uber H3 Discrete Global Grid System** to discreti
 | **Level 5** | `10.5 to 12` | **H3 Res 7** | ~2.2 km | Hyper-local ward & neighborhood analysis |
 
 - **Layer Controls**: Toggle between discrete H3 hexagons and continuous IDW-interpolated heat surfaces.
+- **Advanced Cell Detail**: The heuristic PDI remains available as a collapsed, caveated cell detail; it is not a map overlay.
 - **Overlays**: Wind vectors from the configured weather feed, available NASA FIRMS thermal detections, citizen photo markers, active incidents, and date-stamped NASA GIBS satellite context products.
 
 ---
@@ -183,7 +184,7 @@ The web application uses the **Uber H3 Discrete Global Grid System** to discreti
 
 | Source | Role in Platform | Provenance & Access |
 |---|---|---|
-| [**OpenAQ**](https://openaq.org/) | Ground-level PM2.5 observations | Public station observations where available (API access configured) |
+| [**OpenAQ**](https://openaq.org/) | Ground-level PM2.5 observations | Public station observations where available and configured |
 | [**Open-Meteo**](https://open-meteo.com/) | High-resolution meteorological data | Wind speed/direction, temperature, precipitation, boundary layer height |
 | [**Copernicus CDSE**](https://dataspace.copernicus.eu/) | Sentinel-5P UV Aerosol Index (UVAI) & NO2 | Screening for elevated smoke and industrial plumes |
 | [**NASA FIRMS**](https://firms.modaps.eosdis.nasa.gov/) | VIIRS / MODIS satellite fire anomalies | Rapid corroboration of agricultural stubble burning and industrial flares |
@@ -305,7 +306,7 @@ The backend includes a feature-rich CLI for operations, evaluations, and data ma
 
 ---
 
-## 🌐 Federation & Inter-Agency Workflows
+## 🌐 Experimental Federation Demonstration
 
 The repository includes an experimental local federation workflow. It demonstrates model update exchange but does not establish privacy guarantees or participation by real agencies:
 
@@ -417,7 +418,7 @@ cd partner_apps/air_health_flutter
 flutter analyze
 flutter test
 
-# Fire Department Response Console
+# Fire Department Incident Simulator
 cd ../fire_dept_simulator
 flutter analyze
 flutter test
@@ -441,8 +442,8 @@ See [`docs/GO_LIVE.md`](docs/GO_LIVE.md) for the pre-deployment checklist and op
 ```text
 ├── .github/workflows/          # CI/CD and hourly scheduled ingestion pipeline
 ├── apks/                       # Pre-compiled Android release APKs (ARM64, ARM32, Universal)
-│   ├── air_health_flutter-*.apk # Citizen health companion release builds
-│   └── fire_dept_simulator-*.apk # Authority incident console release builds
+│   ├── air_health_flutter-*.apk # Citizen exposure-awareness release builds
+│   └── fire_dept_simulator-*.apk # Incident-workflow simulator release builds
 ├── backend/                    # FastAPI service, SQLAlchemy/PostGIS models, pipeline
 │   │                           # 📖 See backend/README.md for dedicated guide
 │   ├── alembic/                # Database migrations for PostgreSQL + PostGIS schema
@@ -451,15 +452,15 @@ See [`docs/GO_LIVE.md`](docs/GO_LIVE.md) for the pre-deployment checklist and op
 │   │   ├── domain/             # Core domain models, H3 protocols, lifecycle states
 │   │   ├── ingestion/          # OpenAQ, Open-Meteo, NASA FIRMS, CDSE Sentinel-5P adapters
 │   │   ├── pipeline/           # Composition runner for hourly spatial processing
-│   │   ├── services/           # Dispersion modeling, PDI estimation, incidents, evidence
+│   │   ├── services/           # Dispersion modeling, heuristic PDI, incidents, evidence
 │   │   └── federation_*        # Federated learning client and aggregator modules
 │   └── tests/                  # Unit, regression, and architecture contract tests
-├── frontend/                   # React 19 web application (MapLibre, Tailwind, H3 layers)
+├── frontend/                   # React 19 web application (MapLibre, H3 grid)
 │   │                           # 📖 See frontend/README.md for dedicated guide
 │   ├── src/components/         # Map view, corridor panel, hotspot panel, timeline, alerts
 │   └── src/lib/                # Level of Detail (LOD) calculations, color scales, API hooks
 ├── partner_apps/               # Flutter cross-platform mobile apps
-│   ├── air_health_flutter/     # Citizen health companion & field reporting app
+│   ├── air_health_flutter/     # Citizen exposure awareness & field reporting app
 │   │                           # 📖 See partner_apps/air_health_flutter/README.md
 │   └── fire_dept_simulator/    # Backend-connected incident workflow simulator
 │                               # 📖 See partner_apps/fire_dept_simulator/README.md
