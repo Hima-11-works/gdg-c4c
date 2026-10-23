@@ -157,9 +157,11 @@ class Settings(BaseSettings):
     open_meteo_timeout_seconds: float = Field(default=10.0, gt=0)
     open_meteo_max_retries: int = Field(default=3, ge=1, le=10)
     # Open-Meteo doesn't document a hard cap; this is a self-imposed safety
-    # limit so one run never sends an unbounded number of locations in a
-    # single request — batches beyond it are split into multiple requests.
+    # limit so one run never sends an oversized request. Quota usage is also
+    # weighted by location count and requested variables before every attempt.
     open_meteo_max_locations_per_request: int = Field(default=100, ge=1, le=1000)
+    weather_max_native_locations: int = Field(default=40, ge=1, le=100)
+    weather_forecast_cache_minutes: int = Field(default=15, ge=5, le=60)
 
     # --- NASA FIRMS hotspot ingestion (app.ingestion.firms) ---
     firms_map_key: SecretStr | None = None
@@ -237,7 +239,8 @@ class Settings(BaseSettings):
     # Weather is sampled at this coarser resolution and fanned out to every
     # H3_RESOLUTION cell within each sampled cell — one API call covers many
     # fine cells, since weather varies far less over a city block than PM2.5
-    # does. Must be <= h3_resolution (checked below).
+    # does. Forecast observations remain at this resolution and are expanded
+    # only when a forecast is calculated. Must be <= h3_resolution (checked below).
     weather_h3_resolution: int = Field(default=5, ge=0, le=15)
 
     # Hard ceiling on the fan-out. The bbox is operator input, and cells grow

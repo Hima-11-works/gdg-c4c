@@ -1,4 +1,4 @@
-"""Open-Meteo implementation of app.domain.providers.WeatherProvider.
+"""Open-Meteo current and valid-time forecast weather adapter.
 
 API shape (verified with live requests against api.open-meteo.com — the
 docs page is a JS app WebFetch can't render, so this was checked directly):
@@ -6,7 +6,9 @@ docs page is a JS app WebFetch can't render, so this was checked directly):
   GET /v1/forecast?latitude=lat1,lat2&longitude=lon1,lon2
       &current=wind_speed_10m,wind_direction_10m,precipitation,
                temperature_2m,relative_humidity_2m
-      &hourly=boundary_layer_height&wind_speed_unit=ms&timezone=UTC
+      &hourly=wind_speed_10m,wind_direction_10m,precipitation,
+              boundary_layer_height,temperature_2m,relative_humidity_2m
+      &forecast_hours=7&wind_speed_unit=ms&timezone=UTC
       -> for >1 location: a JSON *array*, one object per location, in the
          same order as the input lists (values are float-quantized, not
          re-sorted). For exactly 1 location: a single JSON *object*, not a
@@ -14,7 +16,7 @@ docs page is a JS app WebFetch can't render, so this was checked directly):
       Each object: {"current": {"time", "wind_speed_10m",
                                  "wind_direction_10m", "precipitation",
                                  "temperature_2m", "relative_humidity_2m"},
-                     "hourly": {"time": [...], "boundary_layer_height": [...]}}
+                     "hourly": {"time": [...], "wind_speed_10m": [...], ...}}
 
 boundary_layer_height is only available hourly, not as a `current` value
 (confirmed live — Open-Meteo's current-weather set is a fixed short list
@@ -31,14 +33,16 @@ offset field. No API key is required for the free tier.
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
 import httpx
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 from app.domain.providers import ProviderError
-from app.domain.types import Coordinate, WeatherSample
+from app.domain.types import Coordinate, WeatherForecastSample, WeatherSample
 from app.ingestion import http
 
 logger = logging.getLogger(__name__)
@@ -48,22 +52,33 @@ logger = logging.getLogger(__name__)
 
 
 class _Current(BaseModel):
-    time: datetime  # naive; treated as UTC (we always pass timezone=UTC)
-    wind_speed_10m: float
-    wind_direction_10m: float
-    precipitation: float
-    temperature_2m: float
-    relative_humidity_2m: float
+    time: datetime | None = None  # naive; treated as UTC (we always pass timezone=UTC)
+    wind_speed_10m: float | None = None
+    wind_direction_10m: float | None = None
+    precipitation: float | None = None
+    temperature_2m: float | None = None
+    relative_humidity_2m: float | None = None
 
 
 class _Hourly(BaseModel):
     time: list[datetime] = Field(default_factory=list)
+    wind_speed_10m: list[float | None] = Field(default_factory=list)
+    wind_direction_10m: list[float | None] = Field(default_factory=list)
+    precipitation: list[float | None] = Field(default_factory=list)
     boundary_layer_height: list[float | None] = Field(default_factory=list)
+    temperature_2m: list[float | None] = Field(default_factory=list)
+    relative_humidity_2m: list[float | None] = Field(default_factory=list)
 
 
 class _LocationWeather(BaseModel):
-    current: _Current
+    current: _Current | None = None
     hourly: _Hourly | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class OpenMeteoWeatherBundle:
+    current: WeatherSample | None
+    forecasts: tuple[WeatherForecastSample, ...]
 
 
 # For >1 location Open-Meteo returns a list; for exactly 1, a bare object.
@@ -97,7 +112,7 @@ def _chunks(items: list[Coordinate], size: int) -> Iterator[list[Coordinate]]:
 
 
 class OpenMeteoProvider:
-    """Fetches current weather from the Open-Meteo forecast API.
+    """Fetch current weather and a short hourly forecast in one request.
 
     `client` is a caller-supplied httpx.AsyncClient (its lifecycle belongs
     to the caller); this class always passes its own `timeout_seconds` on
@@ -120,15 +135,34 @@ class OpenMeteoProvider:
         self._max_locations_per_request = max_locations_per_request
 
     async def fetch_weather(self, points: list[Coordinate]) -> list[WeatherSample | None]:
+        bundles = await self.fetch_weather_bundle(points)
+        return [bundle.current for bundle in bundles]
+
+    async def fetch_weather_bundle(
+        self,
+        points: list[Coordinate],
+        *,
+        valid_from: datetime | None = None,
+        valid_to: datetime | None = None,
+    ) -> list[OpenMeteoWeatherBundle]:
         if not points:
             return []
 
-        results: list[WeatherSample | None] = []
+        collected_at = datetime.now(UTC)
+        start = valid_from or collected_at
+        end = valid_to or start + timedelta(hours=6)
+        results: list[OpenMeteoWeatherBundle] = []
         for batch in _chunks(points, self._max_locations_per_request):
-            results.extend(await self._fetch_batch(batch))
+            results.extend(await self._fetch_batch(batch, collected_at, start, end))
         return results
 
-    async def _fetch_batch(self, points: list[Coordinate]) -> list[WeatherSample | None]:
+    async def _fetch_batch(
+        self,
+        points: list[Coordinate],
+        collected_at: datetime,
+        valid_from: datetime,
+        valid_to: datetime,
+    ) -> list[OpenMeteoWeatherBundle]:
         params = {
             "latitude": ",".join(f"{p.latitude:.5f}" for p in points),
             "longitude": ",".join(f"{p.longitude:.5f}" for p in points),
@@ -136,10 +170,12 @@ class OpenMeteoProvider:
                 "wind_speed_10m,wind_direction_10m,precipitation,"
                 "temperature_2m,relative_humidity_2m"
             ),
-            "hourly": "boundary_layer_height",
+            "hourly": (
+                "wind_speed_10m,wind_direction_10m,precipitation,boundary_layer_height"
+            ),
             "wind_speed_unit": "ms",
             "timezone": "UTC",
-            "forecast_days": 1,
+            "forecast_hours": 7,
         }
         try:
             payload = await http.get_json(
@@ -167,31 +203,103 @@ class OpenMeteoProvider:
                 f"Open-Meteo: requested {len(points)} location(s), got {len(locations)} back"
             )
 
-        samples: list[WeatherSample | None] = []
+        samples: list[OpenMeteoWeatherBundle] = []
         for point, location in zip(points, locations, strict=True):
-            samples.append(self._to_sample(point, location))
+            samples.append(self._to_bundle(point, location, collected_at, valid_from, valid_to))
         return samples
 
-    def _to_sample(self, point: Coordinate, location: _LocationWeather) -> WeatherSample | None:
+    def _to_bundle(
+        self,
+        point: Coordinate,
+        location: _LocationWeather,
+        collected_at: datetime,
+        valid_from: datetime,
+        valid_to: datetime,
+    ) -> OpenMeteoWeatherBundle:
         current = location.current
-        blh = _boundary_layer_height_at(location.hourly, _as_utc(current.time))
-        try:
-            return WeatherSample(
-                wind_speed=current.wind_speed_10m,
-                wind_direction=current.wind_direction_10m,
-                precipitation=current.precipitation,
-                measured_at=_as_utc(current.time),
-                boundary_layer_height=blh,
-                temperature=current.temperature_2m,
-                humidity=current.relative_humidity_2m,
-            )
-        except ValueError as exc:
-            # e.g. a wind_direction outside [0, 360) — a bad upstream
-            # record, not our bug; skip this point, keep the rest.
-            logger.warning(
-                "Open-Meteo: skipping (%.5f, %.5f), invalid reading: %s",
-                point.latitude,
-                point.longitude,
-                exc,
-            )
-            return None
+        sample = None
+        if (
+            current is not None
+            and current.time is not None
+            and current.wind_speed_10m is not None
+            and current.wind_direction_10m is not None
+            and current.precipitation is not None
+        ):
+            measured_at = _as_utc(current.time)
+            try:
+                sample = WeatherSample(
+                    wind_speed=current.wind_speed_10m,
+                    wind_direction=current.wind_direction_10m,
+                    precipitation=current.precipitation,
+                    measured_at=measured_at,
+                    boundary_layer_height=_boundary_layer_height_at(location.hourly, measured_at),
+                    temperature=current.temperature_2m,
+                    humidity=current.relative_humidity_2m,
+                    received_at=collected_at,
+                )
+            except ValueError as exc:
+                logger.warning(
+                    "Open-Meteo: skipping current sample for (%.5f, %.5f): %s",
+                    point.latitude,
+                    point.longitude,
+                    exc,
+                )
+
+        forecasts: list[WeatherForecastSample] = []
+        hourly = location.hourly
+        if hourly is not None:
+            for index, raw_time in enumerate(hourly.time):
+                valid_at = _as_utc(raw_time)
+                if valid_at < valid_from or valid_at > valid_to:
+                    continue
+                try:
+                    forecasts.append(
+                        WeatherForecastSample(
+                            valid_at=valid_at,
+                            wind_speed=_valid_number(hourly.wind_speed_10m, index, minimum=0),
+                            wind_direction=_valid_number(
+                                hourly.wind_direction_10m, index, minimum=0, maximum=360, maximum_exclusive=True
+                            ),
+                            precipitation=_valid_number(hourly.precipitation, index, minimum=0),
+                            boundary_layer_height=_valid_number(
+                                hourly.boundary_layer_height, index, minimum=0
+                            ),
+                            temperature=_valid_number(
+                                hourly.temperature_2m, index, minimum=-90, maximum=60
+                            ),
+                            humidity=_valid_number(
+                                hourly.relative_humidity_2m, index, minimum=0, maximum=100
+                            ),
+                            source_issued_at=None,
+                            received_at=collected_at,
+                        )
+                    )
+                except ValueError as exc:
+                    logger.warning(
+                        "Open-Meteo: skipping invalid forecast for (%.5f, %.5f) at %s: %s",
+                        point.latitude,
+                        point.longitude,
+                        valid_at.isoformat(),
+                        exc,
+                    )
+        return OpenMeteoWeatherBundle(sample, tuple(forecasts))
+
+
+def _at(values: list[float | None], index: int) -> float | None:
+    return values[index] if index < len(values) else None
+
+
+def _valid_number(
+    values: list[float | None],
+    index: int,
+    *,
+    minimum: float,
+    maximum: float | None = None,
+    maximum_exclusive: bool = False,
+) -> float | None:
+    value = _at(values, index)
+    if value is None or not math.isfinite(value) or value < minimum:
+        return None
+    if maximum is not None and (value >= maximum if maximum_exclusive else value > maximum):
+        return None
+    return value

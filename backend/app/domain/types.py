@@ -50,6 +50,24 @@ def _require_valid_weather_values(
         raise ValueError(f"precipitation must be >= 0: {precipitation}")
 
 
+def _require_valid_optional_weather_values(
+    wind_speed: float | None, wind_direction: float | None, precipitation: float | None
+) -> None:
+    """Validate only forecast fields actually supplied by the source."""
+    if wind_speed is not None:
+        _require_finite(wind_speed, "wind_speed")
+        if wind_speed < 0:
+            raise ValueError(f"wind_speed must be >= 0: {wind_speed}")
+    if wind_direction is not None:
+        _require_finite(wind_direction, "wind_direction")
+        if not 0 <= wind_direction < 360:
+            raise ValueError(f"wind_direction must be within [0, 360): {wind_direction}")
+    if precipitation is not None:
+        _require_finite(precipitation, "precipitation")
+        if precipitation < 0:
+            raise ValueError(f"precipitation must be >= 0: {precipitation}")
+
+
 def _require_valid_weather_extras(temperature: float | None, humidity: float | None) -> None:
     """temperature/humidity are optional — same "where available" idiom as
     boundary_layer_height, since not every provider/source has them — but
@@ -64,6 +82,13 @@ def _require_valid_weather_extras(temperature: float | None, humidity: float | N
         _require_finite(humidity, "humidity")
         if not 0 <= humidity <= 100:
             raise ValueError(f"humidity must be within [0, 100]: {humidity}")
+
+
+def _require_valid_boundary_layer_height(value: float | None) -> None:
+    if value is not None:
+        _require_finite(value, "boundary_layer_height")
+        if value < 0:
+            raise ValueError(f"boundary_layer_height must be >= 0: {value}")
 
 
 _EARTH_RADIUS_KM = 6371.0088  # IUGG mean radius
@@ -231,15 +256,16 @@ class WeatherReading:
             raise ValueError("source must not be empty")
         _require_valid_weather_values(self.wind_speed, self.wind_direction, self.precipitation)
         _require_valid_weather_extras(self.temperature, self.humidity)
+        _require_valid_boundary_layer_height(self.boundary_layer_height)
 
 
 @dataclass(frozen=True, slots=True)
 class WeatherSample:
-    """A raw weather reading at a requested point, before it's mapped to
-    any H3 cell. WeatherProvider implementations return these; the
-    ingestion service (which knows about H3) turns each one into one or
-    more WeatherReading rows — see docs/architecture.md on why weather is
-    sampled at coarser representative points and fanned out from there.
+    """A current weather reading at a requested native point.
+
+    Live Open-Meteo collection persists this at its native coarse H3 cell;
+    legacy/demo providers may still project it into one or more
+    ``WeatherReading`` rows.
     """
 
     wind_speed: float
@@ -249,11 +275,98 @@ class WeatherSample:
     boundary_layer_height: float | None = None
     temperature: float | None = None
     humidity: float | None = None
+    received_at: datetime | None = None
 
     def __post_init__(self) -> None:
         _require_utc(self.measured_at, "measured_at")
+        if self.received_at is not None:
+            _require_utc(self.received_at, "received_at")
         _require_valid_weather_values(self.wind_speed, self.wind_direction, self.precipitation)
         _require_valid_weather_extras(self.temperature, self.humidity)
+        _require_valid_boundary_layer_height(self.boundary_layer_height)
+
+
+@dataclass(frozen=True, slots=True)
+class WeatherForecastSample:
+    """One Open-Meteo forecast point at its source valid time."""
+
+    valid_at: datetime
+    wind_speed: float | None = None
+    wind_direction: float | None = None
+    precipitation: float | None = None
+    boundary_layer_height: float | None = None
+    temperature: float | None = None
+    humidity: float | None = None
+    source_model: str = "best-match-v1"
+    source_issued_at: datetime | None = None
+    received_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _require_utc(self.valid_at, "valid_at")
+        if self.source_issued_at is not None:
+            _require_utc(self.source_issued_at, "source_issued_at")
+        if self.received_at is not None:
+            _require_utc(self.received_at, "received_at")
+        if not self.source_model.strip():
+            raise ValueError("source_model must not be empty")
+        _require_valid_optional_weather_values(
+            self.wind_speed, self.wind_direction, self.precipitation
+        )
+        _require_valid_weather_extras(self.temperature, self.humidity)
+        _require_valid_boundary_layer_height(self.boundary_layer_height)
+
+
+@dataclass(frozen=True, slots=True)
+class WeatherForecastObservation:
+    """Persisted forecast sample at one coarse native weather location."""
+
+    sample_cell: str
+    latitude: float
+    longitude: float
+    valid_at: datetime
+    wind_speed: float | None = None
+    wind_direction: float | None = None
+    precipitation: float | None = None
+    boundary_layer_height: float | None = None
+    temperature: float | None = None
+    humidity: float | None = None
+    source: str = "open-meteo"
+    source_model: str = "best-match-v1"
+    source_issued_at: datetime | None = None
+    received_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _require_utc(self.valid_at, "valid_at")
+        if self.source_issued_at is not None:
+            _require_utc(self.source_issued_at, "source_issued_at")
+        if self.received_at is not None:
+            _require_utc(self.received_at, "received_at")
+        if not self.sample_cell.strip() or not self.source.strip() or not self.source_model.strip():
+            raise ValueError("sample_cell, source, and source_model must not be empty")
+        if not -90 <= self.latitude <= 90 or not -180 <= self.longitude <= 180:
+            raise ValueError("weather forecast coordinates are outside geographic bounds")
+        _require_valid_optional_weather_values(
+            self.wind_speed, self.wind_direction, self.precipitation
+        )
+        _require_valid_weather_extras(self.temperature, self.humidity)
+        _require_valid_boundary_layer_height(self.boundary_layer_height)
+
+
+@dataclass(frozen=True, slots=True)
+class WeatherForecastCell:
+    """Forecast weather expanded to one modeled H3 cell for a valid time."""
+
+    h3_cell: str
+    valid_at: datetime
+    wind_speed: float | None = None
+    wind_direction: float | None = None
+    precipitation: float | None = None
+
+    def __post_init__(self) -> None:
+        _require_utc(self.valid_at, "valid_at")
+        _require_valid_optional_weather_values(
+            self.wind_speed, self.wind_direction, self.precipitation
+        )
 
 
 @dataclass(frozen=True, slots=True)

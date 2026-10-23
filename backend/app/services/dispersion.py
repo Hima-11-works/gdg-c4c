@@ -16,7 +16,13 @@ from datetime import datetime, timedelta
 from app.domain.dispersion import ForecastResult
 from app.domain.h3_grid import cell_center, grid_disk
 from app.domain.numeric import clamp, clamp01
-from app.domain.types import Coordinate, Forecast, GridState, WeatherReading
+from app.domain.types import (
+    Coordinate,
+    Forecast,
+    GridState,
+    WeatherForecastCell,
+    WeatherReading,
+)
 
 
 def _angular_difference(bearing_a: float, bearing_b: float) -> float:
@@ -73,14 +79,7 @@ def _downwind_weights(
 
 @dataclass(frozen=True, slots=True)
 class _CellCoefficients:
-    """Per-cell, per-hour update coefficients, computed once per
-    forecast() call rather than once per simulated hour: this model
-    version holds each cell's weather constant for the whole horizon
-    (see DeterministicH3DispersionModel's docstring), so removal,
-    transport, and the downwind neighbor split don't change hour to
-    hour. A future per-hour weather feed would move this computation
-    inside the simulation loop instead.
-    """
+    """Per-cell update coefficients for the weather valid at one step."""
 
     removal_fraction: float
     transport_fraction: float
@@ -184,6 +183,8 @@ class DeterministicH3DispersionModel:
         *,
         generated_at: datetime,
         step_minutes: float = 60,
+        weather_forecasts: Sequence[WeatherForecastCell] = (),
+        time_varying_weather: bool = False,
     ) -> ForecastResult:
         if not current_state:
             return ForecastResult(
@@ -199,14 +200,23 @@ class DeterministicH3DispersionModel:
             raise ValueError("current_state must not contain duplicate h3_cell entries")
         domain = set(cells)
 
-        weather_by_cell = {reading.h3_cell: reading for reading in weather}
+        weather_by_cell: dict[str, WeatherReading] = {}
+        for reading in weather:
+            current = weather_by_cell.get(reading.h3_cell)
+            if current is None or reading.measured_at > current.measured_at:
+                weather_by_cell[reading.h3_cell] = reading
+        forecasts_by_cell: dict[str, list[WeatherForecastCell]] = {}
+        for forecast_weather in weather_forecasts:
+            forecasts_by_cell.setdefault(forecast_weather.h3_cell, []).append(forecast_weather)
+        for readings in forecasts_by_cell.values():
+            readings.sort(key=lambda reading: reading.valid_at)
 
         pm25 = {state.h3_cell: (state.pm25 or 0.0) for state in current_state}
         unestimated = {state.h3_cell for state in current_state if state.pm25 is None}
         confidence = {state.h3_cell: state.confidence for state in current_state}
-        coefficients = {
-            cell: self._coefficients_for(cell, weather_by_cell.get(cell)) for cell in cells
-        }
+        coefficient_cache: dict[
+            tuple[str, WeatherReading | WeatherForecastCell | None], _CellCoefficients
+        ] = {}
 
         forecasts: list[Forecast] = []
         domain_outflow_by_hour: dict[float, float] = {}
@@ -222,6 +232,27 @@ class DeterministicH3DispersionModel:
             horizon_steps[step_num] = h
 
         for step in range(1, total_steps + 1):
+            step_at = generated_at + timedelta(hours=step * step_hours)
+            coefficients: dict[str, _CellCoefficients] = {}
+            for cell in cells:
+                reading: WeatherReading | WeatherForecastCell | None = weather_by_cell.get(cell)
+                if time_varying_weather:
+                    candidates = [
+                        forecast_weather
+                        for forecast_weather in forecasts_by_cell.get(cell, [])
+                        if forecast_weather.valid_at <= step_at
+                        and step_at - forecast_weather.valid_at <= timedelta(hours=1)
+                    ]
+                    if candidates:
+                        reading = candidates[-1]
+                    elif reading is not None and reading.source != "demo":
+                        age = step_at - reading.measured_at
+                        if age < timedelta(0) or age > timedelta(hours=1):
+                            reading = None
+                key = (cell, reading)
+                if key not in coefficient_cache:
+                    coefficient_cache[key] = self._coefficients_for(cell, reading)
+                coefficients[cell] = coefficient_cache[key]
             pm25, confidence, outflow = self._step(
                 cells, domain, pm25, confidence, coefficients, step_hours
             )
@@ -250,7 +281,11 @@ class DeterministicH3DispersionModel:
             domain_outflow_by_hour=domain_outflow_by_hour,
         )
 
-    def _coefficients_for(self, cell: str, reading: WeatherReading | None) -> _CellCoefficients:
+    def _coefficients_for(
+        self,
+        cell: str,
+        reading: WeatherReading | WeatherForecastCell | None,
+    ) -> _CellCoefficients:
         if reading is None:
             # No weather for this cell: decay-only, no fabricated wind.
             return _CellCoefficients(
@@ -260,17 +295,28 @@ class DeterministicH3DispersionModel:
                 has_weather=False,
             )
 
-        precip_factor = clamp01(reading.precipitation / self._precipitation_reference_mm)
+        precip_factor = (
+            clamp01(reading.precipitation / self._precipitation_reference_mm)
+            if reading.precipitation is not None
+            else 0.0
+        )
         removal_fraction = clamp(
             self._decay_rate_per_hour + self._wet_removal_rate_per_hour * precip_factor, 0.0, 1.0
         )
 
-        if reading.wind_speed < self._calm_wind_threshold_ms:
+        if (
+            reading.wind_speed is None
+            or reading.wind_direction is None
+            or reading.wind_speed < self._calm_wind_threshold_ms
+        ):
             return _CellCoefficients(
                 removal_fraction=removal_fraction,
                 transport_fraction=0.0,
                 downwind_weights=[],
-                has_weather=True,
+                has_weather=any(
+                    value is not None
+                    for value in (reading.wind_speed, reading.wind_direction, reading.precipitation)
+                ),
             )
 
         transport_fraction = self._max_transport_fraction * clamp01(

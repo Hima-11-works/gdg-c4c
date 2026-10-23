@@ -20,10 +20,10 @@ from app.domain.incidents import (
     Incident,
     IncidentDelivery,
     IncidentEvent,
-    IncidentWebhookDelivery,
-    IncidentWebhookStatus,
     IncidentSourceType,
     IncidentStatus,
+    IncidentWebhookDelivery,
+    IncidentWebhookStatus,
     ResponderRole,
 )
 from app.domain.prediction import AlertCandidate, PredictionResult, PredictionRun
@@ -37,6 +37,7 @@ from app.domain.types import (
     Forecast,
     GridState,
     SensorReading,
+    WeatherForecastObservation,
     WeatherReading,
 )
 
@@ -102,6 +103,39 @@ class WeatherReadingRepository(Protocol):
     ) -> list[WeatherReading]:
         """Latest reading per selected cell, optionally source/time bounded."""
         ...
+
+
+class WeatherForecastRepository(Protocol):
+    def recently_collected_cells(
+        self,
+        sample_cells: list[str],
+        *,
+        source_model: str,
+        received_after: datetime,
+        valid_through: datetime,
+    ) -> set[str]: ...
+
+    def add_many(
+        self, observations: list[WeatherForecastObservation]
+    ) -> tuple[int, int]: ...
+
+    def list_between(
+        self,
+        sample_cells: list[str],
+        *,
+        source_model: str,
+        valid_from: datetime,
+        valid_to: datetime,
+        received_after: datetime | None = None,
+    ) -> list[WeatherForecastObservation]: ...
+
+    def list_latest_current(
+        self,
+        *,
+        valid_from: datetime,
+        valid_through: datetime,
+        sample_cells: list[str] | None = None,
+    ) -> list[WeatherForecastObservation]: ...
 
 
 class GridStateRepository(Protocol):

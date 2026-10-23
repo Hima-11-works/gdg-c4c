@@ -5,12 +5,12 @@ no randomness).
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import h3
 import pytest
 
-from app.domain.types import Coordinate, GridState, WeatherReading
+from app.domain.types import Coordinate, GridState, WeatherForecastCell, WeatherReading
 from app.services.dispersion import DeterministicH3DispersionModel
 
 GENERATED_AT = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
@@ -473,6 +473,35 @@ def test_confidence_strictly_decreases_with_longer_horizons() -> None:
     c3 = _confidence_by_cell(result, 3)[CENTER]
     c6 = _confidence_by_cell(result, 6)[CENTER]
     assert c1 > c3 > c6 > 0
+
+
+def test_future_valid_time_weather_changes_only_matching_and_later_steps() -> None:
+    grid = [_state(CENTER, 100.0)]
+    baseline = _model().forecast(
+        grid,
+        [],
+        hours=(1, 2, 3),
+        generated_at=GENERATED_AT,
+        time_varying_weather=True,
+    )
+    with_future_rain = _model().forecast(
+        grid,
+        [],
+        hours=(1, 2, 3),
+        generated_at=GENERATED_AT,
+        weather_forecasts=[
+            WeatherForecastCell(
+                h3_cell=CENTER,
+                valid_at=GENERATED_AT + timedelta(hours=2),
+                precipitation=4.0,
+            )
+        ],
+        time_varying_weather=True,
+    )
+
+    assert _by_cell(with_future_rain, 1)[CENTER] == pytest.approx(_by_cell(baseline, 1)[CENTER])
+    assert _by_cell(with_future_rain, 2)[CENTER] < _by_cell(baseline, 2)[CENTER]
+    assert _by_cell(with_future_rain, 3)[CENTER] < _by_cell(baseline, 3)[CENTER]
 
 
 def test_receiving_cell_confidence_is_a_weighted_average_not_an_overwrite() -> None:

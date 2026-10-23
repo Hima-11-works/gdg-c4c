@@ -262,6 +262,34 @@ async def _run_openaq_history_job(settings, *, now=None) -> str:
         session.close()
 
 
+async def _run_weather_collection_job(settings, bbox, *, now=None) -> IngestionResult:
+    """Collect bounded current and hourly Open-Meteo data outside publication."""
+    from app.db.repositories.weather_forecast import SqlWeatherForecastRepository
+
+    if settings.demo_mode:
+        logger.info("Skipping live weather collection in demo mode")
+        return IngestionResult()
+    factory = get_session_factory()
+    session = factory()
+    try:
+        async with httpx.AsyncClient(timeout=settings.open_meteo_timeout_seconds) as client:
+            attach_request_budget(
+                client,
+                provider="open-meteo",
+                budget=SqlProviderRequestBudget(factory),
+            )
+            provider = build_weather_provider(settings, client)
+            service = WeatherIngestionService(
+                provider,
+                SqlWeatherReadingRepository(session),
+                source="open-meteo",
+                forecast_repository=SqlWeatherForecastRepository(session),
+            )
+            return await service.run(bbox, now=now)
+    finally:
+        session.close()
+
+
 async def _run_ingest_weather(args: argparse.Namespace) -> int:
     settings = get_settings()
     bbox = _bbox_from_args(args)
@@ -274,6 +302,8 @@ async def _run_ingest_weather(args: argparse.Namespace) -> int:
 
     session = get_session_factory()()
     try:
+        from app.db.repositories.weather_forecast import SqlWeatherForecastRepository
+
         async with httpx.AsyncClient(timeout=settings.open_meteo_timeout_seconds) as client:
             attach_request_budget(
                 client,
@@ -281,11 +311,21 @@ async def _run_ingest_weather(args: argparse.Namespace) -> int:
                 budget=SqlProviderRequestBudget(get_session_factory()),
             )
             provider = build_weather_provider(settings, client)
-            service = WeatherIngestionService(provider, SqlWeatherReadingRepository(session))
+            service = WeatherIngestionService(
+                provider,
+                SqlWeatherReadingRepository(session),
+                source="demo" if settings.demo_mode else "open-meteo",
+                forecast_repository=SqlWeatherForecastRepository(session),
+            )
             result = await service.run(bbox)
     finally:
         session.close()
 
+    if not settings.demo_mode:
+        print(
+            f"forecast_points={result.forecast_fetched} forecast_saved={result.forecast_saved} "
+            f"cache_hits={result.cache_hits} omitted_locations={result.omitted_locations}"
+        )
     return _report(result)
 
 
@@ -402,6 +442,19 @@ async def _run_collect_due(_args: argparse.Namespace) -> int:
             elif job.job_key == "openaq-history":
                 error = await _run_openaq_history_job(settings)
                 succeeded = True
+            elif job.job_key == "weather-collection":
+                result = await _run_weather_collection_job(settings, bbox)
+                succeeded = result.succeeded
+                error = "; ".join(result.errors) if result.errors else None
+                logger.info(
+                    "Weather collection: current_cells=%d forecast_points=%d "
+                    "saved=%d cache_hits=%d omitted_points=%d",
+                    result.fetched,
+                    result.forecast_fetched,
+                    result.saved,
+                    result.cache_hits,
+                    result.omitted_locations,
+                )
             else:
                 succeeded = False
                 error = f"no worker registered for job {job.job_key}"

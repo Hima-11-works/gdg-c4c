@@ -41,6 +41,23 @@ def test_provider_cost_estimates_count_open_meteo_locations() -> None:
     assert _request_units("firms", request) == (5, 0)
 
 
+def test_open_meteo_weight_counts_each_location_equivalent_in_a_batch() -> None:
+    coordinates = ",".join(str(index) for index in range(40))
+    request = httpx.Request(
+        "GET",
+        "https://weather.test/v1/forecast",
+        params={
+            "latitude": coordinates,
+            "longitude": coordinates,
+            "current": "wind_speed_10m,wind_direction_10m,precipitation,temperature_2m,relative_humidity_2m",
+            "hourly": "wind_speed_10m,wind_direction_10m,precipitation,boundary_layer_height",
+            "forecast_hours": "7",
+        },
+    )
+
+    assert _request_units("open-meteo", request) == (40, 0)
+
+
 class _FakeBudget:
     def __init__(self, *, allowed: bool = True) -> None:
         self.allowed = allowed

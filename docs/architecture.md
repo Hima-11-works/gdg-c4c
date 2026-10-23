@@ -376,17 +376,17 @@ is dropped as stale.
 number of API calls": weather varies far less over a city block than PM2.5
 does, so it's fetched at `WEATHER_H3_RESOLUTION` (coarser than
 `H3_RESOLUTION`, e.g. 5 vs. 8 by default — a difference of 2 levels cuts the
-point count by roughly 49x) and fanned out to every fine `H3_RESOLUTION`
-cell inside each sampled cell
-(`app.domain.h3_grid.representative_sample_points`). Every representative
-point for the whole configured bbox goes into **one** Open-Meteo request
-(it accepts comma-separated multi-location lat/lon and answers with one
-result per point, batched automatically past `OPEN_METEO_MAX_LOCATIONS_PER_REQUEST`
-if needed) — that single fetched sample is then *reused* across every fine
-`WeatherReading` row it represents, which is the caching/reuse mechanism
-here rather than a separate response cache. `WeatherReadingRepository`'s
-schema and validation are untouched by this: every stored row is still at
-`H3_RESOLUTION`, just multiple rows sharing one set of values.
+point count by roughly 49x). `app.domain.h3_grid.representative_sample_points`
+maps those native points to their fine-grid descendants, and the deterministic
+mesh selects at most `WEATHER_MAX_NATIVE_LOCATIONS` points per collection.
+Each collection batches those points into Open-Meteo requests, bounded by
+`OPEN_METEO_MAX_LOCATIONS_PER_REQUEST`. Live current and hourly values are
+stored once per native point, model, and valid time in
+`weather_forecast_observation`. The existing `/api/v1/weather` and cell-detail
+response shapes are preserved by projecting the small set of fresh native
+samples onto requested H3 cells at read time; coarser reads aggregate only
+samples inside each requested cell. Demo/legacy providers may still persist
+`WeatherReading` rows.
 `boundary_layer_height` is only available as an hourly Open-Meteo variable,
 not a "current" one, so it's matched to the current reading's hour and left
 `None` if the model has no value for it — the "where available" case.
@@ -424,6 +424,20 @@ Both use the shared OpenAQ request budget. The publication pipeline reads those
 stored observations for city and country views instead of making overlapping
 poll requests. `python -m app.cli scheduler-status` reports registry scan
 completeness and page/station counts so partial coverage is visible.
+
+**Live weather collection:** the scheduled `weather-collection` job refreshes a
+deterministic mesh of at most 40 native H3 locations every 15 minutes. Each
+Open-Meteo request combines current conditions with the next seven hourly valid
+times and is charged through the shared location/variable weighted budget.
+Current and hourly weather are stored once per native location, model key, and
+valid time in `weather_forecast_observation`, with `received_at` separate from
+a nullable upstream issue time. The existing per-cell `/weather` and cell
+detail response shapes are projected from fresh native current samples when
+read, rather than persisted as fine-cell copies. A fresh cached forecast window suppresses
+duplicate requests. Forecast calculation maps those native samples to the
+requested cells and uses the newest sample valid at each step; absent fields
+stay null and stale current values expire after one hour. The live publication
+pipeline reads this stored collection and makes no Open-Meteo calls itself.
 
 **Duplicate prevention:** both `SensorReadingRepository.add()` and
 `WeatherReadingRepository.add()` raise `DuplicateReadingError` — a

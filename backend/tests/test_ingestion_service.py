@@ -1,8 +1,15 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from app.core.config import get_settings
 from app.domain.h3_grid import cell_center, representative_sample_points
-from app.domain.types import PM25, BoundingBox, Coordinate, SensorReading, WeatherSample
+from app.domain.types import (
+    PM25,
+    BoundingBox,
+    Coordinate,
+    SensorReading,
+    WeatherForecastSample,
+    WeatherSample,
+)
 from app.services.ingestion import SensorIngestionService, WeatherIngestionService
 from tests.fakes import (
     FakePollutionDataProvider,
@@ -166,6 +173,70 @@ async def test_weather_run_preserves_temperature_and_humidity() -> None:
     assert repository.readings
     assert {reading.temperature for reading in repository.readings} == {30.5}
     assert {reading.humidity for reading in repository.readings} == {72.0}
+
+
+async def test_weather_bundle_persists_native_samples_and_reuses_cache() -> None:
+    settings = get_settings()
+
+    class _BundleProvider:
+        calls: list[list[Coordinate]] = []
+
+        async def fetch_weather_bundle(self, points, *, valid_from, valid_to):
+            self.calls.append(points)
+            return [
+                type(
+                    "Bundle",
+                    (),
+                    {
+                        "current": _sample(),
+                        "forecasts": (
+                            WeatherForecastSample(
+                                valid_at=valid_from + timedelta(hours=1),
+                                wind_speed=4.0,
+                                wind_direction=270.0,
+                                precipitation=1.0,
+                                received_at=valid_from,
+                            ),
+                        ),
+                    },
+                )()
+                for _point in points
+            ]
+
+    class _ForecastRepository:
+        cached: set[str] = set()
+        observations: list = []
+
+        def recently_collected_cells(self, sample_cells, **_kwargs):
+            return self.cached.intersection(sample_cells)
+
+        def add_many(self, observations):
+            self.observations.extend(observations)
+            self.cached.update(observation.sample_cell for observation in observations)
+            return len(observations), 0
+
+    provider = _BundleProvider()
+    forecast_repository = _ForecastRepository()
+    current_repository = FakeWeatherReadingRepository()
+    service = WeatherIngestionService(
+        provider,
+        current_repository,
+        forecast_repository=forecast_repository,
+    )
+
+    first = await service.run(BBOX, now=SINCE)
+    second = await service.run(BBOX, now=SINCE + timedelta(minutes=5))
+
+    assert first.succeeded and second.succeeded
+    assert len(provider.calls) == 1
+    assert len(provider.calls[0]) <= settings.weather_max_native_locations
+    assert first.forecast_fetched == len(provider.calls[0])
+    assert len(forecast_repository.observations) == first.fetched + first.forecast_fetched
+    assert first.fetched == len(provider.calls[0])
+    assert current_repository.readings == []  # live values stay at native support
+    assert second.cache_hits == len(provider.calls[0])
+    assert second.fetched == 0
+    assert second.omitted_locations == first.omitted_locations
 
 
 async def test_weather_run_records_the_selected_data_mode_source() -> None:

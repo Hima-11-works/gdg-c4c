@@ -61,7 +61,7 @@ _JOB_KEYS_BY_DATASET = {
     "openaq": "openaq-collection",
     "openaq-national-overview": "openaq-collection",
     "nasa-firms": "environmental-pipeline",
-    "open-meteo": "environmental-pipeline",
+    "open-meteo": "weather-collection",
     "copernicus-sentinel5p-aer-ai": "satellite-hotspot-scan",
 }
 

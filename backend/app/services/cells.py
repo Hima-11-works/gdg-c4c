@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
 from app.core.config import get_settings
 from app.domain.features import DataMode
@@ -10,11 +11,13 @@ from app.domain.h3_grid import assert_valid_cell
 from app.domain.repositories import (
     ForecastRepository,
     GridStateRepository,
+    WeatherForecastRepository,
     WeatherReadingRepository,
 )
 from app.domain.types import Forecast, GridState, WeatherReading
 from app.services import demo_data
 from app.services.results import ServiceResult
+from app.services.weather_projection import project_weather_observations
 
 _DEMO_HORIZONS = (1, 3, 6)
 
@@ -42,15 +45,21 @@ class CellService:
         forecast_repository: ForecastRepository,
         weather_repository: WeatherReadingRepository,
         *, demo_mode: bool | None = None,
+        weather_forecast_repository: WeatherForecastRepository | None = None,
     ) -> None:
         self._grid_repository = grid_repository
         self._forecast_repository = forecast_repository
         self._weather_repository = weather_repository
+        self._weather_forecast_repository = weather_forecast_repository
         self._demo_mode_override = demo_mode
 
     @property
     def _demo_mode(self) -> bool:
-        return get_settings().demo_mode if self._demo_mode_override is None else self._demo_mode_override
+        return (
+            get_settings().demo_mode
+            if self._demo_mode_override is None
+            else self._demo_mode_override
+        )
 
     def get_cell(
         self, h3_cell: str, *, resolution: int | None = None
@@ -78,6 +87,21 @@ class CellService:
         forecasts = self._forecast_repository.latest_for_cell(h3_cell, mode=mode)
         source = "demo" if self._demo_mode else "open-meteo"
         weather = self._weather_repository.latest_for_cell(h3_cell, source=source)
+        if not self._demo_mode and self._weather_forecast_repository is not None:
+            settings = get_settings()
+            now = datetime.now(UTC)
+            observations = self._weather_forecast_repository.list_latest_current(
+                valid_from=now - timedelta(hours=settings.ingest_max_reading_age_hours),
+                valid_through=now,
+            )
+            projected = project_weather_observations(
+                observations,
+                [h3_cell],
+                resolution=resolution,
+                sample_resolution=settings.weather_h3_resolution,
+            )
+            if projected:
+                weather = projected[0]
 
         if current is not None or forecasts or weather is not None:
             return ServiceResult(

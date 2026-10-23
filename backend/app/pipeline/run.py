@@ -1,7 +1,7 @@
 """The complete processing pipeline for the configured region:
 
     cached OpenAQ station observations -> H3 grid + PM2.5 interpolation -> PDI
-    -> Open-Meteo -> weather ingestion -> dispersion model -> forecasts
+    -> cached Open-Meteo weather -> dispersion model -> forecasts
     -> prediction publication -> alerts
 
 Run with:
@@ -62,11 +62,19 @@ from app.db.repositories import (
     SqlTrafficObservationRepository,
     SqlWeatherReadingRepository,
 )
+from app.db.repositories.weather_forecast import SqlWeatherForecastRepository
 from app.db.session import get_session_factory
 from app.domain.features import DataMode, DatasetRef, FeatureSnapshot, InputKind, WeatherFeature
 from app.domain.hotspots import FireSignal, StationSignal
 from app.domain.prediction import DEFAULT_REGION
-from app.domain.types import BoundingBox, Forecast, GridState, SensorReading, WeatherReading
+from app.domain.types import (
+    BoundingBox,
+    Forecast,
+    GridState,
+    SensorReading,
+    WeatherForecastCell,
+    WeatherReading,
+)
 from app.ingestion.demo_reports import demo_fire_reports
 from app.ingestion.factory import build_pollution_provider, build_weather_provider
 from app.ingestion.firms import FirmsProvider
@@ -87,12 +95,13 @@ from app.services.hotspot_detection import (
     build_store,
     fire_signal_from_hotspot,
 )
-from app.services.ingestion import SensorIngestionService, WeatherIngestionService
+from app.services.ingestion import IngestionResult, SensorIngestionService, WeatherIngestionService
 from app.services.national_overview import INDIA_OVERVIEW_BBOX, build_national_overview
 from app.services.pdi import HeuristicPDIModel
 from app.services.prediction_publication import PredictionPublicationService
 from app.services.provider_budget import SqlProviderRequestBudget
 from app.services.reports import FireReportService, ReportRateLimitedError
+from app.services.weather_projection import project_weather_observations
 
 logger = logging.getLogger(__name__)
 
@@ -124,13 +133,14 @@ class PipelineReport:
 def _weather_features(
     readings: list[WeatherReading], *, fallback_time: datetime
 ) -> list[WeatherFeature]:
-    """Stored weather readings -> the feature inputs the model consumes.
+    """Stored weather samples -> the feature inputs the model consumes.
 
     `WeatherReading` stores speed and the meteorological direction the wind
-    blows *from*; `WeatherFeature` wants the u/v components. Converting here
-    rather than at write time keeps the stored reading faithful to what the
-    provider actually said. The sign convention (negated, "from" not "to") is
-    the one the demo scenario generator already uses, so demo and live agree.
+    blows *from*; `WeatherFeature` wants the u/v components. Open-Meteo's
+    current values are model-derived, not ground observations. Converting here
+    rather than at write time keeps the stored sample faithful to the provider
+    output. The sign convention (negated, "from" not "to") is the one the demo
+    scenario generator already uses, so demo and live agree.
     """
     return [
         WeatherFeature(
@@ -153,7 +163,9 @@ def _weather_features(
             temperature_c=reading.temperature,
             relative_humidity_pct=reading.humidity,
             input_kind=(
-                InputKind.SYNTHETIC if reading.source == "demo" else InputKind.OBSERVED
+                InputKind.SYNTHETIC
+                if reading.source == "demo"
+                else InputKind.MODELED
             ),
         )
         for reading in readings
@@ -306,8 +318,16 @@ def _publish_inner(
                 version=("1" if settings.demo_mode else "v3"),
                 kind=(InputKind.SYNTHETIC if settings.demo_mode else InputKind.OBSERVED),
                 region=DEFAULT_REGION,
-                attribution=("Air Health demo data" if settings.demo_mode else "OpenAQ and upstream measurement providers"),
-                license=("Project-generated synthetic data" if settings.demo_mode else "upstream provider terms; OpenAQ terms apply"),
+                attribution=(
+                    "Air Health demo data"
+                    if settings.demo_mode
+                    else "OpenAQ and upstream measurement providers"
+                ),
+                license=(
+                    "Project-generated synthetic data"
+                    if settings.demo_mode
+                    else "upstream provider terms; OpenAQ terms apply"
+                ),
             )
         )
     if weather:
@@ -315,9 +335,13 @@ def _publish_inner(
             DatasetRef(
                 dataset_id=("demo-weather-v1" if settings.demo_mode else "open-meteo-weather-v1"),
                 source=("Air Health demo generator" if settings.demo_mode else "Open-Meteo"),
-                product="weather observations",
-                version=("1" if settings.demo_mode else "provider-current"),
-                kind=(InputKind.SYNTHETIC if settings.demo_mode else InputKind.OBSERVED),
+                product=(
+                    "weather observations"
+                    if settings.demo_mode
+                    else "current weather model and hourly forecast fields"
+                ),
+                version=("1" if settings.demo_mode else "best-match-v1"),
+                kind=(InputKind.SYNTHETIC if settings.demo_mode else InputKind.MODELED),
                 region=DEFAULT_REGION,
                 attribution=("Air Health demo data" if settings.demo_mode else "Open-Meteo"),
                 license=("Project-generated synthetic data" if settings.demo_mode else "CC BY 4.0"),
@@ -576,7 +600,9 @@ async def _ingest_sensors(
         item_count=len(readings),
         error_summary=None if readings else "no fresh stored PM2.5 observations in the pilot area",
     )
-    return StageOutcome("sensor_ingestion", bool(readings), f"reused={len(readings)} stored OpenAQ readings")
+    return StageOutcome(
+        "sensor_ingestion", bool(readings), f"reused={len(readings)} stored OpenAQ readings"
+    )
 
 
 async def _ingest_national_overview_sensors(
@@ -614,7 +640,9 @@ async def _ingest_national_overview_sensors(
         item_count=len(readings),
         error_summary=None if readings else "no fresh stored OpenAQ PM2.5 observations in India",
     )
-    return StageOutcome(dataset_id, bool(readings), f"reused={len(readings)} stored India OpenAQ readings")
+    return StageOutcome(
+        dataset_id, bool(readings), f"reused={len(readings)} stored India OpenAQ readings"
+    )
 
 
 async def _ingest_fires(
@@ -1064,43 +1092,55 @@ async def _ingest_weather(
     bbox: BoundingBox,
     pipeline_run_id: str,
 ) -> StageOutcome:
-    async with httpx.AsyncClient(timeout=settings.open_meteo_timeout_seconds) as client:
-        attach_request_budget(
-            client, provider="open-meteo", budget=SqlProviderRequestBudget(get_session_factory())
+    if settings.demo_mode:
+        async with httpx.AsyncClient(timeout=settings.open_meteo_timeout_seconds) as client:
+            provider = build_weather_provider(settings, client)
+            result = await WeatherIngestionService(
+                provider,
+                SqlWeatherReadingRepository(session),
+                source="demo",
+            ).run(bbox, now=datetime.now(UTC))
+    else:
+        # Live weather arrives on its own 15-minute, quota-bounded schedule.
+        # Publication consumes the latest persisted data and never multiplies
+        # upstream calls when more pipelines or app users are active.
+        now = datetime.now(UTC)
+        observations = SqlWeatherForecastRepository(session).list_latest_current(
+            valid_from=now - timedelta(hours=settings.ingest_max_reading_age_hours),
+            valid_through=now,
         )
-        provider = build_weather_provider(settings, client)
-        result = await WeatherIngestionService(
-            provider,
-            SqlWeatherReadingRepository(session),
-            source="demo" if settings.demo_mode else "open-meteo",
-        ).run(bbox)
+        result = IngestionResult(fetched=len(observations))
 
-    if not result.succeeded:
-        message = f"Open-Meteo ingestion failed: {'; '.join(result.errors)}"
+    if not result.succeeded or (not settings.demo_mode and not result.fetched):
+        message = (
+            f"Open-Meteo ingestion failed: {'; '.join(result.errors)}"
+            if result.errors
+            else "No fresh stored Open-Meteo weather readings in the pilot area"
+        )
         logger.error(message)
         _record_source_health(
             session,
             pipeline_run_id=pipeline_run_id,
             dataset_id="open-meteo",
-            called=True,
+            called=settings.demo_mode or bool(result.fetched),
             failed=True,
             item_count=result.fetched,
-            error_summary="; ".join(result.errors)[:500],
+            error_summary=message[:500],
         )
         return StageOutcome("weather_ingestion", False, message)
     _record_source_health(
         session,
         pipeline_run_id=pipeline_run_id,
         dataset_id="open-meteo",
-        called=True,
+        called=settings.demo_mode or bool(result.fetched),
         failed=False,
         item_count=result.fetched,
     )
     return StageOutcome(
         "weather_ingestion",
         True,
-        f"fetched={result.fetched} saved={result.saved} "
-        f"skipped_duplicates={result.skipped_duplicates}",
+        f"current_cells={result.fetched} forecast_points={result.forecast_fetched} "
+        f"cache_hits={result.cache_hits} omitted_locations={result.omitted_locations}",
     )
 
 
@@ -1299,12 +1339,51 @@ def _forecast(
         missing_weather_confidence_penalty=settings.dispersion_missing_weather_confidence_penalty,
     )
     cells = [state.h3_cell for state in current_states]
-    weather_readings = SqlWeatherReadingRepository(session).list_latest_in_cells(
-        cells,
-        source="demo" if settings.demo_mode else "open-meteo",
-        since=timestamp - timedelta(hours=settings.ingest_max_reading_age_hours),
-        through=timestamp,
-    )
+    if settings.demo_mode:
+        weather_readings = SqlWeatherReadingRepository(session).list_latest_in_cells(
+            cells,
+            source="demo",
+            since=timestamp - timedelta(hours=settings.ingest_max_reading_age_hours),
+            through=timestamp,
+        )
+    else:
+        weather_observations = SqlWeatherForecastRepository(session).list_latest_current(
+            valid_from=timestamp - timedelta(hours=settings.ingest_max_reading_age_hours),
+            valid_through=timestamp,
+        )
+        weather_readings = project_weather_observations(
+            weather_observations,
+            cells,
+            resolution=settings.h3_resolution,
+            sample_resolution=settings.weather_h3_resolution,
+        )
+    weather_forecasts: list[WeatherForecastCell] = []
+    if not settings.demo_mode:
+        sample_cells = sorted(
+            {h3.cell_to_parent(cell, settings.weather_h3_resolution) for cell in cells}
+        )
+        observations = SqlWeatherForecastRepository(session).list_between(
+            sample_cells,
+            source_model="best-match-v1",
+            valid_from=timestamp - timedelta(hours=1),
+            valid_to=timestamp + timedelta(hours=max(FORECAST_HORIZONS_HOURS)),
+            received_after=timestamp - timedelta(hours=settings.ingest_max_reading_age_hours),
+        )
+        observations_by_sample: dict[str, list] = {}
+        for observation in observations:
+            observations_by_sample.setdefault(observation.sample_cell, []).append(observation)
+        for cell in cells:
+            sample_cell = h3.cell_to_parent(cell, settings.weather_h3_resolution)
+            for observation in observations_by_sample.get(sample_cell, []):
+                weather_forecasts.append(
+                    WeatherForecastCell(
+                        h3_cell=cell,
+                        valid_at=observation.valid_at,
+                        wind_speed=observation.wind_speed,
+                        wind_direction=observation.wind_direction,
+                        precipitation=observation.precipitation,
+                    )
+                )
     service = ForecastingService(
         model,
         SqlGridStateRepository(session),
@@ -1318,6 +1397,8 @@ def _forecast(
         weather_source="demo" if settings.demo_mode else "open-meteo",
         current_states=current_states,
         weather_readings=weather_readings,
+        weather_forecasts=weather_forecasts,
+        time_varying_weather=not settings.demo_mode,
     )
 
     if not result.succeeded:

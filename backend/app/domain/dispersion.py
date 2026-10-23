@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
-from app.domain.types import Forecast, GridState, WeatherReading
+from app.domain.types import Forecast, GridState, WeatherForecastCell, WeatherReading
 
 # Re-export for convenience; callers that need step_minutes import from here.
 
@@ -53,6 +53,8 @@ class PollutionForecastModel(Protocol):
         *,
         generated_at: datetime,
         step_minutes: float = 60,
+        weather_forecasts: Sequence[WeatherForecastCell] = (),
+        time_varying_weather: bool = False,
     ) -> ForecastResult:
         """Forecast PM2.5 forward from `current_state`, step by step, and
         return the state at each horizon in `hours`.

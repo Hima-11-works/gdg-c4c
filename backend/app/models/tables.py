@@ -364,6 +364,62 @@ weather_reading = Table(
     Index("ix_weather_reading_h3_cell", "h3_cell"),
 )
 
+# Hourly forecast samples stay at native coarse weather points rather than
+# being duplicated into every fine H3 cell. The model expands these values
+# only for the cells in the run it is forecasting.
+weather_forecast_observation = Table(
+    "weather_forecast_observation",
+    metadata,
+    Column("id", BigInteger, primary_key=True),
+    Column("sample_cell", String(H3_CELL_LENGTH), nullable=False),
+    Column("source", String(50), nullable=False, server_default="open-meteo"),
+    Column("source_model", String(80), nullable=False),
+    Column("latitude", Float, nullable=False),
+    Column("longitude", Float, nullable=False),
+    Column("valid_at", DateTime(timezone=True), nullable=False),
+    Column("wind_speed", Float, nullable=True),
+    Column("wind_direction", Float, nullable=True),
+    Column("precipitation", Float, nullable=True),
+    Column("boundary_layer_height", Float, nullable=True),
+    Column("temperature", Float, nullable=True),
+    Column("humidity", Float, nullable=True),
+    Column("source_issued_at", DateTime(timezone=True), nullable=True),
+    Column("received_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint("wind_speed IS NULL OR wind_speed >= 0", name="ck_weather_forecast_wind_speed"),
+    CheckConstraint(
+        "wind_direction IS NULL OR (wind_direction >= 0 AND wind_direction < 360)",
+        name="ck_weather_forecast_wind_direction",
+    ),
+    CheckConstraint(
+        "precipitation IS NULL OR precipitation >= 0",
+        name="ck_weather_forecast_precipitation",
+    ),
+    CheckConstraint(
+        "boundary_layer_height IS NULL OR boundary_layer_height >= 0",
+        name="ck_weather_forecast_boundary_layer_height",
+    ),
+    CheckConstraint(
+        "temperature IS NULL OR temperature BETWEEN -90 AND 60",
+        name="ck_weather_forecast_temperature",
+    ),
+    CheckConstraint(
+        "humidity IS NULL OR humidity BETWEEN 0 AND 100",
+        name="ck_weather_forecast_humidity",
+    ),
+    CheckConstraint("latitude BETWEEN -90 AND 90", name="ck_weather_forecast_latitude"),
+    CheckConstraint("longitude BETWEEN -180 AND 180", name="ck_weather_forecast_longitude"),
+    UniqueConstraint(
+        "source",
+        "sample_cell",
+        "source_model",
+        "valid_at",
+        name="uq_weather_forecast_location_model_validity",
+    ),
+    Index("ix_weather_forecast_valid_at", "valid_at"),
+    Index("ix_weather_forecast_sample_valid", "sample_cell", "source_model", "valid_at"),
+    Index("ix_weather_forecast_received", "received_at"),
+)
+
 grid_state = Table(
     "grid_state",
     metadata,

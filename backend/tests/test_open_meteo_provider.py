@@ -5,7 +5,7 @@ WebFetch can't render, so this was verified directly)."""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs
 
 import httpx
@@ -98,7 +98,10 @@ async def test_multi_point_preserves_order_and_sets_request_params() -> None:
         assert query["current"] == [
             "wind_speed_10m,wind_direction_10m,precipitation,temperature_2m,relative_humidity_2m"
         ]
-        assert query["hourly"] == ["boundary_layer_height"]
+        assert query["hourly"] == [
+            "wind_speed_10m,wind_direction_10m,precipitation,boundary_layer_height"
+        ]
+        assert query["forecast_hours"] == ["7"]
         return httpx.Response(
             200,
             json=[
@@ -302,3 +305,37 @@ async def test_non_finite_wind_speed_is_skipped() -> None:
 
     assert samples[0] is None
     assert samples[1] is not None
+
+
+async def test_weather_bundle_keeps_future_valid_times_and_missing_fields() -> None:
+    now = datetime(2026, 1, 1, 12, 30, tzinfo=UTC)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json=_location(
+                hourly={
+                    "time": ["2026-01-01T12:00", "2026-01-01T13:00", "2026-01-01T14:00"],
+                    "wind_speed_10m": [1.0, 2.0, 3.0],
+                    "wind_direction_10m": [90.0, 180.0, 270.0],
+                    "precipitation": [None, 1.5, 0.0],
+                    "boundary_layer_height": [100.0, None, 300.0],
+                },
+            ),
+        )
+
+    async with _make_client(handler) as client:
+        [bundle] = await _provider(client).fetch_weather_bundle(
+            [SF], valid_from=now, valid_to=now + timedelta(hours=2)
+        )
+
+    assert bundle.current is not None
+    assert [forecast.valid_at for forecast in bundle.forecasts] == [
+        datetime(2026, 1, 1, 13, 0, tzinfo=UTC),
+        datetime(2026, 1, 1, 14, 0, tzinfo=UTC),
+    ]
+    assert bundle.forecasts[0].wind_speed == 2.0
+    assert bundle.forecasts[0].precipitation == 1.5
+    assert bundle.forecasts[0].boundary_layer_height is None
+    assert bundle.forecasts[0].source_issued_at is None
+    assert bundle.forecasts[0].received_at is not None

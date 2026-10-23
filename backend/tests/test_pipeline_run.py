@@ -197,6 +197,13 @@ async def test_duplicate_only_ingestion_remains_present_in_source_health(
         def list_since(self, *_args, **_kwargs):
             return [object(), object(), object()]
 
+    class _StoredWeatherForecastRepository:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def list_latest_current(self, **_kwargs):
+            return [object(), object(), object()]
+
     class _ReadSession:
         def commit(self) -> None:
             pass
@@ -228,6 +235,9 @@ async def test_duplicate_only_ingestion_remains_present_in_source_health(
     monkeypatch.setattr("app.pipeline.run.SqlSensorReadingRepository", _StoredSensorRepository)
     monkeypatch.setattr("app.pipeline.run.WeatherIngestionService", _WeatherIngestion)
     monkeypatch.setattr("app.pipeline.run.SqlWeatherReadingRepository", lambda _session: object())
+    monkeypatch.setattr(
+        "app.pipeline.run.SqlWeatherForecastRepository", _StoredWeatherForecastRepository
+    )
     monkeypatch.setattr("app.pipeline.run.build_weather_provider", lambda *_args: object())
 
     outcomes = [

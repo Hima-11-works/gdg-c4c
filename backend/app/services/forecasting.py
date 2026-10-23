@@ -21,7 +21,7 @@ from app.domain.repositories import (
     GridStateRepository,
     WeatherReadingRepository,
 )
-from app.domain.types import Forecast, GridState, WeatherReading
+from app.domain.types import Forecast, GridState, WeatherForecastCell, WeatherReading
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +66,8 @@ class ForecastingService:
         weather_source: str | None = None,
         current_states: Sequence[GridState] | None = None,
         weather_readings: Sequence[WeatherReading] | None = None,
+        weather_forecasts: Sequence[WeatherForecastCell] = (),
+        time_varying_weather: bool = False,
     ) -> ForecastingResult:
         current_state = (
             self._grid_repository.latest()
@@ -84,7 +86,20 @@ class ForecastingService:
         )
 
         try:
-            result = self._model.forecast(current_state, weather, hours, generated_at=generated_at, step_minutes=step_minutes)
+            if time_varying_weather or weather_forecasts:
+                result = self._model.forecast(
+                    current_state,
+                    weather,
+                    hours,
+                    generated_at=generated_at,
+                    step_minutes=step_minutes,
+                    weather_forecasts=weather_forecasts,
+                    time_varying_weather=time_varying_weather,
+                )
+            else:
+                result = self._model.forecast(
+                    current_state, weather, hours, generated_at=generated_at, step_minutes=step_minutes
+                )
         except ValueError as exc:
             logger.error("Forecasting aborted: %s", exc)
             return ForecastingResult(cells=len(current_state), errors=[str(exc)])

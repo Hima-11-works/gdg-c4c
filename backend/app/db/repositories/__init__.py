@@ -28,6 +28,7 @@ from app.db.repositories.source_health import (
 )
 from app.db.repositories.traffic_observation import SqlTrafficObservationRepository
 from app.db.repositories.weather_reading import SqlWeatherReadingRepository
+from app.db.repositories.weather_forecast import SqlWeatherForecastRepository
 
 __all__ = [
     "SqlAlertRepository",
@@ -52,5 +53,6 @@ __all__ = [
     "SqlTrafficObservationRepository",
     "SqlSensorReadingRepository",
     "SqlWeatherReadingRepository",
+    "SqlWeatherForecastRepository",
 ]
 

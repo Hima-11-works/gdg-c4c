@@ -34,6 +34,7 @@ from app.db.repositories import (
     SqlPredictionPublicationRepository,
     SqlSensorReadingRepository,
     SqlSourceHealthRepository,
+    SqlWeatherForecastRepository,
     SqlWeatherReadingRepository,
 )
 from app.db.session import get_db
@@ -104,7 +105,10 @@ def get_citizen_sensor_submission_service(
 
 
 def get_weather_service(session: Session = Depends(get_db)) -> WeatherService:
-    return WeatherService(SqlWeatherReadingRepository(session))
+    return WeatherService(
+        SqlWeatherReadingRepository(session),
+        forecast_repository=SqlWeatherForecastRepository(session),
+    )
 
 
 def get_grid_service(session: Session = Depends(get_db)) -> GridService:
@@ -116,6 +120,7 @@ def get_cell_service(session: Session = Depends(get_db)) -> CellService:
         SqlGridStateRepository(session),
         SqlForecastRepository(session),
         SqlWeatherReadingRepository(session),
+        weather_forecast_repository=SqlWeatherForecastRepository(session),
     )
 
 
@@ -174,7 +179,10 @@ def require_simulator_key(
             headers={"X-Error-Code": "simulator_disabled"},
         )
     if x_simulator_key is None or x_simulator_key != configured.get_secret_value():
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="a valid X-Simulator-Key header is required")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="a valid X-Simulator-Key header is required",
+        )
 
 
 def require_incident_actor(
