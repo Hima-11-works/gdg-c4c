@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { latLngToCell } from 'h3-js'
 import { fetchCellDetail } from '../lib/api'
-import { PDI_LABEL, PDI_TOOLTIP, compassLabel, formatNumber, pdiFactorLabel } from '../lib/format'
+import { compassLabel, formatNumber, pdiFactorLabel } from '../lib/format'
 import { cellCenter, resolutionOfCell } from '../lib/h3Geometry'
 import { regionTitle } from '../lib/regionName'
 import {
@@ -287,9 +287,6 @@ function CellDetailContent({
         <dt>PM2.5</dt>
         <dd>{formatNumber(current?.pm25)} µg/m³</dd>
 
-        <dt title={PDI_TOOLTIP}>{PDI_LABEL}</dt>
-        <dd>{formatNumber(current?.pdi)}</dd>
-
         <dt>Wind speed</dt>
         <dd>{formatNumber(windSpeed)} m/s</dd>
 
@@ -419,29 +416,33 @@ function CellDetailContent({
         </details>
       )}
 
-      <h3 title={PDI_TOOLTIP}>{PDI_LABEL} factors</h3>
-      {detail.pdi_factors === null ? (
+      <details className="forecast-limitations">
+        <summary>Heuristic pollution pressure (advanced) · {formatNumber(current?.pdi)}</summary>
         <p className="muted">
-          Not available for this reading — its PDI score has no stored per-factor breakdown.
+          This experimental score combines pollution and environmental context factors. It is not
+          a measured emissions value, a validated health indicator, or a forecast.
         </p>
-      ) : (
-        <ul className="pdi-factor-list">
-          {Object.entries(detail.pdi_factors).map(([key, value]) => {
-            const percent = Math.round(value * 100)
-            return (
-              <li key={key}>
-                <div className="pdi-factor-row">
-                  <span>{pdiFactorLabel(key)}</span>
-                  <span className="muted">{percent}%</span>
-                </div>
-                <div className="pdi-factor-bar">
-                  <div className="pdi-factor-bar-fill" style={{ width: `${percent}%` }} />
-                </div>
-              </li>
-            )
-          })}
-        </ul>
-      )}
+        {detail.pdi_factors === null ? (
+          <p className="muted">A per-factor breakdown is not available for this reading.</p>
+        ) : (
+          <ul className="pdi-factor-list">
+            {Object.entries(detail.pdi_factors).map(([key, value]) => {
+              const percent = Math.round(value * 100)
+              return (
+                <li key={key}>
+                  <div className="pdi-factor-row">
+                    <span>{pdiFactorLabel(key)}</span>
+                    <span className="muted">{percent}%</span>
+                  </div>
+                  <div className="pdi-factor-bar">
+                    <div className="pdi-factor-bar-fill" style={{ width: `${percent}%` }} />
+                  </div>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </details>
 
       {report !== null && <CitizenReportWidget report={report} />}
     </>
@@ -470,7 +471,6 @@ interface WardLogEntry {
   h3Cell: string
   loggedAt: string
   pm25: number | null
-  pdi: number | null
 }
 
 function readWardLog(): WardLogEntry[] {
@@ -523,14 +523,6 @@ function InterventionActionBar({
     `H3 cell: ${h3Cell}`,
     `Observed: ${current?.timestamp ?? 'no current reading'}`,
     `PM2.5: ${current?.pm25 === null || current?.pm25 === undefined ? 'n/a' : `${formatNumber(current.pm25)} µg/m³`}`,
-    `PDI: ${current?.pdi === null || current?.pdi === undefined ? 'n/a' : formatNumber(current.pdi)}`,
-    `PDI factors: ${
-      detail.pdi_factors === null
-        ? 'not available'
-        : Object.entries(detail.pdi_factors)
-            .map(([key, value]) => `${key} ${Math.round(value * 100)}%`)
-            .join(', ')
-    }`,
   ]
 
   const detection =
@@ -558,7 +550,6 @@ function InterventionActionBar({
           h3Cell,
           loggedAt: new Date().toISOString(),
           pm25: current?.pm25 ?? null,
-          pdi: current?.pdi ?? null,
         }
         // The list is a set of cells, not an append-only log: re-logging a
         // cell refreshes its entry instead of piling up duplicates the

@@ -1,5 +1,5 @@
-// Pure UI state: which timeline horizon is selected, whether the PDI
-// overlay is on, which cell (if any) is clicked, and the current
+// Pure UI state: which timeline horizon is selected, which cell (if any) is
+// clicked, and the current
 // level-of-detail viewport (zoom tier + resolution + bbox — see
 // lib/lod.ts). Small and read by several unrelated sibling components
 // (map, timeline, toggle, legend, detail panel), which is what justifies
@@ -37,7 +37,6 @@ export interface MapUiState {
   /** Alert cell selection temporarily unlocks close-up zoom until its detail
    *  panel is closed. Normal, unscoped map navigation remains capped at level 2. */
   focusedCell: boolean
-  showPdi: boolean
   /** Satellite fire / thermal hotspot layer (VIIRS S-NPP). */
   showFireHotspots: boolean
   /** Citizen sensor readings & photo submissions layer. */
@@ -105,7 +104,6 @@ export type MapUiAction =
       zoom: number
     }
   | { type: 'CLEAR_SCOPE' }
-  | { type: 'TOGGLE_PDI' }
   | { type: 'TOGGLE_FIRE_HOTSPOTS' }
   | { type: 'TOGGLE_CITIZEN_SENSORS' }
   | { type: 'TOGGLE_FREIGHT_CORRIDORS' }
@@ -133,7 +131,6 @@ export const initialMapUiState: MapUiState = {
   contrast: false,
   focus: null,
   focusedCell: false,
-  showPdi: false,
   showFireHotspots: false,
   showCitizenSensors: false,
   showFreightCorridors: false,
@@ -251,8 +248,6 @@ export function mapUiReducer(state: MapUiState, action: MapUiAction): MapUiState
         focus: centre === null ? state.focus : { ...centre, zoom },
       }
     }
-    case 'TOGGLE_PDI':
-      return { ...state, showPdi: !state.showPdi }
     case 'TOGGLE_FIRE_HOTSPOTS':
       return { ...state, showFireHotspots: !state.showFireHotspots }
     case 'TOGGLE_CITIZEN_SENSORS':

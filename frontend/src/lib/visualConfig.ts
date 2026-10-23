@@ -5,9 +5,6 @@
 /** Fill opacity for the PM2.5 hex grid layer. */
 export const PM25_FILL_OPACITY = 0.62
 
-/** Fill opacity for the PDI hex grid layer. */
-export const PDI_FILL_OPACITY = 0.6
-
 /** Width of unselected hex cell borders (subtle, quiet). */
 export const CELL_BORDER_WIDTH = 0.5
 
@@ -49,9 +46,6 @@ export const MAJOR_ROAD_COLOR = '#f0e4cd'
  *  enough to read as a continuous flow at the 750ms playback cadence (each
  *  frame dissolves into the next), short enough to leave a moment of hold. */
 export const PM25_DISSOLVE_DURATION_MS = 550
-
-/** Duration (ms) of opacity crossfade when toggling PM2.5 / PDI layers. */
-export const LAYER_CROSSFADE_DURATION_MS = 250
 
 /** Frames per second cap for transition animations. */
 export const TRANSITION_FPS = 30

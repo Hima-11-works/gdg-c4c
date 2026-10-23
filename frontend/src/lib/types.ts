@@ -207,8 +207,8 @@ export interface GridStateOut {
   // Pollution Development Index (PDI) — a heuristic pollution-pressure
   // score in roughly [-100, 100], NOT a scientific measurement of
   // emissions or absorption, and deliberately independent of pm25 above
-  // (they can and do diverge for the same cell) — see PDI_TOOLTIP in
-  // lib/format.ts and CellDetailOut.pdi_factors for the breakdown. Null
+  // (they can and do diverge for the same cell). The UI exposes this only
+  // as an experimental heuristic detail, not a measured value. Null
   // only if the backend genuinely has nothing to compute it from (e.g.
   // every configured factor weight is zero) — see
   // app.services.pdi.HeuristicPDIModel.

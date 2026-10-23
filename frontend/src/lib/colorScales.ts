@@ -2,10 +2,6 @@
 // drift apart. PM2.5's bands follow the Indian CPCB National Air Quality
 // Index (NAQI) scale — Good (0–30), Satisfactory (31–60), Moderate
 // (61–90), Poor (91–120), Very Poor (121–250), Severe (>250 µg/m³).
-// PDI's are a plain, unrelated sequential ramp — using a visually
-// distinct scale (not the pollution colors) is deliberate, so a PDI layer
-// is never mistaken for a second pollution measurement.
-//
 // Colors are tuned for readability against the dark monochrome basemap
 // (see lib/mapTheme.ts). The ramp steps green → light green → yellow →
 // orange → red → maroon per CPCB.
@@ -33,13 +29,6 @@ export const PM25_COLOR_SCALE: ColorStop[] = [
   { value: 91, color: '#f97316', label: 'Poor (91–120)' },
   { value: 121, color: '#ef4444', label: 'Very Poor (121–250)' },
   { value: 251, color: '#7f1d1d', label: 'Severe (250+)' },
-]
-
-export const PDI_COLOR_SCALE: ColorStop[] = [
-  { value: -100, color: '#3b82f6', label: 'Strong sink (-100)' },
-  { value: 0, color: '#525252', label: 'Neutral (0)' },
-  { value: 50, color: '#f59e0b', label: 'Elevated pressure (50)' },
-  { value: 100, color: '#dc2626', label: 'High pressure (100)' },
 ]
 
 /** Theme-aware neutral fill for cells with no estimate; distinct from every

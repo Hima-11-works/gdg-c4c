@@ -1,7 +1,6 @@
-import { NO_DATA_COLORS, PDI_COLOR_SCALE, PM25_COLOR_SCALE } from '../lib/colorScales'
+import { NO_DATA_COLORS, PM25_COLOR_SCALE } from '../lib/colorScales'
 import { BASEMAP_THEMES, WIND } from '../lib/mapTheme'
 import { DISTRICT_BOUNDARY_COLOR, HIGHWAY_CORE_COLOR, MAJOR_ROAD_COLOR } from '../lib/visualConfig'
-import { PDI_LABEL, PDI_TOOLTIP } from '../lib/format'
 import { useMapUi } from '../state/MapUiContext'
 import { SidePanel } from './SidePanel'
 
@@ -33,19 +32,6 @@ export function Legend() {
             </div>
           ))}
         </section>
-
-        {state.showPdi && (
-          <section>
-            <h3 title={PDI_TOOLTIP}>{PDI_LABEL}</h3>
-            <p className="muted legend-note">{PDI_TOOLTIP}</p>
-            {PDI_COLOR_SCALE.map((stop) => (
-              <div className="legend-row" key={stop.value}>
-                <span className="swatch" style={{ backgroundColor: stop.color }} />
-                {stop.label}
-              </div>
-            ))}
-          </section>
-        )}
 
         <section>
           <div className="legend-row">

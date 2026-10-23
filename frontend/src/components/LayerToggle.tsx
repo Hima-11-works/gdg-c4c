@@ -1,4 +1,3 @@
-import { PDI_LABEL, PDI_TOOLTIP } from '../lib/format'
 import { useMapUi } from '../state/MapUiContext'
 import { SidePanel } from './SidePanel'
 import type { MapViewMode } from '../state/mapUiReducer'
@@ -78,15 +77,6 @@ export function LayerToggle() {
             onChange={() => dispatch({ type: 'TOGGLE_CONTRAST' })}
           />
           Contrast ranges
-        </label>
-
-        <label className="layer-toggle-option" title={PDI_TOOLTIP}>
-          <input
-            type="checkbox"
-            checked={state.showPdi}
-            onChange={() => dispatch({ type: 'TOGGLE_PDI' })}
-          />
-          Show {PDI_LABEL} layer
         </label>
 
         <div className="layer-toggle-extra" role="group" aria-label="Signal layers">

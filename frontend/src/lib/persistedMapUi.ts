@@ -22,7 +22,6 @@ type PersistedMapUi = Pick<
   | 'viewMode'
   | 'theme'
   | 'contrast'
-  | 'showPdi'
   | 'showFireHotspots'
   | 'showCitizenSensors'
   | 'showFreightCorridors'
@@ -36,7 +35,6 @@ type PersistedMapUi = Pick<
 
 const BOOLEAN_FIELDS = [
   'contrast',
-  'showPdi',
   'showFireHotspots',
   'showCitizenSensors',
   'showFreightCorridors',
@@ -92,7 +90,6 @@ export function persistMapUi(state: MapUiState): void {
       viewMode: state.viewMode,
       theme: state.theme,
       contrast: state.contrast,
-      showPdi: state.showPdi,
       showFireHotspots: state.showFireHotspots,
       showCitizenSensors: state.showCitizenSensors,
       showFreightCorridors: state.showFreightCorridors,

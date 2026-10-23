@@ -51,17 +51,6 @@ export function relativeTime(iso: string | null | undefined, now = new Date()): 
   return past ? `${days}d ago` : `in ${days}d`
 }
 
-// The one place the app names PDI — every label/tooltip on it should
-// come from here so the wording can't drift between the legend, the
-// layer toggle, and the cell detail panel.
-export const PDI_LABEL = 'Pollution Development Index (PDI)'
-
-export const PDI_TOOLTIP =
-  'A heuristic pollution-pressure score, not an exact measurement of emissions or ' +
-  'absorption. Blends pollution level, urban/industrial pressure, road/activity ' +
-  'pressure, and vegetation (a pollution sink) — kept independent of PM2.5, so the ' +
-  'two numbers can and do differ for the same cell.'
-
 // Backend factor keys (see CellDetailOut.pdi_factors / app.domain.pdi)
 // are short, code-oriented identifiers — this is the only place that
 // maps them to the display wording a user reads. An unrecognized key
