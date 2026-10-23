@@ -11,15 +11,15 @@ import '../../theme/app_typography.dart';
 import '../../theme/widgets/widgets.dart';
 
 enum _SortMode {
-  cleanerNow('Cleaner now'),
-  cleanerSoon('Cleaner in next few hours'),
+  lowerEstimateNow('Lower estimate now'),
+  lowerForecastEstimate('Lower forecast estimate'),
   nearest('Nearest');
 
   const _SortMode(this.label);
   final String label;
 }
 
-/// Nearby screen — shows nearby areas with lower expected pollution.
+/// Nearby screen — compares available pollution estimates for nearby areas.
 class NearbyScreen extends ConsumerStatefulWidget {
   const NearbyScreen({super.key});
 
@@ -28,7 +28,7 @@ class NearbyScreen extends ConsumerStatefulWidget {
 }
 
 class _NearbyScreenState extends ConsumerState<NearbyScreen> {
-  _SortMode _sort = _SortMode.cleanerNow;
+  _SortMode _sort = _SortMode.lowerEstimateNow;
 
   @override
   Widget build(BuildContext context) {
@@ -60,10 +60,10 @@ class _NearbyScreenState extends ConsumerState<NearbyScreen> {
             padding: const EdgeInsets.only(bottom: AppSpacing.xxxxl),
             children: [
               const SectionHeader(
-                title: 'Nearby areas with lower expected pollution',
+                title: 'Nearby pollution estimates',
                 subtitle:
-                    'Environmental conditions may change. This is '
-                    'informational — not a recommendation to relocate.',
+                    'Estimates may be incomplete or out of date. Informational '
+                    'only — not a safety rating or recommendation to relocate.',
               ),
 
               // Sort selector.
@@ -125,9 +125,9 @@ class _NearbyScreenState extends ConsumerState<NearbyScreen> {
   List<NearbyArea> _sortAreas(List<NearbyArea> areas, _SortMode mode) {
     final sorted = List<NearbyArea>.from(areas);
     switch (mode) {
-      case _SortMode.cleanerNow:
+      case _SortMode.lowerEstimateNow:
         sorted.sort((a, b) => a.aqiNow.compareTo(b.aqiNow));
-      case _SortMode.cleanerSoon:
+      case _SortMode.lowerForecastEstimate:
         sorted.sort((a, b) {
           final aForecast = _avgForecastAqi(a);
           final bForecast = _avgForecastAqi(b);

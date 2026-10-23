@@ -17,7 +17,7 @@ A Flutter mobile health companion designed for citizens to track personal air qu
 flowchart TB
     subgraph UI["1. Features & Screens (`lib/features`)"]
         HOME["Home Screen<br/>Current AQI, Weather & Micro-Sensors"]
-        NEARBY["Nearby Areas<br/>Human-Readable Safe Havens"]
+        NEARBY["Nearby Areas<br/>Relative AQI Estimates"]
         ALERTS["Alerts Drawer<br/>Dual-Tier Alerts & Audio Chimes"]
         REPORT["Field Report Sheet<br/>Sanitized Photo & Fire Reports"]
         PROFILE["Health Profile<br/>Sensitivity Categories & Storage"]
@@ -25,7 +25,7 @@ flowchart TB
 
     subgraph LOGIC["2. Domain & Services (`lib/domain` & `lib/services`)"]
         RESOLVER["Place Name Resolver<br/>Offline India Dataset (10.6k+ Places)"]
-        ALERT_ENG["Sensitivity Alert Engine<br/>Asthma · Elderly · Pediatric · Cardiac"]
+        ALERT_ENG["Sensitivity Alert Engine<br/>User-Selected Exposure Thresholds"]
         MEDIA["Media Sanitizer<br/>Client-Side Downscaling & Metadata Prep"]
     end
 
@@ -45,21 +45,19 @@ flowchart TB
 ## 🚀 Key Features
 
 ### 1. Personalized Health Sensitivity Profiles
-Citizens can configure individual sensitivity profiles for tailored environmental advisories:
-- **Asthma / Respiratory Conditions**: Stricter PM2.5 thresholds with proactive bronchospasm warnings.
-- **Elderly Individuals**: Enhanced caution during sustained morning and evening inversions.
-- **Pediatric / Children**: Safe outdoor play recommendations based on hourly forecasts.
-- **Cardiac / Heart Conditions**: Critical cardiovascular stress alerts during severe smog spikes.
+Citizens can select sensitivity preferences that adjust the app's exposure alert thresholds. These
+preferences provide general environmental awareness only; they do not diagnose a condition or offer
+condition-specific clinical advice.
 
 ### 2. Dual-Tier Alerting & Audio Alarms
 - **Tier 1 (Community)**: Official CPCB NAQI category shifts (Satisfactory, Moderate, Poor, Very Poor, Severe).
-- **Tier 2 (Personalized)**: Vulnerability-matched medical warnings.
+- **Tier 2 (Personalized)**: Exposure alerts based on the selected sensitivity preference.
 - **Audible Alerts**: Optional high-priority audio chime alerting users during dangerous pollution surges.
 
-### 3. Human-Readable Nearby Safe Havens
-- The **Nearby** tab automatically surfaces cleaner air areas within a 25 km radius.
-- Backed by an offline geocoded dataset of **over 10,600 Indian cities, towns, and localities** (`assets/data/india_locations.json`) with instant embedded offline seeds (Bhubaneswar, Cuttack, Delhi, Noida, Mumbai, Bengaluru, etc.).
-- **Zero raw H3 cell IDs**: Hexagonal cell IDs are transparently reverse-geocoded into intuitive location names and compass directions (e.g. *"Northeast of Bhubaneswar"*, *"Jatani Area"*).
+### 3. Relative Nearby Pollution Estimates
+- The **Nearby** tab compares available AQI estimates for nearby grid cells, including current and short-horizon forecast estimates where available.
+- Estimates may be incomplete or out of date. They are not safety ratings or recommendations to relocate.
+- An offline gazetteer of **over 10,600 Indian cities, towns, and localities** (`assets/data/india_locations.json`) resolves cell locations when a place name is available; unresolved locations may use a shortened cell label.
 
 ### 4. Ground-Truth Field Reporting (Smoke & Fire)
 - Citizens can photograph and report localized pollution events (agricultural burning, garbage fires, industrial bypass).

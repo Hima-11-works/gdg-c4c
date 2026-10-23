@@ -163,7 +163,7 @@ Citizens are equipped with the **`air_health_flutter`** mobile app:
 - **Personalized Health Profiles**: Tailored health advisories based on sensitivity profiles (**Asthma**, **Elderly**, **Pediatric/Children**, **Cardiac/Heart Conditions**).
 - **Dual-Tier Alerting**: Real-time CPCB NAQI community notifications paired with individualized medical vulnerability alerts.
 - **Audio Sound Alerts**: Optional audible chime alert engine for critical spikes.
-- **Human-Readable Nearby Safe Havens**: Replaces raw truncated H3 hexagonal IDs with human-readable location names and compass bearings backed by an offline geocoded dataset of **over 10,600 Indian localities and cities** (`assets/data/india_locations.json`) with instant embedded offline seeds.
+- **Nearby Pollution Estimates**: Compares available current and short-horizon AQI estimates for nearby cells, with place names resolved from an offline gazetteer of **over 10,600 Indian localities and cities** (`assets/data/india_locations.json`). Estimates can be incomplete or stale; they are not safety ratings or relocation recommendations.
 - **Ground-Truth Field Reporting**: Citizens can capture smoke and fire incidents. The app automatically sanitizes uploads by **stripping sensitive EXIF metadata** before transmission.
 - **Low-Cost Sensor Submissions**: Citizens and community organizations can pipe micro-sensor PM2.5 data directly into the regional grid for authority review.
 - **Offline Resilience**: Local report history and profile persistence backed by secure on-device storage.
