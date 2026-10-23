@@ -1,12 +1,11 @@
-# Air Health — Interactive Web Map & Climate Action Console
+# Air Health — Interactive Web Map Prototype
 
 [![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6%2B-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Vite](https://img.shields.io/badge/Vite-6.0%2B-646CFF?logo=vite&logoColor=white)](https://vitejs.dev/)
 [![MapLibre GL](https://img.shields.io/badge/MapLibre%20GL-5.0%2B-396B9C?logo=maplibre&logoColor=white)](https://maplibre.org/)
-[![Tailwind CSS](https://img.shields.io/badge/Tailwind%20CSS-3.4%2B-38B2AC?logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
 
-The **Air Health Frontend** is an operational, interactive web dashboard designed for environmental authorities, urban planners, logistics coordinators, and the public. It visualizes multi-resolution Uber H3 hexagonal air quality grids, continuous IDW pollution heat surfaces, forward advection forecasts, satellite fire anomalies, economic freight corridors, and citizen-reported ground evidence.
+The **Air Health Frontend** is a prototype web map for exploring multi-resolution H3 air-quality estimates, available forecasts, satellite-derived context, corridor runs, and citizen-reported evidence. Source freshness and coverage depend on backend configuration. Candidate events require human review; corridor views do not provide logistics or travel recommendations.
 
 ---
 
@@ -23,9 +22,9 @@ flowchart TB
     subgraph LAYERS["2. Dynamic Map Layers"]
         H3_HEX["Uber H3 Hexagonal Grid<br/>Dynamic LOD: Res 3 to Res 7"]
         IDW_HEAT["Continuous IDW Surface<br/>Smooth Pollution Heatmap"]
-        WIND["Wind Vector Particles<br/>Real-Time Wind Direction & Speed"]
+        WIND["Wind Vectors<br/>Available Weather Feed"]
         FIRMS["NASA FIRMS Thermal Markers<br/>VIIRS Active Fire Detections"]
-        PHOTOS["Citizen Photo Evidence<br/>Geolocated Verified Citizen Uploads"]
+        PHOTOS["Citizen Photo Evidence<br/>Submitted Reports for Review"]
         GIBS["NASA GIBS Satellite Overlays<br/>MODIS TrueColor & Deep Blue AOD"]
     end
 
@@ -55,24 +54,24 @@ The viewport automatically adjusts its spatial granularity based on user zoom le
 
 ### 2. Multi-Layer Environmental Visualization
 - **Discrete vs Continuous**: Toggle between structured H3 hexagons and seamless Inverse Distance Weighting (IDW) heat surfaces.
-- **Wind Vector Dynamics**: Real-time animated particle trails driven by Open-Meteo $u/v$ wind components.
+- **Wind Vector Dynamics**: Animated particle trails driven by the latest available Open-Meteo $u/v$ wind components.
 - **NASA FIRMS Fires**: Visual fire anomaly markers highlighting active agricultural stubble burning and industrial flares.
-- **NASA GIBS WMS Satellite Overlays**: Live TrueColor surface imagery and Aerosol Optical Depth (AOD) layers proxied through the backend.
+- **NASA GIBS WMS Satellite Overlays**: Satellite imagery and Aerosol Optical Depth (AOD) products proxied through the backend; date and cadence depend on the selected product.
 
-### 3. Economic Corridor Exposure Analyzer
-- Interactive route inspection for high-priority economic axes:
+### 3. Published Corridor Forecast Inspection
+- Inspect forecast runs for configured corridor geometry when a published run is available:
   - **Delhi–Kanpur Interstate Corridor** (Indo-Gangetic Plain axis).
   - **DMIC** (Delhi–Mumbai Industrial Corridor).
   - **EDFC** (Eastern Dedicated Freight Corridor).
-- Forward 1-hour, 3-hour, and 6-hour exposure charts enabling logistics managers to route freight during lower-pollution windows.
+- Geometry may be illustrative. The panel displays run provenance and validation status; it does not route freight or recommend travel windows.
 
-### 4. Hidden Hotspot Review Console
-- Corroborates satellite aerosol anomalies (Copernicus Sentinel-5P UVAI) against NASA FIRMS fire pixels and local citizen smoke reports.
-- Allows authority reviewers to inspect candidate confidence scores and coordinate dispatch.
+### 4. Hotspot Candidate Review
+- Shows candidate evidence assembled from available satellite context, NASA FIRMS detections, and citizen smoke reports.
+- A candidate is an unverified signal for human review. The dashboard does not confirm an emission source or dispatch responders.
 
 ### 5. Citizen Photo Evidence Inspection
 - Interactive map markers showing citizen-reported smoke and fire plumes.
-- Inspect sanitized photo evidence with privacy-preserving metadata stripping verified on the backend.
+- Inspect photo evidence after backend media processing strips image metadata.
 
 ---
 

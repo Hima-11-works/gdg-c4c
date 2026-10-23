@@ -5,7 +5,7 @@
 [![PostgreSQL + PostGIS](https://img.shields.io/badge/PostgreSQL-16%20%2B%20PostGIS-4169E1?logo=postgresql&logoColor=white)](https://postgis.net/)
 [![Uber H3](https://img.shields.io/badge/Uber%20H3-Hexagonal%20Grid-000000?logo=uber&logoColor=white)](https://h3geo.org/)
 
-The backend is the core spatial intelligence, data fusion, and dispatch engine of the **Air Health** platform. It ingests multi-source satellite observations, official CAAQMS sensor data, weather parameters, and crowdsourced citizen evidence, producing high-resolution **Uber H3 hexagonal nowcasts and forecasts**, automated **hidden hotspot detection**, **economic corridor exposure assessments**, and **incident management**.
+The backend provides the spatial data, model-run, review, and incident-workflow APIs for the **Air Health** prototype. Configured ingestion jobs can process ground, satellite, weather, and citizen inputs to produce H3 nowcasts, forecasts, hotspot candidates, corridor evaluations, and incident records. Feed freshness and geographic coverage depend on configuration.
 
 ---
 
@@ -28,17 +28,17 @@ flowchart TB
 
     subgraph PIPELINE["3. Processing Pipeline (`app.pipeline`)"]
         IDW["Inverse Distance Weighting (IDW)<br/>Spatial Nowcasting Engine"]
-        PDI["Pollution Development Index (PDI)<br/>Meteorological Smog Trapping Index"]
+        PDI["Heuristic PDI<br/>Experimental Context Score"]
         DISP["Advection-Dispersion Model<br/>1h, 3h, 6h Forward Forecasts"]
-        HOT["Hidden Hotspot Corroborator<br/>Satellite + Ground Anomaly Matcher"]
-        CORR["Corridor Exposure Evaluator<br/>Delhi-Kanpur, DMIC, EDFC"]
+        HOT["Hotspot Candidate Evidence<br/>Human Review Required"]
+        CORR["Published Corridor Run Evaluator<br/>Illustrative Geometry"]
         ALRT["Alert Rule Engine<br/>CPCB NAQI Bands & Thresholds"]
     end
 
     subgraph SERVICES["4. Application Services (`app.services`)"]
         INC["Incident Lifecycle Engine<br/>State Transition Verification"]
         MED["Media Evidence Service<br/>EXIF Stripping & Raster Re-encoding"]
-        FED["Federation Aggregator & Client<br/>Decentralized Model Synchronization"]
+        FED["Federation Experiment<br/>Local Demo Clients & Aggregator"]
     end
 
     subgraph API["5. REST API Layer (`app.api`)"]
@@ -77,18 +77,19 @@ flowchart TB
    - Dynamically indexes observations across H3 resolutions (Res 3 to Res 8).
    - Distance-decayed IDW interpolation with strict minimum-station safety guards.
    - Forward 1-hour, 3-hour, and 6-hour advection-dispersion forecast vectors.
-3. **Automated Hidden Hotspot Detection**:
-   - Identifies unmonitored emission sources by matching satellite aerosol spikes with citizen reports and local low-cost sensors.
+3. **Hotspot Candidate Review**:
+   - Assembles available satellite, citizen, and sensor context for human review. A candidate does not confirm an emission source.
 4. **Economic Corridor Analysis**:
-   - Spatio-temporal exposure routing along key freight arteries: **Delhi–Kanpur Interstate Corridor**, **DMIC (Delhi–Mumbai)**, and **EDFC (Eastern Dedicated Freight Corridor)**.
-   - Honestly scored against withheld ground monitoring stations.
+   - Serves published forecasts for configured corridor geometry when available. Geometry may be illustrative; evaluation status is reported with the run.
+   - Does not provide logistics routing, visibility, or travel-delay predictions.
 5. **Incident Management & Response Engine**:
-   - Immutable audit history and strict state transitions: `REPORTED` → `ACKNOWLEDGED` → `EN ROUTE` → `ON SCENE` → `RESOLVED` (or `CANCELLED`).
-   - Integrated with the companion [Fire Department Simulator](../partner_apps/fire_dept_simulator/).
-6. **Privacy-Preserving Citizen Photo & Sensor Ingestion**:
-   - Sniffs image bytes, strips sensitive EXIF metadata, and re-encodes rasters to secure non-identifiable derivatives before storage.
+   - Stores incident history and validates allowed status transitions for the companion [incident simulator](../partner_apps/fire_dept_simulator/).
+   - The simulator does not dispatch physical units. A separate optional authority-webhook workflow requires an explicitly configured receiving endpoint.
+6. **Citizen Photo Metadata Processing**:
+   - Sniffs image bytes, strips image metadata, and re-encodes rasters before storage. This processing does not by itself guarantee anonymity.
 7. **Interoperable Federated Learning**:
-   - Multi-party federated model aggregation allowing municipal and state pollution boards to train localized ridge-residual calibration models without sharing raw sensor data.
+   - Includes local partition and multi-process client/aggregator demonstrations. Inputs can be synthetic or test data; participants are not verified agencies.
+   - Parameter exchange alone does not provide differential privacy or another general privacy guarantee.
 
 ---
 
@@ -191,9 +192,9 @@ python -m app.pipeline.run
 
 ---
 
-## 🌐 Federated Learning Architecture
+## 🌐 Federation Demonstration
 
-The backend includes a complete federated training and aggregation subsystem:
+The backend includes a local partition demonstration and an optional multi-process client/aggregator workflow. Participants are not independently verified as agencies, and model update exchange does not establish privacy guarantees:
 
 ```bash
 # 1. Run local dual-partition simulation:
@@ -202,7 +203,7 @@ python -m app.cli federation-demo
 # 2. Start standalone central model aggregator:
 python -m app.federation_aggregator --port 8010 --run-id fed-run-01 --client-keys var/federation/client_keys.json
 
-# 3. Start regional participant client nodes:
+# 3. Start demo participant clients:
 python -m app.federation_client --participant region-a --aggregator-url http://localhost:8010
 python -m app.federation_client --participant region-b --aggregator-url http://localhost:8010
 ```

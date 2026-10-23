@@ -5,22 +5,22 @@
 [![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero%20External%20Pub-green)](pubspec.yaml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-An operational dispatch and response console for municipal authorities, emergency responders, and State Pollution Control Boards (SPCBs). It integrates directly with the **Air Health Incident Engine** to triage public smoke/fire reports, review photo evidence, convert severe air quality spikes into actionable field dispatches, and track unit statuses through an immutable audit trail.
+The **Fire Department Simulator** is a Flutter client for demonstrating an incident-review workflow against a configured Air Health backend. It can show incident records, inspect attached evidence, and record allowed status changes. It is not a live emergency-dispatch application.
 
-> **Operational Simulation Note**: While this app operates as a simulation interface without dispatching physical emergency sirens, **all status transitions are real, persistent writes** committed to the central PostgreSQL/PostGIS database.
+> **Simulation boundary**: Status changes are sent to the configured backend and may persist there. The app does not contact emergency services, send public alerts, or dispatch physical units. Any optional authority webhook is a separate backend configuration and is not implied to be active.
 
 ---
 
-## 🏛️ Architecture & Dispatch Lifecycle
+## 🏛️ Demonstration Incident Lifecycle
 
 ```mermaid
 stateDiagram-v2
-    [*] --> REPORTED: Citizen Report / Alert Opened
-    REPORTED --> ASSIGNED: Unit Assignment (POST /assign)
+    [*] --> REPORTED: Incident Opened
+    REPORTED --> ASSIGNED: Assignment Recorded
     ASSIGNED --> ACKNOWLEDGED: Responder Acknowledged
-    ACKNOWLEDGED --> EN_ROUTE: Unit En Route to Coordinate
-    EN_ROUTE --> ON_SCENE: Unit On Scene / Inspecting
-    ON_SCENE --> RESOLVED: Fire Suppressed / Source Controlled
+    ACKNOWLEDGED --> EN_ROUTE: Status Updated
+    EN_ROUTE --> ON_SCENE: Status Updated
+    ON_SCENE --> RESOLVED: Incident Resolved in Demo
     
     REPORTED --> CANCELLED: False Alarm / Duplicate
     ASSIGNED --> CANCELLED: Dismissed by Controller
@@ -36,14 +36,14 @@ stateDiagram-v2
 
 ## 🚀 Key Capabilities
 
-### 1. Incident Triage Queue
-- Live polling queue (`GET /api/v1/incidents`) showing active reports across jurisdictions.
+### 1. Incident Review Queue
+- Polls the configured backend (`GET /api/v1/incidents`) for incident records visible to the configured actor.
 - Filter by jurisdiction, priority (Low, Medium, High, Critical), and authority role (`fire_department` or `pollution_control`).
-- Real-time in-app alerts whenever new assignments or urgent incidents arrive.
+- In-app notifications when new assignments are returned by the backend. These do not notify anyone outside the app.
 
 ### 2. Evidence Inspection & Ground Truth
 - Directly inspects citizen evidence photos attached to reports.
-- Links incidents to the initiating source (whether a citizen smoke submission, satellite hotspot candidate, or forward corridor alert).
+- Shows the initiating source when it is recorded on the incident.
 - Displays exact geographic coordinates, corresponding H3 hexagonal cell index, and temporal timeline.
 
 ### 3. Strict State Machine & Idempotency
@@ -51,9 +51,8 @@ stateDiagram-v2
   `REPORTED` ➔ `ASSIGNED` ➔ `ACKNOWLEDGED` ➔ `EN ROUTE` ➔ `ON SCENE` ➔ `RESOLVED`.
 - All requests are safe from duplicate taps and network drops: action buttons disable during in-flight requests, and the server enforces idempotent status progression.
 
-### 4. Alert Intake for Pollution Control Boards
-- Operators with the `pollution_control` role can review published PM2.5 alerts from the latest spatial prediction run.
-- Instantiates persistent field inspection incidents directly from severe pollution spikes.
+### 4. Published Alert Review
+- The `pollution_control` simulator role can review published PM2.5 alerts from the latest spatial prediction run and create a simulated incident record for review.
 
 ### 5. In-App Diagnostics & Settings
 - Comprehensive in-app **Settings Screen** allowing dynamic configuration of:
@@ -67,10 +66,7 @@ stateDiagram-v2
 
 ## ⚙️ Zero-Dependency Architectural Design
 
-The entire application relies strictly on Dart's native standard library (`dart:io` and core Flutter material components) without third-party pub package dependencies:
-- **Maximum Reliability**: Zero risk of breaking third-party package updates or version conflicts.
-- **Minimal Binary Footprint**: Clean, small release builds without bloated external dependencies.
-- **Accurate Transport Handling**: Native socket and HTTP error parsing distinguishes pure network drops from legitimate HTTP 4xx/5xx responses.
+The application uses Dart's `dart:io` APIs and Flutter's core material components without third-party pub package dependencies. Its transport layer distinguishes network errors from HTTP responses and reports those errors in the UI.
 
 ---
 

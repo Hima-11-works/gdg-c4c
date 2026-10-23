@@ -5,9 +5,9 @@
 [![Riverpod](https://img.shields.io/badge/Riverpod-2.6-40C4FF?logo=flutter&logoColor=white)](https://riverpod.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A Flutter mobile health companion designed for citizens to track personal air quality exposure, receive personalized health advisories, discover lower-pollution nearby areas, report smoke/fire plumes with photo evidence, and contribute low-cost community sensor readings.
+A Flutter mobile companion for environmental exposure awareness, smoke/fire reports with optional photo evidence, nearby AQI estimates, and community sensor readings.
 
-> **Health Advisory Notice**: This app provides environmental exposure awareness based on official **Central Pollution Control Board (CPCB) NAQI** standards. It is not a clinical diagnostic or medical emergency service.
+> **Health Notice**: Alerts provide general environmental information. They are not clinical guidance, a diagnosis, or a medical emergency service.
 
 ---
 
@@ -20,7 +20,7 @@ flowchart TB
         NEARBY["Nearby Areas<br/>Relative AQI Estimates"]
         ALERTS["Alerts Drawer<br/>Dual-Tier Alerts & Audio Chimes"]
         REPORT["Field Report Sheet<br/>Sanitized Photo & Fire Reports"]
-        PROFILE["Health Profile<br/>Sensitivity Categories & Storage"]
+        PROFILE["Alert Preferences<br/>User-Selected Thresholds"]
     end
 
     subgraph LOGIC["2. Domain & Services (`lib/domain` & `lib/services`)"]
@@ -44,24 +44,24 @@ flowchart TB
 
 ## 🚀 Key Features
 
-### 1. Personalized Health Sensitivity Profiles
+### 1. User-Selected Exposure Alert Thresholds
 Citizens can select sensitivity preferences that adjust the app's exposure alert thresholds. These
 preferences provide general environmental awareness only; they do not diagnose a condition or offer
 condition-specific clinical advice.
 
 ### 2. Dual-Tier Alerting & Audio Alarms
-- **Tier 1 (Community)**: Official CPCB NAQI category shifts (Satisfactory, Moderate, Poor, Very Poor, Severe).
+- **Tier 1 (Community)**: Community air-quality category alerts when supported by available data.
 - **Tier 2 (Personalized)**: Exposure alerts based on the selected sensitivity preference.
-- **Audible Alerts**: Optional high-priority audio chime alerting users during dangerous pollution surges.
+- **Audible Alerts**: Optional audio chimes for configured exposure alerts.
 
 ### 3. Relative Nearby Pollution Estimates
 - The **Nearby** tab compares available AQI estimates for nearby grid cells, including current and short-horizon forecast estimates where available.
 - Estimates may be incomplete or out of date. They are not safety ratings or recommendations to relocate.
 - An offline gazetteer of **over 10,600 Indian cities, towns, and localities** (`assets/data/india_locations.json`) resolves cell locations when a place name is available; unresolved locations may use a shortened cell label.
 
-### 4. Ground-Truth Field Reporting (Smoke & Fire)
-- Citizens can photograph and report localized pollution events (agricultural burning, garbage fires, industrial bypass).
-- **Privacy First**: Sensitive EXIF metadata (camera serial, exact device info) is automatically stripped on the backend, and rasters are re-encoded before review.
+### 4. Citizen Field Reporting (Smoke & Fire)
+- Citizens can photograph and report observed smoke or fire events.
+- **Media Processing**: Backend processing removes image metadata and re-encodes raster images before review; this does not by itself guarantee anonymity.
 - **Retry Resilience**: If network drops after report creation, the app retains the report ID allowing one-tap photo upload retry without creating duplicates.
 
 ### 5. Community Low-Cost Sensor Ingestion
@@ -81,9 +81,9 @@ lib/
 ├── providers/            # Riverpod dependency injection wiring
 ├── features/             # Feature UI modules:
 │   ├── home/             # Primary AQI dial, weather card, sensor input
-│   ├── nearby/           # Nearby cleaner air areas with resolved place names
+│   ├── nearby/           # Nearby AQI estimates with optional place names
 │   ├── alerts/           # Alert notification history and sensitivity advisories
-│   ├── profile/          # User health profile configuration
+│   ├── profile/          # User-selected exposure alert preferences
 │   ├── reports/          # Smoke/fire field reporting sheet with photo attachment
 │   └── onboarding/       # First-time health profile onboarding walkthrough
 ├── routing/              # Declarative go_router route configuration
