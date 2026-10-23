@@ -11,9 +11,11 @@ from sqlalchemy.engine import Row
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.domain.features import DataMode
 from app.domain.h3_grid import assert_valid_cell
 from app.domain.types import GridState
 from app.models.tables import grid_state as grid_state_table
+from app.models.tables import prediction_run
 
 
 def _row_to_domain(row: Row) -> GridState:
@@ -74,28 +76,44 @@ def _get_stmt(h3_cell: str, timestamp: datetime) -> Select:
     )
 
 
-def _latest_stmt() -> Select:
+def _mode_timestamps(mode: DataMode):
+    """Legacy rows are visible only when a publication of the same mode owns them."""
+    return select(prediction_run.c.generated_at).where(
+        prediction_run.c.mode == mode.value
+    )
+
+
+def _latest_stmt(mode: DataMode | None = None) -> Select:
     # DISTINCT ON is PostgreSQL-specific, which is fine: this whole layer is.
+    stmt = select(grid_state_table)
+    if mode is not None:
+        stmt = stmt.where(grid_state_table.c.timestamp.in_(_mode_timestamps(mode)))
     return (
-        select(grid_state_table)
+        stmt
         .distinct(grid_state_table.c.h3_cell)
         .order_by(grid_state_table.c.h3_cell, grid_state_table.c.timestamp.desc())
     )
 
 
-def _latest_in_cells_stmt(cells: list[str]) -> Select:
+def _latest_in_cells_stmt(cells: list[str], mode: DataMode | None = None) -> Select:
+    conditions = [grid_state_table.c.h3_cell.in_(cells)]
+    if mode is not None:
+        conditions.append(grid_state_table.c.timestamp.in_(_mode_timestamps(mode)))
     return (
         select(grid_state_table)
-        .where(grid_state_table.c.h3_cell.in_(cells))
+        .where(*conditions)
         .distinct(grid_state_table.c.h3_cell)
         .order_by(grid_state_table.c.h3_cell, grid_state_table.c.timestamp.desc())
     )
 
 
-def _latest_for_cell_stmt(h3_cell: str) -> Select:
+def _latest_for_cell_stmt(h3_cell: str, mode: DataMode | None = None) -> Select:
+    conditions = [grid_state_table.c.h3_cell == h3_cell]
+    if mode is not None:
+        conditions.append(grid_state_table.c.timestamp.in_(_mode_timestamps(mode)))
     return (
         select(grid_state_table)
-        .where(grid_state_table.c.h3_cell == h3_cell)
+        .where(*conditions)
         .order_by(grid_state_table.c.timestamp.desc())
         .limit(1)
     )
@@ -127,16 +145,20 @@ class SqlGridStateRepository:
         row = self._session.execute(_get_stmt(h3_cell, timestamp)).first()
         return _row_to_domain(row) if row else None
 
-    def latest(self) -> list[GridState]:
-        rows = self._session.execute(_latest_stmt()).all()
+    def latest(self, *, mode: DataMode | None = None) -> list[GridState]:
+        rows = self._session.execute(_latest_stmt(mode)).all()
         return [_row_to_domain(row) for row in rows]
 
-    def latest_in_cells(self, cells: list[str]) -> list[GridState]:
+    def latest_in_cells(
+        self, cells: list[str], *, mode: DataMode | None = None
+    ) -> list[GridState]:
         if not cells:
             return []
-        rows = self._session.execute(_latest_in_cells_stmt(cells)).all()
+        rows = self._session.execute(_latest_in_cells_stmt(cells, mode)).all()
         return [_row_to_domain(row) for row in rows]
 
-    def latest_for_cell(self, h3_cell: str) -> GridState | None:
-        row = self._session.execute(_latest_for_cell_stmt(h3_cell)).first()
+    def latest_for_cell(
+        self, h3_cell: str, *, mode: DataMode | None = None
+    ) -> GridState | None:
+        row = self._session.execute(_latest_for_cell_stmt(h3_cell, mode)).first()
         return _row_to_domain(row) if row else None

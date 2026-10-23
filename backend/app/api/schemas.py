@@ -44,8 +44,8 @@ class Envelope(BaseModel, Generic[T]):
     generated_at: datetime = Field(description="When this response was generated, in UTC.")
     is_demo: bool = Field(
         description=(
-            "True if real data was not yet available and seeded demo data is "
-            "shown instead. Never mix real and fabricated values without this flag."
+            "True when this response contains synthetic demo data, whether it was "
+            "generated for an empty state or read from a demo-mode publication."
         )
     )
     data: T

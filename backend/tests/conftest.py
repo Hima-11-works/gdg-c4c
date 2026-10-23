@@ -96,6 +96,31 @@ def api_client(fake_repos: FakeRepos) -> TestClient:
     return TestClient(app)
 
 
+@pytest.fixture
+def demo_api_client(fake_repos: FakeRepos) -> TestClient:
+    """Explicit demo deployment for tests that need labeled synthetic fixtures."""
+    app = create_app()
+    app.dependency_overrides[get_sensor_service] = lambda: SensorService(
+        fake_repos.sensor, demo_mode=True
+    )
+    app.dependency_overrides[get_weather_service] = lambda: WeatherService(
+        fake_repos.weather, demo_mode=True
+    )
+    app.dependency_overrides[get_grid_service] = lambda: GridService(
+        fake_repos.grid, fake_repos.forecast, demo_mode=True
+    )
+    app.dependency_overrides[get_cell_service] = lambda: CellService(
+        fake_repos.grid, fake_repos.forecast, fake_repos.weather, demo_mode=True
+    )
+    app.dependency_overrides[get_alert_service] = lambda: AlertService(
+        fake_repos.alert, demo_mode=True
+    )
+    app.dependency_overrides[get_fire_report_service] = lambda: FireReportService(
+        fake_repos.fire
+    )
+    return TestClient(app)
+
+
 @pytest.fixture(scope="session")
 def _migrated_db() -> None:
     """Applies every Alembic migration once per test session.

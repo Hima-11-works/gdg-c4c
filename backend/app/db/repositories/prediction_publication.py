@@ -149,10 +149,12 @@ def _get_run_stmt(run_id: str) -> Select:
     return select(prediction_run).where(prediction_run.c.id == run_id)
 
 
-def _latest_run_stmt(region: str | None) -> Select:
+def _latest_run_stmt(region: str | None, mode: DataMode | None = None) -> Select:
     stmt = select(prediction_run)
     if region is not None:
         stmt = stmt.where(prediction_run.c.region == region)
+    if mode is not None:
+        stmt = stmt.where(prediction_run.c.mode == mode.value)
     return stmt.order_by(prediction_run.c.published_at.desc(), prediction_run.c.id).limit(1)
 
 
@@ -291,8 +293,10 @@ class SqlPredictionPublicationRepository:
         row = self._session.execute(_get_run_stmt(run_id)).first()
         return None if row is None else _row_to_run(row)
 
-    def latest_run(self, *, region: str | None = None) -> PredictionRun | None:
-        row = self._session.execute(_latest_run_stmt(region)).first()
+    def latest_run(
+        self, *, region: str | None = None, mode: DataMode | None = None
+    ) -> PredictionRun | None:
+        row = self._session.execute(_latest_run_stmt(region, mode)).first()
         return None if row is None else _row_to_run(row)
 
     def list_results(

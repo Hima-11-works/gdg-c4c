@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:air_health_flutter/app/app.dart';
 import 'package:air_health_flutter/domain/models/fire_report.dart';
 import 'package:air_health_flutter/domain/models/location_point.dart';
+import 'package:air_health_flutter/data/providers/dummy_pollution_data_provider.dart';
+import 'package:air_health_flutter/data/providers/scenario_data.dart';
 import 'package:air_health_flutter/providers/data_providers.dart';
 import 'package:air_health_flutter/providers/location_providers.dart';
 import 'package:air_health_flutter/providers/onboarding_providers.dart';
@@ -32,6 +34,9 @@ void main() {
       ProviderScope(
         overrides: [
           gridApiClientProvider.overrideWithValue(null),
+          pollutionDataProvider.overrideWithValue(
+            DummyPollutionDataProvider(scenario: Scenario.cleanStable),
+          ),
           fireReportApiClientProvider.overrideWithValue(null),
           citizenSensorApiClientProvider.overrideWithValue(null),
           onboardingDoneProvider.overrideWith((ref) async => true),
@@ -56,6 +61,9 @@ void main() {
       ProviderScope(
         overrides: [
           gridApiClientProvider.overrideWithValue(null),
+          pollutionDataProvider.overrideWithValue(
+            DummyPollutionDataProvider(scenario: Scenario.cleanStable),
+          ),
           fireReportApiClientProvider.overrideWithValue(null),
           citizenSensorApiClientProvider.overrideWithValue(null),
           onboardingDoneProvider.overrideWith((ref) async => true),
@@ -78,6 +86,9 @@ void main() {
       ProviderScope(
         overrides: [
           gridApiClientProvider.overrideWithValue(null),
+          pollutionDataProvider.overrideWithValue(
+            DummyPollutionDataProvider(scenario: Scenario.cleanStable),
+          ),
           fireReportApiClientProvider.overrideWithValue(null),
           citizenSensorApiClientProvider.overrideWithValue(null),
           onboardingDoneProvider.overrideWith((ref) async => true),
@@ -99,6 +110,9 @@ void main() {
       ProviderScope(
         overrides: [
           gridApiClientProvider.overrideWithValue(null),
+          pollutionDataProvider.overrideWithValue(
+            DummyPollutionDataProvider(scenario: Scenario.cleanStable),
+          ),
           citizenSensorApiClientProvider.overrideWithValue(null),
           fireReportApiClientProvider.overrideWithValue(
             _RecordingFireReportApiClient(),

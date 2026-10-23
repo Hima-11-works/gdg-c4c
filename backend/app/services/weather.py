@@ -15,24 +15,36 @@ from app.services.results import ServiceResult
 
 
 class WeatherService:
-    def __init__(self, repository: WeatherReadingRepository) -> None:
+    def __init__(
+        self, repository: WeatherReadingRepository, *, demo_mode: bool | None = None
+    ) -> None:
         self._repository = repository
+        self._demo_mode_override = demo_mode
 
     def list_weather(
         self, *, resolution: int | None = None, bbox: BoundingBox | None = None
     ) -> ServiceResult[list[WeatherReading]]:
-        source = "demo" if get_settings().demo_mode else "open-meteo"
+        demo_mode = (
+            get_settings().demo_mode
+            if self._demo_mode_override is None
+            else self._demo_mode_override
+        )
+        source = "demo" if demo_mode else "open-meteo"
         if bbox is None:
             readings = self._repository.list_latest(source=source)
             if readings:
-                return ServiceResult(readings, is_demo=False)
-            return ServiceResult(
-                demo_data.demo_weather_readings(get_settings().h3_resolution), is_demo=True
-            )
+                return ServiceResult(readings, is_demo=demo_mode)
+            if demo_mode:
+                return ServiceResult(
+                    demo_data.demo_weather_readings(get_settings().h3_resolution), is_demo=True
+                )
+            return ServiceResult([], is_demo=False)
 
         resolution = resolution if resolution is not None else get_settings().h3_resolution
         cells = resolve_cells(resolution, bbox)
         readings = self._repository.list_latest_in_cells(cells, source=source)
         if readings:
-            return ServiceResult(readings, is_demo=False)
-        return ServiceResult(demo_data.weather_readings_for_cells(cells), is_demo=True)
+            return ServiceResult(readings, is_demo=demo_mode)
+        if demo_mode:
+            return ServiceResult(demo_data.weather_readings_for_cells(cells), is_demo=True)
+        return ServiceResult([], is_demo=False)

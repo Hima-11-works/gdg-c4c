@@ -96,9 +96,12 @@ def _list_since_stmt(
     return stmt.order_by(sensor_reading_table.c.measured_at)
 
 
-def _list_latest_stmt() -> Select:
+def _list_latest_stmt(source: str | None = None) -> Select:
+    stmt = select(*_COLUMNS)
+    if source is not None:
+        stmt = stmt.where(sensor_reading_table.c.source == source)
     return (
-        select(*_COLUMNS)
+        stmt
         .distinct(
             sensor_reading_table.c.source,
             sensor_reading_table.c.external_sensor_id,
@@ -177,6 +180,6 @@ class SqlSensorReadingRepository:
         ).all()
         return [_row_to_domain(row) for row in rows]
 
-    def list_latest(self) -> list[SensorReading]:
-        rows = self._session.execute(_list_latest_stmt()).all()
+    def list_latest(self, *, source: str | None = None) -> list[SensorReading]:
+        rows = self._session.execute(_list_latest_stmt(source)).all()
         return [_row_to_domain(row) for row in rows]

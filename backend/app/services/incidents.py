@@ -27,6 +27,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 from app.core.config import get_settings
+from app.domain.features import DataMode
 from app.domain.h3_grid import cell_center
 from app.domain.incidents import (
     Incident,
@@ -49,8 +50,8 @@ from app.domain.repositories import (
     AlertRepository,
     FireReportRepository,
     IncidentDeliveryRepository,
-    IncidentWebhookDeliveryRepository,
     IncidentRepository,
+    IncidentWebhookDeliveryRepository,
 )
 from app.domain.types import Alert, AlertSeverity, FireKind, FireReport
 from app.services.hotspot_detection import HotspotScanStore
@@ -295,7 +296,7 @@ class IncidentService:
         existing = self._incidents.get_by_source(
             source_type, source_id=source_id, source_ref=key_ref
         )
-        if existing is not None:
+        if existing is not None and self._is_incident_available(existing):
             self._assert_same_attributes(
                 existing,
                 severity=severity,
@@ -328,7 +329,7 @@ class IncidentService:
                 source_type, source_id
             )
             effective_run_id = linked_prediction_run_id
-            source_synthetic = False
+            source_synthetic = self._source_is_synthetic(source_type, source_id)
 
         effective_lat = latitude if latitude is not None else source_lat
         effective_lon = longitude if longitude is not None else source_lon
@@ -660,13 +661,45 @@ class IncidentService:
         limit: int | None = None,
         offset: int = 0,
     ) -> list[Incident]:
-        return self._incidents.list(
-            status=status,
-            role=role,
-            archived_only=archived_only,
-            limit=limit,
-            offset=offset,
-        )
+        if get_settings().demo_mode:
+            return self._incidents.list(
+                status=status,
+                role=role,
+                archived_only=archived_only,
+                limit=limit,
+                offset=offset,
+            )
+
+        page_size = 100
+        visible: list[Incident] = []
+        scanned = 0
+        available_alert_ids: set[int] | None = None
+        while True:
+            page = self._incidents.list(
+                status=status,
+                role=role,
+                archived_only=archived_only,
+                limit=page_size,
+                offset=scanned,
+            )
+            if available_alert_ids is None and any(
+                item.source_type is IncidentSourceType.ALERT and not item.source_synthetic
+                for item in page
+            ):
+                available_alert_ids = self._active_alert_ids()
+            visible.extend(
+                item
+                for item in page
+                if self._is_incident_available(
+                    item, available_alert_ids=available_alert_ids
+                )
+            )
+            scanned += len(page)
+            if len(page) < page_size or (limit is not None and len(visible) >= offset + limit):
+                break
+        if limit is None:
+            return visible[offset:]
+        return visible[offset : offset + limit]
 
     def history(self, incident_id: int) -> list[IncidentEvent]:
         self._require(incident_id)
@@ -686,10 +719,23 @@ class IncidentService:
         vice versa. No key is needed to read: this is a simulator view, and it
         contains no more than the public incident list does.
         """
+        demo_mode = get_settings().demo_mode
         items: list[InboxItem] = []
+        available_alert_ids: set[int] | None = None
         for delivery in self._deliveries.list_for_role(role, only_open=only_open):
             incident = self._incidents.get(delivery.incident_id)
             if incident is None:  # pragma: no cover - deliveries FK to incidents
+                continue
+            if (
+                not demo_mode
+                and available_alert_ids is None
+                and incident.source_type is IncidentSourceType.ALERT
+                and not incident.source_synthetic
+            ):
+                available_alert_ids = self._active_alert_ids()
+            if not self._is_incident_available(
+                incident, available_alert_ids=available_alert_ids
+            ):
                 continue
             items.append(InboxItem(delivery=delivery, incident=incident))
         return items
@@ -698,9 +744,63 @@ class IncidentService:
 
     def _require(self, incident_id: int) -> Incident:
         incident = self._incidents.get(incident_id)
-        if incident is None:
+        if incident is None or not self._is_incident_available(incident):
             raise IncidentNotFoundError(f"incident {incident_id} does not exist")
         return incident
+
+    def _is_incident_available(
+        self,
+        incident: Incident,
+        *,
+        available_alert_ids: set[int] | None = None,
+    ) -> bool:
+        """Hide synthetic or demo-backed records when the API runs live."""
+        if get_settings().demo_mode:
+            return True
+        if incident.source_synthetic:
+            return False
+        if incident.source_type is IncidentSourceType.REPORT:
+            report = self._reports.get(incident.source_id or -1)
+            return bool(
+                report is not None
+                and not (
+                    report.client_report_id
+                    and report.client_report_id.startswith("demo-fire-")
+                )
+            )
+        if incident.source_type is IncidentSourceType.ALERT:
+            if available_alert_ids is not None:
+                return incident.source_id in available_alert_ids
+            return self._alert_by_id(incident.source_id or -1) is not None
+        if incident.source_type is IncidentSourceType.PUBLISHED_ALERT:
+            try:
+                alert = self._published_alerts.resolve(incident.source_ref or "")
+            except Exception:
+                return False
+            return not alert.synthetic
+        if incident.source_type is IncidentSourceType.HOTSPOT_EVENT:
+            if self._hotspot_store is None:
+                return False
+            try:
+                event = self._hotspot_store.event(incident.source_ref or "")
+            except Exception:
+                return False
+            return event.get("synthetic") is not True and event.get("status") == "confirmed"
+        return False
+
+    def _source_is_synthetic(
+        self, source_type: IncidentSourceType, source_id: int | None
+    ) -> bool:
+        if source_type is IncidentSourceType.ALERT:
+            return get_settings().demo_mode
+        if source_type is IncidentSourceType.REPORT and source_id is not None:
+            report = self._reports.get(source_id)
+            return bool(
+                report is not None
+                and report.client_report_id
+                and report.client_report_id.startswith("demo-fire-")
+            )
+        return False
 
     def _alert_by_id(self, alert_id: int) -> Alert | None:
         # AlertRepository exposes list_active(since); search the active window
@@ -708,16 +808,34 @@ class IncidentService:
         from datetime import timedelta
 
         since = datetime.now(UTC) - timedelta(hours=get_settings().alert_active_lookback_hours)
-        for alert in self._alerts.list_active(since=since):
+        mode = DataMode.DEMO if get_settings().demo_mode else DataMode.LIVE
+        for alert in self._alerts.list_active(since=since, mode=mode):
             if alert.id == alert_id:
                 return alert
         return None
+
+    def _active_alert_ids(self) -> set[int]:
+        """Load eligible alerts once when filtering a batch of incidents."""
+        from datetime import timedelta
+
+        since = datetime.now(UTC) - timedelta(hours=get_settings().alert_active_lookback_hours)
+        return {
+            alert.id
+            for alert in self._alerts.list_active(since=since, mode=DataMode.LIVE)
+            if alert.id is not None
+        }
 
     def _report_by_id(self, report_id: int) -> FireReport | None:
         from datetime import timedelta
 
         since = datetime.now(UTC) - timedelta(hours=get_settings().fire_report_max_age_hours)
         for report in self._reports.list_active(since=since):
-            if report.id == report_id:
+            if (
+                report.id == report_id
+                and (get_settings().demo_mode or not (
+                    report.client_report_id
+                    and report.client_report_id.startswith("demo-fire-")
+                ))
+            ):
                 return report
         return None

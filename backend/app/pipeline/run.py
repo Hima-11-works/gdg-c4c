@@ -1224,6 +1224,7 @@ def _compute_grid(
         timestamp=timestamp,
         sensor_max_age=timedelta(hours=settings.ingest_max_reading_age_hours),
         allowed_sensor_sources={"demo" if settings.demo_mode else "openaq"},
+        include_demo_reports=settings.demo_mode,
     )
 
     if not result.succeeded:
@@ -1351,6 +1352,7 @@ def _generate_alerts(
         pdi_high_threshold=settings.alert_pdi_high_threshold,
         pdi_worsening_min_increase_ugm3=settings.alert_pdi_worsening_min_increase_ugm3,
         active_lookback=timedelta(hours=settings.alert_active_lookback_hours),
+        data_mode=DataMode.DEMO if settings.demo_mode else DataMode.LIVE,
     )
     result = service.run(
         current_states, forecasts, generated_at=timestamp, run_id=pipeline_run_id

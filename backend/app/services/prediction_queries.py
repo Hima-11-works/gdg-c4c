@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 import h3
 
 from app.core.config import get_settings
+from app.db.repositories.source_health import SourceHealth, SourceHealthRepository
 from app.domain.features import (
     FEATURE_SCHEMA_VERSION,
     DataMode,
@@ -18,8 +19,7 @@ from app.domain.features import (
     InputKind,
 )
 from app.domain.h3_grid import cell_center
-from app.domain.prediction import AlertCandidate, DEFAULT_REGION, PredictionResult, PredictionRun
-from app.db.repositories.source_health import SourceHealth, SourceHealthRepository
+from app.domain.prediction import DEFAULT_REGION, AlertCandidate, PredictionResult, PredictionRun
 from app.domain.repositories import PredictionPublicationRepository
 from app.services import demo_data
 
@@ -90,17 +90,20 @@ class PredictionCellView:
 
 class PredictionQueryService:
     def __init__(
-    self,
-    repository: PredictionPublicationRepository,
-    *,
-    native_resolution: int | None = None,
-    region: str | None = None,
-    source_health: SourceHealthRepository | None = None,
-  ) -> None:
+        self,
+        repository: PredictionPublicationRepository,
+        *,
+        native_resolution: int | None = None,
+        region: str | None = None,
+        source_health: SourceHealthRepository | None = None,
+        demo_mode: bool | None = None,
+    ) -> None:
         self._repository = repository
         settings = get_settings()
         self.native_resolution = settings.h3_resolution if native_resolution is None else native_resolution
         self.region = region or DEFAULT_REGION
+        self.demo_mode = settings.demo_mode if demo_mode is None else demo_mode
+        self.mode = DataMode.DEMO if self.demo_mode else DataMode.LIVE
         self._demo_run: PredictionRun | None = None
         # F3: optional, because the read service is constructed in tests and in
         # the v1 paths without a health repository. Absent means "no health
@@ -131,28 +134,33 @@ class PredictionQueryService:
         if run_id is not None:
             stored = self._repository.get_run(run_id)
             if stored is not None:
+                if stored.mode is not self.mode:
+                    raise ValueError(
+                        f"published prediction run {run_id!r} is not available in "
+                        f"{self.mode.value} mode"
+                    )
                 return stored
-            if run_id.startswith(DEMO_FALLBACK_PREFIX):
+            if self.demo_mode and run_id.startswith(DEMO_FALLBACK_PREFIX):
                 demo_run = self._demo_publication(run_id=run_id)
                 if demo_run is not None:
                     return demo_run[0]
             raise ValueError(f"published prediction run {run_id!r} was not found")
-        stored = self._repository.latest_run(region=self.region)
+        stored = self._repository.latest_run(region=self.region, mode=self.mode)
         if stored is not None:
             return stored
-        return self._demo_publication()[0]
+        if self.demo_mode:
+            return self._demo_publication()[0]
+        raise ValueError(
+            f"no live prediction run is available for region {self.region!r}"
+        )
 
     def is_fallback(self, run: PredictionRun) -> bool:
         """Whether `run` was synthesised rather than published.
 
-        F3. The read path above fabricates a `demo-fallback-<hour>` run whenever
-        no publication exists, and hands it back as an ordinary result. That is
-        the right behaviour for a demo - an empty dashboard is worse than an
-        honest synthetic one - and the wrong behaviour for anything that then
-        *cannot tell*, because the run id rolls over on the hour and looks like
-        a healthy pipeline. So the fact is recorded here and surfaced on the
-        envelope as `is_fallback`, rather than left for a client to infer from
-        the shape of a run id.
+        Demo mode may synthesize a `demo-fallback-<hour>` run when no demo
+        publication exists. Live mode never calls that path. The fact remains
+        surfaced on the envelope as `is_fallback`, rather than left for a
+        client to infer from the shape of a run id.
 
         The test is the id prefix, which is the same marker `_demo_publication`
         mints and the route re-parses, so there is one definition of

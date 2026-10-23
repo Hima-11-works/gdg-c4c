@@ -11,23 +11,21 @@ from app.services.grid_query import resolve_cells
 from tests.conftest import FakeRepos
 
 
-def test_current_grid_falls_back_to_demo_data_when_empty(api_client: TestClient) -> None:
+def test_current_grid_is_empty_in_live_mode_when_unavailable(api_client: TestClient) -> None:
     response = api_client.get("/api/v1/grid/current")
 
     assert response.status_code == 200
     body = response.json()
-    assert body["is_demo"] is True
-    assert len(body["data"]) == len(demo_data.demo_cells(get_settings().h3_resolution))
-    first = body["data"][0]
-    assert set(first.keys()) == {
-        "h3_cell",
-        "timestamp",
-        "pm25",
-        "pdi",
-        "confidence",
-        "wind_speed",
-        "wind_direction",
-    }
+    assert body["is_demo"] is False
+    assert body["data"] == []
+
+
+def test_current_grid_uses_demo_data_only_when_demo_mode_is_explicit(
+    demo_api_client: TestClient,
+) -> None:
+    response = demo_api_client.get("/api/v1/grid/current")
+    assert response.json()["is_demo"] is True
+    assert response.json()["data"]
 
 
 def test_current_grid_returns_real_data_when_present(
@@ -57,9 +55,9 @@ def test_current_grid_returns_real_data_when_present(
 
 @pytest.mark.parametrize("hours", [1, 3, 6])
 def test_forecast_grid_falls_back_to_demo_data_when_empty(
-    api_client: TestClient, hours: int
+    demo_api_client: TestClient, hours: int
 ) -> None:
-    response = api_client.get("/api/v1/grid/forecast", params={"minutes": hours * 60})
+    response = demo_api_client.get("/api/v1/grid/forecast", params={"minutes": hours * 60})
 
     assert response.status_code == 200
     body = response.json()
@@ -102,11 +100,12 @@ def test_forecast_grid_returns_real_data_when_present(
     # A different horizon with no real data still falls back to demo,
     # independently of the hours=3 real row above.
     other = api_client.get("/api/v1/grid/forecast", params={"hours": 1})
-    assert other.json()["is_demo"] is True
+    assert other.json()["is_demo"] is False
+    assert other.json()["data"] == []
 
 
-def test_forecast_grid_defaults_to_one_hour(api_client: TestClient) -> None:
-    response = api_client.get("/api/v1/grid/forecast")
+def test_forecast_grid_defaults_to_one_hour(demo_api_client: TestClient) -> None:
+    response = demo_api_client.get("/api/v1/grid/forecast")
 
     assert response.status_code == 200
     body = response.json()
@@ -129,9 +128,11 @@ DELHI_LOCAL_BBOX_PARAMS = {"min_lat": 28.55, "min_lon": 77.15, "max_lat": 28.68,
 
 
 def test_current_grid_country_tier_is_coarse_and_covers_all_of_india(
-    api_client: TestClient,
+    demo_api_client: TestClient,
 ) -> None:
-    response = api_client.get("/api/v1/grid/current", params={"resolution": 3, **INDIA_BBOX_PARAMS})
+    response = demo_api_client.get(
+        "/api/v1/grid/current", params={"resolution": 3, **INDIA_BBOX_PARAMS}
+    )
 
     assert response.status_code == 200
     body = response.json()

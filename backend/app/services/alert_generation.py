@@ -48,6 +48,8 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
+from app.core.config import get_settings
+from app.domain.features import DataMode
 from app.domain.repositories import AlertRepository
 from app.domain.types import Alert, AlertSeverity, Forecast, GridState
 
@@ -76,6 +78,7 @@ class AlertGenerationService:
         pdi_high_threshold: float,
         pdi_worsening_min_increase_ugm3: float,
         active_lookback: timedelta,
+        data_mode: DataMode | None = None,
     ) -> None:
         if warning_threshold_ugm3 <= 0:
             raise ValueError(f"warning_threshold_ugm3 must be > 0: {warning_threshold_ugm3}")
@@ -100,6 +103,9 @@ class AlertGenerationService:
         if active_lookback <= timedelta(0):
             raise ValueError(f"active_lookback must be positive: {active_lookback}")
         self._repository = repository
+        self._data_mode = data_mode or (
+            DataMode.DEMO if get_settings().demo_mode else DataMode.LIVE
+        )
         self._warning = warning_threshold_ugm3
         self._critical = critical_threshold_ugm3
         self._sharp_increase = sharp_increase_threshold_ugm3
@@ -131,7 +137,8 @@ class AlertGenerationService:
             already_alerted = {
                 alert.h3_cell
                 for alert in self._repository.list_active(
-                    since=generated_at - self._active_lookback
+                    since=generated_at - self._active_lookback,
+                    mode=self._data_mode,
                 )
             }
         except Exception as exc:  # deliberately broad, see app.services.ingestion._persist_all

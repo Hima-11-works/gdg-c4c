@@ -6,8 +6,8 @@ name: Pollution pipeline
 #
 # Repository configuration:
 #   secret   DATABASE_URL         direct (non-pooler) Neon connection string
-#   variable PIPELINE_DEMO_MODE   optional; "true" (default) or "false"
-#   secret   OPENAQ_API_KEY       only needed when PIPELINE_DEMO_MODE=false
+#   variable PIPELINE_DEMO_MODE   "true" for synthetic fixtures, otherwise "false"
+#   secret   OPENAQ_API_KEY       required when PIPELINE_DEMO_MODE=false
 #   secret   FIRMS_MAP_KEY        optional NASA FIRMS features in live mode
 #   secret   CDSE_REFRESH_TOKEN   optional live Sentinel-5P aerosol-index scans
 #   variable HOTSPOT_SCAN_BACKEND database to share scans with the API
@@ -40,7 +40,7 @@ jobs:
     timeout-minutes: 20
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      DEMO_MODE: ${{ vars.PIPELINE_DEMO_MODE || 'true' }}
+      DEMO_MODE: ${{ vars.PIPELINE_DEMO_MODE || 'false' }}
       OPENAQ_API_KEY: ${{ secrets.OPENAQ_API_KEY }}
       FIRMS_MAP_KEY: ${{ secrets.FIRMS_MAP_KEY }}
       CDSE_REFRESH_TOKEN: ${{ secrets.CDSE_REFRESH_TOKEN }}
@@ -58,6 +58,17 @@ jobs:
         run: |
           if [ -z "$DATABASE_URL" ]; then
             echo "::error::Set the DATABASE_URL repository secret (a direct Neon connection string)."
+            exit 1
+          fi
+
+      - name: Validate data mode and live provider configuration
+        run: |
+          if [[ "$DEMO_MODE" != "true" && "$DEMO_MODE" != "false" ]]; then
+            echo "::error::PIPELINE_DEMO_MODE must be exactly 'true' or 'false'."
+            exit 1
+          fi
+          if [[ "$DEMO_MODE" == "false" && -z "$OPENAQ_API_KEY" ]]; then
+            echo "::error::Set the OPENAQ_API_KEY repository secret for live pipeline runs."
             exit 1
           fi
 

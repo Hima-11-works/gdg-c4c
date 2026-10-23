@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/api_config.dart';
@@ -9,6 +10,7 @@ import '../data/providers/grid_api_pollution_data_provider.dart';
 import '../data/providers/scenario_data.dart';
 import '../data/reports/citizen_sensor_api.dart';
 import '../data/reports/fire_report_api.dart';
+import '../mocks/dev_scenario_simulator.dart';
 
 export '../data/reports/citizen_sensor_api.dart';
 export '../data/reports/fire_report_api.dart';
@@ -56,10 +58,8 @@ final citizenSensorApiClientProvider = Provider<CitizenSensorApiClient?>((ref) {
 ///
 /// The app talks to the deployed Vercel grid API by default through
 /// [GridApiPollutionDataProvider]. Set `POLLUTION_API_BASE_URL` to target a
-/// local or staging backend. A null client override falls back to deterministic
-/// dummy data, which keeps offline tests isolated. Debug scenario
-/// simulation only replaces the selected source when explicitly enabled with
-/// `USE_DEV_SCENARIO_SIMULATOR=true`.
+/// local or staging backend. A missing client is an error unless the explicit
+/// debug scenario simulator is enabled with `USE_DEV_SCENARIO_SIMULATOR=true`.
 ///
 /// Nothing else in the app changes between the two.
 final pollutionDataProvider = Provider<PollutionDataProvider>((ref) {
@@ -67,5 +67,10 @@ final pollutionDataProvider = Provider<PollutionDataProvider>((ref) {
   if (client != null) {
     return GridApiPollutionDataProvider(client: client);
   }
-  return DummyPollutionDataProvider(scenario: Scenario.cleanStable);
+  if (kDebugMode && devScenarioSimulatorEnabled) {
+    return DummyPollutionDataProvider(scenario: Scenario.cleanStable);
+  }
+  throw StateError(
+    'Pollution API is unavailable and the explicit demo simulator is disabled.',
+  );
 });

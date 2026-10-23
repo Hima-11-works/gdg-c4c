@@ -198,8 +198,10 @@ class SqlWeatherReadingRepository:
         rows = self._session.execute(_list_since_stmt(since)).all()
         return [_row_to_domain(row) for row in rows]
 
-    def latest_for_cell(self, h3_cell: str) -> WeatherReading | None:
-        row = self._session.execute(_latest_for_cell_stmt(h3_cell)).first()
+    def latest_for_cell(
+        self, h3_cell: str, *, source: str | None = None
+    ) -> WeatherReading | None:
+        row = self._session.execute(_latest_for_cell_stmt(h3_cell, source)).first()
         return _row_to_domain(row) if row else None
 
     def list_latest(self, *, source: str | None = None) -> list[WeatherReading]:

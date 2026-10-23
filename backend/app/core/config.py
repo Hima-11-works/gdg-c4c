@@ -68,16 +68,11 @@ class Settings(BaseSettings):
     incident_webhook_timeout_seconds: float = Field(default=5.0, gt=0, le=30)
     incident_webhook_max_attempts: int = Field(default=5, ge=1, le=10)
 
-    # When true, app.ingestion.factory substitutes a fixed, deterministic
-    # sensor/weather dataset (app.ingestion.demo) for OpenAQ/Open-Meteo —
-    # the ONLY thing demo mode changes. Everything downstream (H3 grid,
-    # IDW interpolation, PDI, dispersion/forecasting, alerts, persistence,
-    # the API) runs exactly as it does in live mode, on real (if
-    # synthetic) inputs — this is not the same thing as `is_demo` in API
-    # responses, which flags the separate, unrelated illustrative
-    # fallback in app.services.demo_data used when a repository query
-    # returns nothing at all. A demo-mode pipeline run produces real,
-    # persisted rows, so `is_demo` stays false for them.
+    # Selects one application data mode. In demo mode, the pipeline and
+    # explicitly labeled empty-state fixtures may use synthetic data. In live
+    # mode, API reads are restricted to live publications and their matching
+    # legacy rows; missing data stays empty/unavailable instead of falling back
+    # to synthetic values. This does not identify or isolate separate databases.
     demo_mode: bool = False
 
     # H3 resolution used for every h3_cell column (weather_reading, grid_state,

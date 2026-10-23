@@ -61,8 +61,8 @@ class FakeSensorReadingRepository:
             and (source is None or r.source == source)
         ]
 
-    def list_latest(self) -> list[SensorReading]:
-        return list(self.readings)
+    def list_latest(self, *, source: str | None = None) -> list[SensorReading]:
+        return [r for r in self.readings if source is None or r.source == source]
 
 
 class FakeWeatherReadingRepository:
@@ -94,8 +94,13 @@ class FakeWeatherReadingRepository:
     def list_since(self, since: datetime) -> list[WeatherReading]:
         return [r for r in self.readings if r.measured_at >= since]
 
-    def latest_for_cell(self, h3_cell: str) -> WeatherReading | None:
-        matches = [r for r in self.readings if r.h3_cell == h3_cell]
+    def latest_for_cell(
+        self, h3_cell: str, *, source: str | None = None
+    ) -> WeatherReading | None:
+        matches = [
+            r for r in self.readings
+            if r.h3_cell == h3_cell and (source is None or r.source == source)
+        ]
         return max(matches, key=lambda r: r.measured_at) if matches else None
 
     def list_latest(self, *, source: str | None = None) -> list[WeatherReading]:
@@ -142,7 +147,7 @@ class FakeGridStateRepository:
     def get(self, h3_cell: str, timestamp: datetime) -> GridState | None:
         return self.states.get((h3_cell, timestamp))
 
-    def latest(self) -> list[GridState]:
+    def latest(self, *, mode=None) -> list[GridState]:
         by_cell: dict[str, GridState] = {}
         for state in self.states.values():
             current = by_cell.get(state.h3_cell)
@@ -150,11 +155,11 @@ class FakeGridStateRepository:
                 by_cell[state.h3_cell] = state
         return list(by_cell.values())
 
-    def latest_in_cells(self, cells: list[str]) -> list[GridState]:
+    def latest_in_cells(self, cells: list[str], *, mode=None) -> list[GridState]:
         cell_set = set(cells)
         return [s for s in self.latest() if s.h3_cell in cell_set]
 
-    def latest_for_cell(self, h3_cell: str) -> GridState | None:
+    def latest_for_cell(self, h3_cell: str, *, mode=None) -> GridState | None:
         matches = [s for s in self.states.values() if s.h3_cell == h3_cell]
         return max(matches, key=lambda s: s.timestamp) if matches else None
 
@@ -171,7 +176,7 @@ class FakeForecastRepository:
         return [self.add(forecast) for forecast in forecasts]
 
     def list_for_cell(
-        self, h3_cell: str, *, generated_after: datetime | None = None
+        self, h3_cell: str, *, generated_after: datetime | None = None, mode=None
     ) -> list[Forecast]:
         return [
             f
@@ -180,7 +185,7 @@ class FakeForecastRepository:
             and (generated_after is None or f.generated_at >= generated_after)
         ]
 
-    def latest_for_cell(self, h3_cell: str) -> list[Forecast]:
+    def latest_for_cell(self, h3_cell: str, *, mode=None) -> list[Forecast]:
         cell_forecasts = [f for f in self.forecasts if f.h3_cell == h3_cell]
         if not cell_forecasts:
             return []
@@ -190,7 +195,7 @@ class FakeForecastRepository:
             key=lambda f: f.forecast_hours,
         )
 
-    def latest_for_horizon(self, hours: float) -> list[Forecast]:
+    def latest_for_horizon(self, hours: float, *, mode=None) -> list[Forecast]:
         by_cell: dict[str, Forecast] = {}
         for f in self.forecasts:
             if f.forecast_hours != hours:
@@ -200,7 +205,9 @@ class FakeForecastRepository:
                 by_cell[f.h3_cell] = f
         return sorted(by_cell.values(), key=lambda f: f.h3_cell)
 
-    def latest_for_horizon_in_cells(self, hours: float, cells: list[str]) -> list[Forecast]:
+    def latest_for_horizon_in_cells(
+        self, hours: float, cells: list[str], *, mode=None
+    ) -> list[Forecast]:
         cell_set = set(cells)
         return [f for f in self.latest_for_horizon(hours) if f.h3_cell in cell_set]
 
@@ -213,7 +220,7 @@ class FakeAlertRepository:
         self.alerts.append(alert)
         return alert
 
-    def list_active(self, *, since: datetime) -> list[Alert]:
+    def list_active(self, *, since: datetime, mode=None) -> list[Alert]:
         return [a for a in self.alerts if a.created_at >= since]
 
 
@@ -259,13 +266,20 @@ class FakeFireReportRepository:
                 return report
         return None
 
-    def list_active_qualified(self, *, since: datetime) -> list[FireReport]:
+    def list_active_qualified(
+        self, *, since: datetime, include_demo_reports: bool = True
+    ) -> list[FireReport]:
         return [
             r
             for r in self.reports
             if r.reported_at >= since
             and r.status in MODEL_QUALIFIED_STATUSES
             and (r.expires_at is None or r.expires_at > r.reported_at)
+            and (
+                include_demo_reports
+                or r.client_report_id is None
+                or not r.client_report_id.startswith("demo-fire-")
+            )
         ]
 
     def count_since(self, *, since: datetime, submitter_prefix: str | None = None) -> int:

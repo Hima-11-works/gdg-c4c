@@ -343,7 +343,7 @@ def test_alerts_are_pinned_to_the_run_that_raised_them() -> None:
         def __init__(self) -> None:
             self.saved: list[object] = []
 
-        def list_active(self, *, since: datetime) -> list[object]:
+        def list_active(self, *, since: datetime, mode=None) -> list[object]:
             return []
 
         def add(self, alert: object) -> object:
@@ -394,7 +394,7 @@ def test_an_alert_raised_outside_a_run_is_unpinned_not_invented() -> None:
         def __init__(self) -> None:
             self.saved: list[object] = []
 
-        def list_active(self, *, since: datetime) -> list[object]:
+        def list_active(self, *, since: datetime, mode=None) -> list[object]:
             return []
 
         def add(self, alert: object) -> object:

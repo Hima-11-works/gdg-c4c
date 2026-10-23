@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.core.config import get_settings
+from app.domain.features import DataMode
 from app.domain.h3_grid import assert_valid_cell
 from app.domain.repositories import (
     ForecastRepository,
@@ -40,10 +41,16 @@ class CellService:
         grid_repository: GridStateRepository,
         forecast_repository: ForecastRepository,
         weather_repository: WeatherReadingRepository,
+        *, demo_mode: bool | None = None,
     ) -> None:
         self._grid_repository = grid_repository
         self._forecast_repository = forecast_repository
         self._weather_repository = weather_repository
+        self._demo_mode_override = demo_mode
+
+    @property
+    def _demo_mode(self) -> bool:
+        return get_settings().demo_mode if self._demo_mode_override is None else self._demo_mode_override
 
     def get_cell(
         self, h3_cell: str, *, resolution: int | None = None
@@ -66,9 +73,11 @@ class CellService:
         resolution = resolution if resolution is not None else get_settings().h3_resolution
         assert_valid_cell(h3_cell, resolution=resolution)
 
-        current = self._grid_repository.latest_for_cell(h3_cell)
-        forecasts = self._forecast_repository.list_for_cell(h3_cell)
-        weather = self._weather_repository.latest_for_cell(h3_cell)
+        mode = DataMode.DEMO if self._demo_mode else DataMode.LIVE
+        current = self._grid_repository.latest_for_cell(h3_cell, mode=mode)
+        forecasts = self._forecast_repository.latest_for_cell(h3_cell, mode=mode)
+        source = "demo" if self._demo_mode else "open-meteo"
+        weather = self._weather_repository.latest_for_cell(h3_cell, source=source)
 
         if current is not None or forecasts or weather is not None:
             return ServiceResult(
@@ -79,10 +88,10 @@ class CellService:
                     weather,
                     current.pdi_factors if current is not None else None,
                 ),
-                is_demo=False,
+                is_demo=self._demo_mode,
             )
 
-        if not demo_data.is_within_demo_domain(h3_cell):
+        if not self._demo_mode or not demo_data.is_within_demo_domain(h3_cell):
             return None
 
         demo_current = demo_data.generate_grid_state(h3_cell)

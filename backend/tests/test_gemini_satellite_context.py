@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from app.core.config import Settings
+from app.domain.features import DataMode
 from app.domain.satellite_context import (
     CellEvidenceBundle,
     SatelliteInterpretation,
@@ -198,6 +199,24 @@ def test_thumbnail_rendering_produces_valid_png() -> None:
     )
     assert isinstance(png, bytes)
     assert png.startswith(b"\x89PNG\r\n\x1a\n")  # PNG magic header
+
+
+def test_thumbnail_pm25_uses_the_active_data_mode() -> None:
+    class ModeAwareGridRepo:
+        mode: DataMode | None = None
+
+        def latest_for_cell(self, h3_cell: str, *, mode: DataMode | None = None):
+            self.mode = mode
+            return type("Grid", (), {"pm25": 42.0})()
+
+    grid_repo = ModeAwareGridRepo()
+    service = CellSatelliteService(
+        settings=Settings(demo_mode=False),
+        grid_repo=grid_repo,
+    )
+
+    assert service.map_pm25_for_cell(DELHI_CELL) == 42.0
+    assert grid_repo.mode is DataMode.LIVE
 
 
 def test_surface_context_uses_only_a_nearby_reading_from_the_active_mode() -> None:

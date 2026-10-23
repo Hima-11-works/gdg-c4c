@@ -224,8 +224,16 @@ class _FakeFireReportRepository:
     def list_active(self, *, since):
         return list(self.reports)
 
-    def list_active_qualified(self, *, since):
-        return [r for r in self.reports if r.status is ReportStatus.CORROBORATED]
+    def list_active_qualified(self, *, since, include_demo_reports=True):
+        return [
+            r for r in self.reports
+            if r.status is ReportStatus.CORROBORATED
+            and (
+                include_demo_reports
+                or r.client_report_id is None
+                or not r.client_report_id.startswith("demo-fire-")
+            )
+        ]
 
 
 def _fire_report(cell: str, *, status: ReportStatus = ReportStatus.CORROBORATED) -> FireReport:

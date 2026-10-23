@@ -7,8 +7,10 @@ from app.services import demo_data
 from tests.conftest import FakeRepos
 
 
-def test_list_sensors_falls_back_to_demo_data_when_empty(api_client: TestClient) -> None:
-    response = api_client.get("/api/v1/sensors")
+def test_list_sensors_uses_demo_data_only_when_demo_mode_is_explicit(
+    demo_api_client: TestClient,
+) -> None:
+    response = demo_api_client.get("/api/v1/sensors")
 
     assert response.status_code == 200
     body = response.json()

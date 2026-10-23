@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Protocol
 
 from app.domain.environmental_observations import FireHotspot, TrafficObservation
-from app.domain.features import FeatureSnapshot
+from app.domain.features import DataMode, FeatureSnapshot
 from app.domain.federation import FederationParticipant, FederationRun
 from app.domain.gemini_assessment import EvidenceAssessmentRow, GeminiVisualAssessment
 from app.domain.incidents import (
@@ -68,7 +68,7 @@ class SensorReadingRepository(Protocol):
         bbox: BoundingBox | None = None,
     ) -> list[SensorReading]: ...
 
-    def list_latest(self) -> list[SensorReading]:
+    def list_latest(self, *, source: str | None = None) -> list[SensorReading]:
         """The most recent reading for every (source, external_sensor_id)."""
         ...
 
@@ -84,7 +84,9 @@ class WeatherReadingRepository(Protocol):
 
     def list_since(self, since: datetime) -> list[WeatherReading]: ...
 
-    def latest_for_cell(self, h3_cell: str) -> WeatherReading | None: ...
+    def latest_for_cell(
+        self, h3_cell: str, *, source: str | None = None
+    ) -> WeatherReading | None: ...
 
     def list_latest(self, *, source: str | None = None) -> list[WeatherReading]:
         """The most recent reading for every cell that has one."""
@@ -115,17 +117,21 @@ class GridStateRepository(Protocol):
 
     def get(self, h3_cell: str, timestamp: datetime) -> GridState | None: ...
 
-    def latest(self) -> list[GridState]:
+    def latest(self, *, mode: DataMode | None = None) -> list[GridState]:
         """The most recent row for every cell that has one."""
         ...
 
-    def latest_in_cells(self, cells: list[str]) -> list[GridState]:
+    def latest_in_cells(
+        self, cells: list[str], *, mode: DataMode | None = None
+    ) -> list[GridState]:
         """Same as latest, restricted to these specific H3 cells — a cell
         with no row is simply absent, never fabricated. Used for
         resolution/viewport-scoped API reads; see app.services.grid.GridService."""
         ...
 
-    def latest_for_cell(self, h3_cell: str) -> GridState | None: ...
+    def latest_for_cell(
+        self, h3_cell: str, *, mode: DataMode | None = None
+    ) -> GridState | None: ...
 
 
 class ForecastRepository(Protocol):
@@ -139,18 +145,25 @@ class ForecastRepository(Protocol):
         ...
 
     def list_for_cell(
-        self, h3_cell: str, *, generated_after: datetime | None = None
+        self, h3_cell: str, *, generated_after: datetime | None = None,
+        mode: DataMode | None = None,
     ) -> list[Forecast]: ...
 
-    def latest_for_cell(self, h3_cell: str) -> list[Forecast]:
+    def latest_for_cell(
+        self, h3_cell: str, *, mode: DataMode | None = None
+    ) -> list[Forecast]:
         """All horizons from the most recent pipeline run for this cell."""
         ...
 
-    def latest_for_horizon(self, hours: float) -> list[Forecast]:
+    def latest_for_horizon(
+        self, hours: float, *, mode: DataMode | None = None
+    ) -> list[Forecast]:
         """The most recent forecast at this horizon, for every cell that has one."""
         ...
 
-    def latest_for_horizon_in_cells(self, hours: float, cells: list[str]) -> list[Forecast]:
+    def latest_for_horizon_in_cells(
+        self, hours: float, cells: list[str], *, mode: DataMode | None = None
+    ) -> list[Forecast]:
         """Same as latest_for_horizon, restricted to these specific H3
         cells. Used for resolution/viewport-scoped API reads; see
         app.services.grid.GridService."""
@@ -160,7 +173,9 @@ class ForecastRepository(Protocol):
 class AlertRepository(Protocol):
     def add(self, alert: Alert) -> Alert: ...
 
-    def list_active(self, *, since: datetime) -> list[Alert]: ...
+    def list_active(
+        self, *, since: datetime, mode: DataMode | None = None
+    ) -> list[Alert]: ...
 
 
 class FireReportRepository(Protocol):
@@ -189,7 +204,9 @@ class FireReportRepository(Protocol):
         """
         ...
 
-    def list_active_qualified(self, *, since: datetime) -> list[FireReport]:
+    def list_active_qualified(
+        self, *, since: datetime, include_demo_reports: bool = True
+    ) -> list[FireReport]:
         """Reports inside the window whose status may alter the modeled field.
 
         Separate from `list_active` on purpose: `list_active` is "what a citizen
@@ -384,7 +401,9 @@ class PredictionPublicationRepository(Protocol):
 
     def get_run(self, run_id: str) -> PredictionRun | None: ...
 
-    def latest_run(self, *, region: str | None = None) -> PredictionRun | None: ...
+    def latest_run(
+        self, *, region: str | None = None, mode: DataMode | None = None
+    ) -> PredictionRun | None: ...
 
     def list_results(
         self,

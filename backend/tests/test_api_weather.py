@@ -13,8 +13,10 @@ INDIA_BBOX_PARAMS = {"min_lat": 6.5, "min_lon": 68.0, "max_lat": 37.5, "max_lon"
 DELHI_LOCAL_BBOX_PARAMS = {"min_lat": 28.55, "min_lon": 77.15, "max_lat": 28.68, "max_lon": 77.27}
 
 
-def test_list_weather_falls_back_to_demo_data_when_empty(api_client: TestClient) -> None:
-    response = api_client.get("/api/v1/weather")
+def test_list_weather_uses_demo_data_only_when_demo_mode_is_explicit(
+    demo_api_client: TestClient,
+) -> None:
+    response = demo_api_client.get("/api/v1/weather")
 
     assert response.status_code == 200
     body = response.json()
@@ -60,8 +62,10 @@ def test_list_weather_returns_real_data_when_present(
     assert body["data"][0]["boundary_layer_height"] is None
 
 
-def test_weather_country_tier_is_coarse_and_covers_all_of_india(api_client: TestClient) -> None:
-    response = api_client.get("/api/v1/weather", params={"resolution": 3, **INDIA_BBOX_PARAMS})
+def test_weather_country_tier_is_coarse_and_covers_all_of_india(
+    demo_api_client: TestClient,
+) -> None:
+    response = demo_api_client.get("/api/v1/weather", params={"resolution": 3, **INDIA_BBOX_PARAMS})
 
     assert response.status_code == 200
     body = response.json()

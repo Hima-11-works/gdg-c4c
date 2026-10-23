@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from app.domain.features import DataMode
 from app.domain.types import Alert, AlertSeverity, Forecast, GridState
 from app.services.alert_generation import AlertGenerationService
 from tests.fakes import FakeAlertRepository
@@ -378,7 +379,7 @@ class _AlwaysFailsAlertRepository:
     def add(self, alert):
         raise RuntimeError("connection refused")
 
-    def list_active(self, *, since):
+    def list_active(self, *, since, mode=None):
         return []
 
 
@@ -386,7 +387,7 @@ class _UnreadableAlertRepository:
     def add(self, alert):
         raise NotImplementedError
 
-    def list_active(self, *, since):
+    def list_active(self, *, since, mode=None):
         raise RuntimeError("connection refused")
 
 
@@ -407,6 +408,37 @@ def test_run_reports_a_failure_to_read_existing_alerts_instead_of_raising() -> N
 
     assert result.succeeded is False
     assert "connection refused" in result.errors[0]
+
+
+def test_live_alert_generation_ignores_active_demo_alerts() -> None:
+    class ModeAwareAlertRepository(FakeAlertRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen_modes: list[DataMode | None] = []
+
+        def list_active(self, *, since, mode=None):
+            self.seen_modes.append(mode)
+            if mode is DataMode.DEMO:
+                return super().list_active(since=since)
+            return []
+
+    repository = ModeAwareAlertRepository()
+    repository.add(
+        Alert(
+            h3_cell=CELL,
+            severity=AlertSeverity.WARNING,
+            message="old demo alert",
+            created_at=GENERATED_AT,
+            run_id="demo-run",
+        )
+    )
+
+    result = _service(repository, data_mode=DataMode.LIVE).run(
+        [_state(200.0)], [], generated_at=GENERATED_AT + timedelta(minutes=1)
+    )
+
+    assert result.alerts_created == 1
+    assert repository.seen_modes == [DataMode.LIVE]
 
 
 # --- misc ---

@@ -237,7 +237,7 @@ adb install apks/fire_dept_simulator-arm64.apk
    Copy-Item .env.example .env
    Copy-Item frontend/.env.example frontend/.env
    ```
-   *Note: `.env.example` comes pre-configured with `DEMO_MODE=true` so you can evaluate the entire pipeline immediately without needing external API keys.*
+   *`.env.example` defaults to live mode. To run the synthetic walkthrough, set `DEMO_MODE=true` in `.env` before starting the API and pipeline. Live mode returns empty/unavailable results until it has a live publication; it does not fill gaps with demo values.*
 
 3. **Start PostgreSQL + PostGIS and FastAPI Backend:**
    ```bash
@@ -245,7 +245,7 @@ adb install apks/fire_dept_simulator-arm64.apk
    ```
    *The backend applies database migrations automatically on startup.*
 
-4. **Populate demo data and trigger initial pipeline:**
+4. **For the demo walkthrough, enable demo mode and trigger the initial pipeline:**
    ```bash
    docker compose exec api python -m app.pipeline.run
    ```

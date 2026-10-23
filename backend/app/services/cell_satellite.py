@@ -14,6 +14,7 @@ import h3
 from PIL import Image, ImageDraw
 
 from app.core.config import Settings, get_settings
+from app.domain.features import DataMode
 from app.domain.h3_grid import assert_valid_cell
 from app.domain.satellite_context import (
     BaselineAnomalyContext,
@@ -377,7 +378,8 @@ class CellSatelliteService:
         if self._grid_repo is None or not hasattr(self._grid_repo, "latest_for_cell"):
             return None
         try:
-            grid = self._grid_repo.latest_for_cell(h3_cell)
+            mode = DataMode.DEMO if self.is_demo else DataMode.LIVE
+            grid = self._grid_repo.latest_for_cell(h3_cell, mode=mode)
             return grid.pm25 if grid is not None else None
         except Exception as exc:
             logger.warning("Error fetching map PM2.5 for cell %s: %s", h3_cell, exc)

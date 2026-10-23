@@ -95,6 +95,7 @@ class GridComputationService:
         # efficiency bound only, so it is deliberately wider than
         # FIRE_REPORT_MAX_AGE_HOURS.
         fire_report_window: timedelta = timedelta(days=2),
+        include_demo_reports: bool = False,
     ) -> GridComputationResult:
         grid = self._geospatial.region_coverage(bbox)
         if not grid:
@@ -139,6 +140,7 @@ class GridComputationService:
                 estimates,
                 timestamp=timestamp,
                 window=fire_report_window,
+                include_demo_reports=include_demo_reports,
             )
             finalized = [
                 self._with_pdi(state, fire_pressure)
@@ -192,6 +194,7 @@ class GridComputationService:
         *,
         timestamp: datetime,
         window: timedelta,
+        include_demo_reports: bool,
     ) -> tuple[list[GridState], int, list[float | None]]:
         """Blend fire-report influence into the estimates.
 
@@ -209,7 +212,10 @@ class GridComputationService:
         # re-checks each one, so the gate holds even if a caller passes
         # unqualified reports; querying the qualified set just avoids shipping
         # every anonymous claim into the model to be discarded there.
-        reports = self._fire_repository.list_active_qualified(since=timestamp - window)
+        reports = self._fire_repository.list_active_qualified(
+            since=timestamp - window,
+            include_demo_reports=include_demo_reports,
+        )
         contributions = self._fire_gradient.contributions(grid, reports, timestamp=timestamp)
 
         blended = [

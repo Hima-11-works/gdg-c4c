@@ -6,7 +6,7 @@ from datetime import datetime
 
 from geoalchemy2.elements import WKTElement
 from psycopg.errors import UniqueViolation
-from sqlalchemy import Insert, Select, func, select, update
+from sqlalchemy import Insert, Select, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -117,7 +117,9 @@ def _list_active_stmt(since: datetime) -> Select:
     )
 
 
-def _list_active_qualified_stmt(since: datetime) -> Select:
+def _list_active_qualified_stmt(
+    since: datetime, *, include_demo_reports: bool = True
+) -> Select:
     """Only statuses allowed to alter the modeled field, inside the window.
 
     Mirrors app.domain.report_lifecycle.MODEL_QUALIFIED_STATUSES. The status
@@ -126,12 +128,20 @@ def _list_active_qualified_stmt(since: datetime) -> Select:
     check is what makes it a guarantee rather than an optimization.
     """
     qualified = sorted(status.value for status in MODEL_QUALIFIED_STATUSES)
+    conditions = [
+        fire_report_table.c.reported_at >= since,
+        fire_report_table.c.status.in_(qualified),
+    ]
+    if not include_demo_reports:
+        conditions.append(
+            or_(
+                fire_report_table.c.client_report_id.is_(None),
+                fire_report_table.c.client_report_id.not_like("demo-fire-%"),
+            )
+        )
     return (
         select(fire_report_table)
-        .where(
-            fire_report_table.c.reported_at >= since,
-            fire_report_table.c.status.in_(qualified),
-        )
+        .where(*conditions)
         .order_by(fire_report_table.c.reported_at.desc())
     )
 
@@ -252,8 +262,12 @@ class SqlFireReportRepository:
         row = self._session.execute(_by_client_report_id_stmt(client_report_id)).first()
         return None if row is None else _row_to_domain(row)
 
-    def list_active_qualified(self, *, since: datetime) -> list[FireReport]:
-        rows = self._session.execute(_list_active_qualified_stmt(since)).all()
+    def list_active_qualified(
+        self, *, since: datetime, include_demo_reports: bool = True
+    ) -> list[FireReport]:
+        rows = self._session.execute(
+            _list_active_qualified_stmt(since, include_demo_reports=include_demo_reports)
+        ).all()
         return [_row_to_domain(row) for row in rows]
 
     def count_since(self, *, since: datetime, submitter_prefix: str | None = None) -> int:

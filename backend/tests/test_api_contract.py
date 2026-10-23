@@ -71,9 +71,9 @@ def test_envelope_is_demo_is_the_only_provenance_signal() -> None:
 
 
 def test_grid_current_shape_identical_for_demo_and_real_data(
-    api_client: TestClient, fake_repos: FakeRepos
+    api_client: TestClient, demo_api_client: TestClient, fake_repos: FakeRepos
 ) -> None:
-    demo_body = api_client.get("/api/v1/grid/current").json()
+    demo_body = demo_api_client.get("/api/v1/grid/current").json()
     assert demo_body["is_demo"] is True
     demo_keys = set(demo_body["data"][0].keys())
 
@@ -97,9 +97,9 @@ def test_grid_current_shape_identical_for_demo_and_real_data(
 
 
 def test_grid_forecast_shape_identical_for_demo_and_real_data(
-    api_client: TestClient, fake_repos: FakeRepos
+    api_client: TestClient, demo_api_client: TestClient, fake_repos: FakeRepos
 ) -> None:
-    demo_body = api_client.get("/api/v1/grid/forecast", params={"hours": 3}).json()
+    demo_body = demo_api_client.get("/api/v1/grid/forecast", params={"hours": 3}).json()
     assert demo_body["is_demo"] is True
     demo_keys = set(demo_body["data"][0].keys())
 
@@ -122,9 +122,9 @@ def test_grid_forecast_shape_identical_for_demo_and_real_data(
 
 
 def test_weather_shape_identical_for_demo_and_real_data(
-    api_client: TestClient, fake_repos: FakeRepos
+    api_client: TestClient, demo_api_client: TestClient, fake_repos: FakeRepos
 ) -> None:
-    demo_body = api_client.get("/api/v1/weather").json()
+    demo_body = demo_api_client.get("/api/v1/weather").json()
     assert demo_body["is_demo"] is True
     demo_keys = set(demo_body["data"][0].keys())
 
@@ -148,11 +148,11 @@ def test_weather_shape_identical_for_demo_and_real_data(
 
 
 def test_cell_detail_shape_identical_for_demo_and_real_data(
-    api_client: TestClient, fake_repos: FakeRepos
+    api_client: TestClient, demo_api_client: TestClient, fake_repos: FakeRepos
 ) -> None:
     resolution = get_settings().h3_resolution
     demo_cell = demo_data.demo_cells(resolution)[0]
-    demo_body = api_client.get(f"/api/v1/cells/{demo_cell}").json()
+    demo_body = demo_api_client.get(f"/api/v1/cells/{demo_cell}").json()
     assert demo_body["is_demo"] is True
     demo_keys = set(demo_body["data"].keys())
     demo_current_keys = set(demo_body["data"]["current"].keys())
@@ -196,9 +196,9 @@ def test_cell_detail_shape_identical_for_demo_and_real_data(
 
 
 def test_alerts_shape_identical_for_demo_and_real_data(
-    api_client: TestClient, fake_repos: FakeRepos
+    api_client: TestClient, demo_api_client: TestClient, fake_repos: FakeRepos
 ) -> None:
-    demo_body = api_client.get("/api/v1/alerts").json()
+    demo_body = demo_api_client.get("/api/v1/alerts").json()
     assert demo_body["is_demo"] is True
     demo_keys = set(demo_body["data"][0].keys())
 

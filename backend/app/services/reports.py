@@ -55,6 +55,11 @@ from app.domain.types import FireKind, FireReport
 from app.services.results import ServiceResult
 
 
+def _is_demo_seed(report: FireReport) -> bool:
+    """Recognize only the reserved IDs used by the pipeline's demo fixture."""
+    return bool(report.client_report_id and report.client_report_id.startswith("demo-fire-"))
+
+
 class ReportOutsideIndiaError(ValueError):
     """The report is not inside the India geofence."""
 
@@ -160,6 +165,13 @@ class FireReportService:
            second claim.
         """
         settings = self._settings
+
+        if (
+            not settings.demo_mode
+            and client_report_id is not None
+            and client_report_id.startswith("demo-fire-")
+        ):
+            raise ValueError("client_report_id uses a reserved demo identifier prefix")
 
         # 1. Geofence. A missing asset raises GeofenceAssetError, which
         #    deliberately does not degrade to "accept" - see app.domain.india.
@@ -284,7 +296,11 @@ class FireReportService:
         settings = self._settings
         now = datetime.now(UTC)
         since = now - timedelta(hours=settings.fire_report_max_age_hours)
-        reports = self._repository.list_active(since=since)
+        reports = [
+            report
+            for report in self._repository.list_active(since=since)
+            if self._settings.demo_mode or not _is_demo_seed(report)
+        ]
         # An empty list is a real answer here (nothing reported recently),
         # never a demo fallback: absent reports are a valid state, unlike a
         # grid with no sensor evidence at all.
@@ -292,7 +308,7 @@ class FireReportService:
 
     def get(self, report_id: int) -> FireReport:
         report = self._repository.get(report_id)
-        if report is None:
+        if report is None or (not self._settings.demo_mode and _is_demo_seed(report)):
             raise ReportNotFoundError(f"no report with id {report_id}")
         return report
 
@@ -304,7 +320,11 @@ class FireReportService:
         alternative is a wasted read plus an exception type that reads like a
         server fault.
         """
-        return self._repository.get(report_id) is not None
+        try:
+            self.get(report_id)
+        except ReportNotFoundError:
+            return False
+        return True
 
     def note_evidence_linked(
         self, *, report_id: int, evidence_id: int, at: datetime | None = None

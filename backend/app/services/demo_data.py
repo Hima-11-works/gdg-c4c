@@ -1,9 +1,8 @@
 """Deterministic seed/demo data — a synthetic pollution/weather field over
 all of India, not a lookup table of hand-picked numbers.
 
-Every service in app.services falls back to this ONLY when the real
-repository query returns nothing — never unconditionally — so real data
-takes over automatically once ingestion exists and starts writing rows.
+Services use this only in explicit DEMO_MODE when the selected demo-mode
+repository query has no rows. Live mode does not fall back to these values.
 Every value here is DEMO DATA: illustrative, fabricated, seeded from
 `_SEED` — never a measurement — and every response that can include it
 sets is_demo=True (see app.api.schemas) so the frontend never mistakes it
@@ -89,7 +88,7 @@ Two kinds of function live here:
     geographic coverage — rural cells included, not just named cities.
   - Legacy discrete: `demo_cells`, `demo_sensor_readings`,
     `demo_grid_states`, `demo_weather_readings`, `demo_forecasts`,
-    `demo_alerts` — used for the unfiltered "no bbox given" fallback
+    `demo_alerts` — used for explicit demo-mode fallback when no bbox was given
     (see app.services.grid's module docstring: resolution alone, without
     a bbox, has no effect) where enumerating literally every cell in
     India isn't an option. These evaluate the exact same continuous field

@@ -9,9 +9,11 @@ from sqlalchemy.engine import Row
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.domain.features import DataMode
 from app.domain.h3_grid import assert_valid_cell
 from app.domain.types import Forecast
 from app.models.tables import forecast as forecast_table
+from app.models.tables import prediction_run
 
 
 def _row_to_domain(row: Row) -> Forecast:
@@ -57,40 +59,59 @@ def _insert_many_stmt(forecasts: list[Forecast]) -> Insert:
 _INSERT_CHUNK_ROWS = 5_000
 
 
-def _list_for_cell_stmt(h3_cell: str, generated_after: datetime | None) -> Select:
+def _mode_timestamps(mode: DataMode):
+    return select(prediction_run.c.generated_at).where(
+        prediction_run.c.mode == mode.value
+    )
+
+
+def _list_for_cell_stmt(
+    h3_cell: str, generated_after: datetime | None, mode: DataMode | None = None
+) -> Select:
     stmt = select(forecast_table).where(forecast_table.c.h3_cell == h3_cell)
     if generated_after is not None:
         stmt = stmt.where(forecast_table.c.generated_at >= generated_after)
+    if mode is not None:
+        stmt = stmt.where(forecast_table.c.generated_at.in_(_mode_timestamps(mode)))
     return stmt.order_by(forecast_table.c.forecast_time)
 
 
-def _latest_for_cell_stmt(h3_cell: str) -> Select:
+def _latest_for_cell_stmt(h3_cell: str, mode: DataMode | None = None) -> Select:
+    conditions = [forecast_table.c.h3_cell == h3_cell]
+    if mode is not None:
+        conditions.append(forecast_table.c.generated_at.in_(_mode_timestamps(mode)))
     latest_run = (
         select(func.max(forecast_table.c.generated_at))
-        .where(forecast_table.c.h3_cell == h3_cell)
+        .where(*conditions)
         .scalar_subquery()
     )
-    return (
+    stmt = (
         select(forecast_table)
-        .where(forecast_table.c.h3_cell == h3_cell, forecast_table.c.generated_at == latest_run)
+        .where(*conditions, forecast_table.c.generated_at == latest_run)
         .order_by(forecast_table.c.forecast_hours)
     )
+    return stmt
 
 
-def _latest_for_horizon_stmt(forecast_hours: float) -> Select:
+def _latest_for_horizon_stmt(
+    forecast_hours: float, mode: DataMode | None = None
+) -> Select:
     # Per cell, the most recent run that produced a forecast at this
     # horizon — cells can be on different run cadences, so this is a
     # per-cell max, not a single global "latest run" timestamp.
+    conditions = [forecast_table.c.forecast_hours == forecast_hours]
+    if mode is not None:
+        conditions.append(forecast_table.c.generated_at.in_(_mode_timestamps(mode)))
     latest_per_cell = (
         select(
             forecast_table.c.h3_cell,
             func.max(forecast_table.c.generated_at).label("max_generated_at"),
         )
-        .where(forecast_table.c.forecast_hours == forecast_hours)
+        .where(*conditions)
         .group_by(forecast_table.c.h3_cell)
         .subquery()
     )
-    return (
+    stmt = (
         select(forecast_table)
         .join(
             latest_per_cell,
@@ -100,22 +121,30 @@ def _latest_for_horizon_stmt(forecast_hours: float) -> Select:
         )
         .order_by(forecast_table.c.h3_cell)
     )
+    if mode is not None:
+        stmt = stmt.where(forecast_table.c.generated_at.in_(_mode_timestamps(mode)))
+    return stmt
 
 
-def _latest_for_horizon_in_cells_stmt(forecast_hours: float, cells: list[str]) -> Select:
+def _latest_for_horizon_in_cells_stmt(
+    forecast_hours: float, cells: list[str], mode: DataMode | None = None
+) -> Select:
+    conditions = [
+        forecast_table.c.forecast_hours == forecast_hours,
+        forecast_table.c.h3_cell.in_(cells),
+    ]
+    if mode is not None:
+        conditions.append(forecast_table.c.generated_at.in_(_mode_timestamps(mode)))
     latest_per_cell = (
         select(
             forecast_table.c.h3_cell,
             func.max(forecast_table.c.generated_at).label("max_generated_at"),
         )
-        .where(
-            forecast_table.c.forecast_hours == forecast_hours,
-            forecast_table.c.h3_cell.in_(cells),
-        )
+        .where(*conditions)
         .group_by(forecast_table.c.h3_cell)
         .subquery()
     )
-    return (
+    stmt = (
         select(forecast_table)
         .join(
             latest_per_cell,
@@ -125,6 +154,9 @@ def _latest_for_horizon_in_cells_stmt(forecast_hours: float, cells: list[str]) -
         )
         .order_by(forecast_table.c.h3_cell)
     )
+    if mode is not None:
+        stmt = stmt.where(forecast_table.c.generated_at.in_(_mode_timestamps(mode)))
+    return stmt
 
 
 class SqlForecastRepository:
@@ -161,21 +193,32 @@ class SqlForecastRepository:
         return [_row_to_domain(row) for row in rows]
 
     def list_for_cell(
-        self, h3_cell: str, *, generated_after: datetime | None = None
+        self, h3_cell: str, *, generated_after: datetime | None = None,
+        mode: DataMode | None = None,
     ) -> list[Forecast]:
-        rows = self._session.execute(_list_for_cell_stmt(h3_cell, generated_after)).all()
+        rows = self._session.execute(
+            _list_for_cell_stmt(h3_cell, generated_after, mode)
+        ).all()
         return [_row_to_domain(row) for row in rows]
 
-    def latest_for_cell(self, h3_cell: str) -> list[Forecast]:
-        rows = self._session.execute(_latest_for_cell_stmt(h3_cell)).all()
+    def latest_for_cell(
+        self, h3_cell: str, *, mode: DataMode | None = None
+    ) -> list[Forecast]:
+        rows = self._session.execute(_latest_for_cell_stmt(h3_cell, mode)).all()
         return [_row_to_domain(row) for row in rows]
 
-    def latest_for_horizon(self, hours: float) -> list[Forecast]:
-        rows = self._session.execute(_latest_for_horizon_stmt(hours)).all()
+    def latest_for_horizon(
+        self, hours: float, *, mode: DataMode | None = None
+    ) -> list[Forecast]:
+        rows = self._session.execute(_latest_for_horizon_stmt(hours, mode)).all()
         return [_row_to_domain(row) for row in rows]
 
-    def latest_for_horizon_in_cells(self, hours: float, cells: list[str]) -> list[Forecast]:
+    def latest_for_horizon_in_cells(
+        self, hours: float, cells: list[str], *, mode: DataMode | None = None
+    ) -> list[Forecast]:
         if not cells:
             return []
-        rows = self._session.execute(_latest_for_horizon_in_cells_stmt(hours, cells)).all()
+        rows = self._session.execute(
+            _latest_for_horizon_in_cells_stmt(hours, cells, mode)
+        ).all()
         return [_row_to_domain(row) for row in rows]

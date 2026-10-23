@@ -1,10 +1,7 @@
-"""The single place that chooses between a real provider and Demo Mode's
-fixed dataset, based on Settings.demo_mode. Every caller that needs a
-PollutionDataProvider or WeatherProvider (app.cli, app.pipeline.run) goes
-through these two functions instead of deciding for itself — that's the
-whole mechanism behind "demo and live mode are switchable through
-configuration only": flip DEMO_MODE, nothing else in the codebase
-branches on it.
+"""Select real data providers or explicit demo fixtures from Settings.
+
+Service and API read paths also apply the selected data mode so a live
+deployment cannot surface old demo publications or auto-generate fallback data.
 """
 
 from __future__ import annotations

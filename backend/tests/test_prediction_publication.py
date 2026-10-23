@@ -41,8 +41,12 @@ class MemoryPublicationRepository:
     def get_run(self, run_id):
         return self.run_value if self.run_value and self.run_value.run_id == run_id else None
 
-    def latest_run(self, *, region=None):
-        return self.run_value if region is None or self.run_value.region == region else None
+    def latest_run(self, *, region=None, mode=None):
+        if self.run_value is None or (region is not None and self.run_value.region != region):
+            return None
+        if mode is not None and self.run_value.mode is not mode:
+            return None
+        return self.run_value
 
     def list_results(self, run_id, *, horizons=None, cells=None):
         self.result_queries.append((horizons, cells))
@@ -240,7 +244,9 @@ def test_publication_keeps_pdi_score_and_factor_explanation():
 
 def test_demo_fallback_run_id_resolves_on_a_fresh_service():
     repository = MemoryPublicationRepository()
-    service = PredictionQueryService(repository, native_resolution=8, region="india")
+    service = PredictionQueryService(
+        repository, native_resolution=8, region="india", demo_mode=True
+    )
 
     run = service.run("demo-fallback-20260922T07Z")
     cell = h3.latlng_to_cell(28.6, 77.1, 8)

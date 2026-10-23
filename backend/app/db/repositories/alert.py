@@ -9,9 +9,11 @@ from sqlalchemy.engine import Row
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.domain.features import DataMode
 from app.domain.h3_grid import assert_valid_cell
 from app.domain.types import Alert, AlertSeverity
 from app.models.tables import alert as alert_table
+from app.models.tables import prediction_run
 
 
 def _row_to_domain(row: Row) -> Alert:
@@ -26,6 +28,7 @@ def _row_to_domain(row: Row) -> Alert:
         forecast_hours=row.forecast_hours,
         confidence=row.confidence,
         forecast_time=row.forecast_time,
+        run_id=row.run_id,
     )
 
 
@@ -48,10 +51,21 @@ def _insert_stmt(alert: Alert) -> Insert:
     )
 
 
-def _list_active_stmt(since: datetime) -> Select:
+def _list_active_stmt(since: datetime, mode: DataMode | None = None) -> Select:
+    conditions = [alert_table.c.created_at >= since]
+    if mode is not None:
+        eligible_runs = select(prediction_run.c.id).where(
+            prediction_run.c.mode == mode.value
+        )
+        conditions.extend(
+            (
+                alert_table.c.run_id.is_not(None),
+                alert_table.c.run_id.in_(eligible_runs),
+            )
+        )
     return (
         select(alert_table)
-        .where(alert_table.c.created_at >= since)
+        .where(*conditions)
         .order_by(alert_table.c.created_at.desc())
     )
 
@@ -68,6 +82,6 @@ class SqlAlertRepository:
         self._session.commit()
         return _row_to_domain(row)
 
-    def list_active(self, *, since: datetime) -> list[Alert]:
-        rows = self._session.execute(_list_active_stmt(since)).all()
+    def list_active(self, *, since: datetime, mode: DataMode | None = None) -> list[Alert]:
+        rows = self._session.execute(_list_active_stmt(since, mode)).all()
         return [_row_to_domain(row) for row in rows]

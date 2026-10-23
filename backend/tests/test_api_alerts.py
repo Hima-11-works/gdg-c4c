@@ -6,8 +6,10 @@ from app.domain.types import Alert, AlertSeverity
 from tests.conftest import FakeRepos
 
 
-def test_list_alerts_falls_back_to_demo_data_when_empty(api_client: TestClient) -> None:
-    response = api_client.get("/api/v1/alerts")
+def test_list_alerts_uses_demo_data_only_when_demo_mode_is_explicit(
+    demo_api_client: TestClient,
+) -> None:
+    response = demo_api_client.get("/api/v1/alerts")
 
     assert response.status_code == 200
     body = response.json()
@@ -53,7 +55,9 @@ def test_list_alerts_returns_real_data_when_present(
     assert body["data"][0]["message"] == "Real alert"
 
 
-def test_list_alerts_excludes_stale_alerts(api_client: TestClient, fake_repos: FakeRepos) -> None:
+def test_list_alerts_excludes_stale_alerts(
+    demo_api_client: TestClient, fake_repos: FakeRepos
+) -> None:
     stale = datetime.now(UTC) - timedelta(hours=48)
     fake_repos.alert.add(
         Alert(
@@ -64,7 +68,7 @@ def test_list_alerts_excludes_stale_alerts(api_client: TestClient, fake_repos: F
         )
     )
 
-    response = api_client.get("/api/v1/alerts")
+    response = demo_api_client.get("/api/v1/alerts")
 
     # The only stored alert is outside the active lookback window, so this
     # falls back to demo data just like the empty case.

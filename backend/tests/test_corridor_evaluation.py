@@ -223,7 +223,11 @@ class _EmptyPublicationRepository:
     def get_run(self, run_id):
         return self._run if self._run and self._run.run_id == run_id else None
 
-    def latest_run(self, *, region=None):
+    def latest_run(self, *, region=None, mode=None):
+        if self._run is None or (region is not None and self._run.region != region):
+            return None
+        if mode is not None and self._run.mode is not mode:
+            return None
         return self._run
 
     def list_results(self, run_id):

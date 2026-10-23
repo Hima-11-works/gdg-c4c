@@ -1,19 +1,10 @@
 """Demo Mode's two data sources: implementations of
 app.domain.providers.PollutionDataProvider and WeatherProvider that
 return a fixed, deterministic dataset instead of calling a real external
-API. This is the ONLY thing DEMO_MODE substitutes — see
-app.ingestion.factory, the single place that chooses between these and
-the real OpenAQProvider/OpenMeteoProvider. Everything downstream (H3
-grid, IDW interpolation, PDI, dispersion/forecasting, alert generation,
-persistence, the API) is exactly the same code path as live mode,
-running for real on this synthetic input.
-
-Not the same concept as app.services.demo_data's `is_demo` fallback
-(illustrative placeholder values shown only when a repository query
-finds nothing at all) — a Demo Mode pipeline run produces real,
-persisted rows via the real pipeline, so `is_demo` stays false for them.
-See app.core.config.Settings.demo_mode for that distinction spelled out
-again at the point someone is most likely to be confused by it.
+API. `app.ingestion.factory` selects these instead of OpenAQ/Open-Meteo
+when DEMO_MODE is enabled. The normal pipeline computes and persists its
+results, while read services keep those demo publications isolated and label
+their responses `is_demo=true`. Live mode does not select or fall back to them.
 
 Scenario: a smog-episode-scale PM2.5 hotspot in Delhi (matching
 INGEST_BBOX_*'s default region, so `python -m app.cli ingest` against the

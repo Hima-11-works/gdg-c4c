@@ -285,14 +285,12 @@ Drift prompts investigation only and never triggers automatic replacement.
 See [M6 operations](M6_OPERATIONS.md) for the offline workflow and monitoring
 input contract.
 
-**Demo-data fallback.** Every endpoint falls back to small, deterministic
-seed data (`app/services/demo_data.py`) whenever its repository query
-returns nothing — before the pipeline has ever run, or for a region/cell
-it doesn't cover — never unconditionally, so real rows take over
-automatically once `python -m app.pipeline.run` (see "Pipeline" below)
-has written them. Every such response sets `is_demo: true`; the frontend
-should treat that as "this is illustrative, not measured" (e.g. a
-banner), not silently show fabricated numbers as real air-quality data.
+**Demo data.** `app.services.demo_data` is used only when `DEMO_MODE=true`.
+Live reads select live publications and their associated legacy rows; an
+empty live grid, forecast, sensor, weather, or alert result stays empty, and a
+cell with no live data returns 404. The v2 API also rejects a run ID from the
+other mode. Demo responses set `is_demo: true`, including values read from a
+persisted demo publication, so clients can label them as illustrative.
 
 **Errors** are always `{"error": {"code": "...", "message": "...", "details": [...]?}}`
 (`app/api/errors.py`), for both explicitly-raised and unhandled exceptions.
@@ -436,13 +434,12 @@ bbox from `.env` and print a summary. There is no scheduler yet — these are
 development commands, not the production path (that's the `worker`
 container in [Shape](#shape), not yet built).
 
-**Demo Mode (implemented):** `DEMO_MODE=true` swaps which providers get
-built, nothing else. `app.ingestion.factory.build_pollution_provider`/
-`build_weather_provider` are the single decision point — every caller
-(`app.cli`, `app.pipeline.run`) asks the factory instead of importing
-`OpenAQProvider`/`OpenMeteoProvider` directly or branching on the flag
-itself, which is what keeps `if settings.demo_mode` out of every layer
-above ingestion. In demo mode the factory returns
+**Demo Mode (implemented):** `DEMO_MODE=true` selects demo providers and
+demo-only read behavior. `app.ingestion.factory.build_pollution_provider`/
+`build_weather_provider` select ingestion providers for the CLI and pipeline.
+Read services use the same setting to select publications and to decide
+whether labeled synthetic empty-state fixtures are allowed. In demo mode the
+factory returns
 `app.ingestion.demo.DemoPollutionDataProvider`/`DemoWeatherProvider`
 instead: a fixed hotspot-plus-background PM2.5 dataset (Delhi, matching
 `INGEST_BBOX_*`'s default region — the two modules don't depend on each
@@ -454,10 +451,9 @@ never ages out of the freshness window `GridComputationService` already
 enforces; "deterministic" here means deterministic in content (same
 coordinates/values every call), not in timestamp.
 
-Everything from `GridComputationService` onward is completely unaware
-this happened: it estimates, interpolates, disperses, and alerts on
-whatever ended up persisted, exactly as it would for a real OpenAQ/
-Open-Meteo fetch. The scenario's hotspot (280 µg/m³) and wind (6 m/s) are
+The pipeline estimates, interpolates, disperses, and alerts on the selected
+inputs. Demo-mode publications and their legacy rows remain marked and are
+excluded from live reads. The scenario's hotspot (280 µg/m³) and wind (6 m/s) are
 chosen so a real pipeline run against it reliably produces a visible
 hotspot, forecasts that visibly carry it downwind over +1h/+3h/+6h, and
 at least one CRITICAL alert — via the real, unmodified rule-1 alert
@@ -466,12 +462,9 @@ real `GridComputationService`/`DeterministicH3DispersionModel`/
 `AlertGenerationService` against this dataset end to end and asserts all
 three.
 
-Not the same concept as a response's `is_demo` field (see
-[Configuration](#configuration) and [API](#api-implemented)): that flags
-`app.services.demo_data`'s static illustrative fallback, shown only when
-a repository query finds nothing at all. A Demo Mode pipeline run
-produces real, computed, persisted rows through the real pipeline, so
-`is_demo` stays `false` for them — identical to live mode.
+Responses set `is_demo` for both generated fallback values and persisted
+demo-mode results. Live APIs reject demo runs and do not expose the static
+illustrative field.
 
 ## PM2.5 estimation (implemented: v1, IDW)
 
