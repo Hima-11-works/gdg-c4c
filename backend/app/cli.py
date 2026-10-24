@@ -1907,6 +1907,35 @@ def main(argv: list[str] | None = None) -> int:
     )
     hotspot_parser.set_defaults(func=_run_hotspot_scan)
 
+    shadow_parser = subparsers.add_parser(
+        "shadow-run",
+        help=(
+            "Run live shadow collection measurements, exercise failure modes, "
+            "and evaluate cutover."
+        ),
+    )
+    shadow_parser.add_argument(
+        "--mode",
+        choices=("live", "demo"),
+        default="live",
+        help="Evaluation mode (default: live).",
+    )
+    shadow_parser.add_argument("--out", default=None, help="Write full JSON readiness report here.")
+    shadow_parser.set_defaults(func=_run_shadow_run)
+
+    cutover_parser = subparsers.add_parser(
+        "cutover-gate",
+        help="Evaluate live cutover readiness gatekeeper (exits 0 if ready, 2 if blocked).",
+    )
+    cutover_parser.add_argument(
+        "--mode",
+        choices=("live", "demo"),
+        default="live",
+        help="Cutover target mode (default: live).",
+    )
+    cutover_parser.add_argument("--out", default=None, help="Write full JSON report here.")
+    cutover_parser.set_defaults(func=_run_cutover_gate)
+
     args = parser.parse_args(argv)
     logging.basicConfig(level=get_settings().log_level)
     try:
@@ -2046,6 +2075,130 @@ async def _run_incident_webhook_dispatch(args: argparse.Namespace) -> int:
         f"retrying={result.retrying} failed={result.failed}"
     )
     return 0 if result.failed == 0 else 1
+
+
+async def _run_shadow_run(args: argparse.Namespace) -> int:
+    """Run live shadow collection measurements and exercise operational failure scenarios."""
+    from app.services.shadow_run import (
+        CutoverGate,
+        FailureScenarioExerciser,
+        ShadowMeasurementService,
+    )
+
+    session = get_session_factory()()
+    now = datetime.now(UTC)
+    mode = DataMode.LIVE if args.mode == "live" else DataMode.DEMO
+
+    try:
+        # Measure recent sensor readings lag
+        try:
+            readings = SqlSensorReadingRepository(session).list_since(now - timedelta(hours=6))
+        except SQLAlchemyError:
+            logger.warning("Database unavailable; evaluating shadow metrics with offline readings")
+            readings = ()
+
+        lag = ShadowMeasurementService.measure_lag(readings, now=now)
+        coverage = ShadowMeasurementService.measure_station_coverage(readings, now=now)
+        storage = ShadowMeasurementService.measure_storage_growth()
+
+        exerciser = FailureScenarioExerciser()
+        scenarios = exerciser.run_all_scenarios()
+
+        report = CutoverGate.evaluate(
+            mode=mode,
+            lag=lag,
+            station_coverage=coverage,
+            storage=storage,
+            failure_results=scenarios,
+            now=now,
+        )
+    finally:
+        session.close()
+
+    payload = report.to_dict()
+    print(
+        f"Shadow run assessment ({payload['mode']}): ready_for_cutover={report.ready_for_cutover} "
+        f"gates_passed={sum(1 for g in report.gates if g.passed)}/{len(report.gates)}"
+    )
+    print(
+        f"  lag: samples={lag.sample_count} obs_to_provider={lag.observation_to_provider_seconds}s "
+        f"provider_to_app={lag.provider_to_app_seconds}s"
+    )
+    print(
+        f"  coverage: stations={coverage.total_stations} "
+        f"active_fresh={coverage.active_fresh_stations} "
+        f"freshness={coverage.freshness_fraction:.1%}"
+    )
+    print(
+        f"  storage: daily_rows={storage.estimated_daily_rows} "
+        f"daily_bytes={storage.estimated_daily_bytes} "
+        f"retention_active={storage.retention_prune_active}"
+    )
+    passed_scenarios = sum(1 for s in scenarios if s.graceful_handling)
+    print(f"  failure_scenarios: {passed_scenarios}/{len(scenarios)} passed")
+    for gate in report.gates:
+        status_symbol = "✓" if gate.passed else "✗"
+        print(f"  [{status_symbol}] {gate.gate_name}: {gate.reason}")
+
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        print(f"report written to: {out_path}")
+
+    return 0
+
+
+async def _run_cutover_gate(args: argparse.Namespace) -> int:
+    """Evaluate live cutover readiness gatekeeper (exits 0 if ready, 2 if blocked)."""
+    from app.services.shadow_run import (
+        CutoverGate,
+        FailureScenarioExerciser,
+        ShadowMeasurementService,
+    )
+
+    session = get_session_factory()()
+    now = datetime.now(UTC)
+    mode = DataMode.LIVE if args.mode == "live" else DataMode.DEMO
+
+    try:
+        try:
+            readings = SqlSensorReadingRepository(session).list_since(now - timedelta(hours=6))
+        except SQLAlchemyError:
+            logger.warning("Database unavailable; evaluating cutover gate with offline readings")
+            readings = ()
+
+        lag = ShadowMeasurementService.measure_lag(readings, now=now)
+        coverage = ShadowMeasurementService.measure_station_coverage(readings, now=now)
+        storage = ShadowMeasurementService.measure_storage_growth()
+
+        exerciser = FailureScenarioExerciser()
+        scenarios = exerciser.run_all_scenarios()
+
+        report = CutoverGate.evaluate(
+            mode=mode,
+            lag=lag,
+            station_coverage=coverage,
+            storage=storage,
+            failure_results=scenarios,
+            now=now,
+        )
+    finally:
+        session.close()
+
+    payload = report.to_dict()
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    if not report.ready_for_cutover:
+        blocked_reasons = [g.reason for g in report.gates if not g.passed]
+        print(f"Cutover BLOCKED: {'; '.join(blocked_reasons)}", file=sys.stderr)
+        return 2
+
+    print("Cutover Gate PASSED: All operational prerequisites satisfied for live cutover.")
+    return 0
 
 
 if __name__ == "__main__":
