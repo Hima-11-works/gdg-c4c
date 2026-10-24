@@ -42,6 +42,7 @@ import sys
 import uuid
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import h3
 import httpx
@@ -87,6 +88,7 @@ from app.ingestion.sentinel5p import (
     CopernicusSentinel5PProvider,
     normalized_threshold,
 )
+from app.ingestion.static_features import load_static_features
 from app.services.alert_generation import AlertGenerationService
 from app.services.dispersion import DeterministicH3DispersionModel
 from app.services.environmental_ingestion import EnvironmentalIngestionService
@@ -412,6 +414,15 @@ def _publish_inner(
             )
         )
 
+    static_features = ()
+    if settings.static_features_path:
+        static_path = Path(settings.static_features_path)
+        if static_path.exists():
+            try:
+                static_features = load_static_features(static_path)
+            except Exception as exc:
+                logger.warning("Failed to load static features from %s: %s", static_path, exc)
+
     snapshots = FeatureBuilder(
         resolution=settings.h3_resolution,
         max_observation_age_hours=settings.ingest_max_reading_age_hours,
@@ -421,6 +432,7 @@ def _publish_inner(
         valid_at=timestamp,
         sensor_readings=sensors,
         weather_features=_weather_features(weather, fallback_time=timestamp),
+        static_features=static_features,
         fire_detections=fire_detections,
         dataset_refs=(*fire_dataset_refs, *source_refs, grid_dataset_ref),
     )

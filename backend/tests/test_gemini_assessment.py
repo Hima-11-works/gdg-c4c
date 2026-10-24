@@ -1,6 +1,6 @@
 """Mocked tests for F4's consent-gated, advisory-only Gemini workflow."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -367,3 +367,66 @@ def test_analysis_route_maps_errors_without_exposing_provider_details(
     assert response.status_code == status_code
     assert response.json()["error"]["code"] == error_code
     assert "provider detail" not in response.text
+
+
+def test_reanalysis_cooldown_budgets_quota_and_reuses_saved() -> None:
+    now = datetime(2026, 10, 24, 12, 0, 0, tzinfo=UTC)
+    analyzer = FakeAnalyzer()
+    service, _, _ = _service(analyzer=analyzer)
+
+    first = service.analyze(report_id=7, evidence_id=8, consent=True, now=now)
+    assert len(analyzer.calls) == 1
+
+    # Second call with reanalyze=True within cooldown (e.g. 60 seconds later)
+    # does NOT call analyzer again, reusing saved assessment to budget quota.
+    second = service.analyze(
+        report_id=7,
+        evidence_id=8,
+        consent=True,
+        reanalyze=True,
+        now=now + timedelta(seconds=60),
+    )
+    assert len(analyzer.calls) == 1
+    assert second.id == first.id
+
+    # Call after cooldown window (e.g. 400 seconds later) allows reanalysis
+    third = service.analyze(
+        report_id=7,
+        evidence_id=8,
+        consent=True,
+        reanalyze=True,
+        now=now + timedelta(seconds=400),
+    )
+    assert len(analyzer.calls) == 2
+    assert third.id != first.id
+
+
+def test_concurrent_analysis_deduplicates_provider_calls() -> None:
+    import concurrent.futures
+    import time
+
+    now = datetime(2026, 10, 24, 12, 0, 0, tzinfo=UTC)
+
+    class SlowAnalyzer:
+        def __init__(self):
+            self.calls = 0
+
+        def analyze(self, image_bytes: bytes, *, mime_type: str) -> GeminiVisualAssessment:
+            self.calls += 1
+            time.sleep(0.05)
+            return _content()
+
+    analyzer = SlowAnalyzer()
+    service, _, _ = _service(analyzer=analyzer)
+
+    def worker():
+        return service.analyze(report_id=7, evidence_id=8, consent=True, now=now)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+        futures = [pool.submit(worker) for _ in range(3)]
+        results = [f.result() for f in futures]
+
+    assert len(results) == 3
+    # All 3 callers received the same valid assessment, but provider was called only ONCE!
+    assert analyzer.calls == 1
+    assert results[0].id == results[1].id == results[2].id

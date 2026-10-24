@@ -204,6 +204,11 @@ class Settings(BaseSettings):
     # contacted unless a separate provider is deliberately added.
     traffic_stale_after_hours: float = Field(default=2.0, gt=0)
 
+    # Path to preprocessed, versioned static features artifact (WorldPop, OSM,
+    # ESA WorldCover) for offline ingestion. Unset means static features remain
+    # absent without blocking pipeline execution.
+    static_features_path: str | None = None
+
     # Weather observations for the corridor evaluation are the *labels*: station
     # readings in a forecast's target window, which post-date the forecast's
     # issue time. Sources listed here can never be scored as real observations
@@ -444,6 +449,8 @@ class Settings(BaseSettings):
     # database/storage work and response serialization.
     gemini_request_timeout_seconds: int = Field(default=35, ge=1, le=45)
     gemini_max_output_tokens: int = Field(default=512, ge=128, le=1024)
+    # Minimum time between reanalyses of the same evidence to budget provider quota.
+    gemini_reanalysis_cooldown_seconds: int = Field(default=300, ge=0, le=86400)
 
     # --- Candidate hotspot detection (app.services.hotspot_detection) ---
     # See docs/api/hotspots.md. The detector consumes an upstream, georeferenced

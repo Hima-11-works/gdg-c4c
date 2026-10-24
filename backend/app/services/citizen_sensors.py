@@ -11,6 +11,12 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings, get_settings
 from app.domain import india
 from app.models.tables import citizen_sensor_submission as submission_table
+from app.services.citizen_calibration import (
+    CalibratedCitizenReading,
+    CitizenCalibrationError,
+    CitizenCalibrationPolicy,
+    qualify_citizen_submission,
+)
 from app.services.reports import submitter_prefix
 
 
@@ -170,3 +176,30 @@ class CitizenSensorSubmissionService:
         )
         self._session.commit()
         return {**dict(row), "status": decision, "reviewed_at": reviewed_at}
+
+    def calibrated_for_interpolation(
+        self,
+        *,
+        since: datetime | None = None,
+        policy: CitizenCalibrationPolicy | None = None,
+        now: datetime | None = None,
+    ) -> list[CalibratedCitizenReading]:
+        """Fetch human-verified submissions and apply strict calibration checks."""
+        moment = now or datetime.now(UTC)
+        pol = policy or CitizenCalibrationPolicy()
+        earliest = since or (moment - timedelta(hours=pol.max_reading_age_hours))
+        rows = self._session.execute(
+            select(submission_table)
+            .where(
+                submission_table.c.status == "verified",
+                submission_table.c.measured_at >= earliest,
+            )
+            .order_by(submission_table.c.measured_at.asc())
+        ).mappings()
+        qualified: list[CalibratedCitizenReading] = []
+        for row in rows:
+            try:
+                qualified.append(qualify_citizen_submission(row, policy=pol, now=moment))
+            except CitizenCalibrationError:
+                continue
+        return qualified

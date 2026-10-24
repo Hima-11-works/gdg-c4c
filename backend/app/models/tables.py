@@ -371,7 +371,7 @@ weather_forecast_observation = Table(
     "weather_forecast_observation",
     metadata,
     Column("id", BigInteger, primary_key=True),
-    Column("sample_cell", String(H3_CELL_LENGTH), nullable=False),
+    Column("sample_cell", String(15), nullable=False),
     Column("source", String(50), nullable=False, server_default="open-meteo"),
     Column("source_model", String(80), nullable=False),
     Column("latitude", Float, nullable=False),

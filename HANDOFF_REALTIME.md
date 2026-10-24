@@ -3,10 +3,34 @@
 ## Current state
 
 - Continue on branch `beta`, tracking `origin/beta`.
-- RT09 is complete and tested (`feat(client): apply live-data behavior consistently across all clients`). RT01–RT08 are also present in the branch history.
+- RT10 is complete and tested (`feat(context): add optional context within measured free budgets`). RT01–RT09 are also present in the branch history.
 - The detailed scope and decisions remain in `docs/REAL_TIME_DATA_IMPLEMENTATION_PLAN.md`.
 - Before editing, inspect `git status`. Preserve the existing untracked `docs/BUG_AUDIT.md` and `docs/REAL_TIME_DATA_IMPLEMENTATION_PLAN.md`; do not stage them as part of later steps.
 - Complete one RT step at a time. Quickly verify the step, make one commit for it, push to `origin/beta`, and only then start the next step. Do not combine speculative work from future steps into a commit.
+
+## RT10 delivered
+
+RT10 integrates optional environmental and spatial context strictly bounded within measured free provider budgets:
+
+- **Versioned OSM/WorldPop/WorldCover Features:** Preprocessed real pilot features stored in `backend/app/domain/data/pilot_static_features_delhi_ncr.json` with explicit source release provenance (WorldPop 2025, OSM 2025-Q1, ESA WorldCover 2021-v200). `FeatureBuilder` integrates versioned static features into pipeline cell contexts without blocking core runs when absent.
+- **Unconfigured Traffic:** Strictly unavailable (`predicted_traffic = None` / `missing_fields` contains traffic); synthetic or default speeds are forbidden when unconfigured.
+- **CAMS Distinct Regional Background:** Dedicated `CamsBackgroundService` operating under `"cams"` shared PostgreSQL provider budget (10/min, 100/hr, 1000/day, 50MB/day). Observations model atmospheric background at native 0.4° resolution with `is_station_observation = False` and strict runtime assertion (`assert_never_station_readings`) preventing CAMS observations from masquerading as ground stations or bypassing OpenAQ support requirements.
+- **Citizen Sensor Review & Calibration:** Enforced explicit human review (`status == "verified"`), India geofencing, freshness window, physical bounds ([0, 1000] µg/m³), and slope/intercept calibration formulas in `qualify_citizen_submission`. Added `assert_retains_independent_station_validation` preventing citizen submissions from entering independent reference holdout sets.
+- **Gemini Advisory Photo Review Optimization:** Added thread-safe per-evidence in-flight lock (`_IN_FLIGHT_LOCKS`) to deduplicate concurrent analysis requests. Reuses saved assessments; reanalysis within cooldown period (`gemini_reanalysis_cooldown_seconds`, default 300s) returns existing assessments without consuming provider quota. Provider rate limits and budget exhaustion leave reviews pending for manual inspection without blocking environmental ingestion.
+- **Provider Budgets:** Extended `SqlProviderRequestBudget` with policies for `"cams"` and `"gemini"`.
+- **Alembic Revisions & Schemas:** Shortened Alembic revision strings to <= 32 chars across `0031_shared_provider_budgets` and `0036_satellite_observations` to satisfy `alembic_version.version_num` column constraints.
+
+RT10 verification completed:
+- New dedicated RT10 test suite: 10/10 passed (`backend/tests/test_rt10_optional_context.py`).
+- Focused related test suites: 69/69 passed (`test_static_features_import.py`, `test_feature_builder.py`, `test_pipeline_run.py`, `test_gemini_assessment.py`, `test_shared_request_budget.py`, `test_migrations_offline.py`).
+- Frontend production build (`npm run build`) passed cleanly.
+- Ruff checks on all modified backend files passed with 0 errors.
+
+Operational limits to preserve:
+- Static features are preprocessed at source release cadence; pipeline operation must never depend on live external GIS downloads.
+- CAMS background must never be stored in `sensor_reading` or used to fulfill OpenAQ sensor requirements.
+- Unverified citizen sensor submissions must never enter interpolation.
+- Gemini analysis failures or quota limits must never abort environmental ingestion runs.
 
 ## RT09 delivered
 
@@ -71,12 +95,6 @@ Operational limits to preserve:
 - A live deployment must supply a valid initial `CDSE_REFRESH_TOKEN` and deployment-held `CDSE_SECRET_ENCRYPTION_KEY`. Verify unattended account/authentication behavior in the actual deployment before relying on token rotation.
 
 ## Remaining work
-
-### RT10 — Add optional context only within measured free budgets
-
-Import real, versioned OSM/WorldPop/WorldCover pilot features through existing contracts and preprocess them at source release cadence. Keep unconfigured traffic unavailable. Add CAMS only as a distinct background product if quota and storage permit; do not present it as station observations or bypass OpenAQ support requirements. Define explicit review/calibration requirements before citizen sensors enter interpolation, retaining independent station validation. Keep Gemini advisory photo review optional; reuse saved assessments, deduplicate concurrent work, budget reanalysis, and leave reviews pending on quota exhaustion without blocking environmental ingestion.
-
-**Acceptance:** optional inputs have versioned provenance, consume only their reserved budget, and cannot prevent core station/weather operation.
 
 ### RT11 — Shadow-run, measure, and cut over
 

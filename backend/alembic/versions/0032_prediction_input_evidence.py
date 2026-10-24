@@ -1,7 +1,7 @@
 """Record prediction input freshness and source receipt metadata.
 
 Revision ID: 0032_prediction_input_evidence
-Revises: 0031_shared_provider_budgets_scheduler
+Revises: 0031_shared_provider_budgets
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision: str = "0032_prediction_input_evidence"
-down_revision: str | None = "0031_shared_provider_budgets_scheduler"
+down_revision: str | None = "0031_shared_provider_budgets"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -1017,7 +1017,9 @@ def test_the_api_serves_candidates_and_their_provenance(tmp_path: Path) -> None:
     assert insufficient_rows[0]["synthetic_input"] is False
     assert "not a measured PM2.5 value" in catalog_data["limitations"]["purpose"]
 
-    positive_id = "authored-positive-delhi-ncr-20251108T053000Z-a3eb07bd"
+    positive_id = next(
+        row["scan_id"] for row in catalog_data["scans"] if "positive" in row["scan_id"]
+    )
     response = client.get(f"/api/v1/hotspots/{positive_id}")
     assert response.status_code == 200
     data = response.json()["data"]

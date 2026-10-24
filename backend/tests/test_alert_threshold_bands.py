@@ -46,7 +46,7 @@ def _pm25_bands() -> dict[int, str]:
     text = FRONTEND_SCALE.read_text(encoding="utf-8")
     # Only the PM2.5 scale, not PDI's (which has no CPCB labels).
     start = text.index("PM25_COLOR_SCALE")
-    end = text.index("PDI_COLOR_SCALE", start)
+    end = text.index("NO_DATA_COLORS", start) if "NO_DATA_COLORS" in text[start:] else text.index("];", start)
     return {int(value): label for value, label in _BAND.findall(text[start:end])}
 
 

@@ -50,6 +50,17 @@ POLICIES: dict[str, ProviderPolicy] = {
     # GIBS limits are application safeguards, not claims about NASA quotas.
     "gibs": ProviderPolicy((BudgetWindow(60, 60), BudgetWindow(86400, 5000))),
     "satellite-tile": ProviderPolicy((BudgetWindow(60, 60), BudgetWindow(86400, 5000))),
+    # CAMS regional background operates within bounded free Copernicus / Open-Meteo
+    # API allowances; kept strictly within hourly and daily limits.
+    "cams": ProviderPolicy(
+        (BudgetWindow(60, 10), BudgetWindow(3600, 100), BudgetWindow(86400, 1000)),
+        max_bytes_per_day=50_000_000,
+    ),
+    # Gemini photo advisory analysis uses a measured rate limit to protect
+    # against quota exhaustion and prevent advisory spikes.
+    "gemini": ProviderPolicy(
+        (BudgetWindow(60, 15), BudgetWindow(3600, 300), BudgetWindow(86400, 1500)),
+    ),
 }
 
 

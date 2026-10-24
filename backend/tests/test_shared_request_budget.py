@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import UTC, date, datetime, timedelta
 
 import httpx
@@ -186,6 +187,7 @@ async def test_cdse_download_holds_shared_reservation_until_stream_is_saved() ->
             request_budget=budget,
         )
         provider._access_token = "access-token"
+        provider._access_token_expires_at = time.monotonic() + 3600
         path = await provider._download("b0f9e574-73d2-4c8a-96d1-2f679e9717a7")
         try:
             assert path.read_bytes() == b"netcdf"
@@ -216,6 +218,7 @@ async def test_cdse_redirect_is_counted_as_a_separate_request() -> None:
             request_budget=budget,
         )
         provider._access_token = "access-token"
+        provider._access_token_expires_at = time.monotonic() + 3600
         path = await provider._download("b0f9e574-73d2-4c8a-96d1-2f679e9717a7")
         try:
             assert path.read_bytes() == b"netcdf"

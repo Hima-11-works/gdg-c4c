@@ -371,8 +371,8 @@ def test_scenario_12_empty_forecast_for_a_real_cell_is_an_empty_list_not_demo(
     assert body["data"]["forecasts"] == []
 
 
-def test_scenario_12_empty_forecast_grid_falls_back_to_demo(api_client: TestClient) -> None:
-    response = api_client.get("/api/v1/grid/forecast?hours=3")
+def test_scenario_12_empty_forecast_grid_falls_back_to_demo(demo_api_client: TestClient) -> None:
+    response = demo_api_client.get("/api/v1/grid/forecast?hours=3")
     assert response.status_code == 200
     assert response.json()["is_demo"] is True
 

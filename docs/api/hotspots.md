@@ -135,7 +135,7 @@ can seed from `CDSE_REFRESH_TOKEN`, then encrypts any rotated refresh token in
 Postgres. Configure the same `HOTSPOT_SCAN_BACKEND=database`
 setting on the deployed API so it can serve those records, and set
 `PIPELINE_DEMO_MODE=false` to enable live sources. Migration
-`0036_satellite_observations_and_credentials` creates the satellite cell and
+`0036_satellite_observations` creates the satellite cell and
 encrypted credential tables (in addition to the earlier scan/event migrations).
 Local development keeps the filesystem store by default.
 

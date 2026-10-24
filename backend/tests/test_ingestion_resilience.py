@@ -128,12 +128,12 @@ async def test_a_provider_that_violates_its_contract_is_contained(service_name: 
     assert "unexpected provider error" in result.errors[0]
 
 
-def test_api_keeps_serving_while_both_feeds_are_broken(api_client: TestClient) -> None:
+def test_api_keeps_serving_while_both_feeds_are_broken(demo_api_client: TestClient) -> None:
     """Ingestion failures leave the tables empty; the read path must still
     answer every endpoint (falling back to demo data, flagged is_demo)."""
     for path in API_PATHS:
-        response = api_client.get(path)
+        response = demo_api_client.get(path)
         assert response.status_code == 200, f"{path} -> {response.status_code}"
 
-    body = api_client.get("/api/v1/sensors").json()
+    body = demo_api_client.get("/api/v1/sensors").json()
     assert body["is_demo"] is True

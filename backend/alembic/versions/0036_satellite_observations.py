@@ -1,6 +1,6 @@
 """Persist QA-qualified Sentinel-5P cell observations and rotated CDSE credentials.
 
-Revision ID: 0036_satellite_observations_and_credentials
+Revision ID: 0036_satellite_observations
 Revises: 0035_incident_firms_detection
 Create Date: 2026-10-24
 """
@@ -10,7 +10,7 @@ from __future__ import annotations
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0036_satellite_observations_and_credentials"
+revision = "0036_satellite_observations"
 down_revision = "0035_incident_firms_detection"
 branch_labels = None
 depends_on = None

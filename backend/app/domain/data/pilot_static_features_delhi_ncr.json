@@ -1,0 +1,143 @@
+{
+  "dataset_refs": [
+    {
+      "dataset_id": "worldpop-india-2025",
+      "source": "WorldPop",
+      "product": "population-count-density",
+      "version": "2025",
+      "kind": "modeled",
+      "region": "delhi-ncr",
+      "attribution": "WorldPop (www.worldpop.org - School of Geography and Environmental Science, University of Southampton; Department of Geography and Geosciences, University of Louisville; Departement de Geographie, Universite de Namur)",
+      "license": "CC BY 4.0"
+    },
+    {
+      "dataset_id": "osm-roads-delhi-2025q1",
+      "source": "OpenStreetMap",
+      "product": "road-network",
+      "version": "2025-Q1",
+      "kind": "observed",
+      "region": "delhi-ncr",
+      "attribution": "© OpenStreetMap contributors",
+      "license": "ODbL"
+    },
+    {
+      "dataset_id": "worldcover-delhi-2021v2",
+      "source": "ESA WorldCover",
+      "product": "land-cover-10m",
+      "version": "2021-v200",
+      "kind": "observed",
+      "region": "delhi-ncr",
+      "attribution": "© ESA WorldCover project / Contains modified Copernicus Sentinel data",
+      "license": "CC BY 4.0"
+    }
+  ],
+  "static_features": [
+    {
+      "h3_cell": "882f1d4887fffff",
+      "population_count": 8500.0,
+      "population_density_per_km2": 11500.0,
+      "road_length_km_by_class": {
+        "primary": 2.4,
+        "secondary": 3.8,
+        "residential": 8.2
+      },
+      "major_road_distance_km": 0.15,
+      "built_up_fraction": 0.72,
+      "vegetation_fraction": 0.18,
+      "bare_soil_fraction": 0.05,
+      "industrial_fraction": 0.05,
+      "coverage_fraction": 1.0,
+      "valid_from": "2025-01-01T00:00:00Z",
+      "available_at": "2025-01-15T00:00:00Z"
+    },
+    {
+      "h3_cell": "883da112b5fffff",
+      "population_count": 9200.0,
+      "population_density_per_km2": 12400.0,
+      "road_length_km_by_class": {
+        "motorway": 1.5,
+        "primary": 3.1,
+        "residential": 6.4
+      },
+      "major_road_distance_km": 0.08,
+      "built_up_fraction": 0.78,
+      "vegetation_fraction": 0.12,
+      "bare_soil_fraction": 0.04,
+      "industrial_fraction": 0.06,
+      "coverage_fraction": 1.0,
+      "valid_from": "2025-01-01T00:00:00Z",
+      "available_at": "2025-01-15T00:00:00Z"
+    },
+    {
+      "h3_cell": "883da102a9fffff",
+      "population_count": 6400.0,
+      "population_density_per_km2": 8600.0,
+      "road_length_km_by_class": {
+        "secondary": 2.2,
+        "tertiary": 4.1,
+        "residential": 5.9
+      },
+      "major_road_distance_km": 0.45,
+      "built_up_fraction": 0.65,
+      "vegetation_fraction": 0.25,
+      "bare_soil_fraction": 0.08,
+      "industrial_fraction": 0.02,
+      "coverage_fraction": 1.0,
+      "valid_from": "2025-01-01T00:00:00Z",
+      "available_at": "2025-01-15T00:00:00Z"
+    },
+    {
+      "h3_cell": "883da11081fffff",
+      "population_count": 11200.0,
+      "population_density_per_km2": 15100.0,
+      "road_length_km_by_class": {
+        "primary": 4.0,
+        "secondary": 5.2,
+        "residential": 11.0
+      },
+      "major_road_distance_km": 0.05,
+      "built_up_fraction": 0.85,
+      "vegetation_fraction": 0.08,
+      "bare_soil_fraction": 0.02,
+      "industrial_fraction": 0.05,
+      "coverage_fraction": 1.0,
+      "valid_from": "2025-01-01T00:00:00Z",
+      "available_at": "2025-01-15T00:00:00Z"
+    },
+    {
+      "h3_cell": "883da1142dfffff",
+      "population_count": 4300.0,
+      "population_density_per_km2": 5800.0,
+      "road_length_km_by_class": {
+        "secondary": 1.8,
+        "residential": 4.5
+      },
+      "major_road_distance_km": 0.80,
+      "built_up_fraction": 0.50,
+      "vegetation_fraction": 0.38,
+      "bare_soil_fraction": 0.10,
+      "industrial_fraction": 0.02,
+      "coverage_fraction": 0.95,
+      "valid_from": "2025-01-01T00:00:00Z",
+      "available_at": "2025-01-15T00:00:00Z"
+    },
+    {
+      "h3_cell": "883da11653fffff",
+      "population_count": 7800.0,
+      "population_density_per_km2": 10500.0,
+      "road_length_km_by_class": {
+        "primary": 2.0,
+        "tertiary": 3.5,
+        "residential": 7.0
+      },
+      "major_road_distance_km": 0.22,
+      "built_up_fraction": 0.70,
+      "vegetation_fraction": 0.20,
+      "bare_soil_fraction": 0.06,
+      "industrial_fraction": 0.04,
+      "coverage_fraction": 1.0,
+      "valid_from": "2025-01-01T00:00:00Z",
+      "available_at": "2025-01-15T00:00:00Z"
+    }
+  ]
+}

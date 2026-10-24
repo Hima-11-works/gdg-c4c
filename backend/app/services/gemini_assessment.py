@@ -7,6 +7,7 @@ timestamps, storage URLs, and object keys are deliberately never sent.
 
 from __future__ import annotations
 
+import threading
 from datetime import UTC, datetime
 from typing import Literal, Protocol
 
@@ -184,13 +185,27 @@ def _safe_provider_error(exc: Exception) -> GeminiAssessmentError:
         )
     if status_code in (400, 404):
         return GeminiInvalidConfiguration(
-            "Gemini rejected the configured model or response schema; manual review is still available"
+            "Gemini rejected the configured model or response schema; "
+            "manual review is still available"
         )
     if isinstance(exc, (ValidationError, ValueError, TypeError)):
         return GeminiInvalidOutput(
             "Gemini returned an invalid assessment; manual review is still available"
         )
     return GeminiProviderFailure("Gemini analysis failed; manual review is still available")
+
+
+_IN_FLIGHT_LOCKS: dict[int, threading.Lock] = {}
+_REGISTRY_LOCK = threading.Lock()
+
+
+def _get_evidence_lock(evidence_id: int) -> threading.Lock:
+    with _REGISTRY_LOCK:
+        lock = _IN_FLIGHT_LOCKS.get(evidence_id)
+        if lock is None:
+            lock = threading.Lock()
+            _IN_FLIGHT_LOCKS[evidence_id] = lock
+        return lock
 
 
 class GeminiAssessmentService:
@@ -226,44 +241,55 @@ class GeminiAssessmentService:
         now: datetime | None = None,
     ) -> EvidenceAssessmentRow:
         self._reviewable_evidence(report_id=report_id, evidence_id=evidence_id)
-        saved = self._repository.get_for_evidence(evidence_id)
-        if saved is not None and saved.report_id == report_id and not reanalyze:
-            return saved
-        if not consent:
-            raise GeminiConsentRequired(
-                "explicit consent is required before sending a photo to Gemini"
-            )
-        if self._settings.gemini_api_key is None:
-            raise GeminiAnalysisDisabled("Gemini photo analysis is not configured")
-
-        # This is the same EXIF-free, decoded JPEG derivative returned to the
-        # reviewer. Caller-controlled URLs/keys/bytes never enter this service.
-        derivative = self._evidence.derivative_bytes(
-            report_id=report_id,
-            evidence_id=evidence_id,
-        )
-        try:
-            assessment = GeminiVisualAssessment.model_validate(
-                self._analyzer.analyze(derivative, mime_type="image/jpeg")
-            )
-        except GeminiAssessmentError:
-            raise
-        except (ValidationError, ValueError, TypeError) as exc:
-            raise GeminiInvalidOutput(
-                "Gemini returned an invalid assessment; manual review is still available"
-            ) from exc
-
         moment = now or datetime.now(UTC)
-        return self._repository.save(
-            report_id=report_id,
-            evidence_id=evidence_id,
-            assessment=assessment,
-            model_id=self._settings.gemini_model,
-            prompt_version=PROMPT_VERSION,
-            schema_version=SCHEMA_VERSION,
-            consented_at=moment,
-            generated_at=moment,
-        )
+
+        # Deduplicate concurrent work: serialize simultaneous requests for the same evidence
+        lock = _get_evidence_lock(evidence_id)
+        with lock:
+            saved = self._repository.get_for_evidence(evidence_id)
+            if saved is not None and saved.report_id == report_id:
+                if not reanalyze:
+                    return saved
+                # Budget reanalysis: respect cooldown window to prevent rapid quota depletion
+                cooldown = getattr(self._settings, "gemini_reanalysis_cooldown_seconds", 300)
+                age_seconds = (moment - saved.generated_at).total_seconds()
+                if age_seconds < cooldown:
+                    return saved
+
+            if not consent:
+                raise GeminiConsentRequired(
+                    "explicit consent is required before sending a photo to Gemini"
+                )
+            if self._settings.gemini_api_key is None:
+                raise GeminiAnalysisDisabled("Gemini photo analysis is not configured")
+
+            # This is the same EXIF-free, decoded JPEG derivative returned to the
+            # reviewer. Caller-controlled URLs/keys/bytes never enter this service.
+            derivative = self._evidence.derivative_bytes(
+                report_id=report_id,
+                evidence_id=evidence_id,
+            )
+            try:
+                assessment = GeminiVisualAssessment.model_validate(
+                    self._analyzer.analyze(derivative, mime_type="image/jpeg")
+                )
+            except GeminiAssessmentError:
+                raise
+            except (ValidationError, ValueError, TypeError) as exc:
+                raise GeminiInvalidOutput(
+                    "Gemini returned an invalid assessment; manual review is still available"
+                ) from exc
+
+            return self._repository.save(
+                report_id=report_id,
+                evidence_id=evidence_id,
+                assessment=assessment,
+                model_id=self._settings.gemini_model,
+                prompt_version=PROMPT_VERSION,
+                schema_version=SCHEMA_VERSION,
+                consented_at=moment,
+                generated_at=moment,
+            )
 
     def _reviewable_evidence(self, *, report_id: int, evidence_id: int) -> EvidenceRow:
         row = self._evidence.get(report_id=report_id, evidence_id=evidence_id)
