@@ -184,7 +184,7 @@ def _weather_features(
 def _compute_input_fingerprint(
     sensors: list[SensorReading],
     weather: list[WeatherReading],
-    fire_detections: list[object],
+    fire_detections: list[object] | None,
 ) -> str:
     import hashlib
     import json
@@ -202,7 +202,7 @@ def _compute_input_fingerprint(
         for r in weather
     )
     fire_items: list[tuple[str, str]] = []
-    for f in fire_detections:
+    for f in (fire_detections or ()):
         if hasattr(f, "__dict__"):
             det_id = str(getattr(f, "detection_id", None) or getattr(f, "h3_cell", ""))
             det_time = str(getattr(f, "available_at", None) or getattr(f, "acquired_at", ""))

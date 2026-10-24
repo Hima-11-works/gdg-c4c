@@ -895,7 +895,8 @@ class PredictionQueryService:
             ),
             weather_issued_at=(
                 rows[0].quality.weather_issued_at
-                if all(
+                if rows
+                and all(
                     row.quality.weather_issued_at == rows[0].quality.weather_issued_at
                     for row in rows
                 )
