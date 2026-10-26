@@ -1,5 +1,6 @@
 """Mocked tests for F4's consent-gated, advisory-only Gemini workflow."""
 
+import hashlib
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -28,6 +29,7 @@ from app.services.gemini_assessment import (
     GeminiVisionAnalyzer,
     _safe_provider_error,
 )
+from app.services.provider_budget import Reservation
 
 NOW = datetime(2026, 9, 30, 12, tzinfo=UTC)
 
@@ -111,7 +113,21 @@ class FakeAnalyzer:
         return self.result
 
 
-def _service(*, key="test-gemini-key", row=None, analyzer=None, repository=None):
+class FakeGeminiBudget:
+    def __init__(self, *, allowed=True):
+        self.allowed = allowed
+        self.reservations = []
+        self.completions = []
+
+    def reserve_request_sync(self, **fields):
+        self.reservations.append(fields)
+        return Reservation(allowed=self.allowed, reservation_id=73 if self.allowed else None)
+
+    def complete_request_sync(self, **fields):
+        self.completions.append(fields)
+
+
+def _service(*, key="test-gemini-key", row=None, analyzer=None, repository=None, budget=None):
     evidence = FakeEvidenceService(row=row)
     repository = repository or FakeAssessmentRepository()
     service = GeminiAssessmentService(
@@ -123,6 +139,7 @@ def _service(*, key="test-gemini-key", row=None, analyzer=None, repository=None)
         evidence=evidence,
         repository=repository,
         analyzer=analyzer or FakeAnalyzer(),
+        budget=budget,
     )
     return service, evidence, repository
 
@@ -142,6 +159,40 @@ def test_valid_advisory_uses_only_derivative_and_persists_provenance():
     assert saved.schema_version == SCHEMA_VERSION
     assert saved.consented_at == NOW == saved.generated_at
     assert repository.saves == 1
+
+
+def test_photo_analysis_reserves_and_completes_shared_gemini_budget():
+    analyzer = FakeAnalyzer()
+    budget = FakeGeminiBudget()
+    service, _, _ = _service(analyzer=analyzer, budget=budget)
+
+    service.analyze(report_id=7, evidence_id=8, consent=True, now=NOW)
+
+    assert budget.reservations == [
+        {
+            "provider": "gemini",
+            "request_key_hash": hashlib.sha256(b"photo:7:8").hexdigest(),
+            "request_units": 1,
+            "bytes_reserved": len(b"sanitized-jpeg"),
+            "now": NOW,
+        }
+    ]
+    assert budget.completions[0]["reservation_id"] == 73
+    assert budget.completions[0]["status_code"] == 200
+
+
+def test_photo_analysis_does_not_call_provider_when_shared_budget_is_exhausted():
+    analyzer = FakeAnalyzer()
+    budget = FakeGeminiBudget(allowed=False)
+    service, evidence, repository = _service(analyzer=analyzer, budget=budget)
+
+    with pytest.raises(GeminiQuotaExceeded):
+        service.analyze(report_id=7, evidence_id=8, consent=True, now=NOW)
+
+    assert not analyzer.calls
+    assert evidence.derivative_reads == 1
+    assert repository.saves == 0
+    assert budget.completions == []
 
 
 def test_saved_assessment_is_reused_without_key_consent_or_model_call():

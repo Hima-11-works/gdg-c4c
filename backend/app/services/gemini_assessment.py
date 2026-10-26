@@ -7,9 +7,10 @@ timestamps, storage URLs, and object keys are deliberately never sent.
 
 from __future__ import annotations
 
+import hashlib
 import threading
 from datetime import UTC, datetime
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -18,6 +19,7 @@ from app.core.config import Settings
 from app.domain.evidence import EvidenceRow
 from app.domain.gemini_assessment import EvidenceAssessmentRow, GeminiVisualAssessment
 from app.services.evidence import EvidenceNotFound, EvidenceService
+from app.services.provider_budget import Reservation
 
 PROMPT_VERSION = "f4-photo-visual-1"
 SCHEMA_VERSION = "f4-photo-assessment-1"
@@ -98,6 +100,12 @@ class GeminiProviderFailure(GeminiAssessmentError):
 
 class GeminiAnalyzer(Protocol):
     def analyze(self, image_bytes: bytes, *, mime_type: str) -> GeminiVisualAssessment: ...
+
+
+class GeminiRequestBudget(Protocol):
+    def reserve_request_sync(self, **kwargs: Any) -> Reservation: ...
+
+    def complete_request_sync(self, **kwargs: Any) -> None: ...
 
 
 class GeminiVisionAnalyzer:
@@ -218,11 +226,13 @@ class GeminiAssessmentService:
         evidence: EvidenceService,
         repository: object,
         analyzer: GeminiAnalyzer | None = None,
+        budget: GeminiRequestBudget | None = None,
     ) -> None:
         self._settings = settings
         self._evidence = evidence
         self._repository = repository
         self._analyzer = analyzer or GeminiVisionAnalyzer(settings)
+        self._budget = budget
 
     def get(self, *, report_id: int, evidence_id: int) -> EvidenceAssessmentRow:
         self._reviewable_evidence(report_id=report_id, evidence_id=evidence_id)
@@ -269,16 +279,51 @@ class GeminiAssessmentService:
                 report_id=report_id,
                 evidence_id=evidence_id,
             )
+            reservation_id = None
+            if self._budget is not None:
+                reservation = self._budget.reserve_request_sync(
+                    provider="gemini",
+                    request_key_hash=hashlib.sha256(
+                        f"photo:{report_id}:{evidence_id}".encode()
+                    ).hexdigest(),
+                    request_units=1,
+                    bytes_reserved=len(derivative),
+                    now=moment,
+                )
+                if not reservation.allowed or reservation.reservation_id is None:
+                    raise GeminiQuotaExceeded(
+                        "Gemini request budget is temporarily unavailable; "
+                        "manual review is still available"
+                    )
+                reservation_id = reservation.reservation_id
+
+            status_code = 200
             try:
                 assessment = GeminiVisualAssessment.model_validate(
                     self._analyzer.analyze(derivative, mime_type="image/jpeg")
                 )
-            except GeminiAssessmentError:
+            except GeminiAssessmentError as exc:
+                status_code = _assessment_status_code(exc)
                 raise
             except (ValidationError, ValueError, TypeError) as exc:
+                status_code = 502
                 raise GeminiInvalidOutput(
                     "Gemini returned an invalid assessment; manual review is still available"
                 ) from exc
+            finally:
+                if reservation_id is not None and self._budget is not None:
+                    try:
+                        self._budget.complete_request_sync(
+                            reservation_id=reservation_id,
+                            status_code=status_code,
+                            bytes_used=len(derivative),
+                            now=moment,
+                        )
+                    except Exception:
+                        # The reservation itself still counts against the rolling
+                        # request window; completion telemetry must not hide the
+                        # model result or its original failure.
+                        pass
 
             return self._repository.save(
                 report_id=report_id,
@@ -296,3 +341,14 @@ class GeminiAssessmentService:
         if not row.reviewable:
             raise EvidenceNotFound("this evidence has no available reviewable image")
         return row
+
+
+def _assessment_status_code(exc: GeminiAssessmentError) -> int:
+    """Map the sanitized service exceptions to quota accounting outcomes."""
+    if isinstance(exc, GeminiQuotaExceeded):
+        return 429
+    if isinstance(exc, GeminiInvalidApiKey):
+        return 403
+    if isinstance(exc, (GeminiInvalidConfiguration, GeminiInvalidOutput)):
+        return 400
+    return 599

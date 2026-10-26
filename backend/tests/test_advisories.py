@@ -1,17 +1,33 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from uuid import uuid4
 
 import h3
 import pytest
+from fastapi import HTTPException, Response
+from pydantic import ValidationError
 
+from app.api.routes.advisories import generate_advisory
+from app.api.schemas_advisories import AdvisoryGenerateIn
+from app.core.config import Settings
 from app.db.repositories.source_health import STATUS_PRESENT, SourceHealth
+from app.domain.advisories import AdvisoryRecord
 from app.domain.features import DataMode, DatasetRef, InputKind
 from app.domain.prediction import PredictionInputQuality, PredictionResult, PredictionRun
 from app.domain.published_alerts import PublishedAlertIdentity
 from app.services.advisories import build_deterministic_template
 from app.services.advisory_context import AdvisoryContextService
+from app.services.advisory_generation import (
+    AdvisoryContextChanged,
+    AdvisoryGenerationInProgress,
+    AdvisoryGenerationService,
+)
+from app.services.gemini_advisories import GeminiAdvisoryOutput
 from app.services.prediction_queries import PredictionQueryService
+from app.services.provider_budget import Reservation
 from app.services.published_alerts import PublishedAlertNotFoundError, PublishedAlertService
 
 NOW = datetime(2026, 10, 24, 12, 0, tzinfo=UTC)
@@ -214,3 +230,297 @@ def test_client_supplied_pollution_value_cannot_override_resolved_fact() -> None
 
     with pytest.raises(TypeError):
         service.for_published_alert(alert_id, forecast_pm25=999)  # type: ignore[call-arg]
+
+
+class FakeAdvisoryRepository:
+    def __init__(self) -> None:
+        self.by_hash: dict[str, AdvisoryRecord] = {}
+        self.by_id: dict[str, AdvisoryRecord] = {}
+        self.claims: dict[str, str] = {}
+
+    def get(self, bundle_id: str):
+        return self.by_id.get(bundle_id)
+
+    def get_by_hash(self, context_hash: str):
+        return self.by_hash.get(context_hash)
+
+    def claim(self, *, context_hash: str, now: datetime, force: bool = False, **_kwargs):
+        if context_hash in self.claims:
+            return SimpleNamespace(state="busy", lease_token=None, record=None)
+        if context_hash in self.by_hash and not force:
+            return SimpleNamespace(
+                state="cached", lease_token=None, record=self.by_hash[context_hash]
+            )
+        token = str(uuid4())
+        self.claims[context_hash] = token
+        return SimpleNamespace(state="claimed", lease_token=token, record=None)
+
+    def complete(self, *, context_hash: str, lease_token: str, bundle, generated_at,
+                 consented_at, generation_key, **_kwargs):
+        if self.claims.get(context_hash) != lease_token:
+            return None
+        record = AdvisoryRecord(
+            id=str(uuid4()),
+            context_hash=context_hash,
+            generation_key=generation_key,
+            bundle=bundle,
+            generated_at=generated_at,
+            consented_at=consented_at,
+        )
+        self.by_hash[context_hash] = record
+        self.by_id[record.id] = record
+        del self.claims[context_hash]
+        return record
+
+
+class FakeAdvisoryBudget:
+    def __init__(self, *, allowed: bool = True) -> None:
+        self.allowed = allowed
+        self.reservations = []
+        self.completions = []
+
+    def reserve_request_sync(self, **fields):
+        self.reservations.append(fields)
+        return Reservation(allowed=self.allowed, reservation_id=91 if self.allowed else None)
+
+    def complete_request_sync(self, **fields):
+        self.completions.append(fields)
+
+
+class FakeTextGenerator:
+    def __init__(self, output=None) -> None:
+        self.output = output
+        self.calls = 0
+
+    def generate(self, _context):
+        self.calls += 1
+        return self.output
+
+
+def _generation_service(*, key="test-key", budget=None, generator=None):
+    contexts, _queries, _health, alert_id = _case()
+    service = AdvisoryGenerationService(
+        settings=Settings(
+            _env_file=None,
+            gemini_api_key=key,
+            gemini_model="test-model",
+            gemini_reanalysis_cooldown_seconds=300,
+        ),
+        contexts=contexts,
+        repository=FakeAdvisoryRepository(),
+        budget=budget or FakeAdvisoryBudget(),
+        generator=generator,
+    )
+    return service, alert_id
+
+
+def test_template_generation_is_persisted_and_reused_without_gemini() -> None:
+    budget = FakeAdvisoryBudget()
+    generator = FakeTextGenerator()
+    service, alert_id = _generation_service(budget=budget, generator=generator)
+
+    first = service.generate(alert_id=alert_id, consent=False, now=NOW)
+    second = service.generate(alert_id=alert_id, consent=False, now=NOW + timedelta(seconds=1))
+
+    assert first == second
+    assert first.bundle.provider_status == "template"
+    assert first.consented_at is None
+    assert not budget.reservations
+    assert generator.calls == 0
+
+
+def test_saved_advisory_payload_round_trips_with_provenance() -> None:
+    from app.db.repositories.advisory_bundle import _bundle_to_json, _row_to_record
+
+    context_service, _queries, _health, alert_id = _case()
+    context = context_service.for_published_alert(alert_id, now=NOW)
+    bundle = replace(
+        build_deterministic_template(context),
+        prompt_version="deterministic-template-1",
+    )
+    record_id = str(uuid4())
+    context_hash = "a" * 64
+    row = {
+        "id": record_id,
+        "context_hash": context_hash,
+        "generation_key": "template:advisory-v1",
+        "bundle": _bundle_to_json(bundle),
+        "schema_version": bundle.template_version,
+        "provider_status": bundle.provider_status,
+        "model_id": bundle.model_id,
+        "prompt_version": bundle.prompt_version,
+        "generated_at": NOW,
+        "consented_at": None,
+    }
+
+    record = _row_to_record(row)
+
+    assert record.id == record_id
+    assert record.context_hash == context_hash
+    assert record.bundle == bundle
+    assert record.generated_at == NOW
+    assert record.consented_at is None
+
+
+def test_consent_with_missing_key_returns_a_labeled_template_fallback() -> None:
+    budget = FakeAdvisoryBudget()
+    generator = FakeTextGenerator()
+    service, alert_id = _generation_service(key=None, budget=budget, generator=generator)
+
+    record = service.generate(alert_id=alert_id, consent=True, now=NOW)
+
+    assert record.bundle.provider_status == "template_fallback"
+    assert "TEMPLATE FALLBACK" in record.bundle.draft_label
+    assert "not configured" in (record.bundle.provider_message or "")
+    assert not budget.reservations
+    assert generator.calls == 0
+
+
+def test_gemini_generation_reserves_budget_and_rejects_unrecognized_evidence_ids() -> None:
+    budget = FakeAdvisoryBudget()
+    alert_identity = PublishedAlertIdentity(
+        "advisory-run-1", h3.latlng_to_cell(28.61, 77.21, 8), 60
+    )
+    allowed_id = f"alert:{alert_identity.alert_id}:forecast"
+    generator = FakeTextGenerator(
+        GeminiAdvisoryOutput(
+            summary="Review the forecast with current independent measurements.",
+            inspection_checklist=["Record a fresh ground reading for the same area."],
+            evidence_ids=[allowed_id],
+        )
+    )
+    service, alert_id = _generation_service(budget=budget, generator=generator)
+
+    record = service.generate(alert_id=alert_id, consent=True, now=NOW)
+
+    assert record.bundle.provider_status == "gemini"
+    assert record.bundle.model_id == "test-model"
+    assert record.bundle.generated_evidence_ids == (allowed_id,)
+    assert record.consented_at is not None
+    assert len(budget.reservations) == 1
+    assert budget.reservations[0]["provider"] == "gemini"
+    assert budget.reservations[0]["request_units"] == 1
+    assert budget.completions[0]["status_code"] == 200
+
+
+def test_gemini_generation_falls_back_when_evidence_reference_is_invented() -> None:
+    budget = FakeAdvisoryBudget()
+    generator = FakeTextGenerator(
+        GeminiAdvisoryOutput(
+            summary="Review the published forecast carefully.",
+            inspection_checklist=["Verify the reading independently."],
+            evidence_ids=["alert:invented:forecast"],
+        )
+    )
+    service, alert_id = _generation_service(budget=budget, generator=generator)
+
+    record = service.generate(alert_id=alert_id, consent=True, now=NOW)
+
+    assert record.bundle.provider_status == "template_fallback"
+    assert "safety validation" in (record.bundle.provider_message or "")
+    assert budget.completions[0]["status_code"] == 400
+
+
+def test_budget_exhaustion_uses_template_without_calling_gemini() -> None:
+    budget = FakeAdvisoryBudget(allowed=False)
+    generator = FakeTextGenerator()
+    service, alert_id = _generation_service(budget=budget, generator=generator)
+
+    record = service.generate(alert_id=alert_id, consent=True, now=NOW)
+
+    assert record.bundle.provider_status == "template_fallback"
+    assert "budget is exhausted" in (record.bundle.provider_message or "")
+    assert generator.calls == 0
+    assert not budget.completions
+
+
+def test_concurrent_generation_is_coalesced_as_busy():
+    service, alert_id = _generation_service()
+    context_service = service._contexts
+    context = context_service.for_published_alert(alert_id, now=NOW)
+    # Hold the claim for the deterministic-template key before another request.
+    from app.services.advisory_generation import _context_hash, _generation_key
+
+    context_hash = _context_hash(context, _generation_key(
+        wants_gemini=False, consent=False, model_id="test-model"
+    ))
+    service._repository.claims[context_hash] = str(uuid4())
+
+    with pytest.raises(AdvisoryGenerationInProgress):
+        service.generate(alert_id=alert_id, consent=False, now=NOW)
+
+
+def test_saved_bundle_is_not_returned_after_its_run_context_changes():
+    service, alert_id = _generation_service()
+    record = service.generate(alert_id=alert_id, consent=False, now=NOW)
+    original = service._contexts.for_published_alert
+    service._contexts.for_published_alert = lambda *_args, **_kwargs: replace(
+        original(alert_id, now=NOW), stale=True
+    )
+
+    with pytest.raises(AdvisoryContextChanged):
+        service.get(record.id, now=NOW)
+
+
+def test_advisory_request_schema_rejects_client_supplied_facts():
+    with pytest.raises(ValidationError):
+        AdvisoryGenerateIn.model_validate(
+            {
+                "source_type": "published_alert",
+                "source_id": "v2:some-run:891ea0d2dffffff:60",
+                "consent": True,
+                "forecast_pm25": 1,
+            }
+        )
+
+
+class FakeReviewer:
+    def __init__(self, allowed: bool = True) -> None:
+        self.allowed = allowed
+
+    def require_reviewer(self, key):
+        if not self.allowed or key != "reviewer-secret":
+            raise PermissionError("invalid reviewer key")
+
+
+def test_advisory_route_requires_reviewer_key_before_generation():
+    budget = FakeAdvisoryBudget()
+    generator = FakeTextGenerator()
+    service, alert_id = _generation_service(budget=budget, generator=generator)
+    response = Response()
+    payload = AdvisoryGenerateIn(
+        source_type="published_alert", source_id=alert_id, consent=True
+    )
+
+    with pytest.raises(HTTPException) as error:
+        generate_advisory(
+            payload=payload,
+            response=response,
+            x_reviewer_key="wrong",
+            service=service,
+            reports=FakeReviewer(),
+        )
+
+    assert error.value.status_code == 403
+    assert budget.reservations == []
+    assert generator.calls == 0
+
+
+def test_authorized_advisory_route_returns_private_no_store_draft():
+    service, alert_id = _generation_service(key=None)
+    response = Response()
+    payload = AdvisoryGenerateIn(
+        source_type="published_alert", source_id=alert_id, consent=False
+    )
+
+    envelope = generate_advisory(
+        payload=payload,
+        response=response,
+        x_reviewer_key="reviewer-secret",
+        service=service,
+        reports=FakeReviewer(),
+    )
+
+    assert envelope.data.bundle.provider_status == "template"
+    assert "DRAFT" in envelope.data.bundle.draft_label
+    assert response.headers["Cache-Control"] == "private, no-store"

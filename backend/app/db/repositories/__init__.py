@@ -1,5 +1,8 @@
 """Concrete (SQLAlchemy) implementations of app.domain.repositories."""
 
+from app.db.repositories.advisory_bundle import (
+    AdvisoryBundleRepository as SqlAdvisoryBundleRepository,
+)
 from app.db.repositories.alert import SqlAlertRepository
 from app.db.repositories.dataset_version import SqlDatasetVersionRepository
 from app.db.repositories.feature_snapshot import SqlFeatureSnapshotRepository
@@ -27,11 +30,12 @@ from app.db.repositories.source_health import (
     SqlSourceHealthRepository,
 )
 from app.db.repositories.traffic_observation import SqlTrafficObservationRepository
-from app.db.repositories.weather_reading import SqlWeatherReadingRepository
 from app.db.repositories.weather_forecast import SqlWeatherForecastRepository
+from app.db.repositories.weather_reading import SqlWeatherReadingRepository
 
 __all__ = [
     "SqlAlertRepository",
+    "SqlAdvisoryBundleRepository",
     "SqlDatasetVersionRepository",
     "SqlFeatureSnapshotRepository",
     "SqlFireHotspotRepository",

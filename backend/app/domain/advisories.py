@@ -139,7 +139,11 @@ class AdvisoryBundle:
     summary: str
     inspection_checklist: tuple[str, ...]
     template_version: str = ADVISORY_SCHEMA_VERSION
-    provider_status: Literal["template"] = "template"
+    provider_status: Literal["template", "template_fallback", "gemini"] = "template"
+    model_id: str | None = None
+    prompt_version: str | None = None
+    provider_message: str | None = None
+    generated_evidence_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.draft_label.startswith("DRAFT"):
@@ -150,6 +154,17 @@ class AdvisoryBundle:
             not item.strip() or len(item) > 300 for item in self.inspection_checklist
         ):
             raise ValueError("inspection checklist entries must be bounded non-empty text")
+        if self.model_id is not None and len(self.model_id) > 100:
+            raise ValueError("model_id must not exceed 100 characters")
+        if self.prompt_version is not None and len(self.prompt_version) > 50:
+            raise ValueError("prompt_version must not exceed 50 characters")
+        if self.provider_message is not None and len(self.provider_message) > 240:
+            raise ValueError("provider_message must not exceed 240 characters")
+        context_evidence_ids = {
+            fact.evidence_id for fact in self.context.facts
+        } | {source.evidence_id for source in self.context.sources}
+        if not set(self.generated_evidence_ids).issubset(context_evidence_ids):
+            raise ValueError("generated evidence references must exist in the context")
 
     @property
     def evidence_ids(self) -> tuple[str, ...]:
@@ -157,6 +172,7 @@ class AdvisoryBundle:
             dict.fromkeys(
                 [fact.evidence_id for fact in self.context.facts]
                 + [source.evidence_id for source in self.context.sources]
+                + list(self.generated_evidence_ids)
             )
         )
 
@@ -165,6 +181,8 @@ class AdvisoryBundle:
         lines = [
             self.draft_label,
             "DRAFT FOR HUMAN REVIEW — not an official notice, confirmed event, or GRAP stage.",
+            f"Generation status: {self.provider_status}"
+            + (f" — {self.provider_message}" if self.provider_message else ""),
             "",
             self.summary,
             "",
@@ -185,5 +203,30 @@ class AdvisoryBundle:
                 f"- {source.source}: {source.description} [{source.evidence_id}]"
                 for source in self.context.sources
             ),
+            "",
+            "Generated-text evidence references:",
+            *(f"- {evidence_id}" for evidence_id in self.generated_evidence_ids),
         ]
         return "\n".join(lines)
+
+
+@dataclass(frozen=True, slots=True)
+class AdvisoryRecord:
+    """Persisted advisory output and the generation provenance used to create it."""
+
+    id: str
+    context_hash: str
+    generation_key: str
+    bundle: AdvisoryBundle
+    generated_at: datetime
+    consented_at: datetime | None
+
+    def __post_init__(self) -> None:
+        if len(self.id) != 36 or len(self.context_hash) != 64:
+            raise ValueError("advisory record identifiers are malformed")
+        if not self.generation_key.strip() or len(self.generation_key) > 200:
+            raise ValueError("generation_key must contain 1-200 characters")
+        if self.generated_at.tzinfo is None:
+            raise ValueError("generated_at must be timezone-aware")
+        if self.consented_at is not None and self.consented_at.tzinfo is None:
+            raise ValueError("consented_at must be timezone-aware")

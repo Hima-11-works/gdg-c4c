@@ -449,6 +449,9 @@ class Settings(BaseSettings):
     # database/storage work and response serialization.
     gemini_request_timeout_seconds: int = Field(default=35, ge=1, le=45)
     gemini_max_output_tokens: int = Field(default=512, ge=128, le=1024)
+    gemini_advisory_timeout_seconds: int = Field(default=25, ge=1, le=30)
+    gemini_advisory_max_input_chars: int = Field(default=12000, ge=1000, le=20000)
+    gemini_advisory_max_output_tokens: int = Field(default=512, ge=128, le=1024)
     # Minimum time between reanalyses of the same evidence to budget provider quota.
     gemini_reanalysis_cooldown_seconds: int = Field(default=300, ge=0, le=86400)
 

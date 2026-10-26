@@ -56,10 +56,11 @@ POLICIES: dict[str, ProviderPolicy] = {
         (BudgetWindow(60, 10), BudgetWindow(3600, 100), BudgetWindow(86400, 1000)),
         max_bytes_per_day=50_000_000,
     ),
-    # Gemini photo advisory analysis uses a measured rate limit to protect
-    # against quota exhaustion and prevent advisory spikes.
+    # Conservative application-level ceiling shared by text and photo
+    # advisories: 2 requests/minute and 20/day. Google project quotas vary and
+    # must still be checked in AI Studio; this is not a provider entitlement.
     "gemini": ProviderPolicy(
-        (BudgetWindow(60, 15), BudgetWindow(3600, 300), BudgetWindow(86400, 1500)),
+        (BudgetWindow(60, 2), BudgetWindow(86400, 20)),
     ),
 }
 
@@ -77,6 +78,24 @@ class SqlProviderRequestBudget:
 
     def __init__(self, session_factory: sessionmaker) -> None:
         self._session_factory = session_factory
+
+    def reserve_request_sync(
+        self,
+        *,
+        provider: str,
+        request_key_hash: str,
+        request_units: int,
+        bytes_reserved: int = 0,
+        now: datetime | None = None,
+    ) -> Reservation:
+        """Synchronous counterpart for services that already run in worker threads."""
+        return self._reserve_sync(
+            provider,
+            request_key_hash,
+            request_units,
+            bytes_reserved,
+            now or datetime.now(UTC),
+        )
 
     async def reserve_request(
         self,
@@ -379,6 +398,26 @@ class SqlProviderRequestBudget:
     ) -> None:
         await asyncio.to_thread(
             self._complete_sync,
+            reservation_id,
+            status_code,
+            bytes_used,
+            cooldown_until,
+            remaining_units,
+            now or datetime.now(UTC),
+        )
+
+    def complete_request_sync(
+        self,
+        *,
+        reservation_id: int,
+        status_code: int,
+        bytes_used: int | None,
+        cooldown_until: datetime | None = None,
+        remaining_units: int | None = None,
+        now: datetime | None = None,
+    ) -> None:
+        """Synchronous counterpart for sync provider adapters and API routes."""
+        self._complete_sync(
             reservation_id,
             status_code,
             bytes_used,

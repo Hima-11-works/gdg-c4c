@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.db.repositories import (
+    SqlAdvisoryBundleRepository,
     SqlAlertRepository,
     SqlCellSatelliteInterpretationRepository,
     SqlEvidenceRepository,
@@ -38,9 +39,11 @@ from app.db.repositories import (
     SqlWeatherReadingRepository,
 )
 from app.db.repositories.satellite_observation import SqlSatelliteObservationRepository
-from app.db.session import get_db
+from app.db.session import get_db, get_session_factory
 from app.domain.incidents import IncidentActor
 from app.domain.types import BoundingBox
+from app.services.advisory_context import AdvisoryContextService
+from app.services.advisory_generation import AdvisoryGenerationService
 from app.services.alerts import AlertService
 from app.services.cell_satellite import CellSatelliteService
 from app.services.cells import CellService
@@ -62,6 +65,7 @@ from app.services.media_storage import (
     build_media_store,
 )
 from app.services.prediction_queries import PredictionQueryService
+from app.services.provider_budget import SqlProviderRequestBudget
 from app.services.published_alerts import PublishedAlertService
 from app.services.reports import FireReportService
 from app.services.sensors import SensorService
@@ -234,6 +238,27 @@ def get_gemini_assessment_service(
         settings=settings,
         evidence=evidence,
         repository=SqlGeminiAssessmentRepository(session),
+        budget=SqlProviderRequestBudget(get_session_factory()),
+    )
+
+
+def get_advisory_generation_service(
+    session: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> AdvisoryGenerationService:
+    queries = PredictionQueryService(
+        SqlPredictionPublicationRepository(session),
+        source_health=SqlSourceHealthRepository(session),
+    )
+    contexts = AdvisoryContextService(
+        published_alerts=PublishedAlertService(queries),
+        queries=queries,
+    )
+    return AdvisoryGenerationService(
+        settings=settings,
+        contexts=contexts,
+        repository=SqlAdvisoryBundleRepository(session),
+        budget=SqlProviderRequestBudget(get_session_factory()),
     )
 
 

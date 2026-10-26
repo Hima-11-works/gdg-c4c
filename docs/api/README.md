@@ -14,3 +14,8 @@ The example intentionally has no calibrated interval for the demo forecast.
 `lower_pm25` and `upper_pm25` are nullable until a model has passed held-out
 interval calibration. Exposure is population-weighted concentration plus
 threshold counts; it is not a medical dose estimate.
+
+## Reviewer advisory routes
+
+The consent-gated, reviewer-key-protected draft API is documented in
+[advisories.md](advisories.md).

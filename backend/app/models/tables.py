@@ -1053,6 +1053,41 @@ evidence_visual_assessment = Table(
     Index("ix_evidence_visual_assessment_report", "report_id", "generated_at"),
 )
 
+# Reviewer-requested, run-pinned pollution advisory text. A lease token on the
+# unique context hash coalesces duplicate generation across API workers.
+advisory_bundle = Table(
+    "advisory_bundle",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("context_hash", String(64), nullable=False, unique=True),
+    Column("source_type", String(32), nullable=False),
+    Column("source_id", String(256), nullable=False),
+    Column("run_id", String(120), nullable=False),
+    Column("provider_status", String(24), nullable=False),
+    Column("bundle", JSONB, nullable=True),
+    Column("generation_key", String(200), nullable=False),
+    Column("model_id", String(100), nullable=True),
+    Column("prompt_version", String(50), nullable=False),
+    Column("schema_version", String(50), nullable=False),
+    Column("consented_at", DateTime(timezone=True), nullable=True),
+    Column("generated_at", DateTime(timezone=True), nullable=True),
+    Column("lease_token", String(36), nullable=True),
+    Column("lease_expires_at", DateTime(timezone=True), nullable=True),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint(
+        "(provider_status = 'generating' AND bundle IS NULL AND generated_at IS NULL) "
+        "OR (provider_status IN ('template','template_fallback','gemini') "
+        "AND bundle IS NOT NULL AND generated_at IS NOT NULL)",
+        name="ck_advisory_bundle_state",
+    ),
+    CheckConstraint(
+        "(lease_token IS NULL) = (lease_expires_at IS NULL)",
+        name="ck_advisory_bundle_lease_consistent",
+    ),
+    Index("ix_advisory_bundle_source", "source_type", "source_id", "updated_at"),
+    Index("ix_advisory_bundle_lease", "lease_expires_at"),
+)
+
 # The two-partition federation demonstration persists participant counts and
 # model-update hashes only; the database contract makes raw-row exchange zero.
 federation_run = Table(
