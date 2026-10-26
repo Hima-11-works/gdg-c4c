@@ -469,7 +469,13 @@ export function MapPage() {
       </div>
 
       <div className="overlay overlay-bottom-left">
-        <LayerToggle />
+        <LayerToggle
+          collectorHealth={
+            publishedMeta.resource.status === 'success'
+              ? publishedMeta.resource.data.collector_health
+              : undefined
+          }
+        />
       </div>
 
       <div className="overlay overlay-bottom-center">

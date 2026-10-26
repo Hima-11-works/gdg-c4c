@@ -32,6 +32,16 @@ from app.services.shadow_run import (
     ShadowMeasurementService,
 )
 
+
+def _run_inline(coroutine):
+    """Drive these no-await CLI coroutines without opening a sandboxed socket."""
+    try:
+        coroutine.send(None)
+    except StopIteration as completed:
+        return completed.value
+    raise AssertionError("CLI coroutine unexpectedly awaited external work")
+
+
 # --- 1. Lag and Telemetry Measurements ---
 
 
@@ -78,6 +88,27 @@ def test_measure_lag_empty_returns_zero_samples() -> None:
     assert metrics.observation_to_provider_seconds is None
 
 
+def test_measure_lag_does_not_infer_provider_time_from_observation_age() -> None:
+    measured_at = datetime(2026, 10, 24, 11, 45, tzinfo=UTC)
+    reading = SensorReading(
+        source="openaq",
+        external_sensor_id="s1",
+        latitude=28.61,
+        longitude=77.21,
+        pollutant=PM25,
+        value=85.0,
+        unit="µg/m³",
+        measured_at=measured_at,
+    )
+
+    metrics = ShadowMeasurementService.measure_lag(
+        [reading], now=datetime(2026, 10, 24, 12, 0, tzinfo=UTC)
+    )
+
+    assert metrics.sample_count == 0
+    assert metrics.observation_to_provider_seconds is None
+
+
 # --- 2. Station Coverage and Freshness ---
 
 
@@ -107,6 +138,22 @@ def test_measure_station_coverage_empty() -> None:
     metrics = ShadowMeasurementService.measure_station_coverage([])
     assert metrics.total_stations == 0
     assert metrics.freshness_fraction == 0.0
+
+
+def test_measure_station_coverage_counts_unique_stations_and_uses_latest_reading() -> None:
+    now = datetime(2026, 10, 24, 12, 0, tzinfo=UTC)
+    metrics = ShadowMeasurementService.measure_station_coverage(
+        [
+            {"station_id": "st1", "measured_at": (now - timedelta(hours=3)).isoformat()},
+            {"station_id": "st1", "measured_at": (now - timedelta(minutes=30)).isoformat()},
+            {"station_id": "st2", "measured_at": (now - timedelta(hours=4)).isoformat()},
+        ],
+        now=now,
+    )
+
+    assert metrics.total_stations == 2
+    assert metrics.active_fresh_stations == 1
+    assert metrics.stale_stations == 1
 
 
 # --- 3. Storage Growth and Disk Headroom ---
@@ -235,6 +282,8 @@ def test_cutover_gate_greenlights_when_all_criteria_met() -> None:
         failure_results=scenarios,
         has_synthetic_inputs_in_live=False,
         quota_overshoot_detected=False,
+        live_publication_available=True,
+        scheduler_checks_verified=True,
         retention_sweep_verified=True,
         last_good_live_run_retained=True,
         rollback_path_verified=True,
@@ -308,12 +357,57 @@ def test_cutover_gate_blocks_on_insufficient_station_freshness() -> None:
     assert station_gate.passed is False
 
 
+def test_cutover_gate_blocks_when_evidence_and_operational_checks_are_missing() -> None:
+    report = CutoverGate.evaluate(
+        mode=DataMode.LIVE,
+        lag=LagMetrics(sample_count=0),
+        station_coverage=StationCoverageMetrics(
+            total_stations=0, active_fresh_stations=0, stale_stations=0
+        ),
+        storage=StorageGrowthMetrics(0, 0, retention_prune_active=False),
+        failure_results=[],
+    )
+
+    failed = {gate.gate_name: gate for gate in report.gates if not gate.passed}
+    assert report.ready_for_cutover is False
+    assert "station_freshness" in failed
+    assert "No station observations" in failed["station_freshness"].reason
+    assert "ingestion_lag" in failed
+    assert "No measured" in failed["ingestion_lag"].reason
+    assert "live_publication" in failed
+    assert "scheduler_health" in failed
+    assert "retention_and_storage" in failed
+    assert "failure_resilience" in failed
+    assert "rollback_safety" in failed
+
+
+def test_cutover_gate_uses_worst_measured_lag_not_only_the_average() -> None:
+    report = CutoverGate.evaluate(
+        mode=DataMode.LIVE,
+        lag=LagMetrics(
+            sample_count=10,
+            observation_to_provider_seconds=600.0,
+            max_observation_to_provider_seconds=4 * 3600 + 60,
+        ),
+        station_coverage=StationCoverageMetrics(total_stations=10, active_fresh_stations=8, stale_stations=2),
+        storage=StorageGrowthMetrics(0, 0, retention_prune_active=False),
+        failure_results=FailureScenarioExerciser().run_all_scenarios(),
+    )
+
+    lag_gate = next(gate for gate in report.gates if gate.gate_name == "ingestion_lag")
+    assert lag_gate.passed is False
+    assert "14460s" in lag_gate.reason
+
+
 # --- 7. CLI Commands for Shadow Run and Cutover Gate ---
 
 
 def test_cli_shadow_run_command_execution(capsys: pytest.CaptureFixture[str], tmp_path) -> None:
     out_file = tmp_path / "shadow_report.json"
-    with patch("app.cli.SqlSensorReadingRepository") as mock_repo_cls:
+    with (
+        patch("app.cli.asyncio.run", side_effect=_run_inline),
+        patch("app.cli.SqlSensorReadingRepository") as mock_repo_cls,
+    ):
         mock_repo = MagicMock()
         mock_repo.list_since.return_value = [
             SensorReading(
@@ -338,13 +432,31 @@ def test_cli_shadow_run_command_execution(capsys: pytest.CaptureFixture[str], tm
     assert out_file.exists()
     data = json.loads(out_file.read_text(encoding="utf-8"))
     assert data["mode"] == "live"
-    assert data["ready_for_cutover"] is True
+    assert data["ready_for_cutover"] is False
 
 
-def test_cli_cutover_gate_command_passes_and_fails(tmp_path) -> None:
+def test_cli_cutover_gate_blocks_without_persisted_operational_evidence(tmp_path) -> None:
     out_file = tmp_path / "gate_report.json"
-    # When readings are fresh, gate passes
-    with patch("app.cli.SqlSensorReadingRepository") as mock_repo_cls:
+    # A fresh reading alone cannot prove publication, scheduling, quota,
+    # retention, or rollback readiness.
+    session = MagicMock()
+    with (
+        patch("app.cli.asyncio.run", side_effect=_run_inline),
+        patch("app.cli.get_session_factory", return_value=lambda: session),
+        patch("app.cli.SqlSensorReadingRepository") as mock_repo_cls,
+        patch(
+            "app.cli._read_cutover_operational_evidence",
+            return_value={
+                "has_synthetic_inputs_in_live": None,
+                "quota_overshoot_detected": None,
+                "live_publication_available": False,
+                "scheduler_checks_verified": False,
+                "retention_sweep_verified": None,
+                "last_good_live_run_retained": False,
+                "rollback_path_verified": None,
+            },
+        ),
+    ):
         mock_repo = MagicMock()
         mock_repo.list_since.return_value = [
             SensorReading(
@@ -356,16 +468,35 @@ def test_cli_cutover_gate_command_passes_and_fails(tmp_path) -> None:
                 value=70.0,
                 unit="µg/m³",
                 measured_at=datetime.now(UTC) - timedelta(minutes=10),
+                received_at=datetime.now(UTC) - timedelta(minutes=5),
             )
         ]
         mock_repo_cls.return_value = mock_repo
 
         ret = main(["cutover-gate", "--mode", "live", "--out", str(out_file)])
-        assert ret == 0
+        assert ret == 2
+        assert out_file.exists()
+        data = json.loads(out_file.read_text(encoding="utf-8"))
+        assert data["ready_for_cutover"] is False
+        assert any(gate["gate_name"] == "live_publication" for gate in data["gates"])
 
     # When gate fails due to an injected condition, exits with 2
     with (
+        patch("app.cli.asyncio.run", side_effect=_run_inline),
+        patch("app.cli.get_session_factory", return_value=lambda: MagicMock()),
         patch("app.cli.SqlSensorReadingRepository"),
+        patch(
+            "app.cli._read_cutover_operational_evidence",
+            return_value={
+                "has_synthetic_inputs_in_live": None,
+                "quota_overshoot_detected": None,
+                "live_publication_available": False,
+                "scheduler_checks_verified": False,
+                "retention_sweep_verified": None,
+                "last_good_live_run_retained": False,
+                "rollback_path_verified": None,
+            },
+        ),
         patch("app.services.shadow_run.CutoverGate.evaluate") as mock_eval,
     ):
         mock_eval.return_value = CutoverReadinessReport(

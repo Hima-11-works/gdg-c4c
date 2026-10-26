@@ -1,6 +1,7 @@
 import { useMapUi } from '../state/MapUiContext'
 import { SidePanel } from './SidePanel'
 import type { MapViewMode } from '../state/mapUiReducer'
+import type { SourceHealthOut } from '../lib/types'
 
 const VIEW_MODES: { mode: MapViewMode; label: string; title: string }[] = [
   { mode: 'hex', label: 'Hex cells', title: 'Discrete H3 hexagons (one value per cell)' },
@@ -11,7 +12,33 @@ const VIEW_MODES: { mode: MapViewMode; label: string; title: string }[] = [
   },
 ]
 
-export function LayerToggle() {
+function firmsCollectionHint(collectorHealth?: SourceHealthOut[]): string {
+  if (!collectorHealth) return 'FIRMS collection status is unavailable until metadata loads.'
+  const status = collectorHealth.find((source) => source.dataset_id === 'nasa-firms')
+  if (!status) return 'No FIRMS collection check is recorded; an empty map is inconclusive.'
+
+  const checkedAt = status.fetched_at
+    ? ` Checked ${new Date(status.fetched_at).toLocaleString()}.`
+    : ''
+  switch (status.status) {
+    case 'present':
+      return `Latest collection returned ${status.item_count} detections.${checkedAt}`
+    case 'empty':
+      return `Latest collection succeeded with 0 detections; this does not prove no fire is present.${checkedAt}`
+    case 'stale':
+      return `Latest FIRMS result is stale; current detections are unknown.${checkedAt}`
+    case 'failed':
+      return `Latest FIRMS collection failed; an empty map is inconclusive.${checkedAt}`
+    case 'missing':
+      return 'FIRMS was not queried in the latest collector run; an empty map is inconclusive.'
+  }
+}
+
+export function LayerToggle({
+  collectorHealth,
+}: {
+  collectorHealth?: SourceHealthOut[]
+}) {
   const { state, dispatch } = useMapUi()
 
   return (
@@ -108,7 +135,7 @@ export function LayerToggle() {
               Active Fires (NASA FIRMS)
             </label>
             <span className="layer-sub-hint">
-              Real NRT VIIRS detections. If empty, no active-fire detections were returned.
+              {firmsCollectionHint(collectorHealth)}
             </span>
           </div>
 

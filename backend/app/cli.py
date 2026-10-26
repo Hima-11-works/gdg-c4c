@@ -2149,6 +2149,116 @@ async def _run_shadow_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _read_cutover_operational_evidence(session, *, now: datetime) -> dict[str, bool | None]:
+    """Read cutover facts from persisted publications, provider usage, and jobs.
+
+    Missing records stay unknown (or explicitly unavailable); this helper never
+    promotes absent telemetry to a passing check.
+    """
+    from sqlalchemy import select
+
+    from app.domain.prediction import DEFAULT_REGION
+    from app.models.tables import provider_request_usage, scheduled_job
+    from app.services.scheduler import JOB_DEFINITIONS
+
+    evidence: dict[str, bool | None] = {
+        "has_synthetic_inputs_in_live": None,
+        "quota_overshoot_detected": None,
+        "live_publication_available": None,
+        "scheduler_checks_verified": None,
+        "retention_sweep_verified": None,
+        "last_good_live_run_retained": None,
+        "rollback_path_verified": None,
+    }
+
+    try:
+        live_run = SqlPredictionPublicationRepository(session).latest_run(
+            region=DEFAULT_REGION, mode=DataMode.LIVE
+        )
+        if live_run is None:
+            evidence["live_publication_available"] = False
+            evidence["last_good_live_run_retained"] = False
+        else:
+            age = (
+                now - live_run.published_at
+                if live_run.published_at is not None
+                else None
+            )
+            evidence["live_publication_available"] = (
+                age is not None
+                and age >= -timedelta(minutes=5)
+                and age <= timedelta(hours=24)
+            )
+            evidence["last_good_live_run_retained"] = True
+            if live_run.dataset_refs:
+                from app.domain.features import InputKind
+
+                evidence["has_synthetic_inputs_in_live"] = any(
+                    ref.kind == InputKind.SYNTHETIC for ref in live_run.dataset_refs
+                )
+    except SQLAlchemyError:
+        logger.warning("Could not verify live publication evidence")
+        session.rollback()
+
+    try:
+        outcomes = session.execute(
+            select(provider_request_usage.c.outcome).where(
+                provider_request_usage.c.reserved_at >= now - timedelta(hours=24)
+            )
+        ).scalars().all()
+        if outcomes:
+            evidence["quota_overshoot_detected"] = any(
+                outcome == "rate_limited" for outcome in outcomes
+            )
+    except SQLAlchemyError:
+        logger.warning("Could not verify provider quota evidence")
+        session.rollback()
+
+    try:
+        rows = session.execute(select(scheduled_job)).mappings().all()
+        jobs = {row["job_key"]: row for row in rows}
+        expected_keys = set(JOB_DEFINITIONS)
+        current_jobs_verified = bool(expected_keys) and expected_keys.issubset(jobs)
+        for key, interval_seconds in JOB_DEFINITIONS.items():
+            row = jobs.get(key)
+            if row is None:
+                current_jobs_verified = False
+                continue
+            success_at = row["last_success_at"]
+            next_run_at = row["next_run_at"]
+            max_age = timedelta(seconds=max(interval_seconds * 2, 3600))
+            success_age = now - success_at if success_at is not None else None
+            run_lateness = now - next_run_at if next_run_at is not None else None
+            if (
+                not row["enabled"]
+                or row["consecutive_failures"] != 0
+                or success_age is None
+                or success_age < -timedelta(minutes=5)
+                or success_age > max_age
+                or run_lateness is None
+                or run_lateness > max_age
+            ):
+                current_jobs_verified = False
+        evidence["scheduler_checks_verified"] = current_jobs_verified
+
+        retention = jobs.get("prediction-retention")
+        if retention is not None and retention["enabled"]:
+            last_success = retention["last_success_at"]
+            success_age = now - last_success if last_success is not None else None
+            evidence["retention_sweep_verified"] = (
+                retention["consecutive_failures"] == 0
+                and success_age is not None
+                and timedelta(0) <= success_age <= timedelta(hours=2)
+            )
+        elif retention is not None:
+            evidence["retention_sweep_verified"] = False
+    except SQLAlchemyError:
+        logger.warning("Could not verify scheduler evidence")
+        session.rollback()
+
+    return evidence
+
+
 async def _run_cutover_gate(args: argparse.Namespace) -> int:
     """Evaluate live cutover readiness gatekeeper (exits 0 if ready, 2 if blocked)."""
     from app.services.shadow_run import (
@@ -2166,11 +2276,15 @@ async def _run_cutover_gate(args: argparse.Namespace) -> int:
             readings = SqlSensorReadingRepository(session).list_since(now - timedelta(hours=6))
         except SQLAlchemyError:
             logger.warning("Database unavailable; evaluating cutover gate with offline readings")
+            session.rollback()
             readings = ()
 
         lag = ShadowMeasurementService.measure_lag(readings, now=now)
         coverage = ShadowMeasurementService.measure_station_coverage(readings, now=now)
-        storage = ShadowMeasurementService.measure_storage_growth()
+        evidence = _read_cutover_operational_evidence(session, now=now)
+        storage = ShadowMeasurementService.measure_storage_growth(
+            retention_prune_active=evidence["retention_sweep_verified"] is True
+        )
 
         exerciser = FailureScenarioExerciser()
         scenarios = exerciser.run_all_scenarios()
@@ -2181,6 +2295,7 @@ async def _run_cutover_gate(args: argparse.Namespace) -> int:
             station_coverage=coverage,
             storage=storage,
             failure_results=scenarios,
+            **evidence,
             now=now,
         )
     finally:

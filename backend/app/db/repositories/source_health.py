@@ -174,11 +174,12 @@ def _latest_run_id_stmt() -> Select:
     is the correct source here: the set of runs that recorded health is exactly
     the set of runs whose health is available to read.
     """
-    return (
-        select(health_table.c.pipeline_run_id)
-        .order_by(health_table.c.fetched_at.desc().nullslast(), health_table.c.id.desc())
-        .limit(1)
-    )
+    # `id` is allocated when the health row is written, including for a source
+    # that was intentionally not called (`missing`, with no fetched_at). If we
+    # sort by fetched_at first, that latest missing row loses to every prior
+    # successful fetch and the collector view can claim the old result is the
+    # latest check.
+    return select(health_table.c.pipeline_run_id).order_by(health_table.c.id.desc()).limit(1)
 
 
 def _list_for_run_stmt(run_id: str) -> Select:

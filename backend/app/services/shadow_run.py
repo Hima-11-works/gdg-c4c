@@ -59,12 +59,10 @@ class ShadowMeasurementService:
                 app_lag = (current_time - reading.received_at).total_seconds()
                 if app_lag >= 0:
                     provider_to_app_lags.append(app_lag)
-            else:
-                lag = (current_time - reading.measured_at).total_seconds()
-                if lag >= 0:
-                    obs_to_provider_lags.append(lag)
-
-        sample_count = len(readings)
+        # Only timestamp pairs measure provider lag. A measurement timestamp
+        # without a receipt timestamp can establish observation age, but it
+        # cannot establish when the provider or application received it.
+        sample_count = len(obs_to_provider_lags)
         obs_mean = (
             sum(obs_to_provider_lags) / len(obs_to_provider_lags)
             if obs_to_provider_lags
@@ -93,7 +91,52 @@ class ShadowMeasurementService:
     ) -> StationCoverageMetrics:
         """Quantify active and fresh ground monitoring stations in the target region."""
         current_time = now or datetime.now(UTC)
-        total = len(stations)
+        latest_by_station: dict[tuple[str, ...], datetime | None] = {}
+        for index, station in enumerate(stations):
+            if isinstance(station, SensorReading):
+                station_id = station.canonical_station_id or station.external_sensor_id
+                key = (
+                    ("canonical", station_id)
+                    if station.canonical_station_id
+                    else ("source", station.source, station_id)
+                )
+                measured_at = station.measured_at
+            else:
+                station_id = (
+                    station.get("canonical_station_id")
+                    or station.get("station_id")
+                    or station.get("external_sensor_id")
+                )
+                key = ("station", str(station_id)) if station_id else ("unknown", str(index))
+                raw_time = station.get("measured_at") or station.get("last_updated")
+                try:
+                    measured_at = (
+                        datetime.fromisoformat(raw_time.replace("Z", "+00:00"))
+                        if isinstance(raw_time, str)
+                        else raw_time if isinstance(raw_time, datetime) else None
+                    )
+                    if measured_at is not None:
+                        measured_at = (
+                            measured_at.replace(tzinfo=UTC)
+                            if measured_at.tzinfo is None
+                            else measured_at.astimezone(UTC)
+                        )
+                except ValueError:
+                    measured_at = None
+
+            if measured_at is not None:
+                measured_at = (
+                    measured_at.replace(tzinfo=UTC)
+                    if measured_at.tzinfo is None
+                    else measured_at.astimezone(UTC)
+                )
+            previous = latest_by_station.get(key)
+            if key not in latest_by_station or (
+                measured_at is not None and (previous is None or measured_at > previous)
+            ):
+                latest_by_station[key] = measured_at
+
+        total = len(latest_by_station)
         if total == 0:
             return StationCoverageMetrics(
                 total_stations=0, active_fresh_stations=0, stale_stations=0
@@ -103,20 +146,10 @@ class ShadowMeasurementService:
         active_fresh = 0
         stale = 0
 
-        for s in stations:
-            if isinstance(s, SensorReading):
-                measured_at = s.measured_at
-            else:
-                raw_time = s.get("measured_at") or s.get("last_updated")
-                if isinstance(raw_time, str):
-                    iso_str = raw_time.replace("Z", "+00:00")
-                    measured_at = datetime.fromisoformat(iso_str).astimezone(UTC)
-                elif isinstance(raw_time, datetime):
-                    measured_at = raw_time.astimezone(UTC)
-                else:
-                    stale += 1
-                    continue
-
+        for measured_at in latest_by_station.values():
+            if measured_at is None:
+                stale += 1
+                continue
             if measured_at >= cutoff and measured_at <= current_time + timedelta(minutes=5):
                 active_fresh += 1
             else:
@@ -136,7 +169,7 @@ class ShadowMeasurementService:
         horizons_per_run: int = 5,
         daily_sensor_readings: int = 2000,
         daily_weather_readings: int = 3000,
-        retention_prune_active: bool = True,
+        retention_prune_active: bool = False,
         available_disk_bytes: int = 10 * 1024 * 1024 * 1024,  # 10 GB
     ) -> StorageGrowthMetrics:
         """Estimate daily row and byte consumption and compute disk headroom."""
@@ -380,11 +413,13 @@ class CutoverGate:
         storage: StorageGrowthMetrics,
         failure_results: Sequence[FailureScenarioResult],
         job_summaries: Sequence[JobExecutionSummary] = (),
-        has_synthetic_inputs_in_live: bool = False,
-        quota_overshoot_detected: bool = False,
-        retention_sweep_verified: bool = True,
-        last_good_live_run_retained: bool = True,
-        rollback_path_verified: bool = True,
+        has_synthetic_inputs_in_live: bool | None = None,
+        quota_overshoot_detected: bool | None = None,
+        live_publication_available: bool | None = None,
+        scheduler_checks_verified: bool | None = None,
+        retention_sweep_verified: bool | None = None,
+        last_good_live_run_retained: bool | None = None,
+        rollback_path_verified: bool | None = None,
         now: datetime | None = None,
     ) -> CutoverReadinessReport:
         """Evaluate cutover gates across isolation, budgets, lag, robustness, and rollback."""
@@ -392,7 +427,23 @@ class CutoverGate:
         gates: list[CutoverGateVerdict] = []
 
         # Gate 1: Mode isolation (Zero synthetic data in live runs)
-        if mode == DataMode.LIVE and has_synthetic_inputs_in_live:
+        if mode != DataMode.LIVE:
+            gates.append(
+                CutoverGateVerdict(
+                    gate_name="mode_isolation",
+                    passed=False,
+                    reason="Cutover readiness can only be assessed for live mode.",
+                )
+            )
+        elif has_synthetic_inputs_in_live is None:
+            gates.append(
+                CutoverGateVerdict(
+                    gate_name="mode_isolation",
+                    passed=False,
+                    reason="Live input provenance was not verified.",
+                )
+            )
+        elif has_synthetic_inputs_in_live:
             gates.append(
                 CutoverGateVerdict(
                     gate_name="mode_isolation",
@@ -405,12 +456,20 @@ class CutoverGate:
                 CutoverGateVerdict(
                     gate_name="mode_isolation",
                     passed=True,
-                    reason="Mode isolation verified; live pipeline uses 100% verified real inputs.",
+                    reason="Live input provenance was checked and contains no synthetic inputs.",
                 )
             )
 
         # Gate 2: Provider budget & quota adherence
-        if quota_overshoot_detected:
+        if quota_overshoot_detected is None:
+            gates.append(
+                CutoverGateVerdict(
+                    gate_name="budget_adherence",
+                    passed=False,
+                    reason="Provider quota usage was not verified for the shadow window.",
+                )
+            )
+        elif quota_overshoot_detected:
             gates.append(
                 CutoverGateVerdict(
                     gate_name="budget_adherence",
@@ -423,14 +482,22 @@ class CutoverGate:
                 CutoverGateVerdict(
                     gate_name="budget_adherence",
                     passed=True,
-                    reason="Provider usage remained strictly within measured free quotas.",
+                    reason="No provider rate-limit events were recorded in the observed window.",
                 )
             )
 
         # Gate 3: Station coverage & freshness
         min_fraction = 0.5
         is_fresh = station_coverage.freshness_fraction >= min_fraction
-        if station_coverage.total_stations > 0 and not is_fresh:
+        if station_coverage.total_stations <= 0:
+            gates.append(
+                CutoverGateVerdict(
+                    gate_name="station_freshness",
+                    passed=False,
+                    reason="No station observations are available to assess freshness.",
+                )
+            )
+        elif not is_fresh:
             gates.append(
                 CutoverGateVerdict(
                     gate_name="station_freshness",
@@ -451,19 +518,69 @@ class CutoverGate:
                 )
             )
 
-        # Gate 4: Lag thresholds
+        # Gate 4: A recent run and live scheduling must be evidenced, not
+        # inferred from a passing in-memory smoke check.
+        if live_publication_available is not True:
+            gates.append(
+                CutoverGateVerdict(
+                    gate_name="live_publication",
+                    passed=False,
+                    reason=(
+                        "No recent live publication was verified."
+                        if live_publication_available is False
+                        else "Live publication availability was not verified."
+                    ),
+                )
+            )
+        else:
+            gates.append(
+                CutoverGateVerdict(
+                    gate_name="live_publication",
+                    passed=True,
+                    reason="A recent live prediction publication was verified.",
+                )
+            )
+
+        if scheduler_checks_verified is not True:
+            gates.append(
+                CutoverGateVerdict(
+                    gate_name="scheduler_health",
+                    passed=False,
+                    reason="Recent successful scheduled collection jobs were not verified.",
+                )
+            )
+        else:
+            gates.append(
+                CutoverGateVerdict(
+                    gate_name="scheduler_health",
+                    passed=True,
+                    reason="Recent successful scheduled collection jobs were verified.",
+                )
+            )
+
+        # Gate 5: Lag thresholds require actual timestamp pairs.
         max_lag_seconds = 4 * 3600.0  # 4 hours
-        if (
-            lag.observation_to_provider_seconds is not None
-            and lag.observation_to_provider_seconds > max_lag_seconds
-        ):
+        measured_lag = (
+            lag.max_observation_to_provider_seconds
+            if lag.max_observation_to_provider_seconds is not None
+            else lag.observation_to_provider_seconds
+        )
+        if lag.sample_count <= 0 or measured_lag is None:
+            gates.append(
+                CutoverGateVerdict(
+                    gate_name="ingestion_lag",
+                    passed=False,
+                    reason="No measured observation-to-provider lag samples are available.",
+                )
+            )
+        elif measured_lag > max_lag_seconds:
             gates.append(
                 CutoverGateVerdict(
                     gate_name="ingestion_lag",
                     passed=False,
                     reason=(
                         f"Observation-to-provider lag "
-                        f"({lag.observation_to_provider_seconds:.0f}s) exceeds 4h target."
+                        f"({measured_lag:.0f}s) exceeds 4h target."
                     ),
                 )
             )
@@ -476,15 +593,13 @@ class CutoverGate:
                 )
             )
 
-        # Gate 5: Retention & storage growth
-        if not storage.retention_prune_active or not retention_sweep_verified:
+        # Gate 6: Retention & storage growth
+        if storage.retention_prune_active is not True or retention_sweep_verified is not True:
             gates.append(
                 CutoverGateVerdict(
                     gate_name="retention_and_storage",
                     passed=False,
-                    reason=(
-                        "Prediction retention and media storage sweep are not actively operating."
-                    ),
+                    reason="The prediction retention sweep is not verified as recently successful.",
                 )
             )
         else:
@@ -492,16 +607,27 @@ class CutoverGate:
                 CutoverGateVerdict(
                     gate_name="retention_and_storage",
                     passed=True,
-                    reason=(
-                        "Prediction retention compaction and media sweeps active with headroom."
-                    ),
+                    reason="The scheduled prediction retention sweep reported a recent success.",
                 )
             )
 
-        # Gate 6: Failure scenarios robustness
-        all_scenarios_passed = all(r.graceful_handling for r in failure_results)
+        # Gate 7: Failure scenarios robustness
+        expected_scenario_count = 10
+        all_scenarios_passed = len(failure_results) == expected_scenario_count and all(
+            r.exercised and r.graceful_handling for r in failure_results
+        )
         if not all_scenarios_passed:
-            failed_names = [r.scenario_name for r in failure_results if not r.graceful_handling]
+            failed_names = [
+                r.scenario_name
+                for r in failure_results
+                if not r.exercised or not r.graceful_handling
+            ]
+            if not failure_results:
+                failed_names.append("no scenarios supplied")
+            elif len(failure_results) != expected_scenario_count:
+                failed_names.append(
+                    f"expected {expected_scenario_count} scenarios, got {len(failure_results)}"
+                )
             gates.append(
                 CutoverGateVerdict(
                     gate_name="failure_resilience",
@@ -518,8 +644,8 @@ class CutoverGate:
                 )
             )
 
-        # Gate 7: Rollback path & last-good retention
-        if not last_good_live_run_retained or not rollback_path_verified:
+        # Gate 8: Rollback path & last-good retention
+        if last_good_live_run_retained is not True or rollback_path_verified is not True:
             gates.append(
                 CutoverGateVerdict(
                     gate_name="rollback_safety",
@@ -548,6 +674,6 @@ class CutoverGate:
             jobs=list(job_summaries),
             failure_scenarios=list(failure_results),
             gates=gates,
-            last_good_live_run_retained=last_good_live_run_retained,
-            rollback_path_verified=rollback_path_verified,
+            last_good_live_run_retained=last_good_live_run_retained is True,
+            rollback_path_verified=rollback_path_verified is True,
         )

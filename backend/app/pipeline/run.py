@@ -618,7 +618,9 @@ def _record_source_health(
             ),
             item_count=item_count,
             error_summary=error_summary,
-            fetched_at=datetime.now(UTC),
+            # A run timestamp is not a provider fetch time when we explicitly
+            # skipped the source (for example, because its key is absent).
+            fetched_at=datetime.now(UTC) if called else None,
         )
     except Exception as exc:  # noqa: BLE001 - a diagnostic must not fail a run
         logger.warning("could not record source health for %s: %s", dataset_id, exc)

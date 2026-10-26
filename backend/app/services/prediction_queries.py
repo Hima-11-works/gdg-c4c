@@ -4,13 +4,19 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
-from datetime import UTC, datetime
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 
 import h3
 
 from app.core.config import get_settings
-from app.db.repositories.source_health import SourceHealth, SourceHealthRepository
+from app.db.repositories.source_health import (
+    STATUS_EMPTY,
+    STATUS_PRESENT,
+    STATUS_STALE,
+    SourceHealth,
+    SourceHealthRepository,
+)
 from app.domain.features import (
     FEATURE_SCHEMA_VERSION,
     DataMode,
@@ -35,6 +41,20 @@ DEMO_FALLBACK_PREFIX = "demo-fallback-"
 #: web client's `STALE_RUN_HOURS`. It now lives here so the API and the client
 #: cannot drift; the client's copy is a reimplementation of this.
 STALE_RUN_SECONDS = 24 * 60 * 60
+
+# A successful historical check is not current forever. These limits follow
+# the input cadence: ground/weather and FIRMS should refresh within hours;
+# Sentinel-5P products have a slower observation/reprocessing cadence.
+COLLECTOR_STALE_AFTER = {
+    "openaq": timedelta(hours=3),
+    "openaq-national-overview": timedelta(hours=3),
+    "open-meteo": timedelta(hours=3),
+    "nasa-firms": timedelta(hours=6),
+    "copernicus-sentinel5p-aer-ai": timedelta(hours=24),
+    "copernicus-sentinel5p": timedelta(hours=24),
+    "copernicus-sentinel5p-no2": timedelta(hours=24),
+}
+DEFAULT_COLLECTOR_STALE_AFTER = timedelta(hours=24)
 
 _DEMO_DATASET = DatasetRef(
   dataset_id="air-health-demo-v1",
@@ -121,12 +141,48 @@ class PredictionQueryService:
             # Evidence diagnostics must not make a published read unavailable.
             return []
 
-    def collector_health(self) -> list[SourceHealth]:
-        """Most recent collector checks, separate from run-pinned evidence."""
+    def collector_health(self, *, now: datetime | None = None) -> list[SourceHealth]:
+        """Most recent checks, aged at read time without rewriting run evidence."""
         if self._health is None:
             return []
         try:
-            return self._health.list_latest_run()
+            current_time = now or datetime.now(UTC)
+            rows = self._health.list_latest_run()
+            current: list[SourceHealth] = []
+            for row in rows:
+                if row.status not in {STATUS_PRESENT, STATUS_EMPTY}:
+                    current.append(row)
+                    continue
+
+                age = (
+                    current_time - row.fetched_at
+                    if row.fetched_at is not None
+                    else None
+                )
+                stale_after = COLLECTOR_STALE_AFTER.get(
+                    row.dataset_id, DEFAULT_COLLECTOR_STALE_AFTER
+                )
+                if age is None or age < -timedelta(minutes=5) or age > stale_after:
+                    reason = (
+                        "collection timestamp is missing; freshness cannot be verified"
+                        if age is None
+                        else "collection timestamp is in the future; freshness cannot be verified"
+                        if age < -timedelta(minutes=5)
+                        else (
+                            "last collection is older than "
+                            f"{stale_after.total_seconds() / 3600:g} hours"
+                        )
+                    )
+                    current.append(
+                        replace(
+                            row,
+                            status=STATUS_STALE,
+                            error_summary=row.error_summary or reason,
+                        )
+                    )
+                else:
+                    current.append(row)
+            return current
         except Exception:
             return []
 

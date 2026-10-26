@@ -1,11 +1,12 @@
 # Fast implementation plan for STRATEGY.md
 
 Prepared: 26 October 2026. Code reviewed: `beta`, `cad3780`.
-Status: implementation in progress; S00 documentation work started.
+Status: implementation in progress; S00 documentation corrections and S01 code work are pushed. Local runtime checks remain pending.
 
 ## Execution notes
 
-- **S00 documentation (26 October 2026):** Rewrote `STRATEGY.md` to match the implemented prototype and scoped demo, removing unsupported impact, enforcement, federation-privacy, fixed-quota, and satellite-timing claims. `docs/PITCH_DECK.md` already describes these limitations and was left unchanged. Preflight found Docker Desktop unavailable, local API requests blocked in this environment, and no `GEMINI_API_KEY` in the local `.env`; therefore a running case and Gemini smoke call remain unverified. Continue with deterministic/demo paths and do not claim live operation until that preflight succeeds.
+- **S00 (26 October 2026):** Rewrote `STRATEGY.md` to match the implemented prototype and scoped demo, removing unsupported impact, enforcement, federation-privacy, fixed-quota, and satellite-timing claims. `docs/PITCH_DECK.md` already describes these limitations and was left unchanged. Preflight found Docker Desktop unavailable, local API requests blocked in this environment, and no `GEMINI_API_KEY` in the local `.env`; therefore no running case was opened and a Gemini smoke call could not be made. Continue only with clearly labeled demo/fallback paths until that preflight succeeds.
+- **S01 (26 October 2026):** The cutover gate now blocks on absent observations/lag and unknown publication, scheduler, quota, retention, scenario, or rollback evidence. Collector health ages at read time while published-run health stays unchanged; skipped sources have no fetch timestamp, and the latest health run is selected by write order. FIRMS layer text now distinguishes returned detections, successful empty results, stale/failed checks, and a source that was not queried. Station freshness counts unique stations and lag uses only measured timestamp pairs, with the worst paired lag checked against the target. Verification: 19 focused backend tests passed, frontend production build passed, and changed-file Ruff checks passed with existing line-length/f-string violations excluded. The local browser/API path could not run because Docker is unavailable and localhost access is blocked here.
 ## 1. Feasibility verdict
 
 The three proposed extensions are feasible as a reviewer-facing hackathon demo after narrowing their claims:

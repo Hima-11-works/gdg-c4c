@@ -123,6 +123,7 @@ export interface SourceHealthOut {
   latency_ms: number | null
   fetched_at: string | null
   error_summary: string | null
+  next_expected_collection_at?: string | null
 }
 
 export interface MetaV2Out {
@@ -147,6 +148,7 @@ export interface MetaV2Out {
   age_seconds: number | null
   is_stale: boolean
   source_health: SourceHealthOut[]
+  collector_health: SourceHealthOut[]
 }
 
 export interface GridCurrentV2Out {

@@ -14,7 +14,8 @@ pipeline used to be dishonest by omission:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -25,6 +26,7 @@ from app.db.repositories.source_health import (
     STATUS_PRESENT,
     STATUS_STALE,
     SourceHealth,
+    _latest_run_id_stmt,
     classify,
 )
 from app.domain.prediction import DataMode, PredictionInputQuality, PredictionRun
@@ -33,7 +35,7 @@ from app.services.prediction_queries import (
     PredictionQueryService,
 )
 
-NOW = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
 
 def _run(
@@ -121,6 +123,85 @@ def test_failure_wins_over_data() -> None:
 def test_stale_with_rows_is_stale() -> None:
     assert classify(item_count=10, stale=True) == STATUS_STALE
     assert classify(item_count=10) == STATUS_PRESENT
+
+
+def test_collector_health_ages_current_status_without_rewriting_run_evidence() -> None:
+    old = _health("openaq", STATUS_PRESENT, 4)
+    old = replace(old, fetched_at=NOW - timedelta(hours=4))
+    repository = _StubHealthRepo([old], by_run={"input-run": [old]})
+    service = PredictionQueryService(_StubPublicationRepo(), source_health=repository)
+
+    current = service.collector_health(now=NOW)
+    pinned = service.source_health(_run(source_health_run_id="input-run"))
+
+    assert current[0].status == STATUS_STALE
+    assert "older than 3 hours" in (current[0].error_summary or "")
+    assert pinned[0].status == STATUS_PRESENT
+
+
+def test_fresh_collector_empty_result_stays_empty() -> None:
+    repository = _StubHealthRepo([_health("nasa-firms", STATUS_EMPTY, 0)])
+    service = PredictionQueryService(_StubPublicationRepo(), source_health=repository)
+
+    assert service.collector_health(now=NOW)[0].status == STATUS_EMPTY
+
+
+def test_collector_result_without_timestamp_is_not_reported_current() -> None:
+    row = SourceHealth(
+        dataset_id="nasa-firms",
+        status=STATUS_EMPTY,
+        item_count=0,
+        latency_ms=None,
+        fetched_at=None,
+        error_summary=None,
+    )
+    service = PredictionQueryService(
+        _StubPublicationRepo(), source_health=_StubHealthRepo([row])
+    )
+
+    current = service.collector_health(now=NOW)
+
+    assert current[0].status == STATUS_STALE
+    assert "timestamp is missing" in (current[0].error_summary or "")
+
+
+def test_latest_collector_run_uses_write_order_even_when_fetch_was_skipped() -> None:
+    from sqlalchemy.dialects import postgresql
+
+    sql = str(_latest_run_id_stmt().compile(dialect=postgresql.dialect()))
+
+    assert "ORDER BY ingestion_source_health.id DESC" in sql
+
+
+def test_skipped_source_does_not_receive_a_fetched_timestamp(monkeypatch) -> None:
+    from app.db import repositories
+    from app.pipeline.run import _record_source_health
+
+    recorded: dict[str, object] = {}
+
+    class CaptureRepository:
+        def __init__(self, _session) -> None:
+            pass
+
+        def record(self, **values) -> None:
+            recorded.update(values)
+
+    monkeypatch.setattr(
+        repositories.source_health, "SqlSourceHealthRepository", CaptureRepository
+    )
+
+    _record_source_health(
+        object(),
+        pipeline_run_id="run-skipped",
+        dataset_id="nasa-firms",
+        called=False,
+        failed=False,
+        item_count=0,
+        error_summary="FIRMS key not configured",
+    )
+
+    assert recorded["status"] == STATUS_MISSING
+    assert recorded["fetched_at"] is None
 
 
 def test_every_status_is_a_real_word() -> None:
@@ -389,7 +470,7 @@ def test_run_ids_sort_chronologically() -> None:
 def test_alerts_are_pinned_to_the_run_that_raised_them() -> None:
     """An alert must name the run that produced it, or it cannot be traced."""
     from app.core.config import Settings
-    from app.domain.types import AlertSeverity, Forecast, GridState
+    from app.domain.types import AlertSeverity, GridState
     from app.services.alert_generation import AlertGenerationService
 
     class _RecordingAlerts:
