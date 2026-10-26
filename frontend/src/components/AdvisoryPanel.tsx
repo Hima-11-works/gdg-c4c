@@ -1,6 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ApiError, generateAdvisory } from '../lib/api'
+import {
+  buildCommunityAdvisory,
+  communityLanguageLabel,
+  communityLocale,
+  communityReviewLabel,
+} from '../lib/communityAdvisory'
+import type { CommunityLanguage } from '../lib/communityAdvisory'
+import {
+  matchingSpeechVoice,
+  playSpeechPreview,
+  readSpeechVoices,
+  stopSpeechPreview,
+  subscribeToSpeechVoices,
+} from '../lib/speech'
 import type { AdvisoryRecordOut } from '../lib/types'
 
 function displayTime(value: string): string {
@@ -10,10 +24,16 @@ function displayTime(value: string): string {
     : `${date.toLocaleString('en-GB', { timeZone: 'UTC' })} UTC`
 }
 
-function exportText(record: AdvisoryRecordOut, narrative: string): string {
+function exportText(
+  record: AdvisoryRecordOut,
+  narrative: string,
+  language?: CommunityLanguage,
+  communityText?: string,
+): string {
   const { bundle } = record
   const { context } = bundle
   const edited = narrative.trim() !== bundle.summary
+  const communityReviewNote = language === undefined ? null : communityReviewLabel(language)
   return [
     bundle.draft_label,
     'DRAFT FOR HUMAN REVIEW — not an official notice, confirmed event, or GRAP stage.',
@@ -30,6 +50,15 @@ function exportText(record: AdvisoryRecordOut, narrative: string): string {
     edited ? 'Locally edited narrative (not saved to the server):' : 'Narrative:',
     narrative.trim(),
     ...(edited ? ['', 'Generated original:', bundle.summary] : []),
+    ...(language !== undefined && communityText !== undefined
+      ? [
+          '',
+          `Community advisory (${communityLanguageLabel(language)}):`,
+          ...(communityReviewNote === null ? [] : [communityReviewNote]),
+          'Community text method: deterministic template.',
+          communityText,
+        ]
+      : []),
     '',
     'Published facts:',
     ...context.facts.map((fact) => `- ${fact.label}: ${fact.value} [${fact.evidence_id}]`),
@@ -88,6 +117,45 @@ function providerLabel(record: AdvisoryRecordOut): string {
   return 'Deterministic template · Gemini was not contacted'
 }
 
+function exportCommunityText(
+  record: AdvisoryRecordOut,
+  language: CommunityLanguage,
+  text: string,
+): string {
+  const { bundle } = record
+  const { context } = bundle
+  const reviewLabel = communityReviewLabel(language)
+  return [
+    `DRAFT COMMUNITY ADVISORY · ${communityLanguageLabel(language)}`,
+    'For human review; not an official notice or confirmation of a pollution event.',
+    ...(reviewLabel === null ? [] : [reviewLabel]),
+    `Data mode: ${context.mode}${context.synthetic ? ' · synthetic inputs' : ''}${context.fallback ? ' · fallback inputs' : ''}${context.stale ? ' · stale inputs' : ''}`,
+    `Published alert: ${context.source_id}`,
+    `Prediction run: ${context.run_id}`,
+    `Brief generated: ${displayTime(record.generated_at)}`,
+    `Forecast valid: ${displayTime(context.forecast_at)}`,
+    '',
+    text,
+    '',
+    'Published facts:',
+    ...context.facts.map((fact) => `- ${fact.label}: ${fact.value} [${fact.evidence_id}]`),
+    '',
+    'Missing evidence:',
+    ...(context.missing_evidence.length > 0
+      ? context.missing_evidence.map((item) => `- ${item}`)
+      : ['- None recorded']),
+    '',
+    'Source references:',
+    ...(context.sources.length > 0
+      ? context.sources.map(
+          (source) => `- ${source.source}: ${source.description} [${source.evidence_id}]`,
+        )
+      : ['- No source references were recorded']),
+    '',
+    'Community text method: deterministic template using the alert context above.',
+  ].join('\n')
+}
+
 export function AdvisoryPanel({
   sourceId,
   panelId,
@@ -104,10 +172,16 @@ export function AdvisoryPanel({
   const [narrative, setNarrative] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [communityLanguage, setCommunityLanguage] = useState<CommunityLanguage>('en')
+  const [speechVoices, setSpeechVoices] = useState<SpeechSynthesisVoice[] | null>(readSpeechVoices)
+  const [speechBusy, setSpeechBusy] = useState(false)
+  const [speechMessage, setSpeechMessage] = useState<string | null>(null)
   const controller = useRef<AbortController | null>(null)
   const printRoot = useRef<HTMLElement | null>(null)
 
   useEffect(() => () => controller.current?.abort(), [])
+  useEffect(() => subscribeToSpeechVoices(setSpeechVoices), [])
+  useEffect(() => () => stopSpeechPreview(), [])
 
   const generate = async () => {
     if (busy || !reviewerKey.trim()) return
@@ -147,6 +221,68 @@ export function AdvisoryPanel({
     }
   }
 
+  const copyCommunity = async () => {
+    if (record === null || context === undefined) return
+    try {
+      await copyText(
+        exportCommunityText(
+          record,
+          communityLanguage,
+          buildCommunityAdvisory(context, communityLanguage),
+        ),
+      )
+      setNotice(
+        `${communityLanguageLabel(communityLanguage)} community text copied with its source and evidence references.`,
+      )
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not copy the community advisory.')
+    }
+  }
+
+  const selectCommunityLanguage = (language: CommunityLanguage) => {
+    stopSpeechPreview()
+    setSpeechBusy(false)
+    setSpeechMessage(null)
+    setCommunityLanguage(language)
+  }
+
+  const playCommunity = () => {
+    if (context === undefined) return
+    if (speechVoices === null) {
+      setSpeechMessage("Speech previews aren't supported in this browser.")
+      return
+    }
+    const voice = matchingSpeechVoice(speechVoices, communityLanguage)
+    if (voice === null) {
+      setSpeechMessage(
+        `No matching ${communityLanguageLabel(communityLanguage)} voice is available.`,
+      )
+      return
+    }
+    const started = playSpeechPreview(
+      buildCommunityAdvisory(context, communityLanguage),
+      communityLanguage,
+      voice,
+      (playbackError) => {
+        setSpeechBusy(false)
+        setSpeechMessage(playbackError ?? 'Preview finished.')
+      },
+    )
+    if (started) {
+      setSpeechBusy(true)
+      setSpeechMessage(`Playing with ${voice.name} (${voice.lang}).`)
+    } else {
+      setSpeechBusy(false)
+      setSpeechMessage('A matching language voice could not be started.')
+    }
+  }
+
+  const stopCommunity = () => {
+    stopSpeechPreview()
+    setSpeechBusy(false)
+    setSpeechMessage('Preview stopped.')
+  }
+
   const print = () => {
     document.querySelectorAll('.advisory-print-root').forEach((node) => {
       node.removeAttribute('data-print-active')
@@ -165,6 +301,10 @@ export function AdvisoryPanel({
   const bundle = record?.bundle
   const context = bundle?.context
   const locallyEdited = bundle !== undefined && narrative.trim() !== bundle.summary
+  const communityText =
+    context === undefined ? null : buildCommunityAdvisory(context, communityLanguage)
+  const communityVoice =
+    speechVoices === null ? null : matchingSpeechVoice(speechVoices, communityLanguage)
 
   return (
     <>
@@ -288,11 +428,11 @@ export function AdvisoryPanel({
               </div>
             </dl>
 
-            <label className="advisory-narrative-label" htmlFor="advisory-narrative">
+            <label className="advisory-narrative-label" htmlFor={`${panelId}-narrative`}>
               {locallyEdited ? 'Edited narrative · local only' : 'Narrative'}
             </label>
             <textarea
-              id="advisory-narrative"
+              id={`${panelId}-narrative`}
               className="advisory-narrative advisory-no-print"
               value={narrative}
               maxLength={1600}
@@ -309,6 +449,83 @@ export function AdvisoryPanel({
                 <span className="advisory-note">Local edits are not saved to the server.</span>
               </details>
             )}
+
+            <section className="community-advisory" aria-labelledby={`${panelId}-community-title`}>
+              <h4 id={`${panelId}-community-title`}>Community advisory preview</h4>
+              <div className="advisory-language-switch" role="group" aria-label="Advisory language">
+                {(['en', 'hi', 'pa'] as const).map((language) => (
+                  <button
+                    key={language}
+                    type="button"
+                    className="alert-cta"
+                    aria-pressed={communityLanguage === language}
+                    onClick={() => selectCommunityLanguage(language)}
+                  >
+                    {communityLanguageLabel(language)}
+                  </button>
+                ))}
+              </div>
+              {communityReviewLabel(communityLanguage) !== null && (
+                <p className="advisory-note">
+                  {communityReviewLabel(communityLanguage)}. Review this text with a fluent speaker
+                  before public use.
+                </p>
+              )}
+              {communityText !== null && (
+                <blockquote
+                  className="community-advisory-text"
+                  lang={communityLocale(communityLanguage)}
+                >
+                  {communityText}
+                </blockquote>
+              )}
+              <div className="advisory-actions advisory-no-print">
+                <button type="button" className="alert-cta" onClick={() => void copyCommunity()}>
+                  Copy community advisory
+                </button>
+                {speechVoices === null ? (
+                  <span className="advisory-note" role="status">
+                    Speech previews are not supported in this browser. Text and copy remain
+                    available.
+                  </span>
+                ) : communityVoice === null ? (
+                  <>
+                    <span className="advisory-note" role="status">
+                      No matching {communityLanguageLabel(communityLanguage)} voice is available.
+                      Text and copy remain available; voices may load later.
+                    </span>
+                    <button
+                      type="button"
+                      className="alert-cta"
+                      onClick={() => setSpeechVoices(readSpeechVoices())}
+                    >
+                      Refresh voice list
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      className="alert-cta"
+                      onClick={playCommunity}
+                      disabled={speechBusy}
+                    >
+                      Play advisory preview
+                    </button>
+                    {speechBusy && (
+                      <button type="button" className="alert-cta" onClick={stopCommunity}>
+                        Stop
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+              {speechMessage !== null && (
+                <p className="advisory-note" role="status" aria-live="polite">
+                  {speechMessage}
+                </p>
+              )}
+            </section>
 
             <h4>Published facts</h4>
             <ul className="advisory-evidence-list">
@@ -371,7 +588,14 @@ export function AdvisoryPanel({
             className="advisory-print-root"
             aria-label="Printable advisory draft"
           >
-            <pre>{exportText(record, narrative)}</pre>
+            <pre>
+              {exportText(
+                record,
+                narrative,
+                communityLanguage,
+                buildCommunityAdvisory(record.bundle.context, communityLanguage),
+              )}
+            </pre>
           </article>,
           document.body,
         )}

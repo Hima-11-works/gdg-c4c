@@ -2302,6 +2302,40 @@ body,
   border-top: 1px solid #4a5060;
 }
 
+.community-advisory {
+  margin-top: 0.65rem;
+  padding-top: 0.55rem;
+  border-top: 1px solid #4a5060;
+}
+
+.advisory-language-switch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+}
+
+.advisory-language-switch button[aria-pressed='true'] {
+  border-color: #8ab4f8;
+  background: #d2e3fc;
+  color: #174ea6;
+}
+
+.advisory-language-switch button:focus-visible {
+  outline: 2px solid #8bb8ff;
+  outline-offset: 2px;
+}
+
+.community-advisory-text {
+  margin: 0.4rem 0;
+  padding: 0.4rem 0.55rem;
+  border-left: 3px solid #8ab4f8;
+  background: rgba(138, 180, 248, 0.08);
+  font-size: 0.76rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
 .advisory-print-root {
   display: none;
 }
@@ -4440,7 +4474,8 @@ body,
   .alert-item:hover { background: #f8f9fa; border-color: #bdc1c6; }
   .alert-cell-location code { color: #5f6368; }
   .advisory-panel,
-  .advisory-entry { border-color: var(--maps-border); color: var(--maps-text); }
+  .advisory-entry,
+  .community-advisory { border-color: var(--maps-border); color: var(--maps-text); }
   .advisory-note,
   .advisory-metadata dt { color: var(--maps-secondary); }
   .advisory-result { border-color: var(--maps-border); }
@@ -4453,6 +4488,8 @@ body,
   }
   .advisory-close { border-color: var(--maps-border); color: var(--maps-text); }
   .advisory-error { color: #b3261e; }
+  .advisory-language-switch button[aria-pressed='true'] { border-color: #8ab4f8; background: #e8f0fe; color: #174ea6; }
+  .community-advisory-text { background: #f8fafd; }
 
   .legend-row, .layer-toggle-option, .cell-detail-grid dt,
   .cell-detail-grid dd, .cell-forecast-list, .pdi-factor-list,
@@ -4696,7 +4733,8 @@ body,
   :root[data-theme="dark"] .alert-item.severity-critical::before { background: #f28b82; }
   :root[data-theme="dark"] .alert-cell-location code { color: #bdc1c6; }
   :root[data-theme="dark"] .advisory-panel,
-  :root[data-theme="dark"] .advisory-entry { border-color: #5f6368; color: var(--maps-text); }
+  :root[data-theme="dark"] .advisory-entry,
+  :root[data-theme="dark"] .community-advisory { border-color: #5f6368; color: var(--maps-text); }
   :root[data-theme="dark"] .advisory-note,
   :root[data-theme="dark"] .advisory-metadata dt { color: #bdc1c6; }
   :root[data-theme="dark"] .advisory-result { border-color: #5f6368; }
@@ -4708,6 +4746,8 @@ body,
   }
   :root[data-theme="dark"] .advisory-close { border-color: #5f6368; color: var(--maps-text); }
   :root[data-theme="dark"] .advisory-error { color: #f28b82; }
+  :root[data-theme="dark"] .advisory-language-switch button[aria-pressed='true'] { border-color: #8ab4f8; background: #394b66; color: #d2e3fc; }
+  :root[data-theme="dark"] .community-advisory-text { background: rgba(138, 180, 248, 0.12); }
 
   :root[data-theme="dark"] .legend-row,
   :root[data-theme="dark"] .layer-toggle-option,

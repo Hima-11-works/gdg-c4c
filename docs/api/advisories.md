@@ -53,5 +53,15 @@ evidence IDs. After a saved result is displayed, the panel does not offer a
 regenerate action: reopening it reuses the server's saved result. A failed
 request can be retried from the still-open panel.
 
+The panel also builds deterministic English, Hindi, or Punjabi community text
+from the saved alert context; this does not make another model request. Hindi
+and Punjabi text is explicitly marked as not reviewed by a fluent speaker and
+must be reviewed before public use. Copy includes the alert/run IDs, forecast
+time, data-mode flags, facts, missing evidence, and source references. Speech
+preview runs locally after a reviewer clicks Play and only when the browser
+has a voice matching the selected language. The voice list updates on the
+browser's `voiceschanged` event; no English-voice fallback is used for Hindi or
+Punjabi. This preview does not send or broadcast an alert.
+
 Apply Alembic migrations through `0037_advisory_bundles` before enabling these
 routes in a deployed API.
