@@ -1,12 +1,13 @@
 # Fast implementation plan for STRATEGY.md
 
 Prepared: 26 October 2026. Code reviewed: `beta`, `cad3780`.
-Status: implementation in progress; S00 documentation corrections and S01 code work are pushed. Local runtime checks remain pending.
+Status: implementation in progress; S00 documentation corrections, S01 readiness fixes, and S02 alert-context/template work are pushed. Local runtime checks remain pending.
 
 ## Execution notes
 
 - **S00 (26 October 2026):** Rewrote `STRATEGY.md` to match the implemented prototype and scoped demo, removing unsupported impact, enforcement, federation-privacy, fixed-quota, and satellite-timing claims. `docs/PITCH_DECK.md` already describes these limitations and was left unchanged. Preflight found Docker Desktop unavailable, local API requests blocked in this environment, and no `GEMINI_API_KEY` in the local `.env`; therefore no running case was opened and a Gemini smoke call could not be made. Continue only with clearly labeled demo/fallback paths until that preflight succeeds.
 - **S01 (26 October 2026):** The cutover gate now blocks on absent observations/lag and unknown publication, scheduler, quota, retention, scenario, or rollback evidence. Collector health ages at read time while published-run health stays unchanged; skipped sources have no fetch timestamp, and the latest health run is selected by write order. FIRMS layer text now distinguishes returned detections, successful empty results, stale/failed checks, and a source that was not queried. Station freshness counts unique stations and lag uses only measured timestamp pairs, with the worst paired lag checked against the target. Verification: 19 focused backend tests passed, frontend production build passed, and changed-file Ruff checks passed with existing line-length/f-string violations excluded. The local browser/API path could not run because Docker is unavailable and localhost access is blocked here.
+- **S02 (26 October 2026):** Added a bounded server-owned context for published alerts and a deterministic review draft. It resolves measurements from the alert's own run, uses only that run's pinned source-health rows and dataset references, and marks demo, synthetic, fallback, and stale inputs in the copy-ready plain text. Missing input quality, observation age, source checks, and dataset references are explicit; the draft does not claim event confirmation, source attribution, AQI, or GRAP status. Scope note: incident/report evidence joins are deferred until the public alert path and authorization/consent behavior are in place. Verification: 5 focused advisory tests passed, Ruff and compile checks passed. The existing alert-route TestClient case stalls when it tries to open its local socket in this sandbox; direct service resolution is exercised by the advisory tests.
 ## 1. Feasibility verdict
 
 The three proposed extensions are feasible as a reviewer-facing hackathon demo after narrowing their claims:
@@ -104,7 +105,7 @@ Targets: `backend/app/services/shadow_run.py`, `backend/app/cli.py`, `backend/ap
 
 Proposed files: `backend/app/domain/advisories.py`, `backend/app/services/advisory_context.py`, and `backend/app/services/advisories.py`.
 
-- Implement published-alert resolution first, followed by incident source resolution. Reuse existing resolvers and repositories.
+- Implement published-alert resolution first and reuse existing resolvers and repositories. Defer incident/report source resolution until an explicit, safe reviewer authorization and consent path is available.
 - Add deterministic fact, missing-evidence, and draft-inspection sections. Render numerical values and timestamps from this structure.
 - Carry demo/fallback/stale markers into every draft and export. An unreviewed report can produce a triage draft but cannot be described as confirmed.
 - Only include evidence that actually exists; older satellite observations are dated context, not independent confirmation of a new evening fire.
