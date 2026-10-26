@@ -390,7 +390,13 @@ python -m app.federation_client --participant region-b --aggregator-url http://l
 
 ## Google AI Integration
 
-The implemented Google AI feature is Gemini-powered advisory interpretation of submitted report photos. It cannot infer AQI or pollutant concentration, confirm the pollution source, approve a report, or dispatch responders. See [`docs/GOOGLE_STACK_INTEGRATION.md`](docs/GOOGLE_STACK_INTEGRATION.md) for its constraints and setup.
+The dashboard also supports a reviewer-only draft brief for eligible warning/critical published alerts, plus deterministic English, Hindi, and Punjabi community text from the same saved alert context. The brief includes run provenance, evidence references, and missing evidence; a reviewer can edit its narrative locally and copy or print it. It does not confirm an event, issue an official notice, or dispatch responders.
+
+Gemini text generation is optional. Without explicit consent, the server returns a deterministic template and makes no model request. A Gemini attempt requires the server-side `REPORTS_REVIEWER_KEY` and `GEMINI_API_KEY`; apply migrations through `0037_advisory_bundles` before enabling the endpoints. The application limits shared Gemini advisory calls to 2 per minute and 20 per day, but the actual model-project quota may be lower. Keep both keys server-side. Hindi and Punjabi text is not fluent-speaker reviewed. Optional speech is a local browser preview and works only when the device has a voice matching the chosen language; it does not broadcast an alert.
+
+The forecast briefing describes the selected published run, forecast horizon, method, input mode, and displayed wind sample. Its NCR-only CAQM reference does not assess the current official GRAP stage, which remains `not assessed`.
+
+See [`docs/api/advisories.md`](docs/api/advisories.md) for the endpoint, consent, provenance, and behavior details, and [`docs/GOOGLE_STACK_INTEGRATION.md`](docs/GOOGLE_STACK_INTEGRATION.md) for the photo assessment integration and constraints.
 
 ---
 

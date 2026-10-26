@@ -18,16 +18,18 @@ The judging rubric rewards problem fit (20%), AI execution (25%), reach (20%), d
 | Forecasts and corridor view | Inspect published model runs and configured corridor geometry where available. | Forecasts are experimental. Corridor geometry is illustrative; do not claim a validated plume arrival, transport cause, or route recommendation. |
 | Hotspot evidence review | Assemble available signals into candidate evidence for human review. | A candidate is not a confirmed pollution source. Do not imply every source is independently corroborated. |
 | Gemini photo assessment | Optional structured visual observations for consented photos, when the server key/provider is configured. | The model cannot infer AQI, concentration, exact location/time, or a confirmed source from the image. A reviewer remains responsible. |
+| Reviewer briefs and community text | Dashboard drafts for eligible published alerts, with saved-run evidence, missing-input notes, editable narrative, English/Hindi/Punjabi text, and optional local speech preview. Gemini use requires a configured reviewer key, server key, and explicit consent. | Drafts are advisory and reviewer-only. Hindi and Punjabi text is not fluent-speaker reviewed; speech depends on an exact matching device voice. No alert is broadcast. |
+| Forecast interpretation and policy reference | Selected-run forecast details include horizon, times, method, input mode, and displayed wind sample; a dated NCR-only CAQM reference is linked. | This is not source attribution or validated plume arrival. Official GRAP stage remains not assessed; the card does not encode actions. |
 | Incident workflow | Backend incident records, role-scoped transitions, and a Flutter simulator. | The simulator does not contact emergency services or dispatch physical units. A webhook is active only after its destination is configured and verified. |
 | Federation experiment | Local client/aggregator demonstrations that exchange model updates. | Participants are not verified agencies; parameter exchange alone does not guarantee privacy or establish inter-state operations. |
 
-## Recommended demo extensions
+## Implemented scoped demo extensions
 
-These are the scoped extensions in [the implementation plan](docs/STRATEGY_IMPLEMENTATION_PLAN.md). Mark each as pending until its end-to-end path has been verified.
+The three scoped extensions below are implemented in the repository. The focused checks and remaining end-to-end verification are recorded in [the implementation plan](docs/STRATEGY_IMPLEMENTATION_PLAN.md); do not imply a live browser, database, or Gemini path was verified until that check is completed.
 
-1. **Evidence-backed draft inspection brief.** Resolve facts on the server from a published alert or eligible incident, attach source IDs and times, list missing evidence, and keep a human-editable draft separate from dispatch. Do not generate or issue statutory notices, fines, or legal findings.
-2. **Community advisory text and local audio preview.** Produce short English, Hindi, and Punjabi text from the same bounded evidence. Play audio only with a matching voice available on the current device and a user click. This is a local preview, not a community broadcast service.
-3. **Forecast explanation and policy references.** Explain the published forecast and its units. Link to dated official GRAP material, but keep an official stage `not assessed` unless a current, jurisdiction-scoped official order is independently verified. A cell PM2.5 concentration is not the official city AQI.
+1. **Evidence-backed draft inspection brief.** The dashboard supports eligible warning/critical published alerts and hotspot events with a matching alert. It shows server-resolved run facts, source IDs, times, missing evidence, and a locally editable narrative. It does not generate or issue statutory notices, fines, or legal findings.
+2. **Community advisory text and local audio preview.** The saved alert context produces English, Hindi, and Punjabi text. Hindi and Punjabi require fluent-speaker review before public use. Audio plays only after a user click and only when the device offers a matching language voice; it is not a broadcast service.
+3. **Forecast explanation and policy references.** The selected published forecast is explained with its run, horizon, times, method, input mode, and displayed wind sample. A dated NCR-only CAQM reference is available, while official stage remains `not assessed`. A cell PM2.5 concentration is not the official city AQI.
 
 Gemini availability and free-tier capacity vary by project and model. Check the configured project quota before a live demo. Apply the application's own shared budget and deterministic fallback; never promise zero cost or a universal request limit. Keep provider credentials on the server. Do not send private reports, reporter identity, or raw images to a new text-generation path without explicit consent and data minimization.
 
@@ -47,13 +49,13 @@ Use one case from start to finish; do not join observations from different runs 
 
 | Time | Show | Say |
 | --- | --- | --- |
-| 0:00–0:35 | Map, selected area, and source-status panel. | “This prototype brings available local reports and environmental inputs into one spatial review. The labels show which inputs are live, stale, missing, or illustrative.” |
-| 0:35–1:15 | One candidate or citizen report and its evidence timestamps. | “This is a candidate for human review. Satellite, sensor, and photo evidence have different meanings and may be incomplete.” |
-| 1:15–2:00 | A published forecast/corridor run, if present; otherwise show its unavailable state. | “This is the selected model run and forecast horizon. The geometry and accuracy are limited as shown; it is not an official alert or route instruction.” |
-| 2:00–2:35 | Simulator incident acknowledgement/status transition. | “This demonstrates an auditable software workflow. No emergency responder is being contacted.” |
-| 2:35–3:00 | Optional photo assessment or a saved draft brief only if that path is configured and verified. | “AI output is advisory and tied to the evidence shown. If the provider is unavailable, the deterministic template remains clearly labeled.” |
+| 0:00–0:25 | Map, selected area, and source-status panel. | “The labels show which inputs are live, stale, missing, or illustrative.” |
+| 0:25–0:55 | One eligible published alert and its saved-run evidence timestamps. | “This is a candidate for human review. The brief uses the selected alert's own run and shows missing evidence.” |
+| 0:55–1:35 | Draft brief, provider status, source references, then English/Hindi/Punjabi text. Play local speech only if an exact matching voice is available. | “Gemini is optional and requires explicit consent; otherwise the deterministic template is used. Hindi and Punjabi need fluent-speaker review, and speech is local only.” |
+| 1:35–2:20 | Selected forecast briefing and NCR-only CAQM reference. | “This explains the published model run and its limits. Official GRAP stage remains not assessed.” |
+| 2:20–3:00 | Simulator incident acknowledgement/status transition. | “This is an auditable software simulation. No emergency responder is being contacted.” |
 
-Do not improvise a live-data, model, or authority claim if the corresponding source/status is not visible. If Gemini is not configured, skip the AI call and show the unavailable/template state. A demo is ready only after the exact case and its mode have been checked in the running application.
+Do not improvise a live-data, model, or authority claim if the corresponding source/status is not visible. If Gemini is not configured, show the template status without making a provider call. A demo is ready only after the exact case and its mode have been checked in the running application; this script has not been rehearsed against a running end-to-end deployment.
 
 ## How to present the scoring fit
 

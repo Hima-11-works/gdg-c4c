@@ -184,16 +184,18 @@ Local demo client B ─┘
 ### A concrete starting point for coordinated climate action
 
 - **Problem fit:** combines local reports with environmental context on a shared spatial grid.
-- **AI integration:** Gemini image observations are structured, advisory, and human-reviewed.
+- **AI integration:** optional Gemini photo observations and consent-gated reviewer draft text are bounded, advisory, and human-reviewed; deterministic templates remain available.
+- **Community reach:** English, Hindi, and Punjabi advisory text is tied to the selected alert; Hindi and Punjabi need fluent-speaker review, and local speech depends on an installed matching device voice.
+- **Forecast context:** selected-run details explain the horizon and method; a dated NCR-only CAQM reference does not infer an official GRAP stage.
 - **Working software:** show the dashboard, citizen report flow, published-run corridor detail, and simulated incident status change.
 - **Interoperability:** show the local federation workflow and explicitly state that it is experimental.
 - **Next evidence:** fresh partner data, independent model evaluation, and a verified authority pilot.
 
-**Demo sequence:** open the map and source-status panels; review a candidate; open a published corridor run if one exists; submit a test citizen report; then advance a clearly labeled simulator incident.
+**Three-minute demo sequence:** open the map and source-status panel; select one eligible warning/critical published alert; show its evidence-bound draft, missing evidence, and provider status; display the English/Hindi/Punjabi text and play local speech only if an exact matching voice is available; inspect the selected forecast briefing and NCR-only policy reference; then advance a clearly labeled simulator incident. Keep the same alert/run throughout and label live, stale, synthetic, demo, and fallback inputs as shown. If Gemini is not configured, show the deterministic template without making a model call. This sequence still requires a browser/API walkthrough and rehearsal against the chosen running case before it can be called verified.
 
 **Source repository:** [github.com/Hima-11-works/gdg-c4c](https://github.com/Hima-11-works/gdg-c4c)
 
-**Speaker notes:** Air Health is a working prototype that turns the hackathon problem into a set of reviewable software flows. We will show what is implemented, call out what is illustrative, and use the next steps to describe how the prototype could be validated with city partners.
+**Speaker notes:** Air Health is a working prototype that turns the hackathon problem into a set of reviewable software flows. The reviewer brief and community text use one saved alert context; Gemini requires explicit consent, while the template works without it. The forecast briefing explains a model run and does not establish source attribution, plume arrival, or official GRAP status. We will call out what is illustrative and use the next steps to describe how the prototype could be validated with city partners.
 
 ---
 
