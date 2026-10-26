@@ -18,6 +18,7 @@ import { useMapUi } from '../state/MapUiContext'
 import type { CellDetailOut, FireReportWithStatus } from '../lib/types'
 import { activeFiresInCell, type ActiveFire } from '../lib/activeFires'
 import { estimatePlumeDrift } from '../lib/transboundaryDrift'
+import { GRAP_REFERENCE } from '../lib/grapReference'
 import { CellSatelliteContextPanel } from './CellSatelliteContextPanel'
 
 /** The most recent citizen report filed in this cell, from
@@ -239,10 +240,104 @@ function ForecastChart({ forecasts }: { forecasts: CellDetailOut['forecasts'] })
           </g>
         ))}
         <text className="forecast-axis-title" x={(left + right) / 2} y="242" textAnchor="middle">
-          Time from now
+          Forecast horizon (+ hours)
         </text>
       </svg>
     </div>
+  )
+}
+
+function displayIndiaTime(value: string | null | undefined): string {
+  if (value == null) return 'not recorded'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'unreadable time'
+  return `${new Intl.DateTimeFormat('en-IN', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+    timeZone: 'Asia/Kolkata',
+  }).format(date)} IST`
+}
+
+function forecastMethodExplanation(method: string | null | undefined): string {
+  const normalized = method?.toLowerCase() ?? ''
+  if (normalized.includes('dispersion')) {
+    return 'A deterministic H3 dispersion baseline redistributes and removes existing PM2.5; it does not add new emissions or model atmospheric chemistry. Its latest eligible weather sample is held constant across the forecast steps.'
+  }
+  if (normalized.includes('residual-ridge')) {
+    return 'The residual model adjusts a deterministic H3 dispersion baseline; it does not add new emissions or model atmospheric chemistry. Its latest eligible weather sample is held constant across forecast steps.'
+  }
+  if (normalized === 'persistence-baseline') {
+    return 'The persistence baseline carries the current PM2.5 estimate forward unchanged; it does not model weather transport or new emissions.'
+  }
+  if (normalized === 'native-cell aggregate') {
+    return 'This display cell aggregates native forecast rows; underlying methods and assumptions can differ across those rows.'
+  }
+  return 'This is a model scenario, not a calibrated probability of a pollution event.'
+}
+
+function windReadingSummary(
+  speed: number | null,
+  direction: number | null,
+  sampleTime: string | null,
+): string {
+  if (speed === null && direction === null) {
+    return 'No wind speed or direction is recorded for this selected cell.'
+  }
+  const speedLabel = speed === null ? 'speed unavailable' : `${formatNumber(speed)} m/s`
+  const directionLabel =
+    direction === null
+      ? 'direction unavailable'
+      : `${formatNumber(direction, 0)}° ${compassLabel(direction)}, blowing from`
+  const timeLabel = sampleTime === null ? '' : ` · sample time ${displayIndiaTime(sampleTime)}`
+  return `${speedLabel}; ${directionLabel}${timeLabel}`
+}
+
+function ForecastBriefing({ detail }: { detail: CellDetailOut }) {
+  const forecasts = [...detail.forecasts].sort((a, b) => a.forecast_hours - b.forecast_hours)
+  const first = forecasts[0]
+  const last = forecasts.at(-1)
+  if (first === undefined || last === undefined) return null
+
+  const metadata = first.metadata ?? detail.environmental?.metadata ?? detail.current?.metadata
+  const windSpeed = detail.weather?.wind_speed ?? detail.current?.wind_speed ?? null
+  const windDirection = detail.weather?.wind_direction ?? detail.current?.wind_direction ?? null
+  const windTime = detail.weather?.valid_at ?? detail.weather?.measured_at ?? null
+  const inputKind = metadata?.input_kind ?? 'not recorded'
+  const windSummary = windReadingSummary(windSpeed, windDirection, windTime)
+
+  return (
+    <section className="forecast-briefing" aria-label="Forecast explanation">
+      <h4>Forecast briefing</h4>
+      <dl className="forecast-briefing-grid">
+        <dt>Prediction run</dt>
+        <dd>{detail.environmental?.run_id ?? 'not recorded'}</dd>
+        <dt>Forecast window</dt>
+        <dd>
+          +{first.forecast_hours} to +{last.forecast_hours} hours ·{' '}
+          {displayIndiaTime(first.forecast_time)} to {displayIndiaTime(last.forecast_time)}
+        </dd>
+        <dt>Generated</dt>
+        <dd>{displayIndiaTime(first.generated_at)}</dd>
+        <dt>Method and inputs</dt>
+        <dd>
+          {metadata?.prediction_method ?? 'method not recorded'} · {inputKind}
+          {metadata?.synthetic ? ' · synthetic inputs' : ''}
+          {detail.environmental?.mode ? ` · ${detail.environmental.mode} data mode` : ''}
+        </dd>
+        <dt>Wind context</dt>
+        <dd>{windSummary}</dd>
+      </dl>
+      {metadata?.issued_at != null && (
+        <p className="muted">
+          Weather input provenance: issued {displayIndiaTime(metadata.issued_at)}; valid{' '}
+          {displayIndiaTime(metadata.valid_at)}.
+        </p>
+      )}
+      <p className="muted forecast-briefing-limit">
+        {forecastMethodExplanation(metadata?.prediction_method)} This forecast does not establish a
+        pollution source or validate plume arrival time. See the method limitations below.
+      </p>
+    </section>
   )
 }
 
@@ -402,7 +497,10 @@ function CellDetailContent({
       {detail.forecasts.length === 0 ? (
         <p>No forecast available for this cell yet.</p>
       ) : (
-        <ForecastChart forecasts={detail.forecasts} />
+        <>
+          <ForecastBriefing detail={detail} />
+          <ForecastChart forecasts={detail.forecasts} />
+        </>
       )}
       {forecastMetadata && forecastMetadata.limitations.length > 0 && (
         <details className="forecast-limitations">
@@ -485,20 +583,32 @@ function readWardLog(): WardLogEntry[] {
   }
 }
 
-function GrapAssessmentNotice() {
+function GrapAssessmentNotice({ selectedRegion }: { selectedRegion: string | null }) {
   return (
     <section className="grap-card" aria-label="GRAP assessment not available">
       <strong>Official GRAP stage not assessed</strong>
       <p className="grap-card-advisory">
-        CAQM GRAP applies to Delhi-NCR and uses AQI stages. This view does not have verified AQI and
-        jurisdiction data to determine an official stage or statutory action.
+        GRAP is an NCR policy reference and uses official AQI and orders. The selected cell's NCR
+        jurisdiction, verified AQI, and an applicable current order are not established here, so no
+        stage or action is inferred from this PM2.5 forecast.
       </p>
-      <a
-        href="https://caqm.nic.in/Contents.aspx?langid=1&lev=1&lid=4174&lsid=4171&pid=0"
-        target="_blank"
-        rel="noreferrer"
-      >
-        View CAQM GRAP orders
+      <dl className="grap-reference-metadata">
+        <dt>Reference</dt>
+        <dd>{GRAP_REFERENCE.title}</dd>
+        <dt>Revision</dt>
+        <dd>
+          {GRAP_REFERENCE.direction} · {GRAP_REFERENCE.revisionDate}
+        </dd>
+        <dt>Scope</dt>
+        <dd>
+          {GRAP_REFERENCE.scope}; selected region shown as {selectedRegion ?? 'unknown'}.
+        </dd>
+        <dt>Checked</dt>
+        <dd>{GRAP_REFERENCE.reviewedDate}</dd>
+      </dl>
+      <p className="grap-card-advisory">{GRAP_REFERENCE.limitation}</p>
+      <a href={GRAP_REFERENCE.officialUrl} target="_blank" rel="noreferrer">
+        Open CAQM official site for the latest GRAP schedule and orders
       </a>
     </section>
   )
@@ -705,7 +815,7 @@ export function CellDetailPanel({
 
       <PriorityBadge fires={matchingFires} resource={activeFires} />
 
-      {resource.status === 'success' && <GrapAssessmentNotice />}
+      {resource.status === 'success' && <GrapAssessmentNotice selectedRegion={title} />}
 
       {state.selectedCellGeneralized && (
         <p className="banner banner-demo" role="status">

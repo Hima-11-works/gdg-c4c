@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { fetchAlerts } from '../lib/api'
 import { formatNumber } from '../lib/format'
+import { GRAP_REFERENCE } from '../lib/grapReference'
 import { cellCenter, resolutionOfCell } from '../lib/h3Geometry'
 import { loadLocations, type IndiaLocation } from '../lib/locations'
 import { useApiResource } from '../hooks/useApiResource'
@@ -463,6 +464,14 @@ export function AlertsPanel({ publishedRunId }: { publishedRunId?: string }) {
                   ×
                 </button>
               </header>
+              <p className="muted alerts-checklist-note alert-policy-reference">
+                Alert rows are PM2.5 forecast notifications, not official GRAP stages. The CAQM
+                reference below is for NCR only; no stage or action is inferred here.{' '}
+                <a href={GRAP_REFERENCE.officialUrl} target="_blank" rel="noreferrer">
+                  {GRAP_REFERENCE.title} · {GRAP_REFERENCE.revisionDate} · checked{' '}
+                  {GRAP_REFERENCE.reviewedDate}
+                </a>
+              </p>
               <div className="alert-search">
                 <input
                   type="search"
