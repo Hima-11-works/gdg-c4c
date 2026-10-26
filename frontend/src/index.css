@@ -2115,9 +2115,245 @@ body,
   color: #5dd77c;
 }
 
+.advisory-panel {
+  width: 100%;
+  margin-top: 0.55rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid #4a5060;
+  color: inherit;
+  cursor: default;
+  overflow-wrap: anywhere;
+}
+
+.advisory-heading-row,
+.advisory-status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.6rem;
+}
+
+.advisory-heading-row h3 {
+  margin: 0;
+  font-size: 0.92rem;
+}
+
+.advisory-panel h4 {
+  margin: 0.7rem 0 0.2rem;
+  font-size: 0.78rem;
+}
+
+.advisory-note {
+  margin: 0.25rem 0;
+  color: #9ca3af;
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.advisory-close {
+  flex: none;
+  padding: 0.25rem 0.45rem;
+  border: 1px solid #4a5060;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.68rem;
+  cursor: pointer;
+}
+
+.advisory-key {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.45rem;
+  font-size: 0.75rem;
+}
+
+.advisory-key input,
+.advisory-narrative {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid #4a5060;
+  border-radius: 4px;
+  background: #11141a;
+  color: #eef0f4;
+  font: inherit;
+  font-size: 0.75rem;
+}
+
+.advisory-key input {
+  min-height: 2rem;
+  padding: 0.4rem 0.5rem;
+}
+
+.advisory-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  margin: 0.4rem 0;
+  color: inherit;
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.advisory-consent input {
+  flex: none;
+  margin: 0.15rem 0 0;
+}
+
+.advisory-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.4rem;
+}
+
+.advisory-actions :is(button, input, textarea):focus-visible,
+.advisory-close:focus-visible {
+  outline: 2px solid #8bb8ff;
+  outline-offset: 2px;
+}
+
+.advisory-actions button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.advisory-error {
+  margin: 0.4rem 0;
+  color: #b3261e;
+  font-size: 0.75rem;
+}
+
+.advisory-result {
+  margin-top: 0.6rem;
+  padding-top: 0.55rem;
+  border-top: 1px solid #4a5060;
+}
+
+.advisory-status-row {
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.74rem;
+}
+
+.advisory-metadata {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.35rem 0.7rem;
+  margin: 0.5rem 0;
+  font-size: 0.7rem;
+}
+
+.advisory-metadata dt {
+  color: #9ca3af;
+}
+
+.advisory-metadata dd {
+  margin: 0.08rem 0 0;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.advisory-narrative-label {
+  display: block;
+  margin: 0.45rem 0 0.2rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.advisory-narrative {
+  min-height: 5.5rem;
+  padding: 0.45rem;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.advisory-evidence-list {
+  margin: 0.2rem 0 0.45rem;
+  padding-left: 1.1rem;
+  font-size: 0.7rem;
+  line-height: 1.45;
+}
+
+.advisory-evidence-list li + li {
+  margin-top: 0.2rem;
+}
+
+.advisory-evidence-list code {
+  overflow-wrap: anywhere;
+  font-size: 0.65rem;
+}
+
+.advisory-original {
+  margin-top: 0.35rem;
+  font-size: 0.72rem;
+}
+
+.advisory-original p {
+  white-space: pre-wrap;
+}
+
+.advisory-entry {
+  margin: 0.55rem 0;
+  padding-top: 0.45rem;
+  border-top: 1px solid #4a5060;
+}
+
+.advisory-print-root {
+  display: none;
+}
+
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+
+  .advisory-print-root,
+  .advisory-print-root * {
+    visibility: hidden !important;
+  }
+
+  .advisory-print-root[data-print-active="true"],
+  .advisory-print-root[data-print-active="true"] * {
+    visibility: visible !important;
+  }
+
+  .advisory-print-root {
+    display: none !important;
+    position: absolute !important;
+    inset: 0 auto auto 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0.5rem !important;
+    border: 0 !important;
+    color: #111 !important;
+    background: white !important;
+    font-size: 10pt !important;
+  }
+
+  .advisory-print-root[data-print-active="true"] {
+    display: block !important;
+  }
+
+  .advisory-print-root pre {
+    margin: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font: inherit;
+  }
+
+}
+
 /* On narrow screens the cell detail panel takes the full width instead of
    floating over the map, so it stays usable on a phone. */
 @media (max-width: 30rem) {
+  .advisory-metadata {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .cell-detail {
     left: 0.5rem;
     right: 0.5rem;
@@ -4203,6 +4439,20 @@ body,
   .alert-item.severity-critical { border-left: 1px solid var(--maps-border); }
   .alert-item:hover { background: #f8f9fa; border-color: #bdc1c6; }
   .alert-cell-location code { color: #5f6368; }
+  .advisory-panel,
+  .advisory-entry { border-color: var(--maps-border); color: var(--maps-text); }
+  .advisory-note,
+  .advisory-metadata dt { color: var(--maps-secondary); }
+  .advisory-result { border-color: var(--maps-border); }
+  .advisory-key input,
+  .advisory-narrative {
+    border-color: var(--maps-border);
+    border-radius: 8px;
+    background: #fff;
+    color: var(--maps-text);
+  }
+  .advisory-close { border-color: var(--maps-border); color: var(--maps-text); }
+  .advisory-error { color: #b3261e; }
 
   .legend-row, .layer-toggle-option, .cell-detail-grid dt,
   .cell-detail-grid dd, .cell-forecast-list, .pdi-factor-list,
@@ -4445,6 +4695,19 @@ body,
   :root[data-theme="dark"] .alert-item.severity-warning::before { background: #ff9e40; }
   :root[data-theme="dark"] .alert-item.severity-critical::before { background: #f28b82; }
   :root[data-theme="dark"] .alert-cell-location code { color: #bdc1c6; }
+  :root[data-theme="dark"] .advisory-panel,
+  :root[data-theme="dark"] .advisory-entry { border-color: #5f6368; color: var(--maps-text); }
+  :root[data-theme="dark"] .advisory-note,
+  :root[data-theme="dark"] .advisory-metadata dt { color: #bdc1c6; }
+  :root[data-theme="dark"] .advisory-result { border-color: #5f6368; }
+  :root[data-theme="dark"] .advisory-key input,
+  :root[data-theme="dark"] .advisory-narrative {
+    border-color: #5f6368;
+    background: #202124;
+    color: var(--maps-text);
+  }
+  :root[data-theme="dark"] .advisory-close { border-color: #5f6368; color: var(--maps-text); }
+  :root[data-theme="dark"] .advisory-error { color: #f28b82; }
 
   :root[data-theme="dark"] .legend-row,
   :root[data-theme="dark"] .layer-toggle-option,

@@ -516,6 +516,7 @@ export function MapPage() {
       {state.hotspotPanelOpen && (
         <Suspense fallback={<FeatureLoading label="Loading hotspot triage…" />}>
           <HotspotEvidencePanel
+            publishedRunId={publishedRunId}
             resource={activeFires.resource}
             localHotspots={localHotspots}
             gridResource={currentGrid.resource}

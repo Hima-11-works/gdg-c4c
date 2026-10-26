@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useApiResource } from '../hooks/useApiResource'
 import {
+  fetchAlerts,
   fetchHotspotCatalog,
   fetchHotspotEvents,
   fetchHotspotScan,
@@ -16,7 +17,7 @@ import {
 } from '../lib/hotspotCandidates'
 import type { CandidatesUnavailableReason, HotspotCandidate } from '../lib/hotspotCandidates'
 import type { ActiveFire } from '../lib/activeFires'
-import type { HotspotEventOut, HotspotScanOut, HotspotScanSummaryOut } from '../lib/types'
+import type { AlertOut, HotspotEventOut, HotspotScanOut, HotspotScanSummaryOut } from '../lib/types'
 import type { GridStateOut } from '../lib/types'
 import type { LocalPollutionHotspot } from '../lib/localHotspots'
 import type { AsyncResource } from '../hooks/useApiResource'
@@ -37,6 +38,9 @@ const STATUS_CLASS: Record<string, string> = {
   unclassifiable: 'hotspot-status-unclassifiable',
 }
 const EMPTY_EVENTS: HotspotEventOut[] = []
+const AdvisoryPanel = lazy(() =>
+  import('./AdvisoryPanel').then((module) => ({ default: module.AdvisoryPanel })),
+)
 
 /**
  * The evidence behind one imagery-derived candidate, and what is missing from it.
@@ -48,6 +52,7 @@ const EMPTY_EVENTS: HotspotEventOut[] = []
  * named gaps rather than left blank or filled with something plausible.
  */
 export function HotspotEvidencePanel({
+  publishedRunId,
   resource,
   localHotspots,
   gridResource,
@@ -56,6 +61,7 @@ export function HotspotEvidencePanel({
   selectedDetectionId,
   onSelectDetection,
 }: {
+  publishedRunId?: string
   resource: AsyncResource<ActiveFire[]>
   localHotspots: LocalPollutionHotspot[]
   gridResource: AsyncResource<GridStateOut[]>
@@ -71,6 +77,7 @@ export function HotspotEvidencePanel({
   const [reviewBusy, setReviewBusy] = useState(false)
   const [reviewError, setReviewError] = useState<string | null>(null)
   const [reviewNotice, setReviewNotice] = useState<string | null>(null)
+  const [advisoryOpen, setAdvisoryOpen] = useState(false)
   const { state, dispatch } = useMapUi()
   const panelRef = useRef<HTMLElement>(null)
   const scanCatalog = useApiResource(fetchHotspotCatalog, [], { pollIntervalMs: 5 * 60 * 1000 })
@@ -100,6 +107,24 @@ export function HotspotEvidencePanel({
   )
   const selectedEvent =
     orderedEvents.find((event) => event.event_id === selectedEventId) ?? orderedEvents[0] ?? null
+  const representativeCell = selectedEvent?.dedup_cell || selectedEvent?.footprint_cells[0] || null
+  const publishedAlerts = useApiResource(
+    (signal) => fetchAlerts(publishedRunId, 100, 0, representativeCell ?? undefined, signal),
+    [publishedRunId, representativeCell],
+    { enabled: publishedRunId !== undefined && representativeCell !== null },
+  )
+  const linkedAlert = useMemo(() => {
+    if (publishedAlerts.resource.status !== 'success') return null
+    const rank = (alert: AlertOut) => (alert.severity === 'critical' ? 2 : 1)
+    return (
+      publishedAlerts.resource.data
+        .filter((alert) => alert.severity !== 'watch' && Boolean(alert.alert_id))
+        .sort(
+          (a, b) =>
+            rank(b) - rank(a) || (a.forecast_hours ?? Infinity) - (b.forecast_hours ?? Infinity),
+        )[0] ?? null
+    )
+  }, [publishedAlerts.resource])
   const selectedScanSummary =
     scans.find((scan) => scan.scan_id === selectedScanId) ?? scans[0] ?? null
   const scanDetails = useApiResource(
@@ -260,6 +285,7 @@ export function HotspotEvidencePanel({
                     aria-pressed={selectedEvent?.event_id === event.event_id}
                     onClick={() => {
                       setSelectedEventId(event.event_id)
+                      setAdvisoryOpen(false)
                       setReviewError(null)
                       setReviewNotice(null)
                     }}
@@ -313,6 +339,69 @@ export function HotspotEvidencePanel({
                 >
                   Show event cell on map
                 </button>
+                <div className="advisory-entry">
+                  <h4 className="hotspot-subhead">Published forecast brief</h4>
+                  <p className="muted">
+                    A brief can be based only on a warning or critical forecast published for this
+                    event's representative cell and run. The satellite event alone is not a
+                    published pollution alert.
+                  </p>
+                  {publishedRunId === undefined ? (
+                    <p className="muted" role="status">
+                      No published prediction run is selected.
+                    </p>
+                  ) : publishedAlerts.resource.status === 'loading' ||
+                    publishedAlerts.resource.status === 'idle' ? (
+                    <p className="muted" role="status">
+                      Checking for a matching published alert…
+                    </p>
+                  ) : publishedAlerts.resource.status === 'error' ? (
+                    <p className="hotspot-unavailable-error" role="alert">
+                      Published alerts could not be checked: {publishedAlerts.resource.message}{' '}
+                      <button type="button" className="alert-cta" onClick={publishedAlerts.refetch}>
+                        Retry
+                      </button>
+                    </p>
+                  ) : linkedAlert === null ? (
+                    <p className="muted" role="status">
+                      No warning or critical forecast alert is published for this representative
+                      cell in the selected run.
+                    </p>
+                  ) : (
+                    <>
+                      <p className="hotspot-row-meta">
+                        Matching {linkedAlert.severity} forecast · {linkedAlert.alert_id}
+                      </p>
+                      <button
+                        type="button"
+                        className="alert-cta"
+                        aria-expanded={advisoryOpen}
+                        aria-controls={
+                          advisoryOpen ? `hotspot-advisory-${linkedAlert.alert_id}` : undefined
+                        }
+                        onClick={() => setAdvisoryOpen((value) => !value)}
+                      >
+                        {advisoryOpen ? 'Close draft brief' : 'Generate draft brief'}
+                      </button>
+                      {advisoryOpen && (
+                        <Suspense
+                          fallback={
+                            <p className="muted" role="status">
+                              Loading draft tools…
+                            </p>
+                          }
+                        >
+                          <AdvisoryPanel
+                            key={linkedAlert.alert_id}
+                            sourceId={linkedAlert.alert_id}
+                            panelId={`hotspot-advisory-${linkedAlert.alert_id}`}
+                            onClose={() => setAdvisoryOpen(false)}
+                          />
+                        </Suspense>
+                      )}
+                    </>
+                  )}
+                </div>
                 <ul className="hotspot-event-evidence">
                   {selectedEvent.evidence.map((item, index) => (
                     <li key={`${item.scan_id}-${item.ref}-${index}`}>

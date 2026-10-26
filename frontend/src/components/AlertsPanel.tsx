@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { fetchAlerts } from '../lib/api'
 import { formatNumber } from '../lib/format'
@@ -10,6 +10,9 @@ import type { AlertOut, AlertSeverity } from '../lib/types'
 
 const ALERT_PAGE_SIZE = 100
 const EMPTY_ALERTS: AlertOut[] = []
+const AdvisoryPanel = lazy(() =>
+  import('./AdvisoryPanel').then((module) => ({ default: module.AdvisoryPanel })),
+)
 
 const SEVERITY_LABEL: Record<AlertSeverity, string> = {
   watch: 'Watch',
@@ -100,6 +103,8 @@ function AlertItem({
   selecting,
   done,
   onToggle,
+  advisoryOpen,
+  onToggleAdvisory,
 }: {
   alert: AlertOut
   locationLabel: string | null
@@ -107,6 +112,8 @@ function AlertItem({
   selecting: boolean
   done: (action: string) => boolean
   onToggle: (action: string) => void
+  advisoryOpen: boolean
+  onToggleAdvisory: () => void
 }) {
   return (
     <div className={`alert-item severity-${alert.severity}`}>
@@ -161,7 +168,34 @@ function AlertItem({
               </button>
             )
           })}
+          {alert.severity !== 'watch' && alert.alert_id && (
+            <button
+              type="button"
+              className="alert-cta"
+              onClick={onToggleAdvisory}
+              aria-expanded={advisoryOpen}
+              aria-controls={advisoryOpen ? `alert-advisory-${alert.alert_id}` : undefined}
+            >
+              {advisoryOpen ? 'Close draft brief' : 'Generate draft brief'}
+            </button>
+          )}
         </div>
+        {advisoryOpen && alert.alert_id && (
+          <Suspense
+            fallback={
+              <p className="muted" role="status">
+                Loading draft tools…
+              </p>
+            }
+          >
+            <AdvisoryPanel
+              key={alert.alert_id}
+              sourceId={alert.alert_id}
+              panelId={`alert-advisory-${alert.alert_id}`}
+              onClose={onToggleAdvisory}
+            />
+          </Suspense>
+        )}
       </div>
     </div>
   )
@@ -183,6 +217,7 @@ export function AlertsPanel({ publishedRunId }: { publishedRunId?: string }) {
   const [locationsError, setLocationsError] = useState(false)
   const [selectingCell, setSelectingCell] = useState<string | null>(null)
   const [copyError, setCopyError] = useState<string | null>(null)
+  const [advisoryId, setAdvisoryId] = useState<string | null>(null)
   const { dispatch } = useMapUi()
   const dialogRef = useRef<HTMLElement>(null)
   const { resource, refetch } = useApiResource(
@@ -520,6 +555,12 @@ export function AlertsPanel({ publishedRunId }: { publishedRunId?: string }) {
                     onSelect={() => void selectAlert(alert)}
                     done={(action) => checked.has(keyFor(alert, action))}
                     onToggle={(action) => toggle(alert, action)}
+                    advisoryOpen={advisoryId === alert.alert_id}
+                    onToggleAdvisory={() =>
+                      setAdvisoryId((current) =>
+                        current === alert.alert_id ? null : alert.alert_id,
+                      )
+                    }
                   />
                 ))}
 

@@ -13,6 +13,7 @@
 
 import type {
   AlertOut,
+  AdvisoryRecordOut,
   BoundingBox,
   CellDetailOut,
   CellSatelliteAnalysisOut,
@@ -533,10 +534,56 @@ export function fetchAlerts(
   runId?: string,
   limit?: number,
   offset?: number,
+  h3Cell?: string,
+  signal?: AbortSignal,
 ): Promise<Envelope<AlertOut[]>> {
-  return apiGetV2<AlertOut[]>(`/api/v2/alerts${buildQuery({ limit, offset })}`, runId).then(
-    (envelope) => preserveV2Envelope(envelope, envelope.data),
-  )
+  return apiGetV2<AlertOut[]>(
+    `/api/v2/alerts${buildQuery({ limit, offset, h3_cell: h3Cell })}`,
+    runId,
+    signal,
+  ).then((envelope) => preserveV2Envelope(envelope, envelope.data))
+}
+
+/** Generate a saved, reviewer-only draft from one published alert. */
+export async function generateAdvisory(
+  sourceId: string,
+  reviewerKey: string,
+  consent: boolean,
+  signal?: AbortSignal,
+): Promise<Envelope<AdvisoryRecordOut>> {
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE_URL}/api/v1/advisories`, {
+      method: 'POST',
+      cache: 'no-store',
+      signal,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Reviewer-Key': reviewerKey,
+      },
+      body: JSON.stringify({
+        source_type: 'published_alert',
+        source_id: sourceId,
+        consent,
+        reanalyze: false,
+      }),
+    })
+  } catch (error) {
+    if (signal?.aborted) throw error
+    throw new ApiError(0, 'network_error', 'Could not reach the backend. Is it running?')
+  }
+
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as ErrorResponseBody | null
+    throw new ApiError(
+      response.status,
+      body?.error?.code ?? 'http_error',
+      body?.error?.message ??
+        (typeof body?.detail === 'string' ? body.detail : undefined) ??
+        `Request failed with status ${response.status}`,
+    )
+  }
+  return response.json() as Promise<Envelope<AdvisoryRecordOut>>
 }
 
 /** The latest recorded two-partition federation demonstration. */

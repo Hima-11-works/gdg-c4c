@@ -275,6 +275,7 @@ export interface WeatherReadingOut {
 export type AlertSeverity = 'watch' | 'warning' | 'critical'
 
 export interface AlertOut {
+  alert_id: string
   h3_cell: string
   severity: AlertSeverity
   message: string
@@ -286,6 +287,64 @@ export interface AlertOut {
   forecast_hours: number | null
   confidence: number | null
   forecast_time: string | null
+}
+
+export interface AdvisoryFactOut {
+  evidence_id: string
+  label: string
+  value: string
+}
+
+export interface AdvisorySourceReferenceOut {
+  evidence_id: string
+  source: string
+  description: string
+}
+
+export interface AdvisoryContextOut {
+  source_type: 'published_alert'
+  source_id: string
+  run_id: string
+  h3_cell: string
+  region: string
+  mode: DataMode
+  severity: 'warning' | 'critical'
+  generated_at: string
+  forecast_at: string
+  forecast_hours: number
+  forecast_pm25: number
+  current_pm25: number | null
+  confidence: number | null
+  fallback: boolean
+  synthetic: boolean
+  stale: boolean
+  input_age_hours: number | null
+  facts: AdvisoryFactOut[]
+  sources: AdvisorySourceReferenceOut[]
+  missing_evidence: string[]
+}
+
+export type AdvisoryProviderStatus = 'template' | 'template_fallback' | 'gemini'
+
+export interface AdvisoryBundleOut {
+  context: AdvisoryContextOut
+  draft_label: string
+  summary: string
+  inspection_checklist: string[]
+  template_version: string
+  provider_status: AdvisoryProviderStatus
+  model_id: string | null
+  prompt_version: string | null
+  provider_message: string | null
+  generated_evidence_ids: string[]
+  evidence_ids: string[]
+}
+
+export interface AdvisoryRecordOut {
+  id: string
+  generated_at: string
+  consented_at: string | null
+  bundle: AdvisoryBundleOut
 }
 
 export interface FederationParticipantOut {
@@ -772,4 +831,3 @@ export interface CellSatelliteAnalysisOut {
   thumbnail_available: boolean
   analysis_unavailable_reason: string | null
 }
-

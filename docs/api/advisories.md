@@ -42,5 +42,16 @@ the model project's active quota can be lower. The read route re-resolves the
 alert before returning a saved draft and refuses it if the evidence context has
 changed or disappeared. Responses use `Cache-Control: private, no-store`.
 
+The web dashboard exposes the same workflow from warning/critical alert rows.
+The hotspot panel exposes it only when the selected event's representative
+cell has a matching published alert in the selected run. The reviewer key is
+held only in the open panel's memory. Its consent checkbox is unchecked by
+default. The returned narrative can be edited locally; edits are not sent back
+to the API. Copy and Print/Save as PDF include the draft label, generation/data
+mode, timestamps, facts, missing evidence, source references, and generated-text
+evidence IDs. After a saved result is displayed, the panel does not offer a
+regenerate action: reopening it reuses the server's saved result. A failed
+request can be retried from the still-open panel.
+
 Apply Alembic migrations through `0037_advisory_bundles` before enabling these
 routes in a deployed API.
