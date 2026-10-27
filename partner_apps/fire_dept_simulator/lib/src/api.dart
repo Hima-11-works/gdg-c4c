@@ -261,11 +261,15 @@ class IncidentApi {
   /// hazard, but never changes its lifecycle or makes it a confirmed fire.
   /// Photo reads are bounded to six concurrent requests and cached briefly
   /// because this feed refreshes while the simulator is open.
-  Future<CitizenFireReportFeed> listAcceptedFireReports() async {
+  Future<CitizenFireReportFeed> listAcceptedFireReports({bool force = false}) async {
     final now = DateTime.now();
-    _photoReviewCache.removeWhere(
-      (_, cached) => now.difference(cached.checkedAt) >= _photoReviewCacheTtl,
-    );
+    if (force) {
+      _photoReviewCache.clear();
+    } else {
+      _photoReviewCache.removeWhere(
+        (_, cached) => now.difference(cached.checkedAt) >= _photoReviewCacheTtl,
+      );
+    }
     final response = await _send('GET', '/api/v2/reports');
     final candidates = (response.data as List)
         .map((row) => CitizenReport.fromJson(row as Map<String, dynamic>))
@@ -275,7 +279,9 @@ class IncidentApi {
     final accepted = candidates.where((report) => report.isCorroborated).toList();
     final photoCandidates = candidates
         .where((report) =>
-            !report.isCorroborated && !report.isClosed && report.evidenceCount > 0)
+            !report.isCorroborated &&
+            !report.isClosed &&
+            (report.evidenceCount > 0 || candidates.length <= 25))
         .toList(growable: false);
     var failedPhotoChecks = 0;
     var nextCandidate = 0;
@@ -283,7 +289,7 @@ class IncidentApi {
       while (nextCandidate < photoCandidates.length) {
         final report = photoCandidates[nextCandidate++];
         try {
-          if (await _hasApprovedPhoto(report.id)) {
+          if (await _hasApprovedPhoto(report.id, force: force)) {
             accepted.add(report.withApprovedPhoto());
           }
         } catch (_) {
@@ -303,11 +309,14 @@ class IncidentApi {
     );
   }
 
-  Future<bool> _hasApprovedPhoto(int reportId) async {
+  Future<bool> _hasApprovedPhoto(int reportId, {bool force = false}) async {
     final now = DateTime.now();
     final cached = _photoReviewCache[reportId];
-    if (cached != null && now.difference(cached.checkedAt) < _photoReviewCacheTtl) {
-      return cached.isApproved;
+    if (!force && cached != null) {
+      final ttl = cached.isApproved ? _photoReviewCacheTtl : const Duration(seconds: 5);
+      if (now.difference(cached.checkedAt) < ttl) {
+        return cached.isApproved;
+      }
     }
 
     final response = await _send('GET', '/api/v1/reports/$reportId/evidence');

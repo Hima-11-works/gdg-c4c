@@ -166,7 +166,7 @@ class _IncidentsScreenState extends State<IncidentsScreen>
           api.getPublicationMeta().then<PublicationMeta?>((m) => m).catchError((Object _) => null);
       String? citizenReportsReadError;
       final Future<CitizenFireReportFeed> acceptedFireReportsFuture =
-          api.listAcceptedFireReports().catchError((Object error) {
+          api.listAcceptedFireReports(force: !append).catchError((Object error) {
         citizenReportsReadError = error is ApiException ? error.message : error.toString();
         return const CitizenFireReportFeed(reports: []);
       });

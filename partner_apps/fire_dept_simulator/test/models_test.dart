@@ -225,4 +225,50 @@ void main() {
       }
     });
   });
+
+  group('CitizenReport', () {
+    test('isFireKind includes all fire kinds and other', () {
+      for (final kind in ['building_fire', 'industrial_fire', 'forest_fire', 'crop_burning', 'other', 'unknown']) {
+        final report = CitizenReport(
+          id: 1,
+          h3Cell: '8828308281fffff',
+          kind: kind,
+          latitude: 28.6,
+          longitude: 77.2,
+          smokeIntensity: 3,
+          durationHours: 1.0,
+          reportedAt: DateTime.utc(2026, 10, 27),
+        );
+        expect(report.isFireKind, isTrue, reason: 'Expected $kind to be fire kind');
+      }
+    });
+
+    test('reviewLabel distinguishes corroborated, approved photo, and accepted', () {
+      final base = CitizenReport(
+        id: 1,
+        h3Cell: '8828308281fffff',
+        kind: 'other',
+        latitude: 28.6,
+        longitude: 77.2,
+        smokeIntensity: 3,
+        durationHours: 1.0,
+        reportedAt: DateTime.utc(2026, 10, 27),
+      );
+      expect(base.reviewLabel, 'accepted');
+      expect(base.withApprovedPhoto().reviewLabel, 'photo approved');
+      final corroborated = CitizenReport(
+        id: 2,
+        h3Cell: '8828308281fffff',
+        kind: 'other',
+        latitude: 28.6,
+        longitude: 77.2,
+        smokeIntensity: 3,
+        durationHours: 1.0,
+        reportedAt: DateTime.utc(2026, 10, 27),
+        status: 'corroborated',
+      );
+      expect(corroborated.isCorroborated, isTrue);
+      expect(corroborated.reviewLabel, 'report verified');
+    });
+  });
 }

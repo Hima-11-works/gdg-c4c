@@ -384,7 +384,7 @@ class CitizenReport {
   final int evidenceCount;
   final bool hasApprovedPhoto;
 
-  bool get isCorroborated => status == 'corroborated';
+  bool get isCorroborated => status == 'corroborated' || status == 'approved';
 
   bool get isClosed => status == 'rejected' || status == 'expired';
 
@@ -399,7 +399,8 @@ class CitizenReport {
         'industrial_fire',
         'forest_fire',
         'crop_burning',
-      }.contains(kind);
+        'other',
+      }.contains(kind) || kind == 'unknown' || kind.isEmpty;
 
   CitizenReport withApprovedPhoto() => CitizenReport(
         id: id,

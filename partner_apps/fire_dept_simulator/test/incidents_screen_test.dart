@@ -49,7 +49,7 @@ class _FakeIncidentApi extends IncidentApi {
   Future<List<FireDetection>> listFireDetections({double sinceHours = 6}) async => const [];
 
   @override
-  Future<CitizenFireReportFeed> listAcceptedFireReports() async =>
+  Future<CitizenFireReportFeed> listAcceptedFireReports({bool force = false}) async =>
       const CitizenFireReportFeed(reports: []);
 }
 
