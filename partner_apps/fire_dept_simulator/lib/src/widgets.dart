@@ -256,7 +256,9 @@ class EvidenceList extends StatelessWidget {
                     Padding(
                       padding: const EdgeInsets.only(top: 4),
                       child: Text(
-                        'Resident submission — unverified, not a measurement.',
+                        reportsById[id]!.isCorroborated
+                            ? 'Corroborated citizen report · not a direct measurement.'
+                            : 'Citizen report status: ${reportsById[id]!.status ?? 'unavailable'} · not a direct measurement.',
                         style: theme.textTheme.labelSmall
                             ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
                       ),

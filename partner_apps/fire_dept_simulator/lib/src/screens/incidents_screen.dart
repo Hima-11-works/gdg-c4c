@@ -35,7 +35,9 @@ class _IncidentsScreenState extends State<IncidentsScreen>
   List<Incident> _incidents = const [];
   List<Map<String, dynamic>> _hotspotEvents = const [];
   List<FireDetection> _fireDetections = const [];
+  List<CitizenReport> _approvedPhotoFireReports = const [];
   String? _firmsError;
+  String? _citizenReportsError;
   String? _openingHotspotId;
   int _pendingAssignments = 0;
   PublicationMeta? _publicationMeta;
@@ -102,7 +104,9 @@ class _IncidentsScreenState extends State<IncidentsScreen>
     _incidents = const [];
     _hotspotEvents = const [];
     _fireDetections = const [];
+    _approvedPhotoFireReports = const [];
     _firmsError = null;
+    _citizenReportsError = null;
     _error = null;
     _loading = true;
     _loadingMore = false;
@@ -160,6 +164,12 @@ class _IncidentsScreenState extends State<IncidentsScreen>
       });
       final Future<PublicationMeta?> publicationMetaFuture =
           api.getPublicationMeta().then<PublicationMeta?>((m) => m).catchError((Object _) => null);
+      String? citizenReportsReadError;
+      final Future<CitizenFireReportFeed> approvedPhotoFireReportsFuture =
+          api.listApprovedPhotoFireReports().catchError((Object error) {
+        citizenReportsReadError = error is ApiException ? error.message : error.toString();
+        return const CitizenFireReportFeed(reports: []);
+      });
 
       final results = await Future.wait([
         Future.wait(
@@ -180,6 +190,7 @@ class _IncidentsScreenState extends State<IncidentsScreen>
       final hotspotEvents = await hotspotEventsFuture;
       final fireDetections = await fireDetectionsFuture;
       final publicationMeta = await publicationMetaFuture;
+      final approvedPhotoFireReports = await approvedPhotoFireReportsFuture;
       if (!mounted) return;
       if (!_isCurrentQuery(
         generation: generation,
@@ -211,7 +222,12 @@ class _IncidentsScreenState extends State<IncidentsScreen>
         _hasMoreIncidents = pages.last.length == _incidentPageSize;
         _hotspotEvents = hotspotEvents;
         _fireDetections = fireDetections;
+        _approvedPhotoFireReports = approvedPhotoFireReports.reports;
         _firmsError = firmsReadError;
+        _citizenReportsError = citizenReportsReadError ??
+            (approvedPhotoFireReports.failedPhotoChecks == 0
+                ? null
+                : 'Could not check photo review status for ${approvedPhotoFireReports.failedPhotoChecks} report(s).');
         _pendingAssignments = inbox.length;
         _publicationMeta = publicationMeta ?? _publicationMeta;
         _loading = false;
@@ -440,6 +456,39 @@ class _IncidentsScreenState extends State<IncidentsScreen>
     }
   }
 
+  Future<void> _openCitizenFireReport(CitizenReport report) async {
+    if (widget.config.role != ResponderRole.fireDepartment) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Set the simulator role to fire department to open citizen fire reports.')),
+      );
+      return;
+    }
+    final openingId = 'citizen-report-${report.id}';
+    setState(() => _openingHotspotId = openingId);
+    try {
+      final outcome = await widget.api.createIncident(
+        sourceType: IncidentSourceType.report,
+        sourceId: report.id,
+        evidenceReportIds: [report.id],
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(outcome.created
+              ? 'Citizen fire report with approved photo added as incident #${outcome.value.id}.'
+              : 'Citizen report is already linked to incident #${outcome.value.id}.'),
+        ),
+      );
+      await _load();
+    } on ApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    } finally {
+      if (mounted) setState(() => _openingHotspotId = null);
+    }
+  }
+
   Future<void> _reviewHotspot(Map<String, dynamic> event, String state) async {
     final eventId = event['event_id'] as String?;
     if (eventId == null || eventId.isEmpty) return;
@@ -646,9 +695,14 @@ class _IncidentsScreenState extends State<IncidentsScreen>
         !_incidents.any((incident) =>
             incident.sourceType == IncidentSourceType.firmsDetection &&
             incident.sourceRef == fire.id)).toList(growable: false);
+    final openCitizenFireReports = _approvedPhotoFireReports.where((report) =>
+        !_incidents.any((incident) =>
+            incident.sourceType == IncidentSourceType.report &&
+            incident.sourceId == report.id)).toList(growable: false);
 
     if (_incidents.isEmpty && openHotspots.isEmpty && openFireDetections.isEmpty &&
-        _firmsError == null && error == null) {
+        openCitizenFireReports.isEmpty && _firmsError == null &&
+        _citizenReportsError == null && error == null) {
       return RefreshIndicator(
         onRefresh: _load,
         child: ListView(
@@ -686,8 +740,10 @@ class _IncidentsScreenState extends State<IncidentsScreen>
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
         itemCount: (error == null ? 0 : 1) +
             (_firmsError == null ? 0 : 1) +
+            (_citizenReportsError == null ? 0 : 1) +
             (openFireDetections.isEmpty ? 0 : openFireDetections.length + 1) +
             (openHotspots.isEmpty ? 0 : openHotspots.length + 1) +
+            (openCitizenFireReports.isEmpty ? 0 : openCitizenFireReports.length + 1) +
             _incidents.length +
             (_hasMoreIncidents ? 1 : 0),
         itemBuilder: (context, index) {
@@ -744,6 +800,50 @@ class _IncidentsScreenState extends State<IncidentsScreen>
               return _hotspotCard(openHotspots[itemIndex]);
             }
             itemIndex -= openHotspots.length;
+          }
+          if (_citizenReportsError != null) {
+            if (itemIndex == 0) {
+              return Card(
+                child: ListTile(
+                  leading: const Icon(Icons.cloud_off_outlined),
+                  title: const Text('Citizen fire report photo status unavailable'),
+                  subtitle: Text('Some approved-photo hazards may be missing until the status read succeeds. $_citizenReportsError'),
+                  trailing: IconButton(
+                    tooltip: 'Retry citizen report read',
+                    onPressed: _load,
+                    icon: const Icon(Icons.refresh),
+                  ),
+                ),
+              );
+            }
+            itemIndex--;
+          }
+          if (openCitizenFireReports.isNotEmpty) {
+            if (itemIndex == 0) {
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(4, 8, 4, 4),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Citizen fire reports with approved photos · potential hazards',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    Text(
+                      'Photo approval is a moderation decision, not report corroboration or independent fire confirmation.',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
+                    ),
+                  ],
+                ),
+              );
+            }
+            itemIndex--;
+            if (itemIndex < openCitizenFireReports.length) {
+              return _citizenFireReportCard(openCitizenFireReports[itemIndex]);
+            }
+            itemIndex -= openCitizenFireReports.length;
           }
           if (itemIndex < _incidents.length) {
             return _incidentCard(_incidents[itemIndex]);
@@ -835,6 +935,34 @@ class _IncidentsScreenState extends State<IncidentsScreen>
                       ? null
                       : () => _openFireDetection(detection),
                   child: Text(_openingHotspotId == detection.id ? 'Opening…' : 'Review'),
+                )
+              : const Icon(Icons.lock_outline),
+        ),
+      );
+
+  Widget _citizenFireReportCard(CitizenReport report) => Card(
+        child: ListTile(
+          leading: const Icon(Icons.local_fire_department_outlined),
+          title: Text(
+            '${sourceKindLabel(report.kind)}${report.hasApprovedPhoto ? ' · approved photo' : ''}',
+          ),
+          subtitle: Text(
+            '${formatCoordinates(report.latitude, report.longitude)} · ${report.h3Cell}\n'
+            'Smoke ${report.smokeIntensity}/5 · ${formatDuration(report.durationHours)} · '
+            '${relativeTime(report.reportedAt)}\n'
+            'Citizen-reported potential hazard; photo approved, but fire is not independently confirmed.',
+          ),
+          isThreeLine: true,
+          trailing: widget.config.role == ResponderRole.fireDepartment
+              ? FilledButton(
+                  onPressed: _openingHotspotId == 'citizen-report-${report.id}'
+                      ? null
+                      : () => _openCitizenFireReport(report),
+                  child: Text(
+                    _openingHotspotId == 'citizen-report-${report.id}'
+                        ? 'Opening…'
+                        : 'Open incident',
+                  ),
                 )
               : const Icon(Icons.lock_outline),
         ),

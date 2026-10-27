@@ -89,8 +89,16 @@ class _ApiResponse {
   final dynamic data;
 }
 
+class _CachedPhotoReview {
+  const _CachedPhotoReview({required this.checkedAt, required this.isApproved});
+
+  final DateTime checkedAt;
+  final bool isApproved;
+}
+
 class IncidentApi {
   static const incidentPageSize = 50;
+  static const _photoReviewCacheTtl = Duration(seconds: 45);
 
   IncidentApi({
     required String baseUrl,
@@ -106,6 +114,7 @@ class IncidentApi {
   final Duration timeout;
 
   final HttpClient _client = HttpClient();
+  final Map<int, _CachedPhotoReview> _photoReviewCache = {};
 
   bool get canWrite => apiKey != null && actorId.trim().isNotEmpty;
 
@@ -245,10 +254,68 @@ class IncidentApi {
         .toList();
   }
 
-  /// Loads a persisted report directly by id, including reports outside the
-  /// active feed's age window.
+  /// Recent fire reports with at least one approved citizen photo.
+  ///
+  /// The photo review state is intentionally separate from the report lifecycle:
+  /// approval is a moderation decision, not fire confirmation or corroboration.
+  /// Evidence reads are bounded to six concurrent requests and cached briefly
+  /// because this feed refreshes while the simulator is open.
+  Future<CitizenFireReportFeed> listApprovedPhotoFireReports() async {
+    final now = DateTime.now();
+    _photoReviewCache.removeWhere(
+      (_, cached) => now.difference(cached.checkedAt) >= _photoReviewCacheTtl,
+    );
+    final response = await _send('GET', '/api/v2/reports');
+    final candidates = (response.data as List)
+        .map((row) => CitizenReport.fromJson(row as Map<String, dynamic>))
+        .where((report) => report.isFireKind && report.evidenceCount > 0)
+        .toList(growable: false);
+
+    final approved = <CitizenReport>[];
+    var failedPhotoChecks = 0;
+    var nextCandidate = 0;
+    Future<void> checkNextCandidates() async {
+      while (nextCandidate < candidates.length) {
+        final report = candidates[nextCandidate++];
+        try {
+          if (await _hasApprovedPhoto(report.id)) {
+            approved.add(report.withApprovedPhoto());
+          }
+        } catch (_) {
+          // A failed lookup is not treated as an unapproved photo or an empty
+          // report feed; the UI surfaces the partial-read count separately.
+          failedPhotoChecks++;
+        }
+      }
+    }
+
+    final workerCount = candidates.length < 6 ? candidates.length : 6;
+    await Future.wait(List.generate(workerCount, (_) => checkNextCandidates()));
+    approved.sort((a, b) => b.reportedAt.compareTo(a.reportedAt));
+    return CitizenFireReportFeed(
+      reports: List.unmodifiable(approved),
+      failedPhotoChecks: failedPhotoChecks,
+    );
+  }
+
+  Future<bool> _hasApprovedPhoto(int reportId) async {
+    final now = DateTime.now();
+    final cached = _photoReviewCache[reportId];
+    if (cached != null && now.difference(cached.checkedAt) < _photoReviewCacheTtl) {
+      return cached.isApproved;
+    }
+
+    final response = await _send('GET', '/api/v1/reports/$reportId/evidence');
+    final rows = response.data as List;
+    final isApproved = rows.whereType<Map>().any((row) => row['review_state'] == 'approved');
+    _photoReviewCache[reportId] = _CachedPhotoReview(checkedAt: now, isApproved: isApproved);
+    return isApproved;
+  }
+
+  /// Loads a persisted report with its lifecycle standing, including reports
+  /// outside the active feed's age window.
   Future<CitizenReport> getReport(int id) async {
-    final response = await _send('GET', '/api/v1/reports/$id');
+    final response = await _send('GET', '/api/v2/reports/$id');
     return CitizenReport.fromJson(response.data as Map<String, dynamic>);
   }
 

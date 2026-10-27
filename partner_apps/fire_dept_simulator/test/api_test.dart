@@ -84,7 +84,7 @@ void main() {
     final report = await api.getReport(42);
     final uri = await receivedUri.future;
 
-    expect(uri.path, '/api/v1/reports/42');
+    expect(uri.path, '/api/v2/reports/42');
     expect(report.id, 42);
     expect(report.notes, 'Smoke from the second floor');
   });

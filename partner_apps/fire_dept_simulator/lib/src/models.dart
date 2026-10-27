@@ -353,36 +353,82 @@ class IncidentEvent {
 /// A citizen fire report, used as the evidence behind an incident.
 ///
 /// Incidents carry `evidence_report_ids`; the console resolves each id through
-/// `GET /api/v1/reports/{id}` so older persisted evidence stays readable after
-/// it leaves the active report feed.
+/// `GET /api/v2/reports/{id}` so older persisted evidence stays readable after
+/// it leaves the active report feed, with its current report lifecycle status.
 class CitizenReport {
   const CitizenReport({
     required this.id,
     required this.h3Cell,
     required this.kind,
+    required this.latitude,
+    required this.longitude,
     required this.smokeIntensity,
     required this.durationHours,
     required this.reportedAt,
+    this.status,
+    this.evidenceCount = 0,
+    this.hasApprovedPhoto = false,
     this.notes,
   });
 
   final int id;
   final String h3Cell;
   final String kind;
+  final double latitude;
+  final double longitude;
   final int smokeIntensity;
   final double durationHours;
   final String? notes;
   final DateTime reportedAt;
+  final String? status;
+  final int evidenceCount;
+  final bool hasApprovedPhoto;
+
+  bool get isCorroborated => status == 'corroborated';
+
+  bool get isFireKind => const {
+        'building_fire',
+        'industrial_fire',
+        'forest_fire',
+        'crop_burning',
+      }.contains(kind);
+
+  CitizenReport withApprovedPhoto() => CitizenReport(
+        id: id,
+        h3Cell: h3Cell,
+        kind: kind,
+        latitude: latitude,
+        longitude: longitude,
+        smokeIntensity: smokeIntensity,
+        durationHours: durationHours,
+        reportedAt: reportedAt,
+        status: status,
+        evidenceCount: evidenceCount,
+        hasApprovedPhoto: true,
+        notes: notes,
+      );
 
   factory CitizenReport.fromJson(Map<String, dynamic> json) => CitizenReport(
         id: (json['id'] as num).toInt(),
         h3Cell: (json['h3_cell'] as String?) ?? '',
         kind: (json['kind'] as String?) ?? 'unknown',
+        latitude: (json['latitude'] as num).toDouble(),
+        longitude: (json['longitude'] as num).toDouble(),
         smokeIntensity: (json['smoke_intensity'] as num?)?.toInt() ?? 0,
         durationHours: (json['duration_hours'] as num?)?.toDouble() ?? 0,
         notes: json['notes'] as String?,
         reportedAt: DateTime.parse(json['reported_at'] as String),
+        status: json['status'] as String?,
+        evidenceCount: (json['evidence_count'] as num?)?.toInt() ?? 0,
+        hasApprovedPhoto: json['has_approved_photo'] as bool? ?? false,
       );
+}
+
+class CitizenFireReportFeed {
+  const CitizenFireReportFeed({required this.reports, this.failedPhotoChecks = 0});
+
+  final List<CitizenReport> reports;
+  final int failedPhotoChecks;
 }
 
 /// One persisted NASA FIRMS VIIRS detection. This remains satellite evidence,

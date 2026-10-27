@@ -54,7 +54,12 @@ stateDiagram-v2
 ### 4. Published Alert Review
 - The `pollution_control` simulator role can review published PM2.5 alerts from the latest spatial prediction run and create a simulated incident record for review.
 
-### 5. In-App Diagnostics & Settings
+### 5. Citizen Fire Reports with Approved Photos
+- The fire-department role sees recent building, industrial, forest, and crop-burning reports when at least one attached photo has been approved by a reviewer.
+- Photo approval is a moderation decision, not report corroboration or independent fire confirmation. The simulator labels these as potential hazards.
+- A responder can open a listed report as a simulated fire-department incident; the report remains linked in the incident evidence view.
+
+### 6. In-App Diagnostics & Settings
 - Comprehensive in-app **Settings Screen** allowing dynamic configuration of:
   - Backend Base URL
   - Simulator API Key (`X-Simulator-Key`)
