@@ -27,7 +27,7 @@
 | **07** | **Tri-Persona:** One shared, trusted operating picture | 34 | 15s | Highlight multi-persona matrix (Resident, City, Crew) | 10s |
 | **08** | **Citizen Companion:** Flutter app & Gemini consent toggle | 36 | 15s | Show Flutter mobile app with photo consent checkbox | 10s |
 | **09** | **Responder Console:** 16MB Flutter APK & state machine | 36 | 15s | Advance incident state on Android simulator app | 10s |
-| **10** | **Federation PoC:** Decentralized state data exchange | 33 | 15s | Click Federated Status Pill (Delhi ↔ Punjab nodes) | 5s |
+| **10** | **Federation PoC:** Early cross-state prototype | 19 | 8s | Briefly point to the Federation status pill | 5s |
 | **11** | **Production Stack:** FastAPI, PostGIS & Google Maps | 35 | 15s | Show live latency pill & Google Maps enterprise roadmap | 10s |
 | **12** | **Pilot Roadmap:** From signal to safer action | 34 | 15s | Return to macro corridor view; pitch closing KPIs | 10s |
 | **TOTAL** | | **423** | **~3:00** | | **~2:00** |
@@ -120,11 +120,11 @@
 ---
 
 ### Slide 10: Federation is a working proof of concept — with governance ahead.
-* **Live Demo Action (5s):** Click the **Federated Status Pill** on the dashboard top bar showing the active Delhi and Punjab nodes.
-* **Architecture:** Decentralized, privacy-preserving cross-state machine learning.
+* **Live Demo Action (3s):** Briefly point to the Federation status pill on the dashboard header.
+* **Note:** Early exploration of model-update exchange between regional nodes.
 
-> **🎤 15-Second Speaker Script:**  
-> *"To bridge inter-state boundaries, we built a **Federated Learning proof of concept**. Independent nodes in Delhi and Punjab train locally and exchange signed model updates through a shared aggregator—enabling regional collaborative intelligence without centralizing raw data."*
+> **🎤 Short Speaker Script (~8s / 19 words):**  
+> *"For cross-state collaboration, we have an early prototype exploring how regional nodes could exchange model updates without centralizing raw data."*
 
 ---
 
