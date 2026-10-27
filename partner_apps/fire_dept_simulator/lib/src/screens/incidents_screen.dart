@@ -35,7 +35,7 @@ class _IncidentsScreenState extends State<IncidentsScreen>
   List<Incident> _incidents = const [];
   List<Map<String, dynamic>> _hotspotEvents = const [];
   List<FireDetection> _fireDetections = const [];
-  List<CitizenReport> _approvedPhotoFireReports = const [];
+  List<CitizenReport> _acceptedFireReports = const [];
   String? _firmsError;
   String? _citizenReportsError;
   String? _openingHotspotId;
@@ -104,7 +104,7 @@ class _IncidentsScreenState extends State<IncidentsScreen>
     _incidents = const [];
     _hotspotEvents = const [];
     _fireDetections = const [];
-    _approvedPhotoFireReports = const [];
+    _acceptedFireReports = const [];
     _firmsError = null;
     _citizenReportsError = null;
     _error = null;
@@ -165,8 +165,8 @@ class _IncidentsScreenState extends State<IncidentsScreen>
       final Future<PublicationMeta?> publicationMetaFuture =
           api.getPublicationMeta().then<PublicationMeta?>((m) => m).catchError((Object _) => null);
       String? citizenReportsReadError;
-      final Future<CitizenFireReportFeed> approvedPhotoFireReportsFuture =
-          api.listApprovedPhotoFireReports().catchError((Object error) {
+      final Future<CitizenFireReportFeed> acceptedFireReportsFuture =
+          api.listAcceptedFireReports().catchError((Object error) {
         citizenReportsReadError = error is ApiException ? error.message : error.toString();
         return const CitizenFireReportFeed(reports: []);
       });
@@ -190,7 +190,7 @@ class _IncidentsScreenState extends State<IncidentsScreen>
       final hotspotEvents = await hotspotEventsFuture;
       final fireDetections = await fireDetectionsFuture;
       final publicationMeta = await publicationMetaFuture;
-      final approvedPhotoFireReports = await approvedPhotoFireReportsFuture;
+      final acceptedFireReports = await acceptedFireReportsFuture;
       if (!mounted) return;
       if (!_isCurrentQuery(
         generation: generation,
@@ -222,12 +222,12 @@ class _IncidentsScreenState extends State<IncidentsScreen>
         _hasMoreIncidents = pages.last.length == _incidentPageSize;
         _hotspotEvents = hotspotEvents;
         _fireDetections = fireDetections;
-        _approvedPhotoFireReports = approvedPhotoFireReports.reports;
+        _acceptedFireReports = acceptedFireReports.reports;
         _firmsError = firmsReadError;
         _citizenReportsError = citizenReportsReadError ??
-            (approvedPhotoFireReports.failedPhotoChecks == 0
+            (acceptedFireReports.failedPhotoChecks == 0
                 ? null
-                : 'Could not check photo review status for ${approvedPhotoFireReports.failedPhotoChecks} report(s).');
+                : 'Could not check photo review status for ${acceptedFireReports.failedPhotoChecks} report(s).');
         _pendingAssignments = inbox.length;
         _publicationMeta = publicationMeta ?? _publicationMeta;
         _loading = false;
@@ -475,7 +475,7 @@ class _IncidentsScreenState extends State<IncidentsScreen>
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(outcome.created
-              ? 'Citizen fire report with approved photo added as incident #${outcome.value.id}.'
+              ? 'Accepted citizen fire report added as incident #${outcome.value.id}.'
               : 'Citizen report is already linked to incident #${outcome.value.id}.'),
         ),
       );
@@ -695,7 +695,7 @@ class _IncidentsScreenState extends State<IncidentsScreen>
         !_incidents.any((incident) =>
             incident.sourceType == IncidentSourceType.firmsDetection &&
             incident.sourceRef == fire.id)).toList(growable: false);
-    final openCitizenFireReports = _approvedPhotoFireReports.where((report) =>
+    final openCitizenFireReports = _acceptedFireReports.where((report) =>
         !_incidents.any((incident) =>
             incident.sourceType == IncidentSourceType.report &&
             incident.sourceId == report.id)).toList(growable: false);
@@ -806,8 +806,8 @@ class _IncidentsScreenState extends State<IncidentsScreen>
               return Card(
                 child: ListTile(
                   leading: const Icon(Icons.cloud_off_outlined),
-                  title: const Text('Citizen fire report photo status unavailable'),
-                  subtitle: Text('Some approved-photo hazards may be missing until the status read succeeds. $_citizenReportsError'),
+                  title: const Text('Citizen fire report feed incomplete'),
+                  subtitle: Text('Some accepted reports or photo-approved hazards may be missing until the read succeeds. $_citizenReportsError'),
                   trailing: IconButton(
                     tooltip: 'Retry citizen report read',
                     onPressed: _load,
@@ -826,11 +826,11 @@ class _IncidentsScreenState extends State<IncidentsScreen>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Citizen fire reports with approved photos · potential hazards',
+                      'Accepted citizen fire reports · potential hazards',
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                     Text(
-                      'Photo approval is a moderation decision, not report corroboration or independent fire confirmation.',
+                      'A corroborated report or approved photo is a review signal, not independent fire confirmation.',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                             color: Theme.of(context).colorScheme.onSurfaceVariant,
                           ),
@@ -944,13 +944,13 @@ class _IncidentsScreenState extends State<IncidentsScreen>
         child: ListTile(
           leading: const Icon(Icons.local_fire_department_outlined),
           title: Text(
-            '${sourceKindLabel(report.kind)}${report.hasApprovedPhoto ? ' · approved photo' : ''}',
+            '${sourceKindLabel(report.kind)} · ${report.reviewLabel}',
           ),
           subtitle: Text(
             '${formatCoordinates(report.latitude, report.longitude)} · ${report.h3Cell}\n'
             'Smoke ${report.smokeIntensity}/5 · ${formatDuration(report.durationHours)} · '
             '${relativeTime(report.reportedAt)}\n'
-            'Citizen-reported potential hazard; photo approved, but fire is not independently confirmed.',
+            'Citizen-reported potential hazard; review does not independently confirm a fire.',
           ),
           isThreeLine: true,
           trailing: widget.config.role == ResponderRole.fireDepartment

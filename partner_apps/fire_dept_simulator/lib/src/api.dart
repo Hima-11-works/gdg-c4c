@@ -254,13 +254,14 @@ class IncidentApi {
         .toList();
   }
 
-  /// Recent fire reports with at least one approved citizen photo.
+  /// Recent citizen fire reports that are eligible for responder review.
   ///
-  /// The photo review state is intentionally separate from the report lifecycle:
-  /// approval is a moderation decision, not fire confirmation or corroboration.
-  /// Evidence reads are bounded to six concurrent requests and cached briefly
+  /// A corroborated report is included directly, even when it has no photo.
+  /// A separately approved photo also makes an active fire report a potential
+  /// hazard, but never changes its lifecycle or makes it a confirmed fire.
+  /// Photo reads are bounded to six concurrent requests and cached briefly
   /// because this feed refreshes while the simulator is open.
-  Future<CitizenFireReportFeed> listApprovedPhotoFireReports() async {
+  Future<CitizenFireReportFeed> listAcceptedFireReports() async {
     final now = DateTime.now();
     _photoReviewCache.removeWhere(
       (_, cached) => now.difference(cached.checkedAt) >= _photoReviewCacheTtl,
@@ -268,18 +269,22 @@ class IncidentApi {
     final response = await _send('GET', '/api/v2/reports');
     final candidates = (response.data as List)
         .map((row) => CitizenReport.fromJson(row as Map<String, dynamic>))
-        .where((report) => report.isFireKind && report.evidenceCount > 0)
+        .where((report) => report.isFireKind)
         .toList(growable: false);
 
-    final approved = <CitizenReport>[];
+    final accepted = candidates.where((report) => report.isCorroborated).toList();
+    final photoCandidates = candidates
+        .where((report) =>
+            !report.isCorroborated && !report.isClosed && report.evidenceCount > 0)
+        .toList(growable: false);
     var failedPhotoChecks = 0;
     var nextCandidate = 0;
     Future<void> checkNextCandidates() async {
-      while (nextCandidate < candidates.length) {
-        final report = candidates[nextCandidate++];
+      while (nextCandidate < photoCandidates.length) {
+        final report = photoCandidates[nextCandidate++];
         try {
           if (await _hasApprovedPhoto(report.id)) {
-            approved.add(report.withApprovedPhoto());
+            accepted.add(report.withApprovedPhoto());
           }
         } catch (_) {
           // A failed lookup is not treated as an unapproved photo or an empty
@@ -289,11 +294,11 @@ class IncidentApi {
       }
     }
 
-    final workerCount = candidates.length < 6 ? candidates.length : 6;
+    final workerCount = photoCandidates.length < 6 ? photoCandidates.length : 6;
     await Future.wait(List.generate(workerCount, (_) => checkNextCandidates()));
-    approved.sort((a, b) => b.reportedAt.compareTo(a.reportedAt));
+    accepted.sort((a, b) => b.reportedAt.compareTo(a.reportedAt));
     return CitizenFireReportFeed(
-      reports: List.unmodifiable(approved),
+      reports: List.unmodifiable(accepted),
       failedPhotoChecks: failedPhotoChecks,
     );
   }

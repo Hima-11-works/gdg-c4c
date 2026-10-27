@@ -386,6 +386,14 @@ class CitizenReport {
 
   bool get isCorroborated => status == 'corroborated';
 
+  bool get isClosed => status == 'rejected' || status == 'expired';
+
+  String get reviewLabel {
+    if (isCorroborated) return 'report verified';
+    if (hasApprovedPhoto) return 'photo approved';
+    return 'accepted';
+  }
+
   bool get isFireKind => const {
         'building_fire',
         'industrial_fire',
